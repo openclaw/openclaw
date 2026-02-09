@@ -1,12 +1,12 @@
 import Foundation
 
-public enum OpenClawBonjour {
+public enum EasyHubBonjour {
     // v0: internal-only, subject to rename.
-    public static let gatewayServiceType = "_openclaw-gw._tcp"
+    public static let gatewayServiceType = "_EasyHub-gw._tcp"
     public static let gatewayServiceDomain = "local."
     public static var wideAreaGatewayServiceDomain: String? {
         let env = ProcessInfo.processInfo.environment
-        return resolveWideAreaDomain(env["OPENCLAW_WIDE_AREA_DOMAIN"])
+        return resolveWideAreaDomain(env["EASYHUB_WIDE_AREA_DOMAIN"])
     }
 
     public static var gatewayServiceDomains: [String] {

@@ -142,7 +142,7 @@ function appendAssistantTranscriptMessage(params: {
     usage,
     // Make these explicit so downstream tooling never treats this as model output.
     api: "openai-responses",
-    provider: "openclaw",
+    provider: "EasyHub",
     model: "gateway-injected",
   };
 

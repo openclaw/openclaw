@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import OpenClaw
+@testable import EasyHub
 
 @Suite
 struct AgentWorkspaceTests {
@@ -29,7 +29,7 @@ struct AgentWorkspaceTests {
     @Test
     func bootstrapCreatesAgentsFileWhenMissing() throws {
         let tmp = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("EasyHub-ws-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: tmp) }
 
         let agentsURL = try AgentWorkspace.bootstrap(workspaceURL: tmp)
@@ -52,7 +52,7 @@ struct AgentWorkspaceTests {
     @Test
     func bootstrapSafetyRejectsNonEmptyFolderWithoutAgents() throws {
         let tmp = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("EasyHub-ws-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: tmp) }
         try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
         let marker = tmp.appendingPathComponent("notes.txt")
@@ -70,7 +70,7 @@ struct AgentWorkspaceTests {
     @Test
     func bootstrapSafetyAllowsExistingAgentsFile() throws {
         let tmp = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("EasyHub-ws-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: tmp) }
         try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
         let agents = tmp.appendingPathComponent(AgentWorkspace.agentsFilename)
@@ -88,7 +88,7 @@ struct AgentWorkspaceTests {
     @Test
     func bootstrapSkipsBootstrapFileWhenWorkspaceHasContent() throws {
         let tmp = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("EasyHub-ws-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: tmp) }
         try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
         let marker = tmp.appendingPathComponent("notes.txt")
@@ -103,7 +103,7 @@ struct AgentWorkspaceTests {
     @Test
     func needsBootstrapFalseWhenIdentityAlreadySet() throws {
         let tmp = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("EasyHub-ws-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: tmp) }
         try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
         let identityURL = tmp.appendingPathComponent(AgentWorkspace.identityFilename)

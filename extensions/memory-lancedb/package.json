@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/memory-lancedb",
+  "name": "@easyhub/memory-lancedb",
   "version": "2026.2.6-3",
-  "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
+  "description": "EasyHub LanceDB-backed long-term memory plugin with auto-recall/capture",
   "type": "module",
   "dependencies": {
     "@lancedb/lancedb": "^0.24.1",
@@ -9,9 +9,9 @@
     "openai": "^6.18.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ]

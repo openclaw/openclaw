@@ -5,7 +5,7 @@ import OSLog
 final class ConnectionModeCoordinator {
     static let shared = ConnectionModeCoordinator()
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "connection")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "connection")
     private var lastMode: AppState.ConnectionMode?
 
     /// Apply the requested connection mode by starting/stopping local gateway,

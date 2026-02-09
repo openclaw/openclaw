@@ -38,7 +38,7 @@ x-i18n:
 
 - `host` 默认为 `sandbox`。
 - 当沙箱隔离关闭时，`elevated` 会被忽略（exec 已在主机上运行）。
-- `gateway`/`node` 审批由 `~/.openclaw/exec-approvals.json` 控制。
+- `gateway`/`node` 审批由 `~/.easyhub/exec-approvals.json` 控制。
 - `node` 需要已配对的节点（配套应用或无头节点主机）。
 - 如果有多个可用节点，设置 `exec.node` 或 `tools.exec.node` 来选择一个。
 - 在非 Windows 主机上，exec 会使用已设置的 `SHELL`；如果 `SHELL` 是 `fish`，它会优先从 `PATH` 中选择 `bash`（或 `sh`）以避免 fish 不兼容的脚本，如果两者都不存在则回退到 `SHELL`。
@@ -73,14 +73,14 @@ x-i18n:
 - `host=gateway`：将你的登录 shell `PATH` 合并到 exec 环境中。主机执行时会拒绝 `env.PATH` 覆盖。守护进程本身仍使用最小 `PATH` 运行：
   - macOS：`/opt/homebrew/bin`、`/usr/local/bin`、`/usr/bin`、`/bin`
   - Linux：`/usr/local/bin`、`/usr/bin`、`/bin`
-- `host=sandbox`：在容器内运行 `sh -lc`（登录 shell），因此 `/etc/profile` 可能会重置 `PATH`。OpenClaw 在 profile 加载后通过内部环境变量将 `env.PATH` 添加到前面（无 shell 插值）；`tools.exec.pathPrepend` 在此也适用。
+- `host=sandbox`：在容器内运行 `sh -lc`（登录 shell），因此 `/etc/profile` 可能会重置 `PATH`。EasyHub 在 profile 加载后通过内部环境变量将 `env.PATH` 添加到前面（无 shell 插值）；`tools.exec.pathPrepend` 在此也适用。
 - `host=node`：只有你传递的未被阻止的 env 覆盖会发送到节点。主机执行时会拒绝 `env.PATH` 覆盖。无头节点主机仅在 `PATH` 添加到节点主机 PATH 前面时才接受（不允许替换）。macOS 节点完全丢弃 `PATH` 覆盖。
 
 按智能体绑定节点（在配置中使用智能体列表索引）：
 
 ```bash
-openclaw config get agents.list
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
+EasyHub config get agents.list
+EasyHub config set agents.list[0].tools.exec.node "node-id-or-name"
 ```
 
 控制 UI：Nodes 标签页包含一个小的"Exec 节点绑定"面板用于相同的设置。

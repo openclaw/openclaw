@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { resolvePluginTools } from "../plugins/tools.js";
@@ -19,7 +19,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 
-export function createOpenClawTools(options?: {
+export function createEasyHubTools(options?: {
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
@@ -39,7 +39,7 @@ export function createOpenClawTools(options?: {
   sandboxRoot?: string;
   workspaceDir?: string;
   sandboxed?: boolean;
-  config?: OpenClawConfig;
+  config?: EasyHubConfig;
   pluginToolAllowlist?: string[];
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;

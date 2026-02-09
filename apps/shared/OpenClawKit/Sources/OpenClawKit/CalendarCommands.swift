@@ -1,11 +1,11 @@
 import Foundation
 
-public enum OpenClawCalendarCommand: String, Codable, Sendable {
+public enum EasyHubCalendarCommand: String, Codable, Sendable {
     case events = "calendar.events"
     case add = "calendar.add"
 }
 
-public struct OpenClawCalendarEventsParams: Codable, Sendable, Equatable {
+public struct EasyHubCalendarEventsParams: Codable, Sendable, Equatable {
     public var startISO: String?
     public var endISO: String?
     public var limit: Int?
@@ -17,7 +17,7 @@ public struct OpenClawCalendarEventsParams: Codable, Sendable, Equatable {
     }
 }
 
-public struct OpenClawCalendarAddParams: Codable, Sendable, Equatable {
+public struct EasyHubCalendarAddParams: Codable, Sendable, Equatable {
     public var title: String
     public var startISO: String
     public var endISO: String
@@ -48,7 +48,7 @@ public struct OpenClawCalendarAddParams: Codable, Sendable, Equatable {
     }
 }
 
-public struct OpenClawCalendarEventPayload: Codable, Sendable, Equatable {
+public struct EasyHubCalendarEventPayload: Codable, Sendable, Equatable {
     public var identifier: String
     public var title: String
     public var startISO: String
@@ -76,18 +76,18 @@ public struct OpenClawCalendarEventPayload: Codable, Sendable, Equatable {
     }
 }
 
-public struct OpenClawCalendarEventsPayload: Codable, Sendable, Equatable {
-    public var events: [OpenClawCalendarEventPayload]
+public struct EasyHubCalendarEventsPayload: Codable, Sendable, Equatable {
+    public var events: [EasyHubCalendarEventPayload]
 
-    public init(events: [OpenClawCalendarEventPayload]) {
+    public init(events: [EasyHubCalendarEventPayload]) {
         self.events = events
     }
 }
 
-public struct OpenClawCalendarAddPayload: Codable, Sendable, Equatable {
-    public var event: OpenClawCalendarEventPayload
+public struct EasyHubCalendarAddPayload: Codable, Sendable, Equatable {
+    public var event: EasyHubCalendarEventPayload
 
-    public init(event: OpenClawCalendarEventPayload) {
+    public init(event: EasyHubCalendarEventPayload) {
         self.event = event
     }
 }

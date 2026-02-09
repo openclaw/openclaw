@@ -1,16 +1,16 @@
 {
-  "name": "@openclaw/nostr",
+  "name": "@easyhub/nostr",
   "version": "2026.2.6-3",
-  "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
+  "description": "EasyHub Nostr channel plugin for NIP-04 encrypted DMs",
   "type": "module",
   "dependencies": {
     "nostr-tools": "^2.23.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ],
@@ -25,7 +25,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/nostr",
+      "npmSpec": "@easyhub/nostr",
       "localPath": "extensions/nostr",
       "defaultChoice": "npm"
     }

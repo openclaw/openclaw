@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveAgentModelPrimary } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
@@ -9,7 +9,7 @@ import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
 
 export async function warnIfModelConfigLooksOff(
-  config: OpenClawConfig,
+  config: EasyHubConfig,
   prompter: WizardPrompter,
   options?: { agentId?: string; agentDir?: string },
 ) {

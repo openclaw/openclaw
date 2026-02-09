@@ -20,7 +20,7 @@ x-i18n:
 
 1. 创建 Discord 机器人并复制机器人令牌。
 2. 在 Discord 应用设置中启用 **Message Content Intent**（如果你计划使用允许列表或名称查找，还需启用 **Server Members Intent**）。
-3. 为 OpenClaw 设置令牌：
+3. 为 EasyHub 设置令牌：
    - 环境变量：`DISCORD_BOT_TOKEN=...`
    - 或配置：`channels.discord.token: "..."`。
    - 如果两者都设置，配置优先（环境变量回退仅适用于默认账户）。
@@ -43,7 +43,7 @@ x-i18n:
 
 ## 目标
 
-- 通过 Discord 私信或服务器频道与 OpenClaw 对话。
+- 通过 Discord 私信或服务器频道与 EasyHub 对话。
 - 直接聊天会合并到智能体的主会话（默认 `agent:main:main`）；服务器频道保持隔离为 `agent:<agentId>:discord:channel:<channelId>`（显示名称使用 `discord:<guildSlug>#<channelSlug>`）。
 - 群组私信默认被忽略；通过 `channels.discord.dm.groupEnabled` 启用，并可选择通过 `channels.discord.dm.groupChannels` 进行限制。
 - 保持路由确定性：回复始终返回到消息来源的渠道。
@@ -52,12 +52,12 @@ x-i18n:
 
 1. 创建 Discord 应用程序 → Bot，启用你需要的意图（私信 + 服务器消息 + 消息内容），并获取机器人令牌。
 2. 使用所需权限邀请机器人到你的服务器，以便在你想使用的地方读取/发送消息。
-3. 使用 `channels.discord.token` 配置 OpenClaw（或使用 `DISCORD_BOT_TOKEN` 作为回退）。
+3. 使用 `channels.discord.token` 配置 EasyHub（或使用 `DISCORD_BOT_TOKEN` 作为回退）。
 4. 运行 Gateway 网关；当令牌可用（配置优先，环境变量回退）且 `channels.discord.enabled` 不为 `false` 时，它会自动启动 Discord 渠道。
    - 如果你更喜欢使用环境变量，设置 `DISCORD_BOT_TOKEN`（配置块是可选的）。
 5. 直接聊天：发送时使用 `user:<id>`（或 `<@id>` 提及）；所有对话都进入共享的 `main` 会话。纯数字 ID 是模糊的，会被拒绝。
 6. 服务器频道：发送时使用 `channel:<channelId>`。默认需要提及，可以按服务器或按频道设置。
-7. 直接聊天：默认通过 `channels.discord.dm.policy` 进行安全保护（默认：`"pairing"`）。未知发送者会收到配对码（1 小时后过期）；通过 `openclaw pairing approve discord <code>` 批准。
+7. 直接聊天：默认通过 `channels.discord.dm.policy` 进行安全保护（默认：`"pairing"`）。未知发送者会收到配对码（1 小时后过期）；通过 `EasyHub pairing approve discord <code>` 批准。
    - 要保持旧的"对任何人开放"行为：设置 `channels.discord.dm.policy="open"` 和 `channels.discord.dm.allowFrom=["*"]`。
    - 要使用硬编码允许列表：设置 `channels.discord.dm.policy="allowlist"` 并在 `channels.discord.dm.allowFrom` 中列出发送者。
    - 要忽略所有私信：设置 `channels.discord.dm.enabled=false` 或 `channels.discord.dm.policy="disabled"`。
@@ -89,7 +89,7 @@ x-i18n:
 
 ## 如何创建自己的机器人
 
-这是在服务器（guild）频道（如 `#help`）中运行 OpenClaw 的"Discord 开发者门户"设置。
+这是在服务器（guild）频道（如 `#help`）中运行 EasyHub 的"Discord 开发者门户"设置。
 
 ### 1）创建 Discord 应用 + 机器人用户
 
@@ -98,7 +98,7 @@ x-i18n:
    - **Bot** → **Add Bot**
    - 复制 **Bot Token**（这是你放入 `DISCORD_BOT_TOKEN` 的内容）
 
-### 2）启用 OpenClaw 需要的网关意图
+### 2）启用 EasyHub 需要的网关意图
 
 Discord 会阻止"特权意图"，除非你明确启用它们。
 
@@ -134,7 +134,7 @@ Discord 会阻止"特权意图"，除非你明确启用它们。
 
 ### 4）获取 ID（服务器/用户/频道）
 
-Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
+Discord 到处使用数字 ID；EasyHub 配置优先使用 ID。
 
 1. Discord（桌面/网页）→ **用户设置** → **高级** → 启用 **开发者模式**
 2. 右键点击：
@@ -142,7 +142,7 @@ Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
    - 频道（例如 `#help`）→ **复制频道 ID**
    - 你的用户 → **复制用户 ID**
 
-### 5）配置 OpenClaw
+### 5）配置 EasyHub
 
 #### 令牌
 
@@ -214,7 +214,7 @@ Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
 
 ### 故障排除
 
-- 首先：运行 `openclaw doctor` 和 `openclaw channels status --probe`（可操作的警告 + 快速审计）。
+- 首先：运行 `EasyHub doctor` 和 `EasyHub channels status --probe`（可操作的警告 + 快速审计）。
 - **"Used disallowed intents"**：在开发者门户中启用 **Message Content Intent**（可能还需要 **Server Members Intent**），然后重启 Gateway 网关。
 - **机器人连接但从不在服务器频道回复**：
   - 缺少 **Message Content Intent**，或
@@ -290,12 +290,12 @@ Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
         policy: "pairing", // pairing | allowlist | open | disabled
         allowFrom: ["123456789012345678", "steipete"],
         groupEnabled: false,
-        groupChannels: ["openclaw-dm"],
+        groupChannels: ["EasyHub-dm"],
       },
       guilds: {
         "*": { requireMention: true },
         "123456789012345678": {
-          slug: "friends-of-openclaw",
+          slug: "friends-of-EasyHub",
           requireMention: false,
           reactionNotifications: "own",
           users: ["987654321098765432", "steipete"],
@@ -367,7 +367,7 @@ Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
 
 ### PluralKit（PK）支持
 
-启用 PK 查找，以便代理消息解析到底层系统 + 成员。启用后，OpenClaw 使用成员身份进行允许列表匹配，并将发送者标记为 `Member (PK:System)` 以避免意外的 Discord 提及。
+启用 PK 查找，以便代理消息解析到底层系统 + 成员。启用后，EasyHub 使用成员身份进行允许列表匹配，并将发送者标记为 `Member (PK:System)` 以避免意外的 Discord 提及。
 
 ```json5
 {
@@ -436,13 +436,13 @@ Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
 - 当省略 `guilds.<id>.channels` 时，允许列表中服务器的所有频道都被允许。
 - 要**不允许任何频道**，设置 `channels.discord.groupPolicy: "disabled"`（或保持空允许列表）。
 - 配置向导接受 `Guild/Channel` 名称（公开 + 私有）并在可能时将其解析为 ID。
-- 启动时，OpenClaw 将允许列表中的频道/用户名称解析为 ID（当机器人可以搜索成员时）并记录映射；未解析的条目保持原样。
+- 启动时，EasyHub 将允许列表中的频道/用户名称解析为 ID（当机器人可以搜索成员时）并记录映射；未解析的条目保持原样。
 
 原生命令注意事项：
 
-- 注册的命令镜像 OpenClaw 的聊天命令。
+- 注册的命令镜像 EasyHub 的聊天命令。
 - 原生命令遵循与私信/服务器消息相同的允许列表（`channels.discord.dm.allowFrom`、`channels.discord.guilds`、每频道规则）。
-- 斜杠命令可能在 Discord UI 中对未在允许列表中的用户仍然可见；OpenClaw 在执行时强制执行允许列表并回复"未授权"。
+- 斜杠命令可能在 Discord UI 中对未在允许列表中的用户仍然可见；EasyHub 在执行时强制执行允许列表并回复"未授权"。
 
 ## 工具操作
 
@@ -465,4 +465,4 @@ Discord 消息 ID 在注入的上下文中显示（`[discord message id: …]` �
 
 - 像对待密码一样对待机器人令牌；在受监督的主机上优先使用 `DISCORD_BOT_TOKEN` 环境变量，或锁定配置文件权限。
 - 只授予机器人所需的权限（通常是读取/发送消息）。
-- 如果机器人卡住或受到速率限制，在确认没有其他进程拥有 Discord 会话后重启 Gateway 网关（`openclaw gateway --force`）。
+- 如果机器人卡住或受到速率限制，在确认没有其他进程拥有 Discord 会话后重启 Gateway 网关（`EasyHub gateway --force`）。

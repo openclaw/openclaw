@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { runCliAgent } from "./cli-runner.js";
 import { cleanupSuspendedCliProcesses } from "./cli-runner/helpers.js";
@@ -64,7 +64,7 @@ describe("runCliAgent resume cleanup", () => {
   });
 
   it("falls back to per-agent workspace when workspaceDir is missing", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-runner-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-cli-runner-"));
     const fallbackWorkspace = path.join(tempDir, "workspace-main");
     await fs.mkdir(fallbackWorkspace, { recursive: true });
     const cfg = {
@@ -73,7 +73,7 @@ describe("runCliAgent resume cleanup", () => {
           workspace: fallbackWorkspace,
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies EasyHubConfig;
 
     runExecMock.mockResolvedValue({ stdout: "", stderr: "" });
     runCommandWithTimeoutMock.mockResolvedValueOnce({
@@ -106,7 +106,7 @@ describe("runCliAgent resume cleanup", () => {
   });
 
   it("throws when sessionKey is malformed", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-runner-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-cli-runner-"));
     const mainWorkspace = path.join(tempDir, "workspace-main");
     const researchWorkspace = path.join(tempDir, "workspace-research");
     await fs.mkdir(mainWorkspace, { recursive: true });
@@ -118,7 +118,7 @@ describe("runCliAgent resume cleanup", () => {
         },
         list: [{ id: "research", workspace: researchWorkspace }],
       },
-    } satisfies OpenClawConfig;
+    } satisfies EasyHubConfig;
 
     try {
       await expect(

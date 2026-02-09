@@ -6,7 +6,7 @@ import { repairSessionFileIfNeeded } from "./session-file-repair.js";
 
 describe("repairSessionFileIfNeeded", () => {
   it("rewrites session files that contain malformed lines", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-repair-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-session-repair-"));
     const file = path.join(dir, "session.jsonl");
     const header = {
       type: "session",
@@ -41,7 +41,7 @@ describe("repairSessionFileIfNeeded", () => {
   });
 
   it("does not drop CRLF-terminated JSONL lines", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-repair-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-session-repair-"));
     const file = path.join(dir, "session.jsonl");
     const header = {
       type: "session",
@@ -66,7 +66,7 @@ describe("repairSessionFileIfNeeded", () => {
   });
 
   it("warns and skips repair when the session header is invalid", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-repair-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-session-repair-"));
     const file = path.join(dir, "session.jsonl");
     const badHeader = {
       type: "message",
@@ -87,7 +87,7 @@ describe("repairSessionFileIfNeeded", () => {
   });
 
   it("returns a detailed reason when read errors are not ENOENT", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-repair-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-session-repair-"));
     const warn = vi.fn();
 
     const result = await repairSessionFileIfNeeded({ sessionFile: dir, warn });

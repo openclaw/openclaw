@@ -37,17 +37,17 @@ Gateway 网关仪表板是默认在 `/` 提供的浏览器控制 UI
 ## 快速路径（推荐）
 
 - 新手引导后，CLI 现在会自动打开带有你的 token 的仪表板，并打印相同的带 token 链接。
-- 随时重新打开：`openclaw dashboard`（复制链接，如果可能则打开浏览器，如果是无头环境则显示 SSH 提示）。
+- 随时重新打开：`EasyHub dashboard`（复制链接，如果可能则打开浏览器，如果是无头环境则显示 SSH 提示）。
 - token 保持本地（仅查询参数）；UI 在首次加载后移除它并保存到 localStorage。
 
 ## Token 基础（本地 vs 远程）
 
-- **Localhost**：打开 `http://127.0.0.1:18789/`。如果你看到"unauthorized"，运行 `openclaw dashboard` 并使用带 token 的链接（`?token=...`）。
-- **Token 来源**：`gateway.auth.token`（或 `OPENCLAW_GATEWAY_TOKEN`）；UI 在首次加载后存储它。
+- **Localhost**：打开 `http://127.0.0.1:18789/`。如果你看到"unauthorized"，运行 `EasyHub dashboard` 并使用带 token 的链接（`?token=...`）。
+- **Token 来源**：`gateway.auth.token`（或 `EASYHUB_GATEWAY_TOKEN`）；UI 在首次加载后存储它。
 - **非 localhost**：使用 Tailscale Serve（如果 `gateway.auth.allowTailscale: true` 则无需 token）、带 token 的 tailnet 绑定，或 SSH 隧道。参见 [Web 界面](/web)。
 
 ## 如果你看到"unauthorized" / 1008
 
-- 运行 `openclaw dashboard` 获取新的带 token 链接。
-- 确保 Gateway 网关可达（本地：`openclaw status`；远程：SSH 隧道 `ssh -N -L 18789:127.0.0.1:18789 user@host` 然后打开 `http://127.0.0.1:18789/?token=...`）。
-- 在仪表板设置中，粘贴你在 `gateway.auth.token`（或 `OPENCLAW_GATEWAY_TOKEN`）中配置的相同 token。
+- 运行 `EasyHub dashboard` 获取新的带 token 链接。
+- 确保 Gateway 网关可达（本地：`EasyHub status`；远程：SSH 隧道 `ssh -N -L 18789:127.0.0.1:18789 user@host` 然后打开 `http://127.0.0.1:18789/?token=...`）。
+- 在仪表板设置中，粘贴你在 `gateway.auth.token`（或 `EASYHUB_GATEWAY_TOKEN`）中配置的相同 token。

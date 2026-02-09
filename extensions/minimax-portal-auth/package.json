@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/minimax-portal-auth",
+  "name": "@easyhub/minimax-portal-auth",
   "version": "2026.2.6-3",
-  "description": "OpenClaw MiniMax Portal OAuth provider plugin",
+  "description": "EasyHub MiniMax Portal OAuth provider plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ]

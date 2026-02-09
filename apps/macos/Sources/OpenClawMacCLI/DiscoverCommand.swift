@@ -1,4 +1,4 @@
-import OpenClawDiscovery
+import EasyHubDiscovery
 import Foundation
 
 struct DiscoveryOptions {
@@ -58,10 +58,10 @@ func runDiscover(_ args: [String]) async {
     let opts = DiscoveryOptions.parse(args)
     if opts.help {
         print("""
-        openclaw-mac discover
+        EasyHub-mac discover
 
         Usage:
-          openclaw-mac discover [--timeout <ms>] [--json] [--include-local]
+          EasyHub-mac discover [--timeout <ms>] [--json] [--include-local]
 
         Options:
           --timeout <ms>     Discovery window in milliseconds (default: 2000)

@@ -22,13 +22,13 @@ x-i18n:
 
 在聊天中使用 `/debug` 设置**仅运行时**配置覆盖（内存中，不写入磁盘）。
 `/debug` 默认禁用；通过 `commands.debug: true` 启用。
-当你需要切换不常用的设置而不编辑 `openclaw.json` 时，这非常方便。
+当你需要切换不常用的设置而不编辑 `easyhub.json` 时，这非常方便。
 
 示例：
 
 ```
 /debug show
-/debug set messages.responsePrefix="[openclaw]"
+/debug set messages.responsePrefix="[EasyHub]"
 /debug unset messages.responsePrefix
 /debug reset
 ```
@@ -55,25 +55,25 @@ tsx watch src/entry.ts gateway --force
 
 使用 dev 配置文件来隔离状态，并启动一个安全、可丢弃的调试设置。有**两个** `--dev` 标志：
 
-- **全局 `--dev`（配置文件）：** 将状态隔离到 `~/.openclaw-dev` 下，并将 Gateway 网关端口默认为 `19001`（派生端口随之移动）。
+- **全局 `--dev`（配置文件）：** 将状态隔离到 `~/.easyhub-dev` 下，并将 Gateway 网关端口默认为 `19001`（派生端口随之移动）。
 - **`gateway --dev`：告诉 Gateway 网关在缺失时自动创建默认配置 + 工作区**（并跳过 BOOTSTRAP.md）。
 
 推荐流程（dev 配置文件 + dev 引导）：
 
 ```bash
 pnpm gateway:dev
-OPENCLAW_PROFILE=dev openclaw tui
+EASYHUB_PROFILE=dev EasyHub tui
 ```
 
-如果你还没有全局安装，请通过 `pnpm openclaw ...` 运行 CLI。
+如果你还没有全局安装，请通过 `pnpm EasyHub ...` 运行 CLI。
 
 这会执行：
 
 1. **配置文件隔离**（全局 `--dev`）
-   - `OPENCLAW_PROFILE=dev`
-   - `OPENCLAW_STATE_DIR=~/.openclaw-dev`
-   - `OPENCLAW_CONFIG_PATH=~/.openclaw-dev/openclaw.json`
-   - `OPENCLAW_GATEWAY_PORT=19001`（浏览器/画布相应移动）
+   - `EASYHUB_PROFILE=dev`
+   - `EASYHUB_STATE_DIR=~/.easyhub-dev`
+   - `EASYHUB_CONFIG_PATH=~/.easyhub-dev/easyhub.json`
+   - `EASYHUB_GATEWAY_PORT=19001`（浏览器/画布相应移动）
 
 2. **Dev 引导**（`gateway --dev`）
    - 如果缺失则写入最小配置（`gateway.mode=local`，绑定 loopback）。
@@ -82,7 +82,7 @@ OPENCLAW_PROFILE=dev openclaw tui
    - 如果缺失则填充工作区文件：
      `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md`。
    - 默认身份：**C3‑PO**（礼仪机器人）。
-   - 在 dev 模式下跳过渠道提供商（`OPENCLAW_SKIP_CHANNELS=1`）。
+   - 在 dev 模式下跳过渠道提供商（`EASYHUB_SKIP_CHANNELS=1`）。
 
 重置流程（全新开始）：
 
@@ -94,7 +94,7 @@ pnpm gateway:dev:reset
 如果你需要明确拼写，请使用环境变量形式：
 
 ```bash
-OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
+EASYHUB_PROFILE=dev EasyHub gateway --dev --reset
 ```
 
 `--reset` 清除配置、凭证、会话和 dev 工作区（使用 `trash`，而非 `rm`），然后重新创建默认的 dev 设置。
@@ -102,12 +102,12 @@ OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
 提示：如果非 dev Gateway 网关已在运行（launchd/systemd），请先停止它：
 
 ```bash
-openclaw gateway stop
+EasyHub gateway stop
 ```
 
-## 原始流日志（OpenClaw）
+## 原始流日志（EasyHub）
 
-OpenClaw 可以在任何过滤/格式化之前记录**原始助手流**。
+EasyHub 可以在任何过滤/格式化之前记录**原始助手流**。
 这是查看推理是否作为纯文本增量到达（或作为单独的思考块）的最佳方式。
 
 通过 CLI 启用：
@@ -119,19 +119,19 @@ pnpm gateway:watch --force --raw-stream
 可选路径覆盖：
 
 ```bash
-pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
+pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.easyhub/logs/raw-stream.jsonl
 ```
 
 等效环境变量：
 
 ```bash
-OPENCLAW_RAW_STREAM=1
-OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-stream.jsonl
+EASYHUB_RAW_STREAM=1
+EASYHUB_RAW_STREAM_PATH=~/.easyhub/logs/raw-stream.jsonl
 ```
 
 默认文件：
 
-`~/.openclaw/logs/raw-stream.jsonl`
+`~/.easyhub/logs/raw-stream.jsonl`
 
 ## 原始块日志（pi-mono）
 

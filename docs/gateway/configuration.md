@@ -1,5 +1,5 @@
 ---
-summary: "All configuration options for ~/.openclaw/openclaw.json with examples"
+summary: "All configuration options for ~/.easyhub/easyhub.json with examples"
 read_when:
   - Adding or modifying config fields
 title: "Configuration"
@@ -7,9 +7,9 @@ title: "Configuration"
 
 # Configuration 🔧
 
-OpenClaw reads an optional **JSON5** config from `~/.openclaw/openclaw.json` (comments + trailing commas allowed).
+EasyHub reads an optional **JSON5** config from `~/.easyhub/easyhub.json` (comments + trailing commas allowed).
 
-If the file is missing, OpenClaw uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/.openclaw/workspace`). You usually only need a config to:
+If the file is missing, EasyHub uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/.easyhub/workspace`). You usually only need a config to:
 
 - restrict who can trigger the bot (`channels.whatsapp.allowFrom`, `channels.telegram.allowFrom`, etc.)
 - control group allowlists + mention behavior (`channels.whatsapp.groups`, `channels.telegram.groups`, `channels.discord.guilds`, `agents.list[].groupChat`)
@@ -22,15 +22,15 @@ If the file is missing, OpenClaw uses safe-ish defaults (embedded Pi agent + per
 
 ## Strict config validation
 
-OpenClaw only accepts configurations that fully match the schema.
+EasyHub only accepts configurations that fully match the schema.
 Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start** for safety.
 
 When validation fails:
 
 - The Gateway does not boot.
-- Only diagnostic commands are allowed (for example: `openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`, `openclaw service`, `openclaw help`).
-- Run `openclaw doctor` to see the exact issues.
-- Run `openclaw doctor --fix` (or `--yes`) to apply migrations/repairs.
+- Only diagnostic commands are allowed (for example: `EasyHub doctor`, `EasyHub logs`, `EasyHub health`, `EasyHub status`, `EasyHub service`, `EasyHub help`).
+- Run `EasyHub doctor` to see the exact issues.
+- Run `EasyHub doctor --fix` (or `--yes`) to apply migrations/repairs.
 
 Doctor never writes changes unless you explicitly opt into `--fix`/`--yes`.
 
@@ -51,7 +51,7 @@ Use `config.apply` to validate + write the full config and restart the Gateway i
 It writes a restart sentinel and pings the last active session after the Gateway comes back.
 
 Warning: `config.apply` replaces the **entire config**. If you want to change only a few keys,
-use `config.patch` or `openclaw config set`. Keep a backup of `~/.openclaw/openclaw.json`.
+use `config.patch` or `EasyHub config set`. Keep a backup of `~/.easyhub/easyhub.json`.
 
 Params:
 
@@ -64,9 +64,9 @@ Params:
 Example (via `gateway call`):
 
 ```bash
-openclaw gateway call config.get --params '{}' # capture payload.hash
-openclaw gateway call config.apply --params '{
-  "raw": "{\\n  agents: { defaults: { workspace: \\"~/.openclaw/workspace\\" } }\\n}\\n",
+EasyHub gateway call config.get --params '{}' # capture payload.hash
+EasyHub gateway call config.apply --params '{
+  "raw": "{\\n  agents: { defaults: { workspace: \\"~/.easyhub/workspace\\" } }\\n}\\n",
   "baseHash": "<hash-from-config.get>",
   "sessionKey": "agent:main:whatsapp:dm:+15555550123",
   "restartDelayMs": 1000
@@ -95,8 +95,8 @@ Params:
 Example:
 
 ```bash
-openclaw gateway call config.get --params '{}' # capture payload.hash
-openclaw gateway call config.patch --params '{
+EasyHub gateway call config.get --params '{}' # capture payload.hash
+EasyHub gateway call config.patch --params '{
   "raw": "{\\n  channels: { telegram: { groups: { \\"*\\": { requireMention: false } } } }\\n}\\n",
   "baseHash": "<hash-from-config.get>",
   "sessionKey": "agent:main:whatsapp:dm:+15555550123",
@@ -108,7 +108,7 @@ openclaw gateway call config.patch --params '{
 
 ```json5
 {
-  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
+  agents: { defaults: { workspace: "~/.easyhub/workspace" } },
   channels: { whatsapp: { allowFrom: ["+15555550123"] } },
 }
 ```
@@ -126,11 +126,11 @@ To prevent the bot from responding to WhatsApp @-mentions in groups (only respon
 ```json5
 {
   agents: {
-    defaults: { workspace: "~/.openclaw/workspace" },
+    defaults: { workspace: "~/.easyhub/workspace" },
     list: [
       {
         id: "main",
-        groupChat: { mentionPatterns: ["@openclaw", "reisponde"] },
+        groupChat: { mentionPatterns: ["@EasyHub", "reisponde"] },
       },
     ],
   },
@@ -155,7 +155,7 @@ Split your config into multiple files using the `$include` directive. This is us
 ### Basic usage
 
 ```json5
-// ~/.openclaw/openclaw.json
+// ~/.easyhub/easyhub.json
 {
   gateway: { port: 18789 },
 
@@ -170,10 +170,10 @@ Split your config into multiple files using the `$include` directive. This is us
 ```
 
 ```json5
-// ~/.openclaw/agents.json5
+// ~/.easyhub/agents.json5
 {
   defaults: { sandbox: { mode: "all", scope: "session" } },
-  list: [{ id: "main", workspace: "~/.openclaw/workspace" }],
+  list: [{ id: "main", workspace: "~/.easyhub/workspace" }],
 }
 ```
 
@@ -212,7 +212,7 @@ Included files can themselves contain `$include` directives (up to 10 levels dee
 
 ```json5
 { "$include": "./sub/config.json5" }      // relative
-{ "$include": "/etc/openclaw/base.json5" } // absolute
+{ "$include": "/etc/EasyHub/base.json5" } // absolute
 { "$include": "../shared/common.json5" }   // parent dir
 ```
 
@@ -225,7 +225,7 @@ Included files can themselves contain `$include` directives (up to 10 levels dee
 ### Example: Multi-client legal setup
 
 ```json5
-// ~/.openclaw/openclaw.json
+// ~/.easyhub/easyhub.json
 {
   gateway: { port: 18789, auth: { token: "secret" } },
 
@@ -248,7 +248,7 @@ Included files can themselves contain `$include` directives (up to 10 levels dee
 ```
 
 ```json5
-// ~/.openclaw/clients/mueller/agents.json5
+// ~/.easyhub/clients/mueller/agents.json5
 [
   { id: "mueller-transcribe", workspace: "~/clients/mueller/transcribe" },
   { id: "mueller-docs", workspace: "~/clients/mueller/docs" },
@@ -256,7 +256,7 @@ Included files can themselves contain `$include` directives (up to 10 levels dee
 ```
 
 ```json5
-// ~/.openclaw/clients/mueller/broadcast.json5
+// ~/.easyhub/clients/mueller/broadcast.json5
 {
   "120363403215116621@g.us": ["mueller-transcribe", "mueller-docs"],
 }
@@ -266,12 +266,12 @@ Included files can themselves contain `$include` directives (up to 10 levels dee
 
 ### Env vars + `.env`
 
-OpenClaw reads env vars from the parent process (shell, launchd/systemd, CI, etc.).
+EasyHub reads env vars from the parent process (shell, launchd/systemd, CI, etc.).
 
 Additionally, it loads:
 
 - `.env` from the current working directory (if present)
-- a global fallback `.env` from `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`)
+- a global fallback `.env` from `~/.easyhub/.env` (aka `$EASYHUB_STATE_DIR/.env`)
 
 Neither `.env` file overrides existing env vars.
 
@@ -293,7 +293,7 @@ See [/environment](/help/environment) for full precedence and sources.
 
 ### `env.shellEnv` (optional)
 
-Opt-in convenience: if enabled and none of the expected keys are set yet, OpenClaw runs your login shell and imports only the missing expected keys (never overrides).
+Opt-in convenience: if enabled and none of the expected keys are set yet, EasyHub runs your login shell and imports only the missing expected keys (never overrides).
 This effectively sources your shell profile.
 
 ```json5
@@ -309,8 +309,8 @@ This effectively sources your shell profile.
 
 Env var equivalent:
 
-- `OPENCLAW_LOAD_SHELL_ENV=1`
-- `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
+- `EASYHUB_LOAD_SHELL_ENV=1`
+- `EASYHUB_SHELL_ENV_TIMEOUT_MS=15000`
 
 ### Env var substitution in config
 
@@ -328,7 +328,7 @@ You can reference environment variables directly in any config string value usin
   },
   gateway: {
     auth: {
-      token: "${OPENCLAW_GATEWAY_TOKEN}",
+      token: "${EASYHUB_GATEWAY_TOKEN}",
     },
   },
 }
@@ -357,15 +357,15 @@ You can reference environment variables directly in any config string value usin
 
 ### Auth storage (OAuth + API keys)
 
-OpenClaw stores **per-agent** auth profiles (OAuth + API keys) in:
+EasyHub stores **per-agent** auth profiles (OAuth + API keys) in:
 
-- `<agentDir>/auth-profiles.json` (default: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`)
+- `<agentDir>/auth-profiles.json` (default: `~/.easyhub/agents/<agentId>/agent/auth-profiles.json`)
 
 See also: [/concepts/oauth](/concepts/oauth)
 
 Legacy OAuth imports:
 
-- `~/.openclaw/credentials/oauth.json` (or `$OPENCLAW_STATE_DIR/credentials/oauth.json`)
+- `~/.easyhub/credentials/oauth.json` (or `$EASYHUB_STATE_DIR/credentials/oauth.json`)
 
 The embedded Pi agent maintains a runtime cache at:
 
@@ -373,14 +373,14 @@ The embedded Pi agent maintains a runtime cache at:
 
 Legacy agent dir (pre multi-agent):
 
-- `~/.openclaw/agent/*` (migrated by `openclaw doctor` into `~/.openclaw/agents/<defaultAgentId>/agent/*`)
+- `~/.easyhub/agent/*` (migrated by `EasyHub doctor` into `~/.easyhub/agents/<defaultAgentId>/agent/*`)
 
 Overrides:
 
-- OAuth dir (legacy import only): `OPENCLAW_OAUTH_DIR`
-- Agent dir (default agent root override): `OPENCLAW_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
+- OAuth dir (legacy import only): `EASYHUB_OAUTH_DIR`
+- Agent dir (default agent root override): `EASYHUB_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
 
-On first use, OpenClaw imports `oauth.json` entries into `auth-profiles.json`.
+On first use, EasyHub imports `oauth.json` entries into `auth-profiles.json`.
 
 ### `auth`
 
@@ -406,7 +406,7 @@ rotation order used for failover.
 
 Optional per-agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
 
-If set, OpenClaw derives defaults (only when you haven’t set them explicitly):
+If set, EasyHub derives defaults (only when you haven’t set them explicitly):
 
 - `messages.ackReaction` from the **active agent**’s `identity.emoji` (falls back to 👀)
 - `agents.list[].groupChat.mentionPatterns` from the agent’s `identity.name`/`identity.emoji` (so “@Samantha” works in groups across Telegram/Slack/Discord/Google Chat/iMessage/WhatsApp)
@@ -454,8 +454,8 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`).
 
 ### `logging`
 
-- Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`
-- If you want a stable path, set `logging.file` to `/tmp/openclaw/openclaw.log`.
+- Default log file: `/tmp/EasyHub/EasyHub-YYYY-MM-DD.log`
+- If you want a stable path, set `logging.file` to `/tmp/EasyHub/easyhub.log`.
 - Console output can be tuned separately via:
   - `logging.consoleLevel` (defaults to `info`, bumps to `debug` when `--verbose`)
   - `logging.consoleStyle` (`pretty` | `compact` | `json`)
@@ -467,7 +467,7 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`).
 {
   logging: {
     level: "info",
-    file: "/tmp/openclaw/openclaw.log",
+    file: "/tmp/EasyHub/easyhub.log",
     consoleLevel: "info",
     consoleStyle: "pretty",
     redactSensitive: "tools",
@@ -493,8 +493,8 @@ Pairing codes expire after 1 hour; the bot only sends a pairing code when a new 
 
 Pairing approvals:
 
-- `openclaw pairing list whatsapp`
-- `openclaw pairing approve whatsapp <code>`
+- `EasyHub pairing list whatsapp`
+- `EasyHub pairing approve whatsapp <code>`
 
 ### `channels.whatsapp.allowFrom`
 
@@ -544,8 +544,8 @@ Run multiple WhatsApp accounts in one gateway:
         default: {}, // optional; keeps the default id stable
         personal: {},
         biz: {
-          // Optional override. Default: ~/.openclaw/credentials/whatsapp/biz
-          // authDir: "~/.openclaw/credentials/whatsapp/biz",
+          // Optional override. Default: ~/.easyhub/credentials/whatsapp/biz
+          // authDir: "~/.easyhub/credentials/whatsapp/biz",
         },
       },
     },
@@ -556,7 +556,7 @@ Run multiple WhatsApp accounts in one gateway:
 Notes:
 
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
-- The legacy single-account Baileys auth dir is migrated by `openclaw doctor` into `whatsapp/default`.
+- The legacy single-account Baileys auth dir is migrated by `EasyHub doctor` into `whatsapp/default`.
 
 ### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.googlechat.accounts` / `channels.slack.accounts` / `channels.mattermost.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
 
@@ -604,7 +604,7 @@ Group messages default to **require mention** (either metadata mention or regex 
     groupChat: { historyLimit: 50 },
   },
   agents: {
-    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
+    list: [{ id: "main", groupChat: { mentionPatterns: ["@EasyHub", "EasyHub"] } }],
   },
 }
 ```
@@ -668,7 +668,7 @@ To respond **only** to specific text triggers (ignoring native @-mentions):
         id: "main",
         groupChat: {
           // Only these text patterns will trigger responses
-          mentionPatterns: ["reisponde", "@openclaw"],
+          mentionPatterns: ["reisponde", "@EasyHub"],
         },
       },
     ],
@@ -740,8 +740,8 @@ Inbound messages are routed to an agent via bindings.
   - `default`: optional; when multiple are set, the first wins and a warning is logged.
     If none are set, the **first entry** in the list is the default agent.
   - `name`: display name for the agent.
-  - `workspace`: default `~/.openclaw/workspace-<agentId>` (for `main`, falls back to `agents.defaults.workspace`).
-  - `agentDir`: default `~/.openclaw/agents/<agentId>/agent`.
+  - `workspace`: default `~/.easyhub/workspace-<agentId>` (for `main`, falls back to `agents.defaults.workspace`).
+  - `agentDir`: default `~/.easyhub/agents/<agentId>/agent`.
   - `model`: per-agent default model, overrides `agents.defaults.model` for that agent.
     - string form: `"provider/model"`, overrides only `agents.defaults.model.primary`
     - object form: `{ primary, fallbacks }` (fallbacks override `agents.defaults.model.fallbacks`; `[]` disables global fallbacks for that agent)
@@ -799,7 +799,7 @@ Full access (no sandbox):
     list: [
       {
         id: "personal",
-        workspace: "~/.openclaw/workspace-personal",
+        workspace: "~/.easyhub/workspace-personal",
         sandbox: { mode: "off" },
       },
     ],
@@ -815,7 +815,7 @@ Read-only tools + read-only workspace:
     list: [
       {
         id: "family",
-        workspace: "~/.openclaw/workspace-family",
+        workspace: "~/.easyhub/workspace-family",
         sandbox: {
           mode: "all",
           scope: "agent",
@@ -846,7 +846,7 @@ No filesystem access (messaging/session tools enabled):
     list: [
       {
         id: "public",
-        workspace: "~/.openclaw/workspace-public",
+        workspace: "~/.easyhub/workspace-public",
         sandbox: {
           mode: "all",
           scope: "agent",
@@ -892,8 +892,8 @@ Example: two WhatsApp accounts → two agents:
 {
   agents: {
     list: [
-      { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-      { id: "work", workspace: "~/.openclaw/workspace-work" },
+      { id: "home", default: true, workspace: "~/.easyhub/workspace-home" },
+      { id: "work", workspace: "~/.easyhub/workspace-work" },
     ],
   },
   bindings: [
@@ -1004,7 +1004,7 @@ Notes:
 - `channels.telegram.customCommands` adds extra Telegram bot menu entries. Names are normalized; conflicts with native commands are ignored.
 - `commands.bash: true` enables `! <cmd>` to run host shell commands (`/bash <cmd>` also works as an alias). Requires `tools.elevated.enabled` and allowlisting the sender in `tools.elevated.allowFrom.<channel>`.
 - `commands.bashForegroundMs` controls how long bash waits before backgrounding. While a bash job is running, new `! <cmd>` requests are rejected (one at a time).
-- `commands.config: true` enables `/config` (reads/writes `openclaw.json`).
+- `commands.config: true` enables `/config` (reads/writes `easyhub.json`).
 - `channels.<provider>.configWrites` gates config mutations initiated by that channel (default: true). This applies to `/config set|unset` plus provider-specific auto-migrations (Telegram supergroup ID changes, Slack channel ID changes).
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
@@ -1035,7 +1035,7 @@ Set `web.enabled: false` to keep it off by default.
 
 ### `channels.telegram` (bot transport)
 
-OpenClaw starts Telegram only when a `channels.telegram` config section exists. The bot token is resolved from `channels.telegram.botToken` (or `channels.telegram.tokenFile`), with `TELEGRAM_BOT_TOKEN` as a fallback for the default account.
+EasyHub starts Telegram only when a `channels.telegram` config section exists. The bot token is resolved from `channels.telegram.botToken` (or `channels.telegram.tokenFile`), with `TELEGRAM_BOT_TOKEN` as a fallback for the default account.
 Set `channels.telegram.enabled: false` to disable automatic startup.
 Multi-account support lives under `channels.telegram.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 Set `channels.telegram.configWrites: false` to block Telegram-initiated config writes (including supergroup ID migrations and `/config set|unset`).
@@ -1143,12 +1143,12 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
         policy: "pairing", // pairing | allowlist | open | disabled
         allowFrom: ["1234567890", "steipete"], // optional DM allowlist ("open" requires ["*"])
         groupEnabled: false, // enable group DMs
-        groupChannels: ["openclaw-dm"], // optional group DM allowlist
+        groupChannels: ["EasyHub-dm"], // optional group DM allowlist
       },
       guilds: {
         "123456789012345678": {
           // guild id (preferred) or slug
-          slug: "friends-of-openclaw",
+          slug: "friends-of-EasyHub",
           requireMention: false, // per-guild default
           reactionNotifications: "own", // off | own | all | allowlist
           users: ["987654321098765432"], // optional per-guild user allowlist
@@ -1180,7 +1180,7 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
 }
 ```
 
-OpenClaw starts Discord only when a `channels.discord` config section exists. The token is resolved from `channels.discord.token`, with `DISCORD_BOT_TOKEN` as a fallback for the default account (unless `channels.discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands; bare numeric IDs are ambiguous and rejected.
+EasyHub starts Discord only when a `channels.discord` config section exists. The token is resolved from `channels.discord.token`, with `DISCORD_BOT_TOKEN` as a fallback for the default account (unless `channels.discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands; bare numeric IDs are ambiguous and rejected.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
 Bot-authored messages are ignored by default. Enable with `channels.discord.allowBots` (own messages are still filtered to prevent self-reply loops).
 Reaction notification modes:
@@ -1278,7 +1278,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
       },
       slashCommand: {
         enabled: true,
-        name: "openclaw",
+        name: "EasyHub",
         sessionPrefix: "slack:slash",
         ephemeral: true,
       },
@@ -1292,7 +1292,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
 
 Multi-account support lives under `channels.slack.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
-OpenClaw starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
+EasyHub starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
 Set `channels.slack.configWrites: false` to block Slack-initiated config writes (including channel ID migrations and `/config set|unset`).
 
 Bot-authored messages are ignored by default. Enable with `channels.slack.allowBots` or `channels.slack.channels.<id>.allowBots`.
@@ -1322,7 +1322,7 @@ Slack action groups (gate `slack` tool actions):
 ### `channels.mattermost` (bot token)
 
 Mattermost ships as a plugin and is not bundled with the core install.
-Install it first: `openclaw plugins install @openclaw/mattermost` (or `./extensions/mattermost` from a git checkout).
+Install it first: `EasyHub plugins install @easyhub/mattermost` (or `./extensions/mattermost` from a git checkout).
 
 Mattermost requires a bot token plus the base URL for your server:
 
@@ -1343,7 +1343,7 @@ Mattermost requires a bot token plus the base URL for your server:
 }
 ```
 
-OpenClaw starts Mattermost when the account is configured (bot token + base URL) and enabled. The token + base URL are resolved from `channels.mattermost.botToken` + `channels.mattermost.baseUrl` or `MATTERMOST_BOT_TOKEN` + `MATTERMOST_URL` for the default account (unless `channels.mattermost.enabled` is `false`).
+EasyHub starts Mattermost when the account is configured (bot token + base URL) and enabled. The token + base URL are resolved from `channels.mattermost.botToken` + `channels.mattermost.baseUrl` or `MATTERMOST_BOT_TOKEN` + `MATTERMOST_URL` for the default account (unless `channels.mattermost.enabled` is `false`).
 
 Chat modes:
 
@@ -1385,7 +1385,7 @@ Reaction notification modes:
 
 ### `channels.imessage` (imsg CLI)
 
-OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
+EasyHub spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 
 ```json5
 {
@@ -1428,11 +1428,11 @@ exec ssh -T gateway-host imsg "$@"
 
 Sets the **single global workspace directory** used by the agent for file operations.
 
-Default: `~/.openclaw/workspace`.
+Default: `~/.easyhub/workspace`.
 
 ```json5
 {
-  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
+  agents: { defaults: { workspace: "~/.easyhub/workspace" } },
 }
 ```
 
@@ -1441,13 +1441,13 @@ own per-scope workspaces under `agents.defaults.sandbox.workspaceRoot`.
 
 ### `agents.defaults.repoRoot`
 
-Optional repository root to show in the system prompt’s Runtime line. If unset, OpenClaw
+Optional repository root to show in the system prompt’s Runtime line. If unset, EasyHub
 tries to detect a `.git` directory by walking upward from the workspace (and current
 working directory). The path must exist to be used.
 
 ```json5
 {
-  agents: { defaults: { repoRoot: "~/Projects/openclaw" } },
+  agents: { defaults: { repoRoot: "~/Projects/EasyHub" } },
 }
 ```
 
@@ -1468,7 +1468,7 @@ Use this for pre-seeded deployments where your workspace files come from a repo.
 Max characters of each workspace bootstrap file injected into the system prompt
 before truncation. Default: `20000`.
 
-When a file exceeds this limit, OpenClaw logs a warning and injects a truncated
+When a file exceeds this limit, EasyHub logs a warning and injects a truncated
 head/tail with a marker.
 
 ```json5
@@ -1480,7 +1480,7 @@ head/tail with a marker.
 ### `agents.defaults.userTimezone`
 
 Sets the user’s timezone for **system prompt context** (not for timestamps in
-message envelopes). If unset, OpenClaw uses the host timezone at runtime.
+message envelopes). If unset, EasyHub uses the host timezone at runtime.
 
 ```json5
 {
@@ -1539,7 +1539,7 @@ Overrides apply to all channels, including extensions, and to every outbound rep
 
 If `messages.responsePrefix` is unset, no prefix is applied by default. WhatsApp self-chat
 replies are the exception: they default to `[{identity.name}]` when set, otherwise
-`[openclaw]`, so same-phone conversations stay legible.
+`[EasyHub]`, so same-phone conversations stay legible.
 Set it to `"auto"` to derive `[{identity.name}]` for the routed agent (when set).
 
 #### Template variables
@@ -1568,9 +1568,9 @@ Unresolved variables remain as literal text.
 Example output: `[claude-opus-4-6 | think:high] Here's my response...`
 
 WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (deprecated:
-`messages.messagePrefix`). Default stays **unchanged**: `"[openclaw]"` when
+`messages.messagePrefix`). Default stays **unchanged**: `"[EasyHub]"` when
 `channels.whatsapp.allowFrom` is empty, otherwise `""` (no prefix). When using
-`"[openclaw]"`, OpenClaw will instead use `[{identity.name}]` when the routed
+`"[EasyHub]"`, EasyHub will instead use `[{identity.name}]` when the routed
 agent has `identity.name` set.
 
 `ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
@@ -1589,7 +1589,7 @@ active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` t
 
 #### `messages.tts`
 
-Enable text-to-speech for outbound replies. When on, OpenClaw generates audio
+Enable text-to-speech for outbound replies. When on, EasyHub generates audio
 using ElevenLabs or OpenAI and attaches it to responses. Telegram uses Opus
 voice notes; other channels send MP3 audio.
 
@@ -1606,7 +1606,7 @@ voice notes; other channels send MP3 audio.
       },
       maxTextLength: 4000,
       timeoutMs: 30000,
-      prefsPath: "~/.openclaw/settings/tts.json",
+      prefsPath: "~/.easyhub/settings/tts.json",
       elevenlabs: {
         apiKey: "elevenlabs_api_key",
         baseUrl: "https://api.elevenlabs.io",
@@ -1708,7 +1708,7 @@ Z.AI GLM-4.x models automatically enable thinking mode unless you:
 - set `--thinking off`, or
 - define `agents.defaults.models["zai/<model>"].params.thinking` yourself.
 
-OpenClaw also ships a few built-in alias shorthands. Defaults only apply when the model
+EasyHub also ships a few built-in alias shorthands. Defaults only apply when the model
 is already present in `agents.defaults.models`:
 
 - `opus` -> `anthropic/claude-opus-4-6`
@@ -2018,7 +2018,7 @@ Typing indicators:
 
 `agents.defaults.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-6`).
 Aliases come from `agents.defaults.models.*.alias` (e.g. `Opus`).
-If you omit the provider, OpenClaw currently assumes `anthropic` as a temporary
+If you omit the provider, EasyHub currently assumes `anthropic` as a temporary
 deprecation fallback.
 Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 `ZAI_API_KEY` (or legacy `Z_AI_API_KEY`) in the environment.
@@ -2057,7 +2057,7 @@ of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 `tools.web` configures web search + fetch tools:
 
 - `tools.web.search.enabled` (default: true when key is present)
-- `tools.web.search.apiKey` (recommended: set via `openclaw configure --section web`, or use `BRAVE_API_KEY` env var)
+- `tools.web.search.apiKey` (recommended: set via `EasyHub configure --section web`, or use `BRAVE_API_KEY` env var)
 - `tools.web.search.maxResults` (1–10, default 5)
 - `tools.web.search.timeoutSeconds` (default 30)
 - `tools.web.search.cacheTtlMinutes` (default 15)
@@ -2226,7 +2226,7 @@ Tool groups (shorthands) work in **global** and **per-agent** tool policies:
 - `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
-- `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
+- `group:EasyHub`: all built-in EasyHub tools (excludes provider plugins)
 
 `tools.elevated` controls elevated (host) exec access:
 
@@ -2295,7 +2295,7 @@ Defaults (if enabled):
 - scope: `"agent"` (one container + workspace per agent)
 - Debian bookworm-slim based image
 - agent workspace access: `workspaceAccess: "none"` (default)
-  - `"none"`: use a per-scope sandbox workspace under `~/.openclaw/sandboxes`
+  - `"none"`: use a per-scope sandbox workspace under `~/.easyhub/sandboxes`
 - `"ro"`: keep the sandbox workspace at `/workspace`, and mount the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`)
   - `"rw"`: mount the agent workspace read/write at `/workspace`
 - auto-prune: idle > 24h OR age > 7d
@@ -2322,10 +2322,10 @@ For package installs, ensure network egress, a writable root FS, and a root user
         mode: "non-main", // off | non-main | all
         scope: "agent", // session | agent | shared (agent is default)
         workspaceAccess: "none", // none | ro | rw
-        workspaceRoot: "~/.openclaw/sandboxes",
+        workspaceRoot: "~/.easyhub/sandboxes",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
-          containerPrefix: "openclaw-sbx-",
+          image: "EasyHub-sandbox:bookworm-slim",
+          containerPrefix: "EasyHub-sbx-",
           workdir: "/workspace",
           readOnlyRoot: true,
           tmpfs: ["/tmp", "/var/tmp", "/run"],
@@ -2344,15 +2344,15 @@ For package installs, ensure network egress, a writable root FS, and a root user
             nproc: 256,
           },
           seccompProfile: "/path/to/seccomp.json",
-          apparmorProfile: "openclaw-sandbox",
+          apparmorProfile: "EasyHub-sandbox",
           dns: ["1.1.1.1", "8.8.8.8"],
           extraHosts: ["internal.service:10.0.0.5"],
           binds: ["/var/run/docker.sock:/var/run/docker.sock", "/home/user/source:/source:rw"],
         },
         browser: {
           enabled: false,
-          image: "openclaw-sandbox-browser:bookworm-slim",
-          containerPrefix: "openclaw-sbx-browser-",
+          image: "EasyHub-sandbox-browser:bookworm-slim",
+          containerPrefix: "EasyHub-sbx-browser-",
           cdpPort: 9222,
           vncPort: 5900,
           noVncPort: 6080,
@@ -2434,14 +2434,14 @@ Allowlists for remote control:
 
 ### `models` (custom providers + base URLs)
 
-OpenClaw uses the **pi-coding-agent** model catalog. You can add custom providers
+EasyHub uses the **pi-coding-agent** model catalog. You can add custom providers
 (LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.) by writing
-`~/.openclaw/agents/<agentId>/agent/models.json` or by defining the same schema inside your
-OpenClaw config under `models.providers`.
+`~/.easyhub/agents/<agentId>/agent/models.json` or by defining the same schema inside your
+EasyHub config under `models.providers`.
 Provider-by-provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
 
-When `models.providers` is present, OpenClaw writes/merges a `models.json` into
-`~/.openclaw/agents/<agentId>/agent/` on startup:
+When `models.providers` is present, EasyHub writes/merges a `models.json` into
+`~/.easyhub/agents/<agentId>/agent/` on startup:
 
 - default behavior: **merge** (keeps existing providers, overrides on name)
 - set `models.mode: "replace"` to overwrite the file contents
@@ -2484,7 +2484,7 @@ Select the model via `agents.defaults.model.primary` (provider/model).
 
 ### OpenCode Zen (multi-model proxy)
 
-OpenCode Zen is a multi-model gateway with per-model endpoints. OpenClaw uses
+OpenCode Zen is a multi-model gateway with per-model endpoints. EasyHub uses
 the built-in `opencode` provider from pi-ai; set `OPENCODE_API_KEY` (or
 `OPENCODE_ZEN_API_KEY`) from [https://opencode.ai/auth](https://opencode.ai/auth).
 
@@ -2492,7 +2492,7 @@ Notes:
 
 - Model refs use `opencode/<modelId>` (example: `opencode/claude-opus-4-6`).
 - If you enable an allowlist via `agents.defaults.models`, add each model you plan to use.
-- Shortcut: `openclaw onboard --auth-choice opencode-zen`.
+- Shortcut: `EasyHub onboard --auth-choice opencode-zen`.
 
 ```json5
 {
@@ -2510,7 +2510,7 @@ Notes:
 Z.AI models are available via the built-in `zai` provider. Set `ZAI_API_KEY`
 in your environment and reference the model by provider/model.
 
-Shortcut: `openclaw onboard --auth-choice zai-api-key`.
+Shortcut: `EasyHub onboard --auth-choice zai-api-key`.
 
 ```json5
 {
@@ -2574,10 +2574,10 @@ Use Moonshot's OpenAI-compatible endpoint:
 
 Notes:
 
-- Set `MOONSHOT_API_KEY` in the environment or use `openclaw onboard --auth-choice moonshot-api-key`.
+- Set `MOONSHOT_API_KEY` in the environment or use `EasyHub onboard --auth-choice moonshot-api-key`.
 - Model ref: `moonshot/kimi-k2.5`.
 - For the China endpoint, either:
-  - Run `openclaw onboard --auth-choice moonshot-api-key-cn` (wizard will set `https://api.moonshot.cn/v1`), or
+  - Run `EasyHub onboard --auth-choice moonshot-api-key-cn` (wizard will set `https://api.moonshot.cn/v1`), or
   - Manually set `baseUrl: "https://api.moonshot.cn/v1"` in `models.providers.moonshot`.
 
 ### Kimi Coding
@@ -2598,7 +2598,7 @@ Use Moonshot AI's Kimi Coding endpoint (Anthropic-compatible, built-in provider)
 
 Notes:
 
-- Set `KIMI_API_KEY` in the environment or use `openclaw onboard --auth-choice kimi-code-api-key`.
+- Set `KIMI_API_KEY` in the environment or use `EasyHub onboard --auth-choice kimi-code-api-key`.
 - Model ref: `kimi-coding/k2p5`.
 
 ### Synthetic (Anthropic-compatible)
@@ -2640,7 +2640,7 @@ Use Synthetic's Anthropic-compatible endpoint:
 
 Notes:
 
-- Set `SYNTHETIC_API_KEY` or use `openclaw onboard --auth-choice synthetic-api-key`.
+- Set `SYNTHETIC_API_KEY` or use `EasyHub onboard --auth-choice synthetic-api-key`.
 - Model ref: `synthetic/hf:MiniMaxAI/MiniMax-M2.1`.
 - Base URL should omit `/v1` because the Anthropic client appends it.
 
@@ -2688,7 +2688,7 @@ Use MiniMax M2.1 directly without LM Studio:
 
 Notes:
 
-- Set `MINIMAX_API_KEY` environment variable or use `openclaw onboard --auth-choice minimax-api`.
+- Set `MINIMAX_API_KEY` environment variable or use `EasyHub onboard --auth-choice minimax-api`.
 - Available model: `MiniMax-M2.1` (default).
 - Update pricing in `models.json` if you need exact cost tracking.
 
@@ -2738,8 +2738,8 @@ Notes:
 - Supported APIs: `openai-completions`, `openai-responses`, `anthropic-messages`,
   `google-generative-ai`
 - Use `authHeader: true` + `headers` for custom auth needs.
-- Override the agent config root with `OPENCLAW_AGENT_DIR` (or `PI_CODING_AGENT_DIR`)
-  if you want `models.json` stored elsewhere (default: `~/.openclaw/agents/main/agent`).
+- Override the agent config root with `EASYHUB_AGENT_DIR` (or `PI_CODING_AGENT_DIR`)
+  if you want `models.json` stored elsewhere (default: `~/.easyhub/agents/main/agent`).
 
 ### `session`
 
@@ -2764,9 +2764,9 @@ Controls session scoping, reset policy, reset triggers, and where the session st
       group: { mode: "idle", idleMinutes: 120 },
     },
     resetTriggers: ["/new", "/reset"],
-    // Default is already per-agent under ~/.openclaw/agents/<agentId>/sessions/sessions.json
+    // Default is already per-agent under ~/.easyhub/agents/<agentId>/sessions/sessions.json
     // You can override with {agentId} templating:
-    store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+    store: "~/.easyhub/agents/{agentId}/sessions/sessions.json",
     // Direct chats collapse to agent:<agentId>:<mainKey> (default: "main").
     mainKey: "main",
     agentToAgent: {
@@ -2798,7 +2798,7 @@ Fields:
   - `atHour`: local hour (0-23) for the daily reset boundary.
   - `idleMinutes`: sliding idle window in minutes. When daily + idle are both configured, whichever expires first wins.
 - `resetByType`: per-session overrides for `direct`, `group`, and `thread`. Legacy `dm` key is accepted as an alias for `direct`.
-  - If you only set legacy `session.idleMinutes` without any `reset`/`resetByType`, OpenClaw stays in idle-only mode for backward compatibility.
+  - If you only set legacy `session.idleMinutes` without any `reset`/`resetByType`, EasyHub stays in idle-only mode for backward compatibility.
 - `heartbeatIdleMinutes`: optional idle override for heartbeat checks (daily reset still applies when enabled).
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
@@ -2807,7 +2807,7 @@ Fields:
 ### `skills` (skills config)
 
 Controls bundled allowlist, install preferences, extra skill folders, and per-skill
-overrides. Applies to **bundled** skills and `~/.openclaw/skills` (workspace skills
+overrides. Applies to **bundled** skills and `~/.easyhub/skills` (workspace skills
 still win on name conflicts).
 
 Fields:
@@ -2855,7 +2855,7 @@ Example:
 ### `plugins` (extensions)
 
 Controls plugin discovery, allow/deny, and per-plugin config. Plugins are loaded
-from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus any
+from `~/.easyhub/extensions`, `<workspace>/.easyhub/extensions`, plus any
 `plugins.load.paths` entries. **Config changes require a gateway restart.**
 See [/plugin](/tools/plugin) for full usage.
 
@@ -2891,9 +2891,9 @@ Example:
 }
 ```
 
-### `browser` (openclaw-managed browser)
+### `browser` (EasyHub-managed browser)
 
-OpenClaw can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance for openclaw and expose a small loopback control service.
+EasyHub can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance for EasyHub and expose a small loopback control service.
 Profiles can point at a **remote** Chromium-based browser via `profiles.<name>.cdpUrl`. Remote
 profiles are attach-only (start/stop/reset are disabled).
 
@@ -2907,7 +2907,7 @@ Defaults:
 - control service: loopback only (port derived from `gateway.port`, default `18791`)
 - CDP URL: `http://127.0.0.1:18792` (control service + 1, legacy single-profile)
 - profile color: `#FF4500` (lobster-orange)
-- Note: the control server is started by the running gateway (OpenClaw.app menubar, or `openclaw gateway`).
+- Note: the control server is started by the running gateway (EasyHub.app menubar, or `EasyHub gateway`).
 - Auto-detect order: default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 
 ```json5
@@ -2918,7 +2918,7 @@ Defaults:
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     defaultProfile: "chrome",
     profiles: {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      EasyHub: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
@@ -2945,7 +2945,7 @@ If unset, clients fall back to a muted light-blue.
     // Optional: Control UI assistant identity override.
     // If unset, the Control UI uses the active agent identity (config or IDENTITY.md).
     assistant: {
-      name: "OpenClaw",
+      name: "EasyHub",
       avatar: "CB", // emoji, short text, or image URL/data URI
     },
   },
@@ -2968,7 +2968,7 @@ Defaults:
     mode: "local", // or "remote"
     port: 18789, // WS + HTTP multiplex
     bind: "loopback",
-    // controlUi: { enabled: true, basePath: "/openclaw" }
+    // controlUi: { enabled: true, basePath: "/EasyHub" }
     // auth: { mode: "token", token: "your-token" } // token gates WS + Control UI access
     // tailscale: { mode: "off" | "serve" | "funnel" }
   },
@@ -2978,7 +2978,7 @@ Defaults:
 Control UI base path:
 
 - `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
-- Examples: `"/ui"`, `"/openclaw"`, `"/apps/openclaw"`.
+- Examples: `"/ui"`, `"/EasyHub"`, `"/apps/EasyHub"`.
 - Default: root (`/`) (unchanged).
 - `gateway.controlUi.root` sets the filesystem root for Control UI assets (default: `dist/control-ui`).
 - `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI when
@@ -2997,15 +2997,15 @@ Related docs:
 Trusted proxies:
 
 - `gateway.trustedProxies`: list of reverse proxy IPs that terminate TLS in front of the Gateway.
-- When a connection comes from one of these IPs, OpenClaw uses `x-forwarded-for` (or `x-real-ip`) to determine the client IP for local pairing checks and HTTP auth/local checks.
+- When a connection comes from one of these IPs, EasyHub uses `x-forwarded-for` (or `x-real-ip`) to determine the client IP for local pairing checks and HTTP auth/local checks.
 - Only list proxies you fully control, and ensure they **overwrite** incoming `x-forwarded-for`.
 
 Notes:
 
-- `openclaw gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
+- `EasyHub gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
 - OpenAI Chat Completions endpoint: **disabled by default**; enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
-- Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > default `18789`.
+- Precedence: `--port` > `EASYHUB_GATEWAY_PORT` > `gateway.port` > default `18789`.
 - Gateway auth is required by default (token/password or Tailscale Serve identity). Non-loopback binds require a shared token/password.
 - The onboarding wizard generates a gateway token by default (even on loopback).
 - `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.
@@ -3015,10 +3015,10 @@ Auth and Tailscale:
 - `gateway.auth.mode` sets the handshake requirements (`token` or `password`). When unset, token auth is assumed.
 - `gateway.auth.token` stores the shared token for token auth (used by the CLI on the same machine).
 - When `gateway.auth.mode` is set, only that method is accepted (plus optional Tailscale headers).
-- `gateway.auth.password` can be set here, or via `OPENCLAW_GATEWAY_PASSWORD` (recommended).
+- `gateway.auth.password` can be set here, or via `EASYHUB_GATEWAY_PASSWORD` (recommended).
 - `gateway.auth.allowTailscale` allows Tailscale Serve identity headers
   (`tailscale-user-login`) to satisfy auth when the request arrives on loopback
-  with `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`. OpenClaw
+  with `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`. EasyHub
   verifies the identity by resolving the `x-forwarded-for` address via
   `tailscale whois` before accepting it. When `true`, Serve requests do not need
   a token/password; set `false` to require explicit credentials. Defaults to
@@ -3036,7 +3036,7 @@ Remote client defaults (CLI):
 
 macOS app behavior:
 
-- OpenClaw.app watches `~/.openclaw/openclaw.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
+- EasyHub.app watches `~/.easyhub/easyhub.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
 - If `gateway.mode` is unset but `gateway.remote.url` is set, the macOS app treats it as remote mode.
 - When you change connection mode in the macOS app, it writes `gateway.mode` (and `gateway.remote.url` + `gateway.remote.transport` in remote mode) back to the config file.
 
@@ -3070,7 +3070,7 @@ Direct transport example (macOS app):
 
 ### `gateway.reload` (Config hot reload)
 
-The Gateway watches `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`) and applies changes automatically.
+The Gateway watches `~/.easyhub/easyhub.json` (or `EASYHUB_CONFIG_PATH`) and applies changes automatically.
 
 Modes:
 
@@ -3094,7 +3094,7 @@ Modes:
 
 Files watched:
 
-- `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
+- `~/.easyhub/easyhub.json` (or `EASYHUB_CONFIG_PATH`)
 
 Hot-applied (no full gateway restart):
 
@@ -3119,15 +3119,15 @@ Requires full Gateway restart:
 
 To run multiple gateways on one host (for redundancy or a rescue bot), isolate per-instance state + config and use unique ports:
 
-- `OPENCLAW_CONFIG_PATH` (per-instance config)
-- `OPENCLAW_STATE_DIR` (sessions/creds)
+- `EASYHUB_CONFIG_PATH` (per-instance config)
+- `EASYHUB_STATE_DIR` (sessions/creds)
 - `agents.defaults.workspace` (memories)
 - `gateway.port` (unique per instance)
 
 Convenience flags (CLI):
 
-- `openclaw --dev …` → uses `~/.openclaw-dev` + shifts ports from base `19001`
-- `openclaw --profile <name> …` → uses `~/.openclaw-<name>` (port via config/env/flags)
+- `EasyHub --dev …` → uses `~/.easyhub-dev` + shifts ports from base `19001`
+- `EasyHub --profile <name> …` → uses `~/.EasyHub-<name>` (port via config/env/flags)
 
 See [Gateway runbook](/gateway) for the derived port mapping (gateway/browser/canvas).
 See [Multiple gateways](/gateway/multiple-gateways) for browser/CDP port isolation details.
@@ -3135,9 +3135,9 @@ See [Multiple gateways](/gateway/multiple-gateways) for browser/CDP port isolati
 Example:
 
 ```bash
-OPENCLAW_CONFIG_PATH=~/.openclaw/a.json \
-OPENCLAW_STATE_DIR=~/.openclaw-a \
-openclaw gateway --port 19001
+EASYHUB_CONFIG_PATH=~/.easyhub/a.json \
+EASYHUB_STATE_DIR=~/.EasyHub-a \
+EasyHub gateway --port 19001
 ```
 
 ### `hooks` (Gateway webhooks)
@@ -3157,7 +3157,7 @@ Defaults:
     token: "shared-secret",
     path: "/hooks",
     presets: ["gmail"],
-    transformsDir: "~/.openclaw/hooks",
+    transformsDir: "~/.easyhub/hooks",
     mappings: [
       {
         match: { path: "gmail" },
@@ -3178,7 +3178,7 @@ Defaults:
 Requests must include the hook token:
 
 - `Authorization: Bearer <token>` **or**
-- `x-openclaw-token: <token>`
+- `x-EasyHub-token: <token>`
 
 Endpoints:
 
@@ -3198,13 +3198,13 @@ Mapping notes:
 - If there is no prior delivery route, set `channel` + `to` explicitly (required for Telegram/Discord/Google Chat/Slack/Signal/iMessage/MS Teams).
 - `model` overrides the LLM for this hook run (`provider/model` or alias; must be allowed if `agents.defaults.models` is set).
 
-Gmail helper config (used by `openclaw webhooks gmail setup` / `run`):
+Gmail helper config (used by `EasyHub webhooks gmail setup` / `run`):
 
 ```json5
 {
   hooks: {
     gmail: {
-      account: "openclaw@gmail.com",
+      account: "EasyHub@gmail.com",
       topic: "projects/<project-id>/topics/gog-gmail-watch",
       subscription: "gog-gmail-watch-push",
       pushToken: "shared-push-token",
@@ -3238,11 +3238,11 @@ Gateway auto-start:
 
 - If `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts
   `gog gmail watch serve` on boot and auto-renews the watch.
-- Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to disable the auto-start (for manual runs).
+- Set `EASYHUB_SKIP_GMAIL_WATCHER=1` to disable the auto-start (for manual runs).
 - Avoid running a separate `gog gmail watch serve` alongside the Gateway; it will
   fail with `listen tcp 127.0.0.1:8788: bind: address already in use`.
 
-Note: when `tailscale.mode` is on, OpenClaw defaults `serve.path` to `/` so
+Note: when `tailscale.mode` is on, EasyHub defaults `serve.path` to `/` so
 Tailscale can proxy `/gmail-pubsub` correctly (it strips the set-path prefix).
 If you need the backend to receive the prefixed path, set
 `hooks.gmail.tailscale.target` to a full URL (and align `serve.path`).
@@ -3251,17 +3251,17 @@ If you need the backend to receive the prefixed path, set
 
 The Gateway serves a directory of HTML/CSS/JS over HTTP so iOS/Android nodes can simply `canvas.navigate` to it.
 
-Default root: `~/.openclaw/workspace/canvas`  
-Default port: `18793` (chosen to avoid the openclaw browser CDP port `18792`)  
+Default root: `~/.easyhub/workspace/canvas`  
+Default port: `18793` (chosen to avoid the EasyHub browser CDP port `18792`)  
 The server listens on the **gateway bind host** (LAN or Tailnet) so nodes can reach it.
 
 The server:
 
 - serves files under `canvasHost.root`
 - injects a tiny live-reload client into served HTML
-- watches the directory and broadcasts reloads over a WebSocket endpoint at `/__openclaw__/ws`
+- watches the directory and broadcasts reloads over a WebSocket endpoint at `/__EASYHUB__/ws`
 - auto-creates a starter `index.html` when the directory is empty (so you see something immediately)
-- also serves A2UI at `/__openclaw__/a2ui/` and is advertised to nodes as `canvasHostUrl`
+- also serves A2UI at `/__EASYHUB__/a2ui/` and is advertised to nodes as `canvasHostUrl`
   (always used by nodes for Canvas/A2UI)
 
 Disable live reload (and file watching) if the directory is large or you hit `EMFILE`:
@@ -3271,7 +3271,7 @@ Disable live reload (and file watching) if the directory is large or you hit `EM
 ```json5
 {
   canvasHost: {
-    root: "~/.openclaw/workspace/canvas",
+    root: "~/.easyhub/workspace/canvas",
     port: 18793,
     liveReload: true,
   },
@@ -3283,7 +3283,7 @@ Changes to `canvasHost.*` require a gateway restart (config reload will restart)
 Disable with:
 
 - config: `canvasHost: { enabled: false }`
-- env: `OPENCLAW_SKIP_CANVAS_HOST=1`
+- env: `EASYHUB_SKIP_CANVAS_HOST=1`
 
 ### `bridge` (legacy TCP bridge, removed)
 
@@ -3327,9 +3327,9 @@ Auto-generated certs require `openssl` on PATH; if generation fails, the bridge 
     bind: "tailnet",
     tls: {
       enabled: true,
-      // Uses ~/.openclaw/bridge/tls/bridge-{cert,key}.pem when omitted.
-      // certPath: "~/.openclaw/bridge/tls/bridge-cert.pem",
-      // keyPath: "~/.openclaw/bridge/tls/bridge-key.pem"
+      // Uses ~/.easyhub/bridge/tls/bridge-{cert,key}.pem when omitted.
+      // certPath: "~/.easyhub/bridge/tls/bridge-cert.pem",
+      // keyPath: "~/.easyhub/bridge/tls/bridge-key.pem"
     },
   },
 }
@@ -3337,12 +3337,12 @@ Auto-generated certs require `openssl` on PATH; if generation fails, the bridge 
 
 ### `discovery.mdns` (Bonjour / mDNS broadcast mode)
 
-Controls LAN mDNS discovery broadcasts (`_openclaw-gw._tcp`).
+Controls LAN mDNS discovery broadcasts (`_EasyHub-gw._tcp`).
 
 - `minimal` (default): omit `cliPath` + `sshPort` from TXT records
 - `full`: include `cliPath` + `sshPort` in TXT records
 - `off`: disable mDNS broadcasts entirely
-- Hostname: defaults to `openclaw` (advertises `openclaw.local`). Override with `OPENCLAW_MDNS_HOSTNAME`.
+- Hostname: defaults to `EasyHub` (advertises `EasyHub.local`). Override with `EASYHUB_MDNS_HOSTNAME`.
 
 ```json5
 {
@@ -3352,7 +3352,7 @@ Controls LAN mDNS discovery broadcasts (`_openclaw-gw._tcp`).
 
 ### `discovery.wideArea` (Wide-Area Bonjour / unicast DNS‑SD)
 
-When enabled, the Gateway writes a unicast DNS-SD zone for `_openclaw-gw._tcp` under `~/.openclaw/dns/` using the configured discovery domain (example: `openclaw.internal.`).
+When enabled, the Gateway writes a unicast DNS-SD zone for `_EasyHub-gw._tcp` under `~/.easyhub/dns/` using the configured discovery domain (example: `EasyHub.internal.`).
 
 To make iOS/Android discover across networks (Vienna ⇄ London), pair this with:
 
@@ -3362,7 +3362,7 @@ To make iOS/Android discover across networks (Vienna ⇄ London), pair this with
 One-time setup helper (gateway host):
 
 ```bash
-openclaw dns setup --apply
+EasyHub dns setup --apply
 ```
 
 ```json5

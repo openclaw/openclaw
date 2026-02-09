@@ -1,5 +1,5 @@
 import XCTest
-@testable import OpenClawKit
+@testable import EasyHubKit
 
 final class ElevenLabsTTSValidationTests: XCTestCase {
     func testValidatedOutputFormatAllowsOnlyMp3Presets() {

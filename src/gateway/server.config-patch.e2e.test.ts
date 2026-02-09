@@ -115,7 +115,7 @@ describe("gateway config.patch", () => {
     }>(ws, (o) => o.type === "res" && o.id === get2Id);
     expect(get2Res.ok).toBe(true);
     expect(get2Res.payload?.config?.gateway?.mode).toBe("local");
-    expect(get2Res.payload?.config?.channels?.telegram?.botToken).toBe("__OPENCLAW_REDACTED__");
+    expect(get2Res.payload?.config?.channels?.telegram?.botToken).toBe("__EASYHUB_REDACTED__");
 
     const storedRaw = await fs.readFile(CONFIG_PATH, "utf-8");
     const stored = JSON.parse(storedRaw) as {
@@ -166,7 +166,7 @@ describe("gateway config.patch", () => {
     expect(typeof baseHash).toBe("string");
     const rawRedacted = getRes.payload?.raw;
     expect(typeof rawRedacted).toBe("string");
-    expect(rawRedacted).toContain("__OPENCLAW_REDACTED__");
+    expect(rawRedacted).toContain("__EASYHUB_REDACTED__");
 
     const set2Id = "req-set-sentinel-2";
     ws.send(
@@ -263,7 +263,7 @@ describe("gateway config.patch", () => {
     );
     expect(patchRes.ok).toBe(true);
 
-    const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
+    const sentinelPath = path.join(os.homedir(), ".easyhub", "restart-sentinel.json");
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     try {
@@ -361,7 +361,7 @@ describe("gateway config.patch", () => {
 
 describe("gateway server sessions", () => {
   it("filters sessions by agentId", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-agents-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-sessions-agents-"));
     testState.sessionConfig = {
       store: path.join(dir, "{agentId}", "sessions.json"),
     };
@@ -422,7 +422,7 @@ describe("gateway server sessions", () => {
   });
 
   it("resolves and patches main alias to default agent main key", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-sessions-"));
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };

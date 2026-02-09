@@ -45,7 +45,7 @@ final class GatewayProcessManager {
     #if DEBUG
     private var testingConnection: GatewayConnection?
     #endif
-    private let logger = Logger(subsystem: "ai.openclaw", category: "gateway.process")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "gateway.process")
 
     private let logLimit = 20000 // characters to keep in-memory
     private let environmentRefreshMinInterval: TimeInterval = 30

@@ -1,5 +1,5 @@
 ---
-summary: 使用千帆统一 API 在 OpenClaw 中接入多种模型
+summary: 使用千帆统一 API 在 EasyHub 中接入多种模型
 title: 千帆（Qianfan）
 ---
 

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import OpenClaw
+@testable import EasyHub
 
 @Suite struct GatewayEnvironmentTests {
     @Test func semverParsesCommonForms() {
@@ -34,7 +34,7 @@ import Testing
     @Test func gatewayPortDefaultsAndRespectsOverride() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
-            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            env: ["EASYHUB_CONFIG_PATH": configPath],
             defaults: ["gatewayPort": nil])
         {
             let defaultPort = GatewayEnvironment.gatewayPort()

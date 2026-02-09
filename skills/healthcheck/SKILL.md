@@ -1,13 +1,13 @@
 ---
 name: healthcheck
-description: Host security hardening and risk-tolerance configuration for OpenClaw deployments. Use when a user asks for security audits, firewall/SSH/update hardening, risk posture, exposure review, OpenClaw cron scheduling for periodic checks, or version status checks on a machine running OpenClaw (laptop, workstation, Pi, VPS).
+description: Host security hardening and risk-tolerance configuration for EasyHub deployments. Use when a user asks for security audits, firewall/SSH/update hardening, risk posture, exposure review, EasyHub cron scheduling for periodic checks, or version status checks on a machine running EasyHub (laptop, workstation, Pi, VPS).
 ---
 
-# OpenClaw Host Hardening
+# EasyHub Host Hardening
 
 ## Overview
 
-Assess and harden the host running OpenClaw, then align it to a user-defined risk tolerance without breaking access. Use OpenClaw security tooling as a first-class signal, but treat OS hardening as a separate, explicit set of steps.
+Assess and harden the host running EasyHub, then align it to a user-defined risk tolerance without breaking access. Use EasyHub security tooling as a first-class signal, but treat OS hardening as a separate, explicit set of steps.
 
 ## Core rules
 
@@ -15,7 +15,7 @@ Assess and harden the host running OpenClaw, then align it to a user-defined ris
 - Require explicit approval before any state-changing action.
 - Do not modify remote access settings without confirming how the user connects.
 - Prefer reversible, staged changes with a rollback plan.
-- Never claim OpenClaw changes the host firewall, SSH, or OS updates; it does not.
+- Never claim EasyHub changes the host firewall, SSH, or OS updates; it does not.
 - If role/identity is unknown, provide recommendations only.
 - Formatting: every set of user choices must be numbered so the user can reply with a single digit.
 - System-level backups are recommended; try to verify status.
@@ -36,12 +36,12 @@ Determine (in order):
 2. Privilege level (root/admin vs user).
 3. Access path (local console, SSH, RDP, tailnet).
 4. Network exposure (public IP, reverse proxy, tunnel).
-5. OpenClaw gateway status and bind address.
+5. EasyHub gateway status and bind address.
 6. Backup system and status (e.g., Time Machine, system images, snapshots).
 7. Deployment context (local mac app, headless gateway host, remote gateway, container/CI).
 8. Disk encryption status (FileVault/LUKS/BitLocker).
 9. OS automatic security updates status.
-   Note: these are not blocking items, but are highly recommended, especially if OpenClaw can access sensitive data.
+   Note: these are not blocking items, but are highly recommended, especially if EasyHub can access sensitive data.
 10. Usage mode for a personal assistant with full access (local workstation vs headless/remote vs other).
 
 First ask once for permission to run read-only checks. If granted, run them by default and only ask questions for items you cannot infer or verify. Do not ask for information already visible in runtime or command output. Keep the permission ask as a single sentence, and list follow-up info needed as an unordered list (not numbered) unless you are presenting selectable choices.
@@ -74,24 +74,24 @@ If the user grants read-only permission, run the OS-appropriate checks by defaul
    - macOS: `/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate` and `pfctl -s info`.
 4. Backups (macOS): `tmutil status` (if Time Machine is used).
 
-### 2) Run OpenClaw security audits (read-only)
+### 2) Run EasyHub security audits (read-only)
 
-As part of the default read-only checks, run `openclaw security audit --deep`. Only offer alternatives if the user requests them:
+As part of the default read-only checks, run `EasyHub security audit --deep`. Only offer alternatives if the user requests them:
 
-1. `openclaw security audit` (faster, non-probing)
-2. `openclaw security audit --json` (structured output)
+1. `EasyHub security audit` (faster, non-probing)
+2. `EasyHub security audit --json` (structured output)
 
-Offer to apply OpenClaw safe defaults (numbered):
+Offer to apply EasyHub safe defaults (numbered):
 
-1. `openclaw security audit --fix`
+1. `EasyHub security audit --fix`
 
-Be explicit that `--fix` only tightens OpenClaw defaults and file permissions. It does not change host firewall, SSH, or OS update policies.
+Be explicit that `--fix` only tightens EasyHub defaults and file permissions. It does not change host firewall, SSH, or OS update policies.
 
 If browser control is enabled, recommend that 2FA be enabled on all important accounts, with hardware keys preferred and SMS not sufficient.
 
-### 3) Check OpenClaw version/update status (read-only)
+### 3) Check EasyHub version/update status (read-only)
 
-As part of the default read-only checks, run `openclaw update status`.
+As part of the default read-only checks, run `EasyHub update status`.
 
 Report the current channel and whether an update is available.
 
@@ -117,7 +117,7 @@ Provide a plan that includes:
 - Access-preservation strategy and rollback
 - Risks and potential lockout scenarios
 - Least-privilege notes (e.g., avoid admin usage, tighten ownership/permissions where safe)
-- Credential hygiene notes (location of OpenClaw creds, prefer disk encryption)
+- Credential hygiene notes (location of EasyHub creds, prefer disk encryption)
 
 Always show the plan before any changes.
 
@@ -146,7 +146,7 @@ Re-check:
 - Firewall status
 - Listening ports
 - Remote access still works
-- OpenClaw security audit (re-run)
+- EasyHub security audit (re-run)
 
 Deliver a final posture report and note any deferred items.
 
@@ -168,50 +168,50 @@ If unsure, ask.
 
 ## Periodic checks
 
-After OpenClaw install or first hardening pass, run at least one baseline audit and version check:
+After EasyHub install or first hardening pass, run at least one baseline audit and version check:
 
-- `openclaw security audit`
-- `openclaw security audit --deep`
-- `openclaw update status`
+- `EasyHub security audit`
+- `EasyHub security audit --deep`
+- `EasyHub update status`
 
-Ongoing monitoring is recommended. Use the OpenClaw cron tool/CLI to schedule periodic audits (Gateway scheduler). Do not create scheduled tasks without explicit approval. Store outputs in a user-approved location and avoid secrets in logs.
+Ongoing monitoring is recommended. Use the EasyHub cron tool/CLI to schedule periodic audits (Gateway scheduler). Do not create scheduled tasks without explicit approval. Store outputs in a user-approved location and avoid secrets in logs.
 When scheduling headless cron runs, include a note in the output that instructs the user to call `healthcheck` so issues can be fixed.
 
 ### Required prompt to schedule (always)
 
 After any audit or hardening pass, explicitly offer scheduling and require a direct response. Use a short prompt like (numbered):
 
-1. “Do you want me to schedule periodic audits (e.g., daily/weekly) via `openclaw cron add`?”
+1. “Do you want me to schedule periodic audits (e.g., daily/weekly) via `EasyHub cron add`?”
 
 If the user says yes, ask for:
 
 - cadence (daily/weekly), preferred time window, and output location
-- whether to also schedule `openclaw update status`
+- whether to also schedule `EasyHub update status`
 
 Use a stable cron job name so updates are deterministic. Prefer exact names:
 
 - `healthcheck:security-audit`
 - `healthcheck:update-status`
 
-Before creating, `openclaw cron list` and match on exact `name`. If found, `openclaw cron edit <id> ...`.
-If not found, `openclaw cron add --name <name> ...`.
+Before creating, `EasyHub cron list` and match on exact `name`. If found, `EasyHub cron edit <id> ...`.
+If not found, `EasyHub cron add --name <name> ...`.
 
 Also offer a periodic version check so the user can decide when to update (numbered):
 
-1. `openclaw update status` (preferred for source checkouts and channels)
-2. `npm view openclaw version` (published npm version)
+1. `EasyHub update status` (preferred for source checkouts and channels)
+2. `npm view EasyHub version` (published npm version)
 
-## OpenClaw command accuracy
+## EasyHub command accuracy
 
 Use only supported commands and flags:
 
-- `openclaw security audit [--deep] [--fix] [--json]`
-- `openclaw status` / `openclaw status --deep`
-- `openclaw health --json`
-- `openclaw update status`
-- `openclaw cron add|list|runs|run`
+- `EasyHub security audit [--deep] [--fix] [--json]`
+- `EasyHub status` / `EasyHub status --deep`
+- `EasyHub health --json`
+- `EasyHub update status`
+- `EasyHub cron add|list|runs|run`
 
-Do not invent CLI flags or imply OpenClaw enforces host firewall/SSH policies.
+Do not invent CLI flags or imply EasyHub enforces host firewall/SSH policies.
 
 ## Logging and audit trail
 
@@ -230,7 +230,7 @@ Only write to memory files when the user explicitly opts in and the session is a
 (per `docs/reference/templates/AGENTS.md`). Otherwise provide a redacted, paste-ready summary the user can
 decide to save elsewhere.
 
-Follow the durable-memory prompt format used by OpenClaw compaction:
+Follow the durable-memory prompt format used by EasyHub compaction:
 
 - Write lasting notes to `memory/YYYY-MM-DD.md`.
 

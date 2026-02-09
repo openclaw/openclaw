@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/types.js";
+import type { EasyHubConfig } from "../../config/types.js";
 import type { ChannelDirectoryEntry } from "./types.js";
 import { resolveDiscordAccount } from "../../discord/accounts.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
@@ -8,7 +8,7 @@ import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/norm
 import { normalizeSlackMessagingTarget } from "./normalize/slack.js";
 
 export type DirectoryConfigParams = {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   accountId?: string | null;
   query?: string | null;
   limit?: number | null;

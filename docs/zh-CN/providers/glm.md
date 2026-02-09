@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想在 OpenClaw 中使用 GLM 模型
+  - 你想在 EasyHub 中使用 GLM 模型
   - 你需要了解模型命名规范和设置方法
-summary: GLM 模型系列概述 + 如何在 OpenClaw 中使用
+summary: GLM 模型系列概述 + 如何在 EasyHub 中使用
 title: GLM 模型
 x-i18n:
   generated_at: "2026-02-01T21:34:53Z"
@@ -15,12 +15,12 @@ x-i18n:
 
 # GLM 模型
 
-GLM 是一个**模型系列**（而非公司），通过 Z.AI 平台提供。在 OpenClaw 中，GLM 模型通过 `zai` 提供商访问，模型 ID 格式如 `zai/glm-4.7`。
+GLM 是一个**模型系列**（而非公司），通过 Z.AI 平台提供。在 EasyHub 中，GLM 模型通过 `zai` 提供商访问，模型 ID 格式如 `zai/glm-4.7`。
 
 ## CLI 设置
 
 ```bash
-openclaw onboard --auth-choice zai-api-key
+EasyHub onboard --auth-choice zai-api-key
 ```
 
 ## 配置片段

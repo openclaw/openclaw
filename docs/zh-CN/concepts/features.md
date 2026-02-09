@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 你想了解 OpenClaw 支持的完整功能列表
-summary: OpenClaw 在渠道、路由、媒体和用户体验方面的功能。
+  - 你想了解 EasyHub 支持的完整功能列表
+summary: EasyHub 在渠道、路由、媒体和用户体验方面的功能。
 title: 功能
 x-i18n:
   generated_at: "2026-02-04T17:53:22Z"

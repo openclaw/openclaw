@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/twitch",
+  "name": "@easyhub/twitch",
   "version": "2026.2.6-3",
-  "description": "OpenClaw Twitch channel plugin",
+  "description": "EasyHub Twitch channel plugin",
   "type": "module",
   "dependencies": {
     "@twurple/api": "^8.0.3",
@@ -10,9 +10,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ]

@@ -16,7 +16,7 @@ x-i18n:
 
 # Markdown 格式化
 
-OpenClaw 通过将出站 Markdown 转换为共享的中间表示（IR），然后再渲染为特定渠道的输出来进行格式化。IR 保留源文本不变，同时携带样式/链接跨度信息，使分块和渲染在各渠道间保持一致。
+EasyHub 通过将出站 Markdown 转换为共享的中间表示（IR），然后再渲染为特定渠道的输出来进行格式化。IR 保留源文本不变，同时携带样式/链接跨度信息，使分块和渲染在各渠道间保持一致。
 
 ## 目标
 
@@ -43,7 +43,7 @@ OpenClaw 通过将出站 Markdown 转换为共享的中间表示（IR），然�
 输入 Markdown：
 
 ```markdown
-Hello **world** — see [docs](https://docs.openclaw.ai).
+Hello **world** — see [docs](https://docs.EasyHub.ai).
 ```
 
 IR（示意）：
@@ -52,7 +52,7 @@ IR（示意）：
 {
   "text": "Hello world — see docs.",
   "styles": [{ "start": 6, "end": 11, "style": "bold" }],
-  "links": [{ "start": 19, "end": 23, "href": "https://docs.openclaw.ai" }]
+  "links": [{ "start": 19, "end": 23, "href": "https://docs.EasyHub.ai" }]
 }
 ```
 

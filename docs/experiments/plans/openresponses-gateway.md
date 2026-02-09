@@ -1,6 +1,6 @@
 ---
 summary: "Plan: Add OpenResponses /v1/responses endpoint and deprecate chat completions cleanly"
-owner: "openclaw"
+owner: "EasyHub"
 status: "draft"
 last_updated: "2026-01-19"
 title: "OpenResponses Gateway Plan"
@@ -10,7 +10,7 @@ title: "OpenResponses Gateway Plan"
 
 ## Context
 
-OpenClaw Gateway currently exposes a minimal OpenAI-compatible Chat Completions endpoint at
+EasyHub Gateway currently exposes a minimal OpenAI-compatible Chat Completions endpoint at
 `/v1/chat/completions` (see [OpenAI Chat Completions](/gateway/openai-http-api)).
 
 Open Responses is an open inference standard based on the OpenAI Responses API. It is designed

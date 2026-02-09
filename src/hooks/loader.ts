@@ -7,7 +7,7 @@
 
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
@@ -21,7 +21,7 @@ import { loadWorkspaceHookEntries } from "./workspace.js";
  * 1. Directory-based discovery (bundled, managed, workspace)
  * 2. Legacy config handlers (backwards compatibility)
  *
- * @param cfg - OpenClaw configuration
+ * @param cfg - EasyHub configuration
  * @param workspaceDir - Workspace directory for hook discovery
  * @returns Number of handlers successfully loaded
  *
@@ -34,7 +34,7 @@ import { loadWorkspaceHookEntries } from "./workspace.js";
  * ```
  */
 export async function loadInternalHooks(
-  cfg: OpenClawConfig,
+  cfg: EasyHubConfig,
   workspaceDir: string,
 ): Promise<number> {
   // Check if hooks are enabled

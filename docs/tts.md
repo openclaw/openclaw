@@ -9,8 +9,8 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
-It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
+EasyHub can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+It works anywhere EasyHub can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
@@ -37,7 +37,7 @@ If you want OpenAI or ElevenLabs:
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
-Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
+Edge TTS does **not** require an API key. If no API keys are found, EasyHub defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
 
 If multiple providers are configured, the selected provider is used first and the others are fallback options.
@@ -63,7 +63,7 @@ when no OpenAI or ElevenLabs API keys are available.
 
 ## Config
 
-TTS config lives under `messages.tts` in `openclaw.json`.
+TTS config lives under `messages.tts` in `easyhub.json`.
 Full schema is in [Gateway configuration](/gateway/configuration).
 
 ### Minimal config (enable + provider)
@@ -161,7 +161,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
       auto: "always",
       maxTextLength: 4000,
       timeoutMs: 30000,
-      prefsPath: "~/.openclaw/settings/tts.json",
+      prefsPath: "~/.easyhub/settings/tts.json",
     },
   },
 }
@@ -205,7 +205,7 @@ Then run:
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
 - `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
-- If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
+- If `provider` is **unset**, EasyHub prefers `openai` (if key), then `elevenlabs` (if key),
   otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
@@ -294,7 +294,7 @@ Optional allowlist (disable specific overrides while keeping tags enabled):
 ## Per-user preferences
 
 Slash commands write local overrides to `prefsPath` (default:
-`~/.openclaw/settings/tts.json`, override with `OPENCLAW_TTS_PREFS` or
+`~/.easyhub/settings/tts.json`, override with `EASYHUB_TTS_PREFS` or
 `messages.tts.prefsPath`).
 
 Stored fields:
@@ -318,13 +318,13 @@ These override `messages.tts.*` for that host.
   - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus). citeturn1search0
   - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
     guaranteed Opus voice notes. citeturn1search1
-  - If the configured Edge output format fails, OpenClaw retries with MP3.
+  - If the configured Edge output format fails, EasyHub retries with MP3.
 
 OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
 
 ## Auto-TTS behavior
 
-When enabled, OpenClaw:
+When enabled, EasyHub:
 
 - skips TTS if the reply already contains media or a `MEDIA:` directive.
 - skips very short replies (< 10 chars).
@@ -355,7 +355,7 @@ Reply -> TTS enabled?
 There is a single command: `/tts`.
 See [Slash commands](/tools/slash-commands) for enablement details.
 
-Discord note: `/tts` is a built-in Discord command, so OpenClaw registers
+Discord note: `/tts` is a built-in Discord command, so EasyHub registers
 `/voice` as the native command there. Text `/tts ...` still works.
 
 ```
@@ -367,7 +367,7 @@ Discord note: `/tts` is a built-in Discord command, so OpenClaw registers
 /tts provider openai
 /tts limit 2000
 /tts summary off
-/tts audio Hello from OpenClaw
+/tts audio Hello from EasyHub
 ```
 
 Notes:

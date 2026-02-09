@@ -102,12 +102,12 @@ Notes:
 ## Model/tooling integration
 
 - Tool surface: `nodes` tool adds `location_get` action (node required).
-- CLI: `openclaw nodes location get --node <id>`.
+- CLI: `EasyHub nodes location get --node <id>`.
 - Agent guidelines: only call when user enabled location and understands the scope.
 
 ## UX copy (suggested)
 
 - Off: “Location sharing is disabled.”
-- While Using: “Only when OpenClaw is open.”
+- While Using: “Only when EasyHub is open.”
 - Always: “Allow background location. Requires system permission.”
 - Precise: “Use precise GPS location. Toggle off to share approximate location.”

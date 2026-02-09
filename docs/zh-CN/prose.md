@@ -3,7 +3,7 @@ read_when:
   - 你想运行或编写 .prose 工作流
   - 你想启用 OpenProse 插件
   - 你需要了解状态存储
-summary: OpenProse：OpenClaw 中的 .prose 工作流、斜杠命令和状态
+summary: OpenProse：EasyHub 中的 .prose 工作流、斜杠命令和状态
 title: OpenProse
 x-i18n:
   generated_at: "2026-02-03T07:53:38Z"
@@ -16,7 +16,7 @@ x-i18n:
 
 # OpenProse
 
-OpenProse 是一种可移植的、以 Markdown 为中心的工作流格式，用于编排 AI 会话。在 OpenClaw 中，它作为插件发布，安装一个 OpenProse Skills 包以及一个 `/prose` 斜杠命令。程序存放在 `.prose` 文件中，可以生成多个具有显式控制流的子智能体。
+OpenProse 是一种可移植的、以 Markdown 为中心的工作流格式，用于编排 AI 会话。在 EasyHub 中，它作为插件发布，安装一个 OpenProse Skills 包以及一个 `/prose` 斜杠命令。程序存放在 `.prose` 文件中，可以生成多个具有显式控制流的子智能体。
 
 官方网站：https://www.prose.md
 
@@ -31,18 +31,18 @@ OpenProse 是一种可移植的、以 Markdown 为中心的工作流格式，用
 捆绑的插件默认是禁用的。启用 OpenProse：
 
 ```bash
-openclaw plugins enable open-prose
+EasyHub plugins enable open-prose
 ```
 
 启用插件后重启 Gateway 网关。
 
-开发/本地检出：`openclaw plugins install ./extensions/open-prose`
+开发/本地检出：`EasyHub plugins install ./extensions/open-prose`
 
 相关文档：[插件](/tools/plugin)、[插件清单](/plugins/manifest)、[Skills](/tools/skills)。
 
 ## 斜杠命令
 
-OpenProse 将 `/prose` 注册为用户可调用的 Skills 命令。它路由到 OpenProse VM 指令，并在底层使用 OpenClaw 工具。
+OpenProse 将 `/prose` 注册为用户可调用的 Skills 命令。它路由到 OpenProse VM 指令，并在底层使用 EasyHub 工具。
 
 常用命令：
 
@@ -122,11 +122,11 @@ OpenProse 支持多种状态后端：
 `/prose run <handle/slug>` 解析为 `https://p.prose.md/<handle>/<slug>`。
 直接 URL 按原样获取。这使用 `web_fetch` 工具（或用于 POST 的 `exec`）。
 
-## OpenClaw 运行时映射
+## EasyHub 运行时映射
 
-OpenProse 程序映射到 OpenClaw 原语：
+OpenProse 程序映射到 EasyHub 原语：
 
-| OpenProse 概念       | OpenClaw 工具    |
+| OpenProse 概念       | EasyHub 工具    |
 | -------------------- | ---------------- |
 | 生成会话 / Task 工具 | `sessions_spawn` |
 | 文件读/写            | `read` / `write` |
@@ -136,6 +136,6 @@ OpenProse 程序映射到 OpenClaw 原语：
 
 ## 安全 + 批准
 
-将 `.prose` 文件视为代码。运行前请审查。使用 OpenClaw 工具白名单和批准门控来控制副作用。
+将 `.prose` 文件视为代码。运行前请审查。使用 EasyHub 工具白名单和批准门控来控制副作用。
 
 对于确定性的、批准门控的工作流，可与 [Lobster](/tools/lobster) 比较。

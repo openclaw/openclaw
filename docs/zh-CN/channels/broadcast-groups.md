@@ -25,7 +25,7 @@ x-i18n:
 
 当前范围：**仅限 WhatsApp**（web 渠道）。
 
-广播群组在渠道白名单和群组激活规则之后进行评估。在 WhatsApp 群组中，这意味着广播会在 OpenClaw 正常回复时发生（例如：被提及时，具体取决于你的群组设置）。
+广播群组在渠道白名单和群组激活规则之后进行评估。在 WhatsApp 群组中，这意味着广播会在 EasyHub 正常回复时发生（例如：被提及时，具体取决于你的群组设置）。
 
 ## 使用场景
 
@@ -90,7 +90,7 @@ Agents:
 }
 ```
 
-**结果：** 当 OpenClaw 在此聊天中回复时，将运行所有三个智能体。
+**结果：** 当 EasyHub 在此聊天中回复时，将运行所有三个智能体。
 
 ### 处理策略
 
@@ -199,7 +199,7 @@ Agents:
 ```
 Session: agent:alfred:whatsapp:group:120363403215116621@g.us
 History: [user message, alfred's previous responses]
-Workspace: /Users/pascal/openclaw-alfred/
+Workspace: /Users/pascal/EasyHub-alfred/
 Tools: read, write, exec
 ```
 
@@ -208,7 +208,7 @@ Tools: read, write, exec
 ```
 Session: agent:baerbel:whatsapp:group:120363403215116621@g.us
 History: [user message, baerbel's previous responses]
-Workspace: /Users/pascal/openclaw-baerbel/
+Workspace: /Users/pascal/EasyHub-baerbel/
 Tools: read only
 ```
 
@@ -324,7 +324,7 @@ Result: Agent A and C respond, Agent B logs error
 **调试：**
 
 ```bash
-tail -f ~/.openclaw/logs/gateway.log | grep broadcast
+tail -f ~/.easyhub/logs/gateway.log | grep broadcast
 ```
 
 ### 只有一个智能体响应
@@ -410,7 +410,7 @@ tail -f ~/.openclaw/logs/gateway.log | grep broadcast
 ### 配置模式
 
 ```typescript
-interface OpenClawConfig {
+interface EasyHubConfig {
   broadcast?: {
     strategy?: "parallel" | "sequential";
     [peerId: string]: string[];

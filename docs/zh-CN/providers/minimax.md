@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想在 OpenClaw 中使用 MiniMax 模型
+  - 你想在 EasyHub 中使用 MiniMax 模型
   - 你需要 MiniMax 设置指南
-summary: 在 OpenClaw 中使用 MiniMax M2.1
+summary: 在 EasyHub 中使用 MiniMax M2.1
 title: MiniMax
 x-i18n:
   generated_at: "2026-02-03T10:08:52Z"
@@ -45,9 +45,9 @@ MiniMax 强调 M2.1 的以下改进：
 启用内置 OAuth 插件并进行认证：
 
 ```bash
-openclaw plugins enable minimax-portal-auth  # 如果已加载则跳过
-openclaw gateway restart  # 如果 Gateway 网关已在运行则重启
-openclaw onboard --auth-choice minimax-portal
+EasyHub plugins enable minimax-portal-auth  # 如果已加载则跳过
+EasyHub gateway restart  # 如果 Gateway 网关已在运行则重启
+EasyHub onboard --auth-choice minimax-portal
 ```
 
 系统会提示你选择端点：
@@ -55,7 +55,7 @@ openclaw onboard --auth-choice minimax-portal
 - **Global** - 国际用户（`api.minimax.io`）
 - **CN** - 中国用户（`api.minimaxi.com`）
 
-详情参见 [MiniMax OAuth 插件 README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax-portal-auth)。
+详情参见 [MiniMax OAuth 插件 README](https://github.com/EasyHub/EasyHub/tree/main/extensions/minimax-portal-auth)。
 
 ### MiniMax M2.1（API 密钥）
 
@@ -63,7 +63,7 @@ openclaw onboard --auth-choice minimax-portal
 
 通过 CLI 配置：
 
-- 运行 `openclaw configure`
+- 运行 `EasyHub configure`
 - 选择 **Model/auth**
 - 选择 **MiniMax M2.1**
 
@@ -122,7 +122,7 @@ openclaw onboard --auth-choice minimax-portal
 **适用于：** 使用 LM Studio 进行本地推理。
 我们在强大硬件（例如台式机/服务器）上使用 LM Studio 的本地服务器运行 MiniMax M2.1 时看到了出色的效果。
 
-通过 `openclaw.json` 手动配置：
+通过 `easyhub.json` 手动配置：
 
 ```json5
 {
@@ -156,11 +156,11 @@ openclaw onboard --auth-choice minimax-portal
 }
 ```
 
-## 通过 `openclaw configure` 配置
+## 通过 `EasyHub configure` 配置
 
 使用交互式配置向导设置 MiniMax，无需编辑 JSON：
 
-1. 运行 `openclaw configure`。
+1. 运行 `EasyHub configure`。
 2. 选择 **Model/auth**。
 3. 选择 **MiniMax M2.1**。
 4. 在提示时选择你的默认模型。
@@ -181,7 +181,7 @@ openclaw onboard --auth-choice minimax-portal
 - 如果需要精确的成本跟踪，请更新 `models.json` 中的定价值。
 - MiniMax 编程计划推荐链接（9 折优惠）：https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link
 - 参见 [/concepts/model-providers](/concepts/model-providers) 了解提供商规则。
-- 使用 `openclaw models list` 和 `openclaw models set minimax/MiniMax-M2.1` 切换模型。
+- 使用 `EasyHub models list` 和 `EasyHub models set minimax/MiniMax-M2.1` 切换模型。
 
 ## 故障排除
 
@@ -190,7 +190,7 @@ openclaw onboard --auth-choice minimax-portal
 这通常意味着 **MiniMax 提供商未配置**（没有提供商条目，也没有找到 MiniMax 认证配置文件/环境变量密钥）。此检测的修复在 **2026.1.12** 中（撰写本文时尚未发布）。修复方法：
 
 - 升级到 **2026.1.12**（或从源码 `main` 分支运行），然后重启 Gateway 网关。
-- 运行 `openclaw configure` 并选择 **MiniMax M2.1**，或
+- 运行 `EasyHub configure` 并选择 **MiniMax M2.1**，或
 - 手动添加 `models.providers.minimax` 块，或
 - 设置 `MINIMAX_API_KEY`（或 MiniMax 认证配置文件）以便注入提供商。
 
@@ -202,5 +202,5 @@ openclaw onboard --auth-choice minimax-portal
 然后重新检查：
 
 ```bash
-openclaw models list
+EasyHub models list
 ```

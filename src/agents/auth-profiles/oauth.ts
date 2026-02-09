@@ -5,7 +5,7 @@ import {
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
@@ -106,7 +106,7 @@ async function refreshOAuthTokenWithLock(params: {
 }
 
 async function tryResolveOAuthProfile(params: {
-  cfg?: OpenClawConfig;
+  cfg?: EasyHubConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
@@ -147,7 +147,7 @@ async function tryResolveOAuthProfile(params: {
 }
 
 export async function resolveApiKeyForProfile(params: {
-  cfg?: OpenClawConfig;
+  cfg?: EasyHubConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;

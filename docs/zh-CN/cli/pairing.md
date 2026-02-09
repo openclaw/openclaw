@@ -1,7 +1,7 @@
 ---
 read_when:
   - 你正在使用配对模式私信并需要批准发送者
-summary: "`openclaw pairing` 的 CLI 参考（批准/列出配对请求）"
+summary: "`EasyHub pairing` 的 CLI 参考（批准/列出配对请求）"
 title: pairing
 x-i18n:
   generated_at: "2026-02-03T07:45:02Z"
@@ -12,7 +12,7 @@ x-i18n:
   workflow: 15
 ---
 
-# `openclaw pairing`
+# `EasyHub pairing`
 
 批准或检查私信配对请求（适用于支持配对的渠道）。
 
@@ -23,6 +23,6 @@ x-i18n:
 ## 命令
 
 ```bash
-openclaw pairing list whatsapp
-openclaw pairing approve whatsapp <code> --notify
+EasyHub pairing list whatsapp
+EasyHub pairing approve whatsapp <code> --notify
 ```

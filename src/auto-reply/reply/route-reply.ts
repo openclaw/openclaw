@@ -7,7 +7,7 @@
  * across multiple providers.
  */
 
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -30,7 +30,7 @@ export type RouteReplyParams = {
   /** Thread id for replies (Telegram topic id or Matrix thread event id). */
   threadId?: string | number;
   /** Config for provider-specific settings. */
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   /** Optional abort signal for cooperative cancellation. */
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */

@@ -5,7 +5,7 @@ read_when:
   - Updating the default dev agent identity
 ---
 
-# AGENTS.md - OpenClaw Workspace
+# AGENTS.md - EasyHub Workspace
 
 This folder is the assistant's working directory.
 

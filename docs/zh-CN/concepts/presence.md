@@ -3,7 +3,7 @@ read_when:
   - 调试实例标签页
   - 排查重复或过期的实例行
   - 更改 Gateway 网关 WS 连接或系统事件信标
-summary: OpenClaw 在线状态条目如何生成、合并和显示
+summary: EasyHub 在线状态条目如何生成、合并和显示
 title: 在线状态
 x-i18n:
   generated_at: "2026-02-03T07:46:37Z"
@@ -16,7 +16,7 @@ x-i18n:
 
 # 在线状态
 
-OpenClaw"在线状态"是以下内容的轻量级、尽力而为的视图：
+EasyHub"在线状态"是以下内容的轻量级、尽力而为的视图：
 
 - **Gateway 网关**本身，以及
 - **连接到 Gateway 网关的客户端**（mac 应用、WebChat、CLI 等）

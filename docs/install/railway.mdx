@@ -2,7 +2,7 @@
 title: Deploy on Railway
 ---
 
-Deploy OpenClaw on Railway with a one-click template and finish setup in your browser.
+Deploy EasyHub on Railway with a one-click template and finish setup in your browser.
 This is the easiest “no terminal on the server” path: Railway runs the Gateway for you,
 and you configure everything via the `/setup` web wizard.
 
@@ -30,11 +30,11 @@ Railway will either:
 Then open:
 
 - `https://<your-railway-domain>/setup` — setup wizard (password protected)
-- `https://<your-railway-domain>/openclaw` — Control UI
+- `https://<your-railway-domain>/EasyHub` — Control UI
 
 ## What you get
 
-- Hosted OpenClaw Gateway + Control UI
+- Hosted EasyHub Gateway + Control UI
 - Web setup wizard at `/setup` (no terminal commands)
 - Persistent storage via Railway Volume (`/data`) so config/credentials/workspace survive redeploys
 - Backup export at `/setup/export` to migrate off Railway later
@@ -59,9 +59,9 @@ Set these variables on the service:
 
 - `SETUP_PASSWORD` (required)
 - `PORT=8080` (required — must match the port in Public Networking)
-- `OPENCLAW_STATE_DIR=/data/.openclaw` (recommended)
-- `OPENCLAW_WORKSPACE_DIR=/data/workspace` (recommended)
-- `OPENCLAW_GATEWAY_TOKEN` (recommended; treat as an admin secret)
+- `EASYHUB_STATE_DIR=/data/.easyhub` (recommended)
+- `EASYHUB_WORKSPACE_DIR=/data/workspace` (recommended)
+- `EASYHUB_GATEWAY_TOKEN` (recommended; treat as an admin secret)
 
 ## Setup flow
 
@@ -96,4 +96,4 @@ Download a backup at:
 
 - `https://<your-railway-domain>/setup/export`
 
-This exports your OpenClaw state + workspace so you can migrate to another host without losing config or memory.
+This exports your EasyHub state + workspace so you can migrate to another host without losing config or memory.

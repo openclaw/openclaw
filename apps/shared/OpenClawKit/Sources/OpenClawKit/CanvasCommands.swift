@@ -1,6 +1,6 @@
 import Foundation
 
-public enum OpenClawCanvasCommand: String, Codable, Sendable {
+public enum EasyHubCanvasCommand: String, Codable, Sendable {
     case present = "canvas.present"
     case hide = "canvas.hide"
     case navigate = "canvas.navigate"

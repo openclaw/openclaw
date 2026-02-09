@@ -39,11 +39,11 @@ x-i18n:
 ## CLI 工作流程（支持无头模式）
 
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
-openclaw nodes reject <requestId>
-openclaw nodes status
-openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
+EasyHub nodes pending
+EasyHub nodes approve <requestId>
+EasyHub nodes reject <requestId>
+EasyHub nodes status
+EasyHub nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
 
 `nodes status` 显示已配对/已连接的节点及其功能。
@@ -80,12 +80,12 @@ openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 
 ## 存储（本地，私有）
 
-配对状态存储在 Gateway 网关状态目录下（默认 `~/.openclaw`）：
+配对状态存储在 Gateway 网关状态目录下（默认 `~/.easyhub`）：
 
-- `~/.openclaw/nodes/paired.json`
-- `~/.openclaw/nodes/pending.json`
+- `~/.easyhub/nodes/paired.json`
+- `~/.easyhub/nodes/pending.json`
 
-如果你覆盖了 `OPENCLAW_STATE_DIR`，`nodes/` 文件夹会随之移动。
+如果你覆盖了 `EASYHUB_STATE_DIR`，`nodes/` 文件夹会随之移动。
 
 安全注意事项：
 

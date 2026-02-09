@@ -1,5 +1,5 @@
 import AVFoundation
-import OpenClawKit
+import EasyHubKit
 import Foundation
 
 actor CameraController {
@@ -36,7 +36,7 @@ actor CameraController {
         }
     }
 
-    func snap(params: OpenClawCameraSnapParams) async throws -> (
+    func snap(params: EasyHubCameraSnapParams) async throws -> (
         format: String,
         base64: String,
         width: Int,
@@ -109,7 +109,7 @@ actor CameraController {
             height: res.heightPx)
     }
 
-    func clip(params: OpenClawCameraClipParams) async throws -> (
+    func clip(params: EasyHubCameraClipParams) async throws -> (
         format: String,
         base64: String,
         durationMs: Int,
@@ -161,9 +161,9 @@ actor CameraController {
         await Self.warmUpCaptureSession()
 
         let movURL = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mov")
+            .appendingPathComponent("EasyHub-camera-\(UUID().uuidString).mov")
         let mp4URL = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mp4")
+            .appendingPathComponent("EasyHub-camera-\(UUID().uuidString).mp4")
 
         defer {
             try? FileManager().removeItem(at: movURL)
@@ -221,7 +221,7 @@ actor CameraController {
     }
 
     private nonisolated static func pickCamera(
-        facing: OpenClawCameraFacing,
+        facing: EasyHubCameraFacing,
         deviceId: String?) -> AVCaptureDevice?
     {
         if let deviceId, !deviceId.isEmpty {

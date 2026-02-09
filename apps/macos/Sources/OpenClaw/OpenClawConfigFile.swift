@@ -1,19 +1,19 @@
-import OpenClawProtocol
+import EasyHubProtocol
 import Foundation
 
-enum OpenClawConfigFile {
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
+enum EasyHubConfigFile {
+    private static let logger = Logger(subsystem: "ai.easyhub", category: "config")
 
     static func url() -> URL {
-        OpenClawPaths.configURL
+        EasyHubPaths.configURL
     }
 
     static func stateDirURL() -> URL {
-        OpenClawPaths.stateDirURL
+        EasyHubPaths.stateDirURL
     }
 
     static func defaultWorkspaceURL() -> URL {
-        OpenClawPaths.workspaceURL
+        EasyHubPaths.workspaceURL
     }
 
     static func loadDict() -> [String: Any] {

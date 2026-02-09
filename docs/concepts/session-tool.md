@@ -73,7 +73,7 @@ Behavior:
 
 - `includeTools=false` filters `role: "toolResult"` messages.
 - Returns messages array in the raw transcript format.
-- When given a `sessionId`, OpenClaw resolves it to the corresponding session key (missing ids error).
+- When given a `sessionId`, EasyHub resolves it to the corresponding session key (missing ids error).
 
 ## sessions_send
 
@@ -94,11 +94,11 @@ Behavior:
 - Announce delivery runs after the primary run completes and is best-effort; `status: "ok"` does not guarantee the announce was delivered.
 - Waits via gateway `agent.wait` (server-side) so reconnects don't drop the wait.
 - Agent-to-agent message context is injected for the primary run.
-- After the primary run completes, OpenClaw runs a **reply-back loop**:
+- After the primary run completes, EasyHub runs a **reply-back loop**:
   - Round 2+ alternates between requester and target agents.
   - Reply exactly `REPLY_SKIP` to stop the ping‑pong.
   - Max turns is `session.agentToAgent.maxPingPongTurns` (0–5, default 5).
-- Once the loop ends, OpenClaw runs the **agent‑to‑agent announce step** (target agent only):
+- Once the loop ends, EasyHub runs the **agent‑to‑agent announce step** (target agent only):
   - Reply exactly `ANNOUNCE_SKIP` to stay silent.
   - Any other reply is sent to the target channel.
   - Announce step includes the original request + round‑1 reply + latest ping‑pong reply.
@@ -167,7 +167,7 @@ Behavior:
 - Sub-agents default to the full tool set **minus session tools** (configurable via `tools.subagents.tools`).
 - Sub-agents are not allowed to call `sessions_spawn` (no sub-agent → sub-agent spawning).
 - Always non-blocking: returns `{ status: "accepted", runId, childSessionKey }` immediately.
-- After completion, OpenClaw runs a sub-agent **announce step** and posts the result to the requester chat channel.
+- After completion, EasyHub runs a sub-agent **announce step** and posts the result to the requester chat channel.
 - Reply exactly `ANNOUNCE_SKIP` during the announce step to stay silent.
 - Announce replies are normalized to `Status`/`Result`/`Notes`; `Status` comes from runtime outcome (not model text).
 - Sub-agent sessions are auto-archived after `agents.defaults.subagents.archiveAfterMinutes` (default: 60).

@@ -1,5 +1,5 @@
-import OpenClawKit
-import OpenClawProtocol
+import EasyHubKit
+import EasyHubProtocol
 
-typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
-typealias KitAnyCodable = OpenClawKit.AnyCodable
+typealias ProtoAnyCodable = EasyHubProtocol.AnyCodable
+typealias KitAnyCodable = EasyHubKit.AnyCodable

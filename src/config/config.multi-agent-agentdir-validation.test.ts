@@ -8,7 +8,7 @@ describe("multi-agent agentDir validation", () => {
   it("rejects shared agents.list agentDir", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const shared = path.join(tmpdir(), "openclaw-shared-agentdir");
+    const shared = path.join(tmpdir(), "EasyHub-shared-agentdir");
     const res = validateConfigObject({
       agents: {
         list: [
@@ -26,16 +26,16 @@ describe("multi-agent agentDir validation", () => {
 
   it("throws on shared agentDir during loadConfig()", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
+      const configDir = path.join(home, ".easyhub");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
+        path.join(configDir, "easyhub.json"),
         JSON.stringify(
           {
             agents: {
               list: [
-                { id: "a", agentDir: "~/.openclaw/agents/shared/agent" },
-                { id: "b", agentDir: "~/.openclaw/agents/shared/agent" },
+                { id: "a", agentDir: "~/.easyhub/agents/shared/agent" },
+                { id: "b", agentDir: "~/.easyhub/agents/shared/agent" },
               ],
             },
             bindings: [{ agentId: "a", match: { channel: "telegram" } }],

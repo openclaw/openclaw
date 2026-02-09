@@ -1,5 +1,5 @@
 ---
-summary: "When OpenClaw shows typing indicators and how to tune them"
+summary: "When EasyHub shows typing indicators and how to tune them"
 read_when:
   - Changing typing indicator behavior or defaults
 title: "Typing Indicators"
@@ -13,7 +13,7 @@ to control **how often** it refreshes.
 
 ## Defaults
 
-When `agents.defaults.typingMode` is **unset**, OpenClaw keeps the legacy behavior:
+When `agents.defaults.typingMode` is **unset**, EasyHub keeps the legacy behavior:
 
 - **Direct chats**: typing starts immediately once the model loop begins.
 - **Group chats with a mention**: typing starts immediately.

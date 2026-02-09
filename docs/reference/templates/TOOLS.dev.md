@@ -8,7 +8,7 @@ read_when:
 # TOOLS.md - User Tool Notes (editable)
 
 This file is for _your_ notes about external tools and conventions.
-It does not define which tools exist; OpenClaw provides built-in tools internally.
+It does not define which tools exist; EasyHub provides built-in tools internally.
 
 ## Examples
 

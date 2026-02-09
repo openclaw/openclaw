@@ -41,7 +41,7 @@ export function readSessionMessages(
           role: "system",
           content: [{ type: "text", text: "Compaction" }],
           timestamp,
-          __openclaw: {
+          __EasyHub: {
             kind: "compaction",
             id: typeof parsed.id === "string" ? parsed.id : undefined,
           },
@@ -72,7 +72,7 @@ export function resolveSessionTranscriptCandidates(
     candidates.push(resolveSessionTranscriptPath(sessionId, agentId));
   }
   const home = resolveRequiredHomeDir(process.env, os.homedir);
-  candidates.push(path.join(home, ".openclaw", "sessions", `${sessionId}.jsonl`));
+  candidates.push(path.join(home, ".easyhub", "sessions", `${sessionId}.jsonl`));
   return candidates;
 }
 

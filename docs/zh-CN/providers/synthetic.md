@@ -2,7 +2,7 @@
 read_when:
   - 你想使用 Synthetic 作为模型提供商
   - 你需要配置 Synthetic API 密钥或 base URL
-summary: 在 OpenClaw 中使用 Synthetic 的 Anthropic 兼容 API
+summary: 在 EasyHub 中使用 Synthetic 的 Anthropic 兼容 API
 title: Synthetic
 x-i18n:
   generated_at: "2026-02-01T21:35:34Z"
@@ -15,7 +15,7 @@ x-i18n:
 
 # Synthetic
 
-Synthetic 提供兼容 Anthropic 的端点。OpenClaw 将其注册为 `synthetic` 提供商，并使用 Anthropic Messages API。
+Synthetic 提供兼容 Anthropic 的端点。EasyHub 将其注册为 `synthetic` 提供商，并使用 Anthropic Messages API。
 
 ## 快速设置
 
@@ -23,7 +23,7 @@ Synthetic 提供兼容 Anthropic 的端点。OpenClaw 将其注册为 `synthetic
 2. 运行新手引导：
 
 ```bash
-openclaw onboard --auth-choice synthetic-api-key
+EasyHub onboard --auth-choice synthetic-api-key
 ```
 
 默认模型设置为：
@@ -67,7 +67,7 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 }
 ```
 
-注意：OpenClaw 的 Anthropic 客户端会自动在 base URL 后追加 `/v1`，因此请使用 `https://api.synthetic.new/anthropic`（而非 `/anthropic/v1`）。如果 Synthetic 更改了其 base URL，请覆盖 `models.providers.synthetic.baseUrl`。
+注意：EasyHub 的 Anthropic 客户端会自动在 base URL 后追加 `/v1`，因此请使用 `https://api.synthetic.new/anthropic`（而非 `/anthropic/v1`）。如果 Synthetic 更改了其 base URL，请覆盖 `models.providers.synthetic.baseUrl`。
 
 ## 模型目录
 

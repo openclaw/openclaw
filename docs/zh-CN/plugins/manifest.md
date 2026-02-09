@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 你正在构建一个 OpenClaw 插件
+  - 你正在构建一个 EasyHub 插件
   - 你需要提供插件配置 Schema 或调试插件验证错误
 summary: 插件清单及 JSON Schema 要求（严格配置验证）
 title: 插件清单
@@ -13,9 +13,9 @@ x-i18n:
   workflow: 15
 ---
 
-# 插件清单（openclaw.plugin.json）
+# 插件清单（EasyHub.plugin.json）
 
-每个插件都**必须**在**插件根目录**下提供一个 `openclaw.plugin.json` 文件。OpenClaw 使用此清单来**在不执行插件代码的情况下**验证配置。缺失或无效的清单将被视为插件错误，并阻止配置验证。
+每个插件都**必须**在**插件根目录**下提供一个 `EasyHub.plugin.json` 文件。EasyHub 使用此清单来**在不执行插件代码的情况下**验证配置。缺失或无效的清单将被视为插件错误，并阻止配置验证。
 
 参阅完整的插件系统指南：[插件](/tools/plugin)。
 

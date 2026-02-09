@@ -16,10 +16,10 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Checkout openclaw (PR)
+      - name: Checkout EasyHub (PR)
         uses: actions/checkout@v4
         with:
-          path: openclaw
+          path: EasyHub
 
       - name: Checkout formal models
         uses: actions/checkout@v4
@@ -33,11 +33,11 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Regenerate extracted constants from openclaw
+      - name: Regenerate extracted constants from EasyHub
         run: |
           set -euo pipefail
           cd clawdbot-formal-models
-          export OPENCLAW_REPO_DIR="${GITHUB_WORKSPACE}/openclaw"
+          export EASYHUB_REPO_DIR="${GITHUB_WORKSPACE}/EasyHub"
           node scripts/extract-tool-groups.mjs
           node scripts/check-tool-group-alias.mjs
 
@@ -73,7 +73,7 @@ jobs:
             ingress-retry session-key-stability session-explosion-bound config-normalization \
             queue-drain delivery-route-stability delivery-pipeline retry-termination retry-eventual-success \
             no-cross-stream multi-event-eventual-emission \
-            dedupe-collision-fallback crash-restart-dedupe two-worker-dedupe openclaw-session-key-conformance \
+            dedupe-collision-fallback crash-restart-dedupe two-worker-dedupe EasyHub-session-key-conformance \
             routing-thread-parent-channel-override routing-trirule gateway-auth-proxy-header-spoof \
             group-alias-check
 
@@ -96,7 +96,7 @@ jobs:
             ingress-retry-negative session-key-stability-negative config-normalization-negative \
             queue-drain delivery-route-stability-negative delivery-pipeline-negative retry-termination-negative retry-eventual-success-negative \
             no-cross-stream-negative multi-event-eventual-emission-negative \
-            dedupe-collision-fallback-negative crash-restart-dedupe-negative two-worker-dedupe-negative openclaw-session-key-conformance-negative \
+            dedupe-collision-fallback-negative crash-restart-dedupe-negative two-worker-dedupe-negative EasyHub-session-key-conformance-negative \
             routing-thread-parent-channel-override-negative routing-trirule-negative gateway-auth-proxy-header-spoof-negative
 
       - name: Upload drift diff artifact
@@ -114,7 +114,7 @@ jobs:
             const body = [
               '⚠️ **Formal models conformance drift detected**',
               '',
-              'The formal models extracted constants (`generated/*`) do not match this openclaw PR.',
+              'The formal models extracted constants (`generated/*`) do not match this EasyHub PR.',
               '',
               'This check is **informational** (not blocking merges yet).',
               'See the `formal-models-conformance-drift` artifact for the diff.',

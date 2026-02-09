@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/telegram",
+  "name": "@easyhub/telegram",
   "version": "2026.2.6-3",
-  "description": "OpenClaw Telegram channel plugin",
+  "description": "EasyHub Telegram channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ]

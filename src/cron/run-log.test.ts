@@ -12,7 +12,7 @@ describe("cron run log", () => {
   });
 
   it("appends JSONL and prunes by line count", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-log-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-cron-log-"));
     const logPath = path.join(dir, "runs", "job-1.jsonl");
 
     for (let i = 0; i < 10; i++) {
@@ -42,7 +42,7 @@ describe("cron run log", () => {
   });
 
   it("reads newest entries and filters by jobId", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-log-read-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-cron-log-read-"));
     const logPathA = path.join(dir, "runs", "a.jsonl");
     const logPathB = path.join(dir, "runs", "b.jsonl");
 

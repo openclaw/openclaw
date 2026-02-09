@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -58,7 +58,7 @@ function logNestedOutput(runtime: RuntimeEnv, opts: AgentCommandOpts, output: st
 }
 
 export async function deliverAgentCommandResult(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   deps: CliDeps;
   runtime: RuntimeEnv;
   opts: AgentCommandOpts;

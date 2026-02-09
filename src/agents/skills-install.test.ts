@@ -27,7 +27,7 @@ async function writeInstallableSkill(workspaceDir: string, name: string): Promis
     `---
 name: ${name}
 description: test skill
-metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-package"}]}}
+metadata: {"EasyHub":{"install":[{"id":"deps","kind":"node","package":"example-package"}]}}
 ---
 
 # ${name}
@@ -52,7 +52,7 @@ describe("installSkill code safety scanning", () => {
   });
 
   it("adds detailed warnings for critical findings and continues install", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-skills-install-"));
     try {
       const skillDir = await writeInstallableSkill(workspaceDir, "danger-skill");
       scanDirectoryWithSummaryMock.mockResolvedValue({
@@ -89,7 +89,7 @@ describe("installSkill code safety scanning", () => {
   });
 
   it("warns and continues when skill scan fails", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-skills-install-"));
     try {
       await writeInstallableSkill(workspaceDir, "scanfail-skill");
       scanDirectoryWithSummaryMock.mockRejectedValue(new Error("scanner exploded"));

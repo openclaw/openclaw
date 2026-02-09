@@ -16,7 +16,7 @@ x-i18n:
 
 # API 用量与费用
 
-本文档列出了**可能调用 API 密钥的功能**及其费用的显示位置。重点介绍 OpenClaw 中可能产生提供商用量或付费 API 调用的功能。
+本文档列出了**可能调用 API 密钥的功能**及其费用的显示位置。重点介绍 EasyHub 中可能产生提供商用量或付费 API 调用的功能。
 
 ## 费用显示位置（聊天 + CLI）
 
@@ -32,13 +32,13 @@ x-i18n:
 
 **CLI 用量窗口（提供商配额）**
 
-- `openclaw status --usage` 和 `openclaw channels list` 显示提供商**用量窗口**（配额快照，非每条消息的费用）。
+- `EasyHub status --usage` 和 `EasyHub channels list` 显示提供商**用量窗口**（配额快照，非每条消息的费用）。
 
 详情和示例请参阅 [Token 用量与费用](/reference/token-use)。
 
 ## 密钥的发现方式
 
-OpenClaw 可以从以下来源获取凭据：
+EasyHub 可以从以下来源获取凭据：
 
 - **认证配置文件**（按智能体配置，存储在 `auth-profiles.json` 中）。
 - **环境变量**（例如 `OPENAI_API_KEY`、`BRAVE_API_KEY`、`FIRECRAWL_API_KEY`）。
@@ -104,8 +104,8 @@ OpenClaw 可以从以下来源获取凭据：
 
 某些状态命令会调用**提供商用量端点**以显示配额窗口或认证健康状态。这些通常是低频调用，但仍会访问提供商 API：
 
-- `openclaw status --usage`
-- `openclaw models status --json`
+- `EasyHub status --usage`
+- `EasyHub models status --json`
 
 请参阅[模型 CLI](/cli/models)。
 
@@ -117,7 +117,7 @@ OpenClaw 可以从以下来源获取凭据：
 
 ### 8）模型扫描/探测
 
-`openclaw models scan` 可以探测 OpenRouter 模型，启用探测时会使用 `OPENROUTER_API_KEY`。
+`EasyHub models scan` 可以探测 OpenRouter 模型，启用探测时会使用 `OPENROUTER_API_KEY`。
 
 请参阅[模型 CLI](/cli/models)。
 

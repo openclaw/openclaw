@@ -14,13 +14,13 @@ x-i18n:
 
 # 智能体运行时 🤖
 
-OpenClaw 运行一个源自 **pi-mono** 的嵌入式智能体运行时。
+EasyHub 运行一个源自 **pi-mono** 的嵌入式智能体运行时。
 
 ## 工作区（必需）
 
-OpenClaw 使用单一智能体工作区目录（`agents.defaults.workspace`）作为智能体**唯一**的工作目录（`cwd`），用于工具和上下文。
+EasyHub 使用单一智能体工作区目录（`agents.defaults.workspace`）作为智能体**唯一**的工作目录（`cwd`），用于工具和上下文。
 
-建议：使用 `openclaw setup` 在缺失时创建 `~/.openclaw/openclaw.json` 并初始化工作区文件。
+建议：使用 `EasyHub setup` 在缺失时创建 `~/.easyhub/easyhub.json` 并初始化工作区文件。
 
 完整工作区布局 + 备份指南：[智能体工作区](/concepts/agent-workspace)
 
@@ -28,7 +28,7 @@ OpenClaw 使用单一智能体工作区目录（`agents.defaults.workspace`）�
 
 ## 引导文件（注入）
 
-在 `agents.defaults.workspace` 内，OpenClaw 期望以下用户可编辑的文件：
+在 `agents.defaults.workspace` 内，EasyHub 期望以下用户可编辑的文件：
 
 - `AGENTS.md` — 操作指令 + "记忆"
 - `SOUL.md` — 人设、边界、语气
@@ -37,11 +37,11 @@ OpenClaw 使用单一智能体工作区目录（`agents.defaults.workspace`）�
 - `IDENTITY.md` — 智能体名称/风格/表情
 - `USER.md` — 用户档案 + 偏好称呼
 
-在新会话的第一轮，OpenClaw 将这些文件的内容直接注入智能体上下文。
+在新会话的第一轮，EasyHub 将这些文件的内容直接注入智能体上下文。
 
 空文件会被跳过。大文件会被修剪和截断并添加标记，以保持提示词精简（阅读文件获取完整内容）。
 
-如果文件缺失，OpenClaw 会注入一行"文件缺失"标记（`openclaw setup` 将创建安全的默认模板）。
+如果文件缺失，EasyHub 会注入一行"文件缺失"标记（`EasyHub setup` 将创建安全的默认模板）。
 
 `BOOTSTRAP.md` 仅在**全新工作区**（没有其他引导文件存在）时创建。如果你在完成仪式后删除它，后续重启不应重新创建。
 
@@ -57,17 +57,17 @@ OpenClaw 使用单一智能体工作区目录（`agents.defaults.workspace`）�
 
 ## Skills
 
-OpenClaw 从三个位置加载 Skills（名称冲突时工作区优先）：
+EasyHub 从三个位置加载 Skills（名称冲突时工作区优先）：
 
 - 内置（随安装包提供）
-- 托管/本地：`~/.openclaw/skills`
+- 托管/本地：`~/.easyhub/skills`
 - 工作区：`<workspace>/skills`
 
 Skills 可通过配置/环境变量控制（参见 [Gateway 网关配置](/gateway/configuration) 中的 `skills`）。
 
 ## pi-mono 集成
 
-OpenClaw 复用 pi-mono 代码库的部分内容（模型/工具），但**会话管理、设备发现和工具连接由 OpenClaw 负责**。
+EasyHub 复用 pi-mono 代码库的部分内容（模型/工具），但**会话管理、设备发现和工具连接由 EasyHub 负责**。
 
 - 无 pi-coding 智能体运行时。
 - 不读取 `~/.pi/agent` 或 `<workspace>/.pi` 设置。
@@ -76,9 +76,9 @@ OpenClaw 复用 pi-mono 代码库的部分内容（模型/工具），但**会�
 
 会话记录以 JSONL 格式存储在：
 
-- `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
+- `~/.easyhub/agents/<agentId>/sessions/<SessionId>.jsonl`
 
-会话 ID 是稳定的，由 OpenClaw 选择。
+会话 ID 是稳定的，由 EasyHub 选择。
 **不**读取旧版 Pi/Tau 会话文件夹。
 
 ## 流式传输中的引导
@@ -101,7 +101,7 @@ OpenClaw 复用 pi-mono 代码库的部分内容（模型/工具），但**会�
 
 - 配置模型时使用 `provider/model`。
 - 如果模型 ID 本身包含 `/`（OpenRouter 风格），请包含提供商前缀（例如：`openrouter/moonshotai/kimi-k2`）。
-- 如果省略提供商，OpenClaw 将输入视为别名或**默认提供商**的模型（仅在模型 ID 中没有 `/` 时有效）。
+- 如果省略提供商，EasyHub 将输入视为别名或**默认提供商**的模型（仅在模型 ID 中没有 `/` 时有效）。
 
 ## 配置（最小）
 

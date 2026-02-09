@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/feishu",
+  "name": "@easyhub/feishu",
   "version": "2026.2.6-3",
-  "description": "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng)",
+  "description": "EasyHub Feishu/Lark channel plugin (community maintained by @m1heng)",
   "type": "module",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.58.0",
@@ -9,9 +9,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ],
@@ -29,7 +29,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/feishu",
+      "npmSpec": "@easyhub/feishu",
       "localPath": "extensions/feishu",
       "defaultChoice": "npm"
     }

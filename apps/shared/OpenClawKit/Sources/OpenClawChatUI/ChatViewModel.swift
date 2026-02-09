@@ -1,4 +1,4 @@
-import OpenClawKit
+import EasyHubKit
 import Foundation
 import Observation
 import OSLog
@@ -10,28 +10,28 @@ import AppKit
 import UIKit
 #endif
 
-private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
+private let chatUILogger = Logger(subsystem: "ai.easyhub", category: "EasyHubChatUI")
 
 @MainActor
 @Observable
-public final class OpenClawChatViewModel {
-    public private(set) var messages: [OpenClawChatMessage] = []
+public final class EasyHubChatViewModel {
+    public private(set) var messages: [EasyHubChatMessage] = []
     public var input: String = ""
     public var thinkingLevel: String = "off"
     public private(set) var isLoading = false
     public private(set) var isSending = false
     public private(set) var isAborting = false
     public var errorText: String?
-    public var attachments: [OpenClawPendingAttachment] = []
+    public var attachments: [EasyHubPendingAttachment] = []
     public private(set) var healthOK: Bool = false
     public private(set) var pendingRunCount: Int = 0
 
     public private(set) var sessionKey: String
     public private(set) var sessionId: String?
     public private(set) var streamingAssistantText: String?
-    public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
-    public private(set) var sessions: [OpenClawChatSessionEntry] = []
-    private let transport: any OpenClawChatTransport
+    public private(set) var pendingToolCalls: [EasyHubChatPendingToolCall] = []
+    public private(set) var sessions: [EasyHubChatSessionEntry] = []
+    private let transport: any EasyHubChatTransport
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
@@ -43,7 +43,7 @@ public final class OpenClawChatViewModel {
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
 
-    private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
+    private var pendingToolCallsById: [String: EasyHubChatPendingToolCall] = [:] {
         didSet {
             self.pendingToolCalls = self.pendingToolCallsById.values
                 .sorted { ($0.startedAt ?? 0) < ($1.startedAt ?? 0) }
@@ -52,7 +52,7 @@ public final class OpenClawChatViewModel {
 
     private var lastHealthPollAt: Date?
 
-    public init(sessionKey: String, transport: any OpenClawChatTransport) {
+    public init(sessionKey: String, transport: any EasyHubChatTransport) {
         self.sessionKey = sessionKey
         self.transport = transport
 
@@ -99,12 +99,12 @@ public final class OpenClawChatViewModel {
         Task { await self.performSwitchSession(to: sessionKey) }
     }
 
-    public var sessionChoices: [OpenClawChatSessionEntry] {
+    public var sessionChoices: [EasyHubChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = self.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
         var seen = Set<String>()
-        var recent: [OpenClawChatSessionEntry] = []
+        var recent: [EasyHubChatSessionEntry] = []
         for entry in sorted {
             guard !seen.contains(entry.key) else { continue }
             seen.insert(entry.key)
@@ -112,7 +112,7 @@ public final class OpenClawChatViewModel {
             recent.append(entry)
         }
 
-        var result: [OpenClawChatSessionEntry] = []
+        var result: [EasyHubChatSessionEntry] = []
         var included = Set<String>()
         for entry in recent where !included.contains(entry.key) {
             result.append(entry)
@@ -138,7 +138,7 @@ public final class OpenClawChatViewModel {
         Task { await self.addImageAttachment(url: nil, data: data, fileName: fileName, mimeType: mimeType) }
     }
 
-    public func removeAttachment(_ id: OpenClawPendingAttachment.ID) {
+    public func removeAttachment(_ id: EasyHubPendingAttachment.ID) {
         self.attachments.removeAll { $0.id == id }
     }
 
@@ -180,15 +180,15 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private static func decodeMessages(_ raw: [AnyCodable]) -> [OpenClawChatMessage] {
+    private static func decodeMessages(_ raw: [AnyCodable]) -> [EasyHubChatMessage] {
         let decoded = raw.compactMap { item in
-            (try? ChatPayloadDecoding.decode(item, as: OpenClawChatMessage.self))
+            (try? ChatPayloadDecoding.decode(item, as: EasyHubChatMessage.self))
         }
         return Self.dedupeMessages(decoded)
     }
 
-    private static func dedupeMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
-        var result: [OpenClawChatMessage] = []
+    private static func dedupeMessages(_ messages: [EasyHubChatMessage]) -> [EasyHubChatMessage] {
+        var result: [EasyHubChatMessage] = []
         result.reserveCapacity(messages.count)
         var seen = Set<String>()
 
@@ -205,7 +205,7 @@ public final class OpenClawChatViewModel {
         return result
     }
 
-    private static func dedupeKey(for message: OpenClawChatMessage) -> String? {
+    private static func dedupeKey(for message: EasyHubChatMessage) -> String? {
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -233,8 +233,8 @@ public final class OpenClawChatViewModel {
         self.streamingAssistantText = nil
 
         // Optimistically append user message to UI.
-        var userContent: [OpenClawChatMessageContent] = [
-            OpenClawChatMessageContent(
+        var userContent: [EasyHubChatMessageContent] = [
+            EasyHubChatMessageContent(
                 type: "text",
                 text: messageText,
                 thinking: nil,
@@ -246,8 +246,8 @@ public final class OpenClawChatViewModel {
                 name: nil,
                 arguments: nil),
         ]
-        let encodedAttachments = self.attachments.map { att -> OpenClawChatAttachmentPayload in
-            OpenClawChatAttachmentPayload(
+        let encodedAttachments = self.attachments.map { att -> EasyHubChatAttachmentPayload in
+            EasyHubChatAttachmentPayload(
                 type: att.type,
                 mimeType: att.mimeType,
                 fileName: att.fileName,
@@ -255,7 +255,7 @@ public final class OpenClawChatViewModel {
         }
         for att in encodedAttachments {
             userContent.append(
-                OpenClawChatMessageContent(
+                EasyHubChatMessageContent(
                     type: att.type,
                     text: nil,
                     thinking: nil,
@@ -268,7 +268,7 @@ public final class OpenClawChatViewModel {
                     arguments: nil))
         }
         self.messages.append(
-            OpenClawChatMessage(
+            EasyHubChatMessage(
                 id: UUID(),
                 role: "user",
                 content: userContent,
@@ -332,8 +332,8 @@ public final class OpenClawChatViewModel {
         await self.bootstrap()
     }
 
-    private func placeholderSession(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
+    private func placeholderSession(key: String) -> EasyHubChatSessionEntry {
+        EasyHubChatSessionEntry(
             key: key,
             kind: nil,
             displayName: nil,
@@ -354,7 +354,7 @@ public final class OpenClawChatViewModel {
             contextTokens: nil)
     }
 
-    private func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
+    private func handleTransportEvent(_ evt: EasyHubChatTransportEvent) {
         switch evt {
         case let .health(ok):
             self.healthOK = ok
@@ -370,7 +370,7 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func handleChatEvent(_ chat: OpenClawChatEventPayload) {
+    private func handleChatEvent(_ chat: EasyHubChatEventPayload) {
         if let sessionKey = chat.sessionKey, sessionKey != self.sessionKey {
             return
         }
@@ -407,7 +407,7 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
+    private func handleAgentEvent(_ evt: EasyHubAgentEventPayload) {
         if let sessionId, evt.runId != sessionId {
             return
         }
@@ -423,7 +423,7 @@ public final class OpenClawChatViewModel {
             guard let toolCallId = evt.data["toolCallId"]?.value as? String else { return }
             if phase == "start" {
                 let args = evt.data["args"]
-                self.pendingToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
+                self.pendingToolCallsById[toolCallId] = EasyHubChatPendingToolCall(
                     toolCallId: toolCallId,
                     name: name,
                     args: args,
@@ -534,7 +534,7 @@ public final class OpenClawChatViewModel {
 
         let preview = Self.previewImage(data: data)
         self.attachments.append(
-            OpenClawPendingAttachment(
+            EasyHubPendingAttachment(
                 url: url,
                 data: data,
                 fileName: fileName,
@@ -542,7 +542,7 @@ public final class OpenClawChatViewModel {
                 preview: preview))
     }
 
-    private static func previewImage(data: Data) -> OpenClawPlatformImage? {
+    private static func previewImage(data: Data) -> EasyHubPlatformImage? {
         #if canImport(AppKit)
         NSImage(data: data)
         #elseif canImport(UIKit)

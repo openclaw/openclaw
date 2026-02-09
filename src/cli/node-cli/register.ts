@@ -24,7 +24,7 @@ export function registerNodeCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.openclaw.ai/cli/node")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.EasyHub.ai/cli/node")}\n`,
     );
 
   node

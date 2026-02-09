@@ -18,8 +18,8 @@ let port = 0;
 let previousToken: string | undefined;
 
 beforeAll(async () => {
-  previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-  delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  previousToken = process.env.EASYHUB_GATEWAY_TOKEN;
+  delete process.env.EASYHUB_GATEWAY_TOKEN;
   port = await getFreePort();
   server = await startGatewayServer(port);
 });
@@ -27,9 +27,9 @@ beforeAll(async () => {
 afterAll(async () => {
   await server.close();
   if (previousToken === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.EASYHUB_GATEWAY_TOKEN;
   } else {
-    process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+    process.env.EASYHUB_GATEWAY_TOKEN = previousToken;
   }
 });
 
@@ -51,7 +51,7 @@ describe("gateway config.apply", () => {
           id,
           method: "config.apply",
           params: {
-            raw: '{ "agents": { "list": [{ "id": "main", "workspace": "~/openclaw" }] } }',
+            raw: '{ "agents": { "list": [{ "id": "main", "workspace": "~/EasyHub" }] } }',
             sessionKey: "agent:main:whatsapp:dm:+15555550123",
             restartDelayMs: 0,
           },
@@ -64,7 +64,7 @@ describe("gateway config.apply", () => {
       expect(res.ok).toBe(true);
 
       // Verify sentinel file was created (restart was scheduled)
-      const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
+      const sentinelPath = path.join(os.homedir(), ".easyhub", "restart-sentinel.json");
 
       // Wait for file to be written
       await new Promise((resolve) => setTimeout(resolve, 100));

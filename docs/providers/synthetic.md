@@ -1,5 +1,5 @@
 ---
-summary: "Use Synthetic's Anthropic-compatible API in OpenClaw"
+summary: "Use Synthetic's Anthropic-compatible API in EasyHub"
 read_when:
   - You want to use Synthetic as a model provider
   - You need a Synthetic API key or base URL setup
@@ -8,7 +8,7 @@ title: "Synthetic"
 
 # Synthetic
 
-Synthetic exposes Anthropic-compatible endpoints. OpenClaw registers it as the
+Synthetic exposes Anthropic-compatible endpoints. EasyHub registers it as the
 `synthetic` provider and uses the Anthropic Messages API.
 
 ## Quick setup
@@ -17,7 +17,7 @@ Synthetic exposes Anthropic-compatible endpoints. OpenClaw registers it as the
 2. Run onboarding:
 
 ```bash
-openclaw onboard --auth-choice synthetic-api-key
+EasyHub onboard --auth-choice synthetic-api-key
 ```
 
 The default model is set to:
@@ -61,7 +61,7 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 }
 ```
 
-Note: OpenClaw's Anthropic client appends `/v1` to the base URL, so use
+Note: EasyHub's Anthropic client appends `/v1` to the base URL, so use
 `https://api.synthetic.new/anthropic` (not `/anthropic/v1`). If Synthetic changes
 its base URL, override `models.providers.synthetic.baseUrl`.
 

@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想通过 Ollama 使用本地模型运行 OpenClaw
+  - 你想通过 Ollama 使用本地模型运行 EasyHub
   - 你需要 Ollama 的安装和配置指导
-summary: 通过 Ollama（本地 LLM 运行时）运行 OpenClaw
+summary: 通过 Ollama（本地 LLM 运行时）运行 EasyHub
 title: Ollama
 x-i18n:
   generated_at: "2026-02-01T21:35:22Z"
@@ -15,7 +15,7 @@ x-i18n:
 
 # Ollama
 
-Ollama 是一个本地 LLM 运行时，可以轻松在你的机器上运行开源模型。OpenClaw 通过 Ollama 的 OpenAI 兼容 API 进行集成，并且当你通过 `OLLAMA_API_KEY`（或认证配置）启用且未定义显式的 `models.providers.ollama` 条目时，可以**自动发现支持工具调用的模型**。
+Ollama 是一个本地 LLM 运行时，可以轻松在你的机器上运行开源模型。EasyHub 通过 Ollama 的 OpenAI 兼容 API 进行集成，并且当你通过 `OLLAMA_API_KEY`（或认证配置）启用且未定义显式的 `models.providers.ollama` 条目时，可以**自动发现支持工具调用的模型**。
 
 ## 快速开始
 
@@ -31,14 +31,14 @@ ollama pull qwen2.5-coder:32b
 ollama pull deepseek-r1:32b
 ```
 
-3. 为 OpenClaw 启用 Ollama（任意值即可；Ollama 不需要真实密钥）：
+3. 为 EasyHub 启用 Ollama（任意值即可；Ollama 不需要真实密钥）：
 
 ```bash
 # 设置环境变量
 export OLLAMA_API_KEY="ollama-local"
 
 # 或在配置文件中设置
-openclaw config set models.providers.ollama.apiKey "ollama-local"
+EasyHub config set models.providers.ollama.apiKey "ollama-local"
 ```
 
 4. 使用 Ollama 模型：
@@ -55,7 +55,7 @@ openclaw config set models.providers.ollama.apiKey "ollama-local"
 
 ## 模型发现（隐式提供商）
 
-当你设置了 `OLLAMA_API_KEY`（或认证配置）且**未**定义 `models.providers.ollama` 时，OpenClaw 会从本地 Ollama 实例 `http://127.0.0.1:11434` 发现模型：
+当你设置了 `OLLAMA_API_KEY`（或认证配置）且**未**定义 `models.providers.ollama` 时，EasyHub 会从本地 Ollama 实例 `http://127.0.0.1:11434` 发现模型：
 
 - 查询 `/api/tags` 和 `/api/show`
 - 仅保留报告了 `tools` 能力的模型
@@ -70,7 +70,7 @@ openclaw config set models.providers.ollama.apiKey "ollama-local"
 
 ```bash
 ollama list
-openclaw models list
+EasyHub models list
 ```
 
 要添加新模型，只需通过 Ollama 拉取：
@@ -127,7 +127,7 @@ export OLLAMA_API_KEY="ollama-local"
 }
 ```
 
-如果设置了 `OLLAMA_API_KEY`，你可以在提供商条目中省略 `apiKey`，OpenClaw 会自动填充以进行可用性检查。
+如果设置了 `OLLAMA_API_KEY`，你可以在提供商条目中省略 `apiKey`，EasyHub 会自动填充以进行可用性检查。
 
 ### 自定义基础 URL（显式配置）
 
@@ -167,7 +167,7 @@ export OLLAMA_API_KEY="ollama-local"
 
 ### 推理模型
 
-当 Ollama 在 `/api/show` 中报告 `thinking` 时，OpenClaw 会将模型标记为具有推理能力：
+当 Ollama 在 `/api/show` 中报告 `thinking` 时，EasyHub 会将模型标记为具有推理能力：
 
 ```bash
 ollama pull deepseek-r1:32b
@@ -179,7 +179,7 @@ Ollama 免费且在本地运行，因此所有模型费用均设置为 $0。
 
 ### 上下文窗口
 
-对于自动发现的模型，OpenClaw 会使用 Ollama 报告的上下文窗口（如果可用），否则默认为 `8192`。你可以在显式提供商配置中覆盖 `contextWindow` 和 `maxTokens`。
+对于自动发现的模型，EasyHub 会使用 Ollama 报告的上下文窗口（如果可用），否则默认为 `8192`。你可以在显式提供商配置中覆盖 `contextWindow` 和 `maxTokens`。
 
 ## 故障排除
 
@@ -199,7 +199,7 @@ curl http://localhost:11434/api/tags
 
 ### 没有可用模型
 
-OpenClaw 仅自动发现报告了工具支持的模型。如果你的模型未列出，可以：
+EasyHub 仅自动发现报告了工具支持的模型。如果你的模型未列出，可以：
 
 - 拉取一个支持工具调用的模型，或
 - 在 `models.providers.ollama` 中显式定义该模型。

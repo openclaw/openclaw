@@ -1,8 +1,8 @@
-import OpenClawKit
+import EasyHubKit
 import Foundation
 import os
 import Testing
-@testable import OpenClaw
+@testable import EasyHub
 
 @Suite(.serialized)
 @MainActor

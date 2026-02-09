@@ -5,7 +5,7 @@ import OSLog
 @MainActor
 final class CLIInstallPrompter {
     static let shared = CLIInstallPrompter()
-    private let logger = Logger(subsystem: "ai.openclaw", category: "cli.prompt")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "cli.prompt")
     private var isPrompting = false
 
     func checkAndPromptIfNeeded(reason: String) {
@@ -15,7 +15,7 @@ final class CLIInstallPrompter {
         UserDefaults.standard.set(version, forKey: cliInstallPromptedVersionKey)
 
         let alert = NSAlert()
-        alert.messageText = "Install OpenClaw CLI?"
+        alert.messageText = "Install EasyHub CLI?"
         alert.informativeText = "Local mode needs the CLI so launchd can run the gateway."
         alert.addButton(withTitle: "Install CLI")
         alert.addButton(withTitle: "Not now")
@@ -62,7 +62,7 @@ final class CLIInstallPrompter {
         SettingsTabRouter.request(tab)
         SettingsWindowOpener.shared.open()
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
+            NotificationCenter.default.post(name: .EasyHubSelectSettingsTab, object: tab)
         }
     }
 

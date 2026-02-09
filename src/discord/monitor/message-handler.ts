@@ -16,7 +16,7 @@ import { resolveDiscordMessageText } from "./message-utils.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type DiscordConfig = NonNullable<
-  import("../../config/config.js").OpenClawConfig["channels"]
+  import("../../config/config.js").EasyHubConfig["channels"]
 >["discord"];
 
 export function createDiscordMessageHandler(params: {

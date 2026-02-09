@@ -12,7 +12,7 @@ describe("getShellConfig", () => {
   const tempDirs: string[] = [];
 
   const createTempBin = (files: string[]) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-shell-"));
     tempDirs.push(dir);
     for (const name of files) {
       const filePath = path.join(dir, name);

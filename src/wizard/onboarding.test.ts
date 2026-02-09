@@ -76,7 +76,7 @@ vi.mock("../tui/tui.js", () => ({
 describe("runOnboardingWizard", () => {
   it("exits when config is invalid", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
-      path: "/tmp/.openclaw/openclaw.json",
+      path: "/tmp/.easyhub/easyhub.json",
       exists: true,
       raw: "{}",
       parsed: {},
@@ -173,7 +173,7 @@ describe("runOnboardingWizard", () => {
   it("launches TUI without auto-delivery when hatching", async () => {
     runTui.mockClear();
 
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-onboard-"));
     await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "{}");
 
     const select: WizardPrompter["select"] = vi.fn(async (opts) => {
@@ -231,7 +231,7 @@ describe("runOnboardingWizard", () => {
   it("offers TUI hatch even without BOOTSTRAP.md", async () => {
     runTui.mockClear();
 
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-onboard-"));
 
     const select: WizardPrompter["select"] = vi.fn(async (opts) => {
       if (opts.message === "How do you want to hatch your bot?") {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { resolveEasyHubPackageRoot } from "../infra/easyhub-root.js";
 
 const FALLBACK_TEMPLATE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -37,7 +37,7 @@ export async function resolveWorkspaceTemplateDir(opts?: {
     const argv1 = opts?.argv1 ?? process.argv[1];
     const cwd = opts?.cwd ?? process.cwd();
 
-    const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl, argv1, cwd });
+    const packageRoot = await resolveEasyHubPackageRoot({ moduleUrl, argv1, cwd });
     const candidates = [
       packageRoot ? path.join(packageRoot, "docs", "reference", "templates") : null,
       cwd ? path.resolve(cwd, "docs", "reference", "templates") : null,

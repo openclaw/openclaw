@@ -56,4 +56,4 @@ go run scripts/docs-i18n/main.go -mode segment docs/channels/matrix.md
 - 反馈来源：GitHub issue #6995
 - 反馈用户：@AaronWander、@taiyi747、@Explorer1092、@rendaoyuan
 - 变更要点：更新 prompt 规则、扩充 glossary、清理 TM、批量再生成 + 定点修复
-- 参考链接：https://github.com/openclaw/openclaw/issues/6995
+- 参考链接：https://github.com/EasyHub/EasyHub/issues/6995

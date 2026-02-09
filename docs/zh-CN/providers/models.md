@@ -2,7 +2,7 @@
 read_when:
   - 你想选择一个模型提供商
   - 你想要 LLM 认证 + 模型选择的快速设置示例
-summary: OpenClaw 支持的模型提供商（LLM）
+summary: EasyHub 支持的模型提供商（LLM）
 title: 模型提供商快速入门
 x-i18n:
   generated_at: "2026-02-03T07:53:35Z"
@@ -15,7 +15,7 @@ x-i18n:
 
 # 模型提供商
 
-OpenClaw 可以使用许多 LLM 提供商。选择一个，进行认证，然后将默认模型设置为 `provider/model`。
+EasyHub 可以使用许多 LLM 提供商。选择一个，进行认证，然后将默认模型设置为 `provider/model`。
 
 ## 推荐：Venice（Venice AI）
 
@@ -28,7 +28,7 @@ Venice 是我们推荐的 Venice AI 设置，用于隐私优先的推理，并�
 
 ## 快速开始（两个步骤）
 
-1. 与提供商认证（通常通过 `openclaw onboard`）。
+1. 与提供商认证（通常通过 `EasyHub onboard`）。
 2. 设置默认模型：
 
 ```json5

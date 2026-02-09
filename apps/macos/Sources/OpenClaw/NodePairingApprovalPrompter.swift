@@ -1,8 +1,8 @@
 import AppKit
-import OpenClawDiscovery
-import OpenClawIPC
-import OpenClawKit
-import OpenClawProtocol
+import EasyHubDiscovery
+import EasyHubIPC
+import EasyHubKit
+import EasyHubProtocol
 import Foundation
 import Observation
 import OSLog
@@ -22,7 +22,7 @@ enum NodePairingReconcilePolicy {
 final class NodePairingApprovalPrompter {
     static let shared = NodePairingApprovalPrompter()
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "node-pairing")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "node-pairing")
     private var task: Task<Void, Never>?
     private var reconcileTask: Task<Void, Never>?
     private var reconcileOnceTask: Task<Void, Never>?

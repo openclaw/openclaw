@@ -1,9 +1,9 @@
-import OpenClawProtocol
+import EasyHubProtocol
 import SwiftUI
 import Testing
-@testable import OpenClaw
+@testable import EasyHub
 
-private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
+private typealias ProtoAnyCodable = EasyHubProtocol.AnyCodable
 
 @Suite(.serialized)
 @MainActor

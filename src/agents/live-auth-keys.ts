@@ -26,12 +26,12 @@ function collectEnvPrefixedKeys(prefix: string): string[] {
 }
 
 export function collectAnthropicApiKeys(): string[] {
-  const forcedSingle = process.env.OPENCLAW_LIVE_ANTHROPIC_KEY?.trim();
+  const forcedSingle = process.env.EASYHUB_LIVE_ANTHROPIC_KEY?.trim();
   if (forcedSingle) {
     return [forcedSingle];
   }
 
-  const fromList = parseKeyList(process.env.OPENCLAW_LIVE_ANTHROPIC_KEYS);
+  const fromList = parseKeyList(process.env.EASYHUB_LIVE_ANTHROPIC_KEYS);
   const fromEnv = collectEnvPrefixedKeys("ANTHROPIC_API_KEY");
   const primary = process.env.ANTHROPIC_API_KEY?.trim();
 

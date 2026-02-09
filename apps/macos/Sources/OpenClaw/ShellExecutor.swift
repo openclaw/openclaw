@@ -1,4 +1,4 @@
-import OpenClawIPC
+import EasyHubIPC
 import Foundation
 
 enum ShellExecutor {

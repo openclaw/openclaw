@@ -30,7 +30,7 @@ x-i18n:
 
 ## 配置示例（WhatsApp）
 
-在 `~/.openclaw/openclaw.json` 中添加 `groupChat` 块，以便在 WhatsApp 剥离文本正文中的可视 `@` 时，显示名称提及仍能正常工作：
+在 `~/.easyhub/easyhub.json` 中添加 `groupChat` 块，以便在 WhatsApp 剥离文本正文中的可视 `@` 时，显示名称提及仍能正常工作：
 
 ```json5
 {
@@ -47,7 +47,7 @@ x-i18n:
         id: "main",
         groupChat: {
           historyLimit: 50,
-          mentionPatterns: ["@?openclaw", "\\+?15555550123"],
+          mentionPatterns: ["@?EasyHub", "\\+?15555550123"],
         },
       },
     ],
@@ -57,7 +57,7 @@ x-i18n:
 
 注意：
 
-- 正则表达式不区分大小写；它们涵盖了像 `@openclaw` 这样的显示名称提及，以及带或不带 `+`/空格的原始号码。
+- 正则表达式不区分大小写；它们涵盖了像 `@EasyHub` 这样的显示名称提及，以及带或不带 `+`/空格的原始号码。
 - 当有人点击联系人时，WhatsApp 仍会通过 `mentionedJids` 发送规范的提及，因此号码回退很少需要，但作为安全网很有用。
 
 ### 激活命令（仅所有者）
@@ -71,15 +71,15 @@ x-i18n:
 
 ## 使用方法
 
-1. 将你的 WhatsApp 账号（运行 OpenClaw 的账号）添加到群组。
-2. 说 `@openclaw …`（或包含号码）。只有允许列表中的发送者才能触发，除非你设置 `groupPolicy: "open"`。
+1. 将你的 WhatsApp 账号（运行 EasyHub 的账号）添加到群组。
+2. 说 `@EasyHub …`（或包含号码）。只有允许列表中的发送者才能触发，除非你设置 `groupPolicy: "open"`。
 3. 智能体提示将包含最近的群组上下文以及尾部的 `[from: …]` 标记，以便它能够回应正确的人。
 4. 会话级指令（`/verbose on`、`/think high`、`/new` 或 `/reset`、`/compact`）仅适用于该群组的会话；将它们作为独立消息发送以使其生效。你的个人私信会话保持独立。
 
 ## 测试/验证
 
 - 手动冒烟测试：
-  - 在群组中发送 `@openclaw` 提及，确认收到引用发送者名称的回复。
+  - 在群组中发送 `@EasyHub` 提及，确认收到引用发送者名称的回复。
   - 发送第二次提及，验证历史记录块被包含，然后在下一轮清除。
 - 检查 Gateway 网关日志（使用 `--verbose` 运行）以查看 `inbound web message` 条目，显示 `from: <groupJid>` 和 `[from: …]` 后缀。
 
@@ -87,5 +87,5 @@ x-i18n:
 
 - 群组有意跳过心跳以避免嘈杂的广播。
 - 回声抑制使用组合的批次字符串；如果你发送两次相同的文本但没有提及，只有第一次会得到响应。
-- 会话存储条目将在会话存储中显示为 `agent:<agentId>:whatsapp:group:<jid>`（默认为 `~/.openclaw/agents/<agentId>/sessions/sessions.json`）；缺失条目只是意味着该群组尚未触发运行。
+- 会话存储条目将在会话存储中显示为 `agent:<agentId>:whatsapp:group:<jid>`（默认为 `~/.easyhub/agents/<agentId>/sessions/sessions.json`）；缺失条目只是意味着该群组尚未触发运行。
 - 群组中的输入指示器遵循 `agents.defaults.typingMode`（默认：未被提及时为 `message`）。

@@ -15,43 +15,43 @@ x-i18n:
 
 # Doctor
 
-`openclaw doctor` 是 OpenClaw 的修复 + 迁移工具。它修复过时的配置/状态，检查健康状况，并提供可操作的修复步骤。
+`EasyHub doctor` 是 EasyHub 的修复 + 迁移工具。它修复过时的配置/状态，检查健康状况，并提供可操作的修复步骤。
 
 ## 快速开始
 
 ```bash
-openclaw doctor
+EasyHub doctor
 ```
 
 ### 无头/自动化
 
 ```bash
-openclaw doctor --yes
+EasyHub doctor --yes
 ```
 
 无需提示接受默认值（包括适用时的重启/服务/沙箱修复步骤）。
 
 ```bash
-openclaw doctor --repair
+EasyHub doctor --repair
 ```
 
 无需提示应用推荐的修复（安全时进行修复 + 重启）。
 
 ```bash
-openclaw doctor --repair --force
+EasyHub doctor --repair --force
 ```
 
 也应用激进的修复（覆盖自定义 supervisor 配置）。
 
 ```bash
-openclaw doctor --non-interactive
+EasyHub doctor --non-interactive
 ```
 
 无需提示运行，仅应用安全迁移（配置规范化 + 磁盘状态移动）。跳过需要人工确认的重启/服务/沙箱操作。
 检测到时自动运行遗留状态迁移。
 
 ```bash
-openclaw doctor --deep
+EasyHub doctor --deep
 ```
 
 扫描系统服务以查找额外的 Gateway 网关安装（launchd/systemd/schtasks）。
@@ -59,7 +59,7 @@ openclaw doctor --deep
 如果你想在写入前查看更改，请先打开配置文件：
 
 ```bash
-cat ~/.openclaw/openclaw.json
+cat ~/.easyhub/easyhub.json
 ```
 
 ## 功能概述
@@ -74,7 +74,7 @@ cat ~/.openclaw/openclaw.json
 - 状态完整性和权限检查（会话、记录、状态目录）。
 - 本地运行时的配置文件权限检查（chmod 600）。
 - 模型认证健康：检查 OAuth 过期，可刷新即将过期的 token，并报告认证配置文件冷却/禁用状态。
-- 额外工作区目录检测（`~/openclaw`）。
+- 额外工作区目录检测（`~/EasyHub`）。
 - 启用沙箱隔离时的沙箱镜像修复。
 - 遗留服务迁移和额外 Gateway 网关检测。
 - Gateway 网关运行时检查（服务已安装但未运行；缓存的 launchd 标签）。
@@ -100,13 +100,13 @@ cat ~/.openclaw/openclaw.json
 
 ### 2）遗留配置键迁移
 
-当配置包含已弃用的键时，其他命令会拒绝运行并要求你运行 `openclaw doctor`。
+当配置包含已弃用的键时，其他命令会拒绝运行并要求你运行 `EasyHub doctor`。
 
 Doctor 将：
 
 - 解释找到了哪些遗留键。
 - 显示它应用的迁移。
-- 使用更新后的 schema 重写 `~/.openclaw/openclaw.json`。
+- 使用更新后的 schema 重写 `~/.easyhub/easyhub.json`。
 
 Gateway 网关在检测到遗留配置格式时也会在启动时自动运行 doctor 迁移，因此过时的配置无需手动干预即可修复。
 
@@ -136,14 +136,14 @@ Gateway 网关在检测到遗留配置格式时也会在启动时自动运行 do
 Doctor 可以将旧的磁盘布局迁移到当前结构：
 
 - 会话存储 + 记录：
-  - 从 `~/.openclaw/sessions/` 到 `~/.openclaw/agents/<agentId>/sessions/`
+  - 从 `~/.easyhub/sessions/` 到 `~/.easyhub/agents/<agentId>/sessions/`
 - 智能体目录：
-  - 从 `~/.openclaw/agent/` 到 `~/.openclaw/agents/<agentId>/agent/`
+  - 从 `~/.easyhub/agent/` 到 `~/.easyhub/agents/<agentId>/agent/`
 - WhatsApp 认证状态（Baileys）：
-  - 从遗留的 `~/.openclaw/credentials/*.json`（除 `oauth.json` 外）
-  - 到 `~/.openclaw/credentials/whatsapp/<accountId>/...`（默认账户 id：`default`）
+  - 从遗留的 `~/.easyhub/credentials/*.json`（除 `oauth.json` 外）
+  - 到 `~/.easyhub/credentials/whatsapp/<accountId>/...`（默认账户 id：`default`）
 
-这些迁移是尽力而为且幂等的；当 doctor 将任何遗留文件夹作为备份保留时会发出警告。Gateway 网关/CLI 也会在启动时自动迁移遗留会话 + 智能体目录，因此历史/认证/模型会落在每智能体路径中，无需手动运行 doctor。WhatsApp 认证有意仅通过 `openclaw doctor` 迁移。
+这些迁移是尽力而为且幂等的；当 doctor 将任何遗留文件夹作为备份保留时会发出警告。Gateway 网关/CLI 也会在启动时自动迁移遗留会话 + 智能体目录，因此历史/认证/模型会落在每智能体路径中，无需手动运行 doctor。WhatsApp 认证有意仅通过 `EasyHub doctor` 迁移。
 
 ### 4）状态完整性检查（会话持久化、路由和安全）
 
@@ -156,9 +156,9 @@ Doctor 检查：
 - **会话目录缺失**：`sessions/` 和会话存储目录是持久化历史和避免 `ENOENT` 崩溃所必需的。
 - **记录不匹配**：当最近的会话条目缺少记录文件时发出警告。
 - **主会话"1 行 JSONL"**：当主记录只有一行时标记（历史未累积）。
-- **多个状态目录**：当多个 `~/.openclaw` 文件夹存在于不同 home 目录或当 `OPENCLAW_STATE_DIR` 指向别处时发出警告（历史可能在安装之间分裂）。
+- **多个状态目录**：当多个 `~/.easyhub` 文件夹存在于不同 home 目录或当 `EASYHUB_STATE_DIR` 指向别处时发出警告（历史可能在安装之间分裂）。
 - **远程模式提醒**：如果 `gateway.mode=remote`，doctor 会提醒你在远程主机上运行它（状态在那里）。
-- **配置文件权限**：当 `~/.openclaw/openclaw.json` 对组/其他用户可读时发出警告，并提供收紧到 `600` 的选项。
+- **配置文件权限**：当 `~/.easyhub/easyhub.json` 对组/其他用户可读时发出警告，并提供收紧到 `600` 的选项。
 
 ### 5）模型认证健康（OAuth 过期）
 
@@ -180,8 +180,8 @@ Doctor 还会报告由于以下原因暂时不可用的认证配置文件：
 
 ### 8）Gateway 网关服务迁移和清理提示
 
-Doctor 检测遗留的 Gateway 网关服务（launchd/systemd/schtasks），并提供删除它们并使用当前 Gateway 网关端口安装 OpenClaw 服务的选项。它还可以扫描额外的类 Gateway 网关服务并打印清理提示。
-配置文件命名的 OpenClaw Gateway 网关服务被视为一等公民，不会被标记为"额外的"。
+Doctor 检测遗留的 Gateway 网关服务（launchd/systemd/schtasks），并提供删除它们并使用当前 Gateway 网关端口安装 EasyHub 服务的选项。它还可以扫描额外的类 Gateway 网关服务并打印清理提示。
+配置文件命名的 EasyHub Gateway 网关服务被视为一等公民，不会被标记为"额外的"。
 
 ### 9）安全警告
 
@@ -197,7 +197,7 @@ Doctor 打印当前工作区符合条件/缺失/被阻止的 Skills 的快速摘
 
 ### 12）Gateway 网关认证检查（本地 token）
 
-当本地 Gateway 网关缺少 `gateway.auth` 时，Doctor 会发出警告并提供生成 token 的选项。使用 `openclaw doctor --generate-gateway-token` 在自动化中强制创建 token。
+当本地 Gateway 网关缺少 `gateway.auth` 时，Doctor 会发出警告并提供生成 token 的选项。使用 `EasyHub doctor --generate-gateway-token` 在自动化中强制创建 token。
 
 ### 13）Gateway 网关健康检查 + 重启
 
@@ -213,11 +213,11 @@ Doctor 检查已安装的 supervisor 配置（launchd/systemd/schtasks）是否�
 
 注意事项：
 
-- `openclaw doctor` 在重写 supervisor 配置前提示。
-- `openclaw doctor --yes` 接受默认修复提示。
-- `openclaw doctor --repair` 无需提示应用推荐的修复。
-- `openclaw doctor --repair --force` 覆盖自定义 supervisor 配置。
-- 你始终可以通过 `openclaw gateway install --force` 强制完全重写。
+- `EasyHub doctor` 在重写 supervisor 配置前提示。
+- `EasyHub doctor --yes` 接受默认修复提示。
+- `EasyHub doctor --repair` 无需提示应用推荐的修复。
+- `EasyHub doctor --repair --force` 覆盖自定义 supervisor 配置。
+- 你始终可以通过 `EasyHub gateway install --force` 强制完全重写。
 
 ### 16）Gateway 网关运行时 + 端口诊断
 

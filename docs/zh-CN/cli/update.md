@@ -2,7 +2,7 @@
 read_when:
   - 你想安全地更新源码检出
   - 你需要了解 `--update` 简写行为
-summary: "`openclaw update` 的 CLI 参考（相对安全的源码更新 + Gateway 网关自动重启）"
+summary: "`EasyHub update` 的 CLI 参考（相对安全的源码更新 + Gateway 网关自动重启）"
 title: update
 x-i18n:
   generated_at: "2026-02-03T07:45:34Z"
@@ -13,24 +13,24 @@ x-i18n:
   workflow: 15
 ---
 
-# `openclaw update`
+# `EasyHub update`
 
-安全更新 OpenClaw 并在 stable/beta/dev 渠道之间切换。
+安全更新 EasyHub 并在 stable/beta/dev 渠道之间切换。
 
 如果你通过 **npm/pnpm** 安装（全局安装，无 git 元数据），更新通过 [更新](/install/updating) 中的包管理器流程进行。
 
 ## 用法
 
 ```bash
-openclaw update
-openclaw update status
-openclaw update wizard
-openclaw update --channel beta
-openclaw update --channel dev
-openclaw update --tag beta
-openclaw update --no-restart
-openclaw update --json
-openclaw --update
+EasyHub update
+EasyHub update status
+EasyHub update wizard
+EasyHub update --channel beta
+EasyHub update --channel dev
+EasyHub update --tag beta
+EasyHub update --no-restart
+EasyHub update --json
+EasyHub --update
 ```
 
 ## 选项
@@ -48,9 +48,9 @@ openclaw --update
 显示当前更新渠道 + git 标签/分支/SHA（对于源码检出），以及更新可用性。
 
 ```bash
-openclaw update status
-openclaw update status --json
-openclaw update status --timeout 10
+EasyHub update status
+EasyHub update status --json
+EasyHub update status --timeout 10
 ```
 
 选项：
@@ -64,9 +64,9 @@ openclaw update status --timeout 10
 
 ## 工作原理
 
-当你显式切换渠道（`--channel ...`）时，OpenClaw 也会保持安装方式一致：
+当你显式切换渠道（`--channel ...`）时，EasyHub 也会保持安装方式一致：
 
-- `dev` → 确保存在 git 检出（默认：`~/openclaw`，可通过 `OPENCLAW_GIT_DIR` 覆盖），更新它，并从该检出安装全局 CLI。
+- `dev` → 确保存在 git 检出（默认：`~/EasyHub`，可通过 `EASYHUB_GIT_DIR` 覆盖），更新它，并从该检出安装全局 CLI。
 - `stable`/`beta` → 使用匹配的 dist-tag 从 npm 安装。
 
 ## Git 检出流程
@@ -86,16 +86,16 @@ openclaw update status --timeout 10
 5. Rebase 到所选提交（仅 dev）。
 6. 安装依赖（优先使用 pnpm；npm 作为备选）。
 7. 构建 + 构建控制界面。
-8. 运行 `openclaw doctor` 作为最终的"安全更新"检查。
+8. 运行 `EasyHub doctor` 作为最终的"安全更新"检查。
 9. 将插件同步到当前渠道（dev 使用捆绑的扩展；stable/beta 使用 npm）并更新 npm 安装的插件。
 
 ## `--update` 简写
 
-`openclaw --update` 会重写为 `openclaw update`（便于 shell 和启动脚本使用）。
+`EasyHub --update` 会重写为 `EasyHub update`（便于 shell 和启动脚本使用）。
 
 ## 另请参阅
 
-- `openclaw doctor`（在 git 检出上会提供先运行更新的选项）
+- `EasyHub doctor`（在 git 检出上会提供先运行更新的选项）
 - [开发渠道](/install/development-channels)
 - [更新](/install/updating)
 - [CLI 参考](/cli)

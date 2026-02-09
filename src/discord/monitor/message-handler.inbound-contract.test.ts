@@ -28,7 +28,7 @@ describe("discord processDiscordMessage inbound contract", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
     capturedCtx = undefined;
 
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-discord-"));
     const storePath = path.join(dir, "sessions.json");
 
     await processDiscordMessage({
@@ -106,7 +106,7 @@ describe("discord processDiscordMessage inbound contract", () => {
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     capturedCtx = undefined;
 
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-discord-"));
     const storePath = path.join(dir, "sessions.json");
 
     const messageCtx = {

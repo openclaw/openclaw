@@ -75,7 +75,7 @@ const findLatestMtime = (dirPath, shouldSkip) => {
 };
 
 const shouldBuild = () => {
-  if (env.OPENCLAW_FORCE_BUILD === "1") {
+  if (env.EASYHUB_FORCE_BUILD === "1") {
     return true;
   }
   const stampMtime = statMtime(buildStampPath);
@@ -101,14 +101,14 @@ const shouldBuild = () => {
 };
 
 const logRunner = (message) => {
-  if (env.OPENCLAW_RUNNER_LOG === "0") {
+  if (env.EASYHUB_RUNNER_LOG === "0") {
     return;
   }
-  process.stderr.write(`[openclaw] ${message}\n`);
+  process.stderr.write(`[EasyHub] ${message}\n`);
 };
 
 const runNode = () => {
-  const nodeProcess = spawn(process.execPath, ["openclaw.mjs", ...args], {
+  const nodeProcess = spawn(process.execPath, ["easyhub.mjs", ...args], {
     cwd,
     env,
     stdio: "inherit",

@@ -23,10 +23,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 import { emitAgentEvent } from "../infra/agent-events.js";
 import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createEasyHubTools } from "./easyhub-tools.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
-describe("openclaw-tools: subagents", () => {
+describe("easyhub-tools: subagents", () => {
   beforeEach(() => {
     configOverride = {
       session: {
@@ -70,7 +70,7 @@ describe("openclaw-tools: subagents", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = createEasyHubTools({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
@@ -109,7 +109,7 @@ describe("openclaw-tools: subagents", () => {
       },
     };
 
-    const tool = createOpenClawTools({
+    const tool = createEasyHubTools({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
@@ -180,7 +180,7 @@ describe("openclaw-tools: subagents", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = createEasyHubTools({
       agentSessionKey: "discord:group:req",
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_spawn");
@@ -293,7 +293,7 @@ describe("openclaw-tools: subagents", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = createEasyHubTools({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
       agentAccountId: "kev",

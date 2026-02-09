@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { discordOutbound } from "../../channels/plugins/outbound/discord.js";
 import { imessageOutbound } from "../../channels/plugins/outbound/imessage.js";
@@ -171,8 +171,8 @@ describe("routeReply", () => {
   it("applies responsePrefix when routing", async () => {
     mocks.sendMessageSlack.mockClear();
     const cfg = {
-      messages: { responsePrefix: "[openclaw]" },
-    } as unknown as OpenClawConfig;
+      messages: { responsePrefix: "[EasyHub]" },
+    } as unknown as EasyHubConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "slack",
@@ -181,7 +181,7 @@ describe("routeReply", () => {
     });
     expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
       "channel:C123",
-      "[openclaw] hi",
+      "[EasyHub] hi",
       expect.any(Object),
     );
   });
@@ -198,7 +198,7 @@ describe("routeReply", () => {
         ],
       },
       messages: {},
-    } as unknown as OpenClawConfig;
+    } as unknown as EasyHubConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "slack",
@@ -345,7 +345,7 @@ describe("routeReply", () => {
           enabled: true,
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as EasyHubConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "msteams",

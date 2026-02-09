@@ -1,6 +1,6 @@
 ---
 read_when: Connecting the macOS app to a remote gateway over SSH
-summary: OpenClaw.app 连接远程 Gateway 网关的 SSH 隧道设置
+summary: EasyHub.app 连接远程 Gateway 网关的 SSH 隧道设置
 title: 远程 Gateway 网关设置
 x-i18n:
   generated_at: "2026-02-03T07:48:37Z"
@@ -11,9 +11,9 @@ x-i18n:
   workflow: 15
 ---
 
-# 使用远程 Gateway 网关运行 OpenClaw.app
+# 使用远程 Gateway 网关运行 EasyHub.app
 
-OpenClaw.app 使用 SSH 隧道连接到远程 Gateway 网关。本指南向你展示如何设置。
+EasyHub.app 使用 SSH 隧道连接到远程 Gateway 网关。本指南向你展示如何设置。
 
 ## 概述
 
@@ -21,7 +21,7 @@ OpenClaw.app 使用 SSH 隧道连接到远程 Gateway 网关。本指南向你�
 ┌─────────────────────────────────────────────────────────────┐
 │                        Client Machine                          │
 │                                                              │
-│  OpenClaw.app ──► ws://127.0.0.1:18789 (local port)           │
+│  EasyHub.app ──► ws://127.0.0.1:18789 (local port)           │
 │                     │                                        │
 │                     ▼                                        │
 │  SSH Tunnel ────────────────────────────────────────────────│
@@ -64,7 +64,7 @@ ssh-copy-id -i ~/.ssh/id_rsa <REMOTE_USER>@<REMOTE_IP>
 ### 步骤 3：设置 Gateway 网关令牌
 
 ```bash
-launchctl setenv OPENCLAW_GATEWAY_TOKEN "<your-token>"
+launchctl setenv EASYHUB_GATEWAY_TOKEN "<your-token>"
 ```
 
 ### 步骤 4：启动 SSH 隧道
@@ -73,11 +73,11 @@ launchctl setenv OPENCLAW_GATEWAY_TOKEN "<your-token>"
 ssh -N remote-gateway &
 ```
 
-### 步骤 5：重启 OpenClaw.app
+### 步骤 5：重启 EasyHub.app
 
 ```bash
-# Quit OpenClaw.app (⌘Q), then reopen:
-open /path/to/OpenClaw.app
+# Quit EasyHub.app (⌘Q), then reopen:
+open /path/to/EasyHub.app
 ```
 
 应用现在将通过 SSH 隧道连接到远程 Gateway 网关。
@@ -125,7 +125,7 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist
 - 崩溃时重新启动
 - 在后台持续运行
 
-旧版注意事项：如果存在任何遗留的 `com.openclaw.ssh-tunnel` LaunchAgent，请将其删除。
+旧版注意事项：如果存在任何遗留的 `com.EasyHub.ssh-tunnel` LaunchAgent，请将其删除。
 
 ---
 
@@ -161,4 +161,4 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 | `KeepAlive`                          | 隧道崩溃时自动重启                    |
 | `RunAtLoad`                          | 代理加载时启动隧道                    |
 
-OpenClaw.app 连接到你的客户端机器上的 `ws://127.0.0.1:18789`。SSH 隧道将该连接转发到运行 Gateway 网关的远程机器的端口 18789。
+EasyHub.app 连接到你的客户端机器上的 `ws://127.0.0.1:18789`。SSH 隧道将该连接转发到运行 Gateway 网关的远程机器的端口 18789。

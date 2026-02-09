@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import type { MsgContext } from "./templating.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -30,7 +30,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back from empty SenderId to SenderE164", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+123"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -53,7 +53,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back from whitespace SenderId to SenderE164", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+123"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -76,7 +76,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back to From when SenderId and SenderE164 are whitespace", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+999"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -99,7 +99,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back from un-normalizable SenderId to SenderE164", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+123"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -122,7 +122,7 @@ describe("resolveCommandAuthorization", () => {
   it("prefers SenderE164 when SenderId does not match allowFrom", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+41796666864"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -146,7 +146,7 @@ describe("resolveCommandAuthorization", () => {
     const cfg = {
       commands: { ownerAllowFrom: ["whatsapp:+15551234567"] },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const ownerCtx = {
       Provider: "whatsapp",
@@ -192,7 +192,7 @@ describe("resolveCommandAuthorization", () => {
     );
     const cfg = {
       channels: { discord: {} },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const ctx = {
       Provider: "discord",
@@ -292,12 +292,12 @@ describe("control command parsing", () => {
   it("ignores telegram commands addressed to other bots", () => {
     expect(
       hasControlCommand("/help@otherbot", undefined, {
-        botUsername: "openclaw",
+        botUsername: "EasyHub",
       }),
     ).toBe(false);
     expect(
-      hasControlCommand("/help@openclaw", undefined, {
-        botUsername: "openclaw",
+      hasControlCommand("/help@EasyHub", undefined, {
+        botUsername: "EasyHub",
       }),
     ).toBe(true);
   });

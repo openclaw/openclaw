@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 在 Windows 上安装 OpenClaw
+  - 在 Windows 上安装 EasyHub
   - 查找 Windows 配套应用状态
 summary: Windows（WSL2）支持 + 配套应用状态
 title: Windows (WSL2)
@@ -15,7 +15,7 @@ x-i18n:
 
 # Windows (WSL2)
 
-Windows 上的 OpenClaw 推荐**通过 WSL2**（推荐 Ubuntu）。CLI + Gateway 网关在 Linux 内运行，这保持了运行时的一致性并使工具兼容性大大提高（Node/Bun/pnpm、Linux 二进制文件、Skills）。原生 Windows 可能更棘手。WSL2 给你完整的 Linux 体验——一条命令安装：`wsl --install`。
+Windows 上的 EasyHub 推荐**通过 WSL2**（推荐 Ubuntu）。CLI + Gateway 网关在 Linux 内运行，这保持了运行时的一致性并使工具兼容性大大提高（Node/Bun/pnpm、Linux 二进制文件、Skills）。原生 Windows 可能更棘手。WSL2 给你完整的 Linux 体验——一条命令安装：`wsl --install`。
 
 原生 Windows 配套应用已在计划中。
 
@@ -35,19 +35,19 @@ Windows 上的 OpenClaw 推荐**通过 WSL2**（推荐 Ubuntu）。CLI + Gateway
 在 WSL2 内：
 
 ```
-openclaw onboard --install-daemon
+EasyHub onboard --install-daemon
 ```
 
 或：
 
 ```
-openclaw gateway install
+EasyHub gateway install
 ```
 
 或：
 
 ```
-openclaw configure
+EasyHub configure
 ```
 
 出现提示时选择 **Gateway service**。
@@ -55,7 +55,7 @@ openclaw configure
 修复/迁移：
 
 ```
-openclaw doctor
+EasyHub doctor
 ```
 
 ## 高级：通过 LAN 暴露 WSL 服务（portproxy）
@@ -94,7 +94,7 @@ netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=0.0.0.
 注意事项：
 
 - 从另一台机器 SSH 目标是 **Windows 主机 IP**（示例：`ssh user@windows-host -p 2222`）。
-- 远程节点必须指向**可访问的** Gateway 网关 URL（不是 `127.0.0.1`）；使用 `openclaw status --all` 确认。
+- 远程节点必须指向**可访问的** Gateway 网关 URL（不是 `127.0.0.1`）；使用 `EasyHub status --all` 确认。
 - 使用 `listenaddress=0.0.0.0` 进行 LAN 访问；`127.0.0.1` 仅保持本地访问。
 - 如果你想自动化，注册一个计划任务在登录时运行刷新步骤。
 
@@ -136,17 +136,17 @@ wsl --shutdown
 systemctl --user status
 ```
 
-### 3）安装 OpenClaw（在 WSL 内）
+### 3）安装 EasyHub（在 WSL 内）
 
 在 WSL 内按照 Linux 入门指南流程：
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
+git clone https://github.com/EasyHub/EasyHub.git
+cd EasyHub
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run
 pnpm build
-openclaw onboard
+EasyHub onboard
 ```
 
 完整指南：[入门指南](/start/getting-started)

@@ -153,7 +153,7 @@ describe("runReplyAgent messaging tool suppression", () => {
 
   it("persists usage even when replies are suppressed", async () => {
     const storePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-session-store-")),
       "sessions.json",
     );
     const sessionKey = "main";

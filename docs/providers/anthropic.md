@@ -1,7 +1,7 @@
 ---
-summary: "Use Anthropic Claude via API keys or setup-token in OpenClaw"
+summary: "Use Anthropic Claude via API keys or setup-token in EasyHub"
 read_when:
-  - You want to use Anthropic models in OpenClaw
+  - You want to use Anthropic models in EasyHub
   - You want setup-token instead of API keys
 title: "Anthropic"
 ---
@@ -9,7 +9,7 @@ title: "Anthropic"
 # Anthropic (Claude)
 
 Anthropic builds the **Claude** model family and provides access via an API.
-In OpenClaw you can authenticate with an API key or a **setup-token**.
+In EasyHub you can authenticate with an API key or a **setup-token**.
 
 ## Option A: Anthropic API key
 
@@ -19,11 +19,11 @@ Create your API key in the Anthropic Console.
 ### CLI setup
 
 ```bash
-openclaw onboard
+EasyHub onboard
 # choose: Anthropic API key
 
 # or non-interactive
-openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
+EasyHub onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
 
 ### Config snippet
@@ -37,7 +37,7 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Prompt caching (Anthropic API)
 
-OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; subscription auth does not honor cache settings.
+EasyHub supports Anthropic's prompt caching feature. This is **API-only**; subscription auth does not honor cache settings.
 
 ### Configuration
 
@@ -65,7 +65,7 @@ Use the `cacheRetention` parameter in your model config:
 
 ### Defaults
 
-When using Anthropic API Key authentication, OpenClaw automatically applies `cacheRetention: "short"` (5-minute cache) for all Anthropic models. You can override this by explicitly setting `cacheRetention` in your config.
+When using Anthropic API Key authentication, EasyHub automatically applies `cacheRetention: "short"` (5-minute cache) for all Anthropic models. You can override this by explicitly setting `cacheRetention` in your config.
 
 ### Legacy parameter
 
@@ -76,7 +76,7 @@ The older `cacheControlTtl` parameter is still supported for backwards compatibi
 
 We recommend migrating to the new `cacheRetention` parameter.
 
-OpenClaw includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API
+EasyHub includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API
 requests; keep it if you override provider headers (see [/gateway/configuration](/gateway/configuration)).
 
 ## Option B: Claude setup-token
@@ -91,23 +91,23 @@ Setup-tokens are created by the **Claude Code CLI**, not the Anthropic Console. 
 claude setup-token
 ```
 
-Paste the token into OpenClaw (wizard: **Anthropic token (paste setup-token)**), or run it on the gateway host:
+Paste the token into EasyHub (wizard: **Anthropic token (paste setup-token)**), or run it on the gateway host:
 
 ```bash
-openclaw models auth setup-token --provider anthropic
+EasyHub models auth setup-token --provider anthropic
 ```
 
 If you generated the token on a different machine, paste it:
 
 ```bash
-openclaw models auth paste-token --provider anthropic
+EasyHub models auth paste-token --provider anthropic
 ```
 
 ### CLI setup (setup-token)
 
 ```bash
 # Paste a setup-token during onboarding
-openclaw onboard --auth-choice setup-token
+EasyHub onboard --auth-choice setup-token
 ```
 
 ### Config snippet (setup-token)
@@ -120,7 +120,7 @@ openclaw onboard --auth-choice setup-token
 
 ## Notes
 
-- Generate the setup-token with `claude setup-token` and paste it, or run `openclaw models auth setup-token` on the gateway host.
+- Generate the setup-token with `claude setup-token` and paste it, or run `EasyHub models auth setup-token` on the gateway host.
 - If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
 
@@ -131,22 +131,22 @@ openclaw onboard --auth-choice setup-token
 - Claude subscription auth can expire or be revoked. Re-run `claude setup-token`
   and paste it into the **gateway host**.
 - If the Claude CLI login lives on a different machine, use
-  `openclaw models auth paste-token --provider anthropic` on the gateway host.
+  `EasyHub models auth paste-token --provider anthropic` on the gateway host.
 
 **No API key found for provider "anthropic"**
 
 - Auth is **per agent**. New agents don’t inherit the main agent’s keys.
 - Re-run onboarding for that agent, or paste a setup-token / API key on the
-  gateway host, then verify with `openclaw models status`.
+  gateway host, then verify with `EasyHub models status`.
 
 **No credentials found for profile `anthropic:default`**
 
-- Run `openclaw models status` to see which auth profile is active.
+- Run `EasyHub models status` to see which auth profile is active.
 - Re-run onboarding, or paste a setup-token / API key for that profile.
 
 **No available auth profile (all in cooldown/unavailable)**
 
-- Check `openclaw models status --json` for `auth.unusableProfiles`.
+- Check `EasyHub models status --json` for `auth.unusableProfiles`.
 - Add another Anthropic profile or wait for cooldown.
 
 More: [/gateway/troubleshooting](/gateway/troubleshooting) and [/help/faq](/help/faq).

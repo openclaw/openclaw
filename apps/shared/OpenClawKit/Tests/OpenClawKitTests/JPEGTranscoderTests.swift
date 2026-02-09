@@ -1,4 +1,4 @@
-import OpenClawKit
+import EasyHubKit
 import CoreGraphics
 import ImageIO
 import Testing

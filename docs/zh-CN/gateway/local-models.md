@@ -3,7 +3,7 @@ read_when:
   - 你想从自己的 GPU 机器提供模型服务
   - 你正在配置 LM Studio 或 OpenAI 兼容代理
   - 你需要最安全的本地模型指南
-summary: 在本地 LLM 上运行 OpenClaw（LM Studio、vLLM、LiteLLM、自定义 OpenAI 端点）
+summary: 在本地 LLM 上运行 EasyHub（LM Studio、vLLM、LiteLLM、自定义 OpenAI 端点）
 title: 本地模型
 x-i18n:
   generated_at: "2026-02-03T07:48:15Z"
@@ -16,7 +16,7 @@ x-i18n:
 
 # 本地模型
 
-本地运行是可行的，但 OpenClaw 期望大上下文 + 强大的提示注入防御。小显存会截断上下文并泄露安全性。目标要高：**≥2 台满配 Mac Studio 或同等 GPU 配置（约 $30k+）**。单张 **24 GB** GPU 仅适用于较轻的提示，且延迟更高。使用**你能运行的最大/完整尺寸模型变体**；激进量化或"小型"检查点会增加提示注入风险（参见[安全](/gateway/security)）。
+本地运行是可行的，但 EasyHub 期望大上下文 + 强大的提示注入防御。小显存会截断上下文并泄露安全性。目标要高：**≥2 台满配 Mac Studio 或同等 GPU 配置（约 $30k+）**。单张 **24 GB** GPU 仅适用于较轻的提示，且延迟更高。使用**你能运行的最大/完整尺寸模型变体**；激进量化或"小型"检查点会增加提示注入风险（参见[安全](/gateway/security)）。
 
 ## 推荐：LM Studio + MiniMax M2.1（Responses API，完整尺寸）
 

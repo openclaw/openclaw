@@ -1,4 +1,4 @@
-import type { ConfigFileSnapshot } from "./types.openclaw.js";
+import type { ConfigFileSnapshot } from "./types.easyhub.js";
 
 /**
  * Sentinel value used to replace sensitive config fields in gateway responses.
@@ -6,7 +6,7 @@ import type { ConfigFileSnapshot } from "./types.openclaw.js";
  * sentinel and restore the original value from the on-disk config, so a
  * round-trip through the Web UI does not corrupt credentials.
  */
-export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+export const REDACTED_SENTINEL = "__EASYHUB_REDACTED__";
 
 /**
  * Patterns that identify sensitive config field names.

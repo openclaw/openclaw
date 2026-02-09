@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
@@ -11,7 +11,7 @@ import {
 
 describe("session cost usage", () => {
   it("aggregates daily totals with log cost and pricing fallback", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-cost-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "sess-1.jsonl");
@@ -94,10 +94,10 @@ describe("session cost usage", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
-    const originalState = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = root;
+    const originalState = process.env.EASYHUB_STATE_DIR;
+    process.env.EASYHUB_STATE_DIR = root;
     try {
       const summary = await loadCostUsageSummary({ days: 30, config });
       expect(summary.daily.length).toBe(1);
@@ -105,15 +105,15 @@ describe("session cost usage", () => {
       expect(summary.totals.totalCost).toBeCloseTo(0.03003, 5);
     } finally {
       if (originalState === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.EASYHUB_STATE_DIR;
       } else {
-        process.env.OPENCLAW_STATE_DIR = originalState;
+        process.env.EASYHUB_STATE_DIR = originalState;
       }
     }
   });
 
   it("summarizes a single session file", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-session-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-cost-session-"));
     const sessionFile = path.join(root, "session.jsonl");
     const now = new Date();
 
@@ -146,7 +146,7 @@ describe("session cost usage", () => {
   });
 
   it("captures message counts, tool usage, and model usage", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-session-meta-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-cost-session-meta-"));
     const sessionFile = path.join(root, "session.jsonl");
     const start = new Date("2026-02-01T10:00:00.000Z");
     const end = new Date("2026-02-01T10:05:00.000Z");
@@ -214,7 +214,7 @@ describe("session cost usage", () => {
   });
 
   it("does not exclude sessions with mtime after endMs during discovery", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-discover-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "sess-late.jsonl");
@@ -223,8 +223,8 @@ describe("session cost usage", () => {
     const now = Date.now();
     await fs.utimes(sessionFile, now / 1000, now / 1000);
 
-    const originalState = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = root;
+    const originalState = process.env.EASYHUB_STATE_DIR;
+    process.env.EASYHUB_STATE_DIR = root;
     try {
       const sessions = await discoverAllSessions({
         startMs: now - 7 * 24 * 60 * 60 * 1000,
@@ -234,9 +234,9 @@ describe("session cost usage", () => {
       expect(sessions[0]?.sessionId).toBe("sess-late");
     } finally {
       if (originalState === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.EASYHUB_STATE_DIR;
       } else {
-        process.env.OPENCLAW_STATE_DIR = originalState;
+        process.env.EASYHUB_STATE_DIR = originalState;
       }
     }
   });

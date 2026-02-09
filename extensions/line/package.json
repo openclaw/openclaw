@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/line",
+  "name": "@easyhub/line",
   "version": "2026.2.6-3",
-  "description": "OpenClaw LINE channel plugin",
+  "description": "EasyHub LINE channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ],
@@ -21,7 +21,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/line",
+      "npmSpec": "@easyhub/line",
       "localPath": "extensions/line",
       "defaultChoice": "npm"
     }

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import {
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
@@ -12,7 +12,7 @@ import {
   MINIMAX_LM_STUDIO_COST,
 } from "./onboard-auth.models.js";
 
-export function applyMinimaxProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyMinimaxProviderConfig(cfg: EasyHubConfig): EasyHubConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models["anthropic/claude-opus-4-6"] = {
     ...models["anthropic/claude-opus-4-6"],
@@ -59,9 +59,9 @@ export function applyMinimaxProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 }
 
 export function applyMinimaxHostedProviderConfig(
-  cfg: OpenClawConfig,
+  cfg: EasyHubConfig,
   params?: { baseUrl?: string },
-): OpenClawConfig {
+): EasyHubConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[MINIMAX_HOSTED_MODEL_REF] = {
     ...models[MINIMAX_HOSTED_MODEL_REF],
@@ -103,7 +103,7 @@ export function applyMinimaxHostedProviderConfig(
   };
 }
 
-export function applyMinimaxConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyMinimaxConfig(cfg: EasyHubConfig): EasyHubConfig {
   const next = applyMinimaxProviderConfig(cfg);
   return {
     ...next,
@@ -126,9 +126,9 @@ export function applyMinimaxConfig(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyMinimaxHostedConfig(
-  cfg: OpenClawConfig,
+  cfg: EasyHubConfig,
   params?: { baseUrl?: string },
-): OpenClawConfig {
+): EasyHubConfig {
   const next = applyMinimaxHostedProviderConfig(cfg, params);
   return {
     ...next,
@@ -147,9 +147,9 @@ export function applyMinimaxHostedConfig(
 
 // MiniMax Anthropic-compatible API (platform.minimax.io/anthropic)
 export function applyMinimaxApiProviderConfig(
-  cfg: OpenClawConfig,
+  cfg: EasyHubConfig,
   modelId: string = "MiniMax-M2.1",
-): OpenClawConfig {
+): EasyHubConfig {
   const providers = { ...cfg.models?.providers };
   const existingProvider = providers.minimax;
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
@@ -190,9 +190,9 @@ export function applyMinimaxApiProviderConfig(
 }
 
 export function applyMinimaxApiConfig(
-  cfg: OpenClawConfig,
+  cfg: EasyHubConfig,
   modelId: string = "MiniMax-M2.1",
-): OpenClawConfig {
+): EasyHubConfig {
   const next = applyMinimaxApiProviderConfig(cfg, modelId);
   return {
     ...next,

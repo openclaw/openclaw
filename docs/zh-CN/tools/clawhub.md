@@ -16,13 +16,13 @@ x-i18n:
 
 # ClawHub
 
-ClawHub 是 **OpenClaw 的公共 Skills 注册中心**。它是一项免费服务：所有 Skills 都是公开的、开放的，所有人都可以查看、共享和复用。Skills 就是一个包含 `SKILL.md` 文件（以及辅助文本文件）的文件夹。你可以在网页应用中浏览 Skills，也可以使用 CLI 来搜索、安装、更新和发布 Skills。
+ClawHub 是 **EasyHub 的公共 Skills 注册中心**。它是一项免费服务：所有 Skills 都是公开的、开放的，所有人都可以查看、共享和复用。Skills 就是一个包含 `SKILL.md` 文件（以及辅助文本文件）的文件夹。你可以在网页应用中浏览 Skills，也可以使用 CLI 来搜索、安装、更新和发布 Skills。
 
 网站：[clawhub.com](https://clawhub.com)
 
 ## 适用人群（新手友好）
 
-如果你想为 OpenClaw 智能体添加新功能，ClawHub 是查找和安装 Skills 的最简单方式。你不需要了解后端的工作原理。你可以：
+如果你想为 EasyHub 智能体添加新功能，ClawHub 是查找和安装 Skills 的最简单方式。你不需要了解后端的工作原理。你可以：
 
 - 使用自然语言搜索 Skills。
 - 将 Skills 安装到你的工作区。
@@ -36,7 +36,7 @@ ClawHub 是 **OpenClaw 的公共 Skills 注册中心**。它是一项免费服�
    - `clawhub search "calendar"`
 3. 安装一个 Skills：
    - `clawhub install <skill-slug>`
-4. 启动一个新的 OpenClaw 会话，以加载新 Skills。
+4. 启动一个新的 EasyHub 会话，以加载新 Skills。
 
 ## 安装 CLI
 
@@ -50,9 +50,9 @@ npm i -g clawhub
 pnpm add -g clawhub
 ```
 
-## 在 OpenClaw 中的定位
+## 在 EasyHub 中的定位
 
-默认情况下，CLI 会将 Skills 安装到当前工作目录下的 `./skills`。如果已配置 OpenClaw 工作区，`clawhub` 会回退到该工作区，除非你通过 `--workdir`（或 `CLAWHUB_WORKDIR`）进行覆盖。OpenClaw 从 `<workspace>/skills` 加载工作区 Skills，并会在**下一个**会话中生效。如果你已经在使用 `~/.openclaw/skills` 或内置 Skills，工作区 Skills 优先级更高。
+默认情况下，CLI 会将 Skills 安装到当前工作目录下的 `./skills`。如果已配置 EasyHub 工作区，`clawhub` 会回退到该工作区，除非你通过 `--workdir`（或 `CLAWHUB_WORKDIR`）进行覆盖。EasyHub 从 `<workspace>/skills` 加载工作区 Skills，并会在**下一个**会话中生效。如果你已经在使用 `~/.easyhub/skills` 或内置 Skills，工作区 Skills 优先级更高。
 
 有关 Skills 加载、共享和权限控制的更多详情，请参阅
 [Skills](/tools/skills)。
@@ -71,7 +71,7 @@ pnpm add -g clawhub
 
 全局选项（适用于所有命令）：
 
-- `--workdir <dir>`：工作目录（默认：当前目录；回退到 OpenClaw 工作区）。
+- `--workdir <dir>`：工作目录（默认：当前目录；回退到 EasyHub 工作区）。
 - `--dir <dir>`：Skills 目录，相对于工作目录（默认：`skills`）。
 - `--site <url>`：网站基础 URL（浏览器登录）。
 - `--registry <url>`：注册中心 API 基础 URL。
@@ -185,7 +185,7 @@ clawhub sync --all
 
 ### 同步扫描和回退根目录
 
-`clawhub sync` 首先扫描当前工作目录。如果未找到 Skills，它会回退到已知的旧版位置（例如 `~/openclaw/skills` 和 `~/.openclaw/skills`）。这样设计是为了在不需要额外标志的情况下找到旧版 Skills 安装。
+`clawhub sync` 首先扫描当前工作目录。如果未找到 Skills，它会回退到已知的旧版位置（例如 `~/EasyHub/skills` 和 `~/.easyhub/skills`）。这样设计是为了在不需要额外标志的情况下找到旧版 Skills 安装。
 
 ### 存储和锁文件
 

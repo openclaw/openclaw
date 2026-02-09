@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Configuration
-SUBSYSTEM="ai.openclaw"
+SUBSYSTEM="ai.easyhub"
 DEFAULT_LEVEL="info"
 
 # Colors for output
@@ -48,17 +48,17 @@ SHOW_HELP=false
 # Function to show usage
 show_usage() {
     cat << EOF
-clawlog - OpenClaw Logging Utility
+clawlog - EasyHub Logging Utility
 
 USAGE:
     clawlog [OPTIONS]
 
 DESCRIPTION:
-    View OpenClaw logs with full details (bypasses Apple's privacy redaction).
+    View EasyHub logs with full details (bypasses Apple's privacy redaction).
     Requires sudo access configured for /usr/bin/log command.
 
 LOG FLOW ARCHITECTURE:
-    OpenClaw logs flow through the macOS unified log (subsystem: ai.openclaw).
+    EasyHub logs flow through the macOS unified log (subsystem: ai.EasyHub).
 
 LOG CATEGORIES (examples):
     • voicewake           - Voice wake detection/test harness

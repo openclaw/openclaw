@@ -34,7 +34,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       return await fn(home);
     },
-    { prefix: "openclaw-queue-" },
+    { prefix: "EasyHub-queue-" },
   );
 }
 
@@ -43,7 +43,7 @@ function makeCfg(home: string, queue?: Record<string, unknown>) {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-5",
-        workspace: path.join(home, "openclaw"),
+        workspace: path.join(home, "EasyHub"),
       },
     },
     channels: { whatsapp: { allowFrom: ["*"] } },

@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
-import OpenClawIPC
+import EasyHubIPC
 import CoreGraphics
 import CoreLocation
 import Foundation
@@ -373,14 +373,14 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
 }
 
 enum AppleScriptPermission {
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "AppleScriptPermission")
+    private static let logger = Logger(subsystem: "ai.easyhub", category: "AppleScriptPermission")
 
     /// Sends a benign AppleScript to Terminal to verify Automation permission.
     @MainActor
     static func isAuthorized() -> Bool {
         let script = """
         tell application "Terminal"
-            return "openclaw-ok"
+            return "EasyHub-ok"
         end tell
         """
 

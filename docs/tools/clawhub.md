@@ -9,13 +9,13 @@ title: "ClawHub"
 
 # ClawHub
 
-ClawHub is the **public skill registry for OpenClaw**. It is a free service: all skills are public, open, and visible to everyone for sharing and reuse. A skill is just a folder with a `SKILL.md` file (plus supporting text files). You can browse skills in the web app or use the CLI to search, install, update, and publish skills.
+ClawHub is the **public skill registry for EasyHub**. It is a free service: all skills are public, open, and visible to everyone for sharing and reuse. A skill is just a folder with a `SKILL.md` file (plus supporting text files). You can browse skills in the web app or use the CLI to search, install, update, and publish skills.
 
 Site: [clawhub.ai](https://clawhub.ai)
 
 ## What ClawHub is
 
-- A public registry for OpenClaw skills.
+- A public registry for EasyHub skills.
 - A versioned store of skill bundles and metadata.
 - A discovery surface for search, tags, and usage signals.
 
@@ -24,7 +24,7 @@ Site: [clawhub.ai](https://clawhub.ai)
 1. A user publishes a skill bundle (files + metadata).
 2. ClawHub stores the bundle, parses metadata, and assigns a version.
 3. The registry indexes the skill for search and discovery.
-4. Users browse, download, and install skills in OpenClaw.
+4. Users browse, download, and install skills in EasyHub.
 
 ## What you can do
 
@@ -36,7 +36,7 @@ Site: [clawhub.ai](https://clawhub.ai)
 
 ## Who this is for (beginner-friendly)
 
-If you want to add new capabilities to your OpenClaw agent, ClawHub is the easiest way to find and install skills. You do not need to know how the backend works. You can:
+If you want to add new capabilities to your EasyHub agent, ClawHub is the easiest way to find and install skills. You do not need to know how the backend works. You can:
 
 - Search for skills by plain language.
 - Install a skill into your workspace.
@@ -50,7 +50,7 @@ If you want to add new capabilities to your OpenClaw agent, ClawHub is the easie
    - `clawhub search "calendar"`
 3. Install a skill:
    - `clawhub install <skill-slug>`
-4. Start a new OpenClaw session so it picks up the new skill.
+4. Start a new EasyHub session so it picks up the new skill.
 
 ## Install the CLI
 
@@ -64,16 +64,16 @@ npm i -g clawhub
 pnpm add -g clawhub
 ```
 
-## How it fits into OpenClaw
+## How it fits into EasyHub
 
-By default, the CLI installs skills into `./skills` under your current working directory. If a OpenClaw workspace is configured, `clawhub` falls back to that workspace unless you override `--workdir` (or `CLAWHUB_WORKDIR`). OpenClaw loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.openclaw/skills` or bundled skills, workspace skills take precedence.
+By default, the CLI installs skills into `./skills` under your current working directory. If a EasyHub workspace is configured, `clawhub` falls back to that workspace unless you override `--workdir` (or `CLAWHUB_WORKDIR`). EasyHub loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.easyhub/skills` or bundled skills, workspace skills take precedence.
 
 For more detail on how skills are loaded, shared, and gated, see
 [Skills](/tools/skills).
 
 ## Skill system overview
 
-A skill is a versioned bundle of files that teaches OpenClaw how to perform a
+A skill is a versioned bundle of files that teaches EasyHub how to perform a
 specific task. Each publish creates a new version, and the registry keeps a
 history of versions so users can audit changes.
 
@@ -112,14 +112,14 @@ Reporting and moderation:
 - Moderators can view hidden skills, unhide them, delete them, or ban users.
 - Abusing the report feature can result in account bans.
 
-Interested in becoming a moderator? Ask in the OpenClaw Discord and contact a
+Interested in becoming a moderator? Ask in the EasyHub Discord and contact a
 moderator or maintainer.
 
 ## CLI commands and parameters
 
 Global options (apply to all commands):
 
-- `--workdir <dir>`: Working directory (default: current dir; falls back to OpenClaw workspace).
+- `--workdir <dir>`: Working directory (default: current dir; falls back to EasyHub workspace).
 - `--dir <dir>`: Skills directory, relative to workdir (default: `skills`).
 - `--site <url>`: Site base URL (browser login).
 - `--registry <url>`: Registry API base URL.
@@ -233,7 +233,7 @@ Updates compare the local skill contents to registry versions using a content ha
 
 ### Sync scanning and fallback roots
 
-`clawhub sync` scans your current workdir first. If no skills are found, it falls back to known legacy locations (for example `~/openclaw/skills` and `~/.openclaw/skills`). This is designed to find older skill installs without extra flags.
+`clawhub sync` scans your current workdir first. If no skills are found, it falls back to known legacy locations (for example `~/EasyHub/skills` and `~/.easyhub/skills`). This is designed to find older skill installs without extra flags.
 
 ### Storage and lockfile
 

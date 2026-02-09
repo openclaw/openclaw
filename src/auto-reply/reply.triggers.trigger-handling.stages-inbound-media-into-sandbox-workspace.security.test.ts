@@ -14,7 +14,7 @@ import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
 import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(async (home) => await fn(home), { prefix: "openclaw-triggers-bypass-" });
+  return withTempHomeBase(async (home) => await fn(home), { prefix: "EasyHub-triggers-bypass-" });
 }
 
 afterEach(() => {
@@ -24,7 +24,7 @@ afterEach(() => {
 describe("stageSandboxMedia security", () => {
   it("rejects staging host files from outside the media directory", async () => {
     await withTempHome(async (home) => {
-      // Sensitive host file outside .openclaw
+      // Sensitive host file outside .EasyHub
       const sensitiveFile = join(home, "secrets.txt");
       await fs.writeFile(sensitiveFile, "SENSITIVE DATA");
 
@@ -54,7 +54,7 @@ describe("stageSandboxMedia security", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: join(home, "openclaw"),
+              workspace: join(home, "EasyHub"),
               sandbox: {
                 mode: "non-main",
                 workspaceRoot: join(home, "sandboxes"),
@@ -65,7 +65,7 @@ describe("stageSandboxMedia security", () => {
           session: { store: join(home, "sessions.json") },
         },
         sessionKey: "agent:main:main",
-        workspaceDir: join(home, "openclaw"),
+        workspaceDir: join(home, "EasyHub"),
       });
 
       const stagedFullPath = join(sandboxDir, "media", "inbound", basename(sensitiveFile));

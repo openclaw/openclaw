@@ -2,23 +2,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 
-const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const previousBundledPluginsDir = process.env.EASYHUB_BUNDLED_PLUGINS_DIR;
 
 beforeAll(() => {
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(
+  process.env.EASYHUB_BUNDLED_PLUGINS_DIR = path.join(
     os.tmpdir(),
-    "openclaw-test-no-bundled-extensions",
+    "EasyHub-test-no-bundled-extensions",
   );
 });
 
 afterAll(() => {
   if (previousBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete process.env.EASYHUB_BUNDLED_PLUGINS_DIR;
   } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+    process.env.EASYHUB_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
   }
 });
 
@@ -80,15 +80,15 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   return { ...mod, resolveExecApprovals: () => approvals };
 });
 
-describe("createOpenClawCodingTools safeBins", () => {
+describe("createEasyHubCodingTools safeBins", () => {
   it("threads tools.exec.safeBins into exec allowlist checks", async () => {
     if (process.platform === "win32") {
       return;
     }
 
-    const { createOpenClawCodingTools } = await import("./pi-tools.js");
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-safe-bins-"));
-    const cfg: OpenClawConfig = {
+    const { createEasyHubCodingTools } = await import("./pi-tools.js");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-safe-bins-"));
+    const cfg: EasyHubConfig = {
       tools: {
         exec: {
           host: "gateway",
@@ -99,7 +99,7 @@ describe("createOpenClawCodingTools safeBins", () => {
       },
     };
 
-    const tools = createOpenClawCodingTools({
+    const tools = createEasyHubCodingTools({
       config: cfg,
       sessionKey: "agent:main:main",
       workspaceDir: tmpDir,
@@ -109,8 +109,8 @@ describe("createOpenClawCodingTools safeBins", () => {
     expect(execTool).toBeDefined();
 
     const marker = `safe-bins-${Date.now()}`;
-    const prevShellEnvTimeoutMs = process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS;
-    process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = "1000";
+    const prevShellEnvTimeoutMs = process.env.EASYHUB_SHELL_ENV_TIMEOUT_MS;
+    process.env.EASYHUB_SHELL_ENV_TIMEOUT_MS = "1000";
     const result = await (async () => {
       try {
         return await execTool!.execute("call1", {
@@ -119,9 +119,9 @@ describe("createOpenClawCodingTools safeBins", () => {
         });
       } finally {
         if (prevShellEnvTimeoutMs === undefined) {
-          delete process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS;
+          delete process.env.EASYHUB_SHELL_ENV_TIMEOUT_MS;
         } else {
-          process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = prevShellEnvTimeoutMs;
+          process.env.EASYHUB_SHELL_ENV_TIMEOUT_MS = prevShellEnvTimeoutMs;
         }
       }
     })();

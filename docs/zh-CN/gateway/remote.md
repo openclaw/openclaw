@@ -43,7 +43,7 @@ x-i18n:
 
 笔记本电脑**不**运行智能体。它远程连接：
 
-- 使用 macOS 应用的 **Remote over SSH** 模式（设置 → 通用 → "OpenClaw runs"）。
+- 使用 macOS 应用的 **Remote over SSH** 模式（设置 → 通用 → "EasyHub runs"）。
 - 应用打开并管理隧道，因此 WebChat + 健康检查"直接工作"。
 
 操作手册：[macOS 远程访问](/platforms/mac/remote)。
@@ -83,10 +83,10 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 
 隧道建立后：
 
-- `openclaw health` 和 `openclaw status --deep` 现在通过 `ws://127.0.0.1:18789` 访问远程 Gateway 网关。
-- `openclaw gateway {status,health,send,agent,call}` 在需要时也可以通过 `--url` 指定转发的 URL。
+- `EasyHub health` 和 `EasyHub status --deep` 现在通过 `ws://127.0.0.1:18789` 访问远程 Gateway 网关。
+- `EasyHub gateway {status,health,send,agent,call}` 在需要时也可以通过 `--url` 指定转发的 URL。
 
-注意：将 `18789` 替换为你配置的 `gateway.port`（或 `--port`/`OPENCLAW_GATEWAY_PORT`）。
+注意：将 `18789` 替换为你配置的 `gateway.port`（或 `--port`/`EASYHUB_GATEWAY_PORT`）。
 
 ## CLI 远程默认值
 

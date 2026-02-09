@@ -1,6 +1,6 @@
 import Foundation
 
-public enum OpenClawCanvasA2UIAction: Sendable {
+public enum EasyHubCanvasA2UIAction: Sendable {
     public struct AgentMessageContext: Sendable {
         public struct Session: Sendable {
             public var key: String
@@ -97,7 +97,7 @@ public enum OpenClawCanvasA2UIAction: Sendable {
         return """
         (() => {
           const detail = \(json);
-          window.dispatchEvent(new CustomEvent('openclaw:a2ui-action-status', { detail }));
+          window.dispatchEvent(new CustomEvent('EasyHub:a2ui-action-status', { detail }));
         })();
         """
     }

@@ -1,7 +1,7 @@
-import OpenClawProtocol
+import EasyHubProtocol
 import Foundation
 import Testing
-@testable import OpenClaw
+@testable import EasyHub
 
 @Suite(.serialized) struct VoiceWakeGlobalSettingsSyncTests {
     @Test func appliesVoiceWakeChangedEventToAppState() async {
@@ -11,7 +11,7 @@ import Testing
             AppStateStore.shared.applyGlobalVoiceWakeTriggers(["before"])
         }
 
-        let payload = OpenClawProtocol.AnyCodable(["triggers": ["openclaw", "computer"]])
+        let payload = EasyHubProtocol.AnyCodable(["triggers": ["EasyHub", "computer"]])
         let evt = EventFrame(
             type: "event",
             event: "voicewake.changed",
@@ -22,7 +22,7 @@ import Testing
         await VoiceWakeGlobalSettingsSync.shared.handle(push: .event(evt))
 
         let updated = await MainActor.run { AppStateStore.shared.swabbleTriggerWords }
-        #expect(updated == ["openclaw", "computer"])
+        #expect(updated == ["EasyHub", "computer"])
 
         await MainActor.run {
             AppStateStore.shared.applyGlobalVoiceWakeTriggers(previous)
@@ -36,7 +36,7 @@ import Testing
             AppStateStore.shared.applyGlobalVoiceWakeTriggers(["before"])
         }
 
-        let payload = OpenClawProtocol.AnyCodable(["unexpected": 123])
+        let payload = EasyHubProtocol.AnyCodable(["unexpected": 123])
         let evt = EventFrame(
             type: "event",
             event: "voicewake.changed",

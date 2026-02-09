@@ -4,7 +4,7 @@ import CoreLocation
 import CoreMotion
 import EventKit
 import Foundation
-import OpenClawKit
+import EasyHubKit
 import Network
 import Observation
 import Photos
@@ -426,7 +426,7 @@ final class GatewayConnectionController {
         if manualClientId?.isEmpty == false {
             return manualClientId!
         }
-        return "openclaw-ios"
+        return "EasyHub-ios"
     }
 
     private func resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
@@ -456,29 +456,29 @@ final class GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
+        var caps = [EasyHubCapability.canvas.rawValue, EasyHubCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =
             UserDefaults.standard.object(forKey: "camera.enabled") == nil
                 ? true
                 : UserDefaults.standard.bool(forKey: "camera.enabled")
-        if cameraEnabled { caps.append(OpenClawCapability.camera.rawValue) }
+        if cameraEnabled { caps.append(EasyHubCapability.camera.rawValue) }
 
         let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
-        if voiceWakeEnabled { caps.append(OpenClawCapability.voiceWake.rawValue) }
+        if voiceWakeEnabled { caps.append(EasyHubCapability.voiceWake.rawValue) }
 
         let locationModeRaw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
-        let locationMode = OpenClawLocationMode(rawValue: locationModeRaw) ?? .off
-        if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
+        let locationMode = EasyHubLocationMode(rawValue: locationModeRaw) ?? .off
+        if locationMode != .off { caps.append(EasyHubCapability.location.rawValue) }
 
-        caps.append(OpenClawCapability.device.rawValue)
-        caps.append(OpenClawCapability.photos.rawValue)
-        caps.append(OpenClawCapability.contacts.rawValue)
-        caps.append(OpenClawCapability.calendar.rawValue)
-        caps.append(OpenClawCapability.reminders.rawValue)
+        caps.append(EasyHubCapability.device.rawValue)
+        caps.append(EasyHubCapability.photos.rawValue)
+        caps.append(EasyHubCapability.contacts.rawValue)
+        caps.append(EasyHubCapability.calendar.rawValue)
+        caps.append(EasyHubCapability.reminders.rawValue)
         if Self.motionAvailable() {
-            caps.append(OpenClawCapability.motion.rawValue)
+            caps.append(EasyHubCapability.motion.rawValue)
         }
 
         return caps
@@ -486,54 +486,54 @@ final class GatewayConnectionController {
 
     private func currentCommands() -> [String] {
         var commands: [String] = [
-            OpenClawCanvasCommand.present.rawValue,
-            OpenClawCanvasCommand.hide.rawValue,
-            OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            OpenClawCanvasA2UICommand.reset.rawValue,
-            OpenClawScreenCommand.record.rawValue,
-            OpenClawSystemCommand.notify.rawValue,
-            OpenClawChatCommand.push.rawValue,
-            OpenClawTalkCommand.pttStart.rawValue,
-            OpenClawTalkCommand.pttStop.rawValue,
-            OpenClawTalkCommand.pttCancel.rawValue,
-            OpenClawTalkCommand.pttOnce.rawValue,
+            EasyHubCanvasCommand.present.rawValue,
+            EasyHubCanvasCommand.hide.rawValue,
+            EasyHubCanvasCommand.navigate.rawValue,
+            EasyHubCanvasCommand.evalJS.rawValue,
+            EasyHubCanvasCommand.snapshot.rawValue,
+            EasyHubCanvasA2UICommand.push.rawValue,
+            EasyHubCanvasA2UICommand.pushJSONL.rawValue,
+            EasyHubCanvasA2UICommand.reset.rawValue,
+            EasyHubScreenCommand.record.rawValue,
+            EasyHubSystemCommand.notify.rawValue,
+            EasyHubChatCommand.push.rawValue,
+            EasyHubTalkCommand.pttStart.rawValue,
+            EasyHubTalkCommand.pttStop.rawValue,
+            EasyHubTalkCommand.pttCancel.rawValue,
+            EasyHubTalkCommand.pttOnce.rawValue,
         ]
 
         let caps = Set(self.currentCaps())
-        if caps.contains(OpenClawCapability.camera.rawValue) {
-            commands.append(OpenClawCameraCommand.list.rawValue)
-            commands.append(OpenClawCameraCommand.snap.rawValue)
-            commands.append(OpenClawCameraCommand.clip.rawValue)
+        if caps.contains(EasyHubCapability.camera.rawValue) {
+            commands.append(EasyHubCameraCommand.list.rawValue)
+            commands.append(EasyHubCameraCommand.snap.rawValue)
+            commands.append(EasyHubCameraCommand.clip.rawValue)
         }
-        if caps.contains(OpenClawCapability.location.rawValue) {
-            commands.append(OpenClawLocationCommand.get.rawValue)
+        if caps.contains(EasyHubCapability.location.rawValue) {
+            commands.append(EasyHubLocationCommand.get.rawValue)
         }
-        if caps.contains(OpenClawCapability.device.rawValue) {
-            commands.append(OpenClawDeviceCommand.status.rawValue)
-            commands.append(OpenClawDeviceCommand.info.rawValue)
+        if caps.contains(EasyHubCapability.device.rawValue) {
+            commands.append(EasyHubDeviceCommand.status.rawValue)
+            commands.append(EasyHubDeviceCommand.info.rawValue)
         }
-        if caps.contains(OpenClawCapability.photos.rawValue) {
-            commands.append(OpenClawPhotosCommand.latest.rawValue)
+        if caps.contains(EasyHubCapability.photos.rawValue) {
+            commands.append(EasyHubPhotosCommand.latest.rawValue)
         }
-        if caps.contains(OpenClawCapability.contacts.rawValue) {
-            commands.append(OpenClawContactsCommand.search.rawValue)
-            commands.append(OpenClawContactsCommand.add.rawValue)
+        if caps.contains(EasyHubCapability.contacts.rawValue) {
+            commands.append(EasyHubContactsCommand.search.rawValue)
+            commands.append(EasyHubContactsCommand.add.rawValue)
         }
-        if caps.contains(OpenClawCapability.calendar.rawValue) {
-            commands.append(OpenClawCalendarCommand.events.rawValue)
-            commands.append(OpenClawCalendarCommand.add.rawValue)
+        if caps.contains(EasyHubCapability.calendar.rawValue) {
+            commands.append(EasyHubCalendarCommand.events.rawValue)
+            commands.append(EasyHubCalendarCommand.add.rawValue)
         }
-        if caps.contains(OpenClawCapability.reminders.rawValue) {
-            commands.append(OpenClawRemindersCommand.list.rawValue)
-            commands.append(OpenClawRemindersCommand.add.rawValue)
+        if caps.contains(EasyHubCapability.reminders.rawValue) {
+            commands.append(EasyHubRemindersCommand.list.rawValue)
+            commands.append(EasyHubRemindersCommand.add.rawValue)
         }
-        if caps.contains(OpenClawCapability.motion.rawValue) {
-            commands.append(OpenClawMotionCommand.activity.rawValue)
-            commands.append(OpenClawMotionCommand.pedometer.rawValue)
+        if caps.contains(EasyHubCapability.motion.rawValue) {
+            commands.append(EasyHubMotionCommand.activity.rawValue)
+            commands.append(EasyHubMotionCommand.pedometer.rawValue)
         }
 
         return commands

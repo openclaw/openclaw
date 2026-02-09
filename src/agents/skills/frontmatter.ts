@@ -1,7 +1,7 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import JSON5 from "json5";
 import type {
-  OpenClawSkillMetadata,
+  EasyHubSkillMetadata,
   ParsedSkillFrontmatter,
   SkillEntry,
   SkillInstallSpec,
@@ -99,9 +99,9 @@ function parseFrontmatterBool(value: string | undefined, fallback: boolean): boo
   return parsed === undefined ? fallback : parsed;
 }
 
-export function resolveOpenClawMetadata(
+export function resolveEasyHubMetadata(
   frontmatter: ParsedSkillFrontmatter,
-): OpenClawSkillMetadata | undefined {
+): EasyHubSkillMetadata | undefined {
   const raw = getFrontmatterValue(frontmatter, "metadata");
   if (!raw) {
     return undefined;

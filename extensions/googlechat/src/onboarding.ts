@@ -1,4 +1,4 @@
-import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk";
+import type { EasyHubConfig, DmPolicy } from "EasyHub/plugin-sdk";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
@@ -9,7 +9,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   migrateBaseNameToDefaultAccount,
-} from "openclaw/plugin-sdk";
+} from "EasyHub/plugin-sdk";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
@@ -21,7 +21,7 @@ const channel = "googlechat" as const;
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 
-function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
+function setGoogleChatDmPolicy(cfg: EasyHubConfig, policy: DmPolicy) {
   const allowFrom =
     policy === "open"
       ? addWildcardAllowFrom(cfg.channels?.["googlechat"]?.dm?.allowFrom)
@@ -50,9 +50,9 @@ function parseAllowFromInput(raw: string): string[] {
 }
 
 async function promptAllowFrom(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   prompter: WizardPrompter;
-}): Promise<OpenClawConfig> {
+}): Promise<EasyHubConfig> {
   const current = params.cfg.channels?.["googlechat"]?.dm?.allowFrom ?? [];
   const entry = await params.prompter.text({
     message: "Google Chat allowFrom (user id or email)",
@@ -90,10 +90,10 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 };
 
 function applyAccountConfig(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   accountId: string;
   patch: Record<string, unknown>;
-}): OpenClawConfig {
+}): EasyHubConfig {
   const { cfg, accountId, patch } = params;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
@@ -129,10 +129,10 @@ function applyAccountConfig(params: {
 }
 
 async function promptCredentials(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   prompter: WizardPrompter;
   accountId: string;
-}): Promise<OpenClawConfig> {
+}): Promise<EasyHubConfig> {
   const { cfg, prompter, accountId } = params;
   const envReady =
     accountId === DEFAULT_ACCOUNT_ID &&
@@ -182,10 +182,10 @@ async function promptCredentials(params: {
 }
 
 async function promptAudience(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   prompter: WizardPrompter;
   accountId: string;
-}): Promise<OpenClawConfig> {
+}): Promise<EasyHubConfig> {
   const account = resolveGoogleChatAccount({
     cfg: params.cfg,
     accountId: params.accountId,

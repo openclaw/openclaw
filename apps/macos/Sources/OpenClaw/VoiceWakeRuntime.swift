@@ -13,7 +13,7 @@ actor VoiceWakeRuntime {
 
     enum ListeningState { case idle, voiceWake, pushToTalk }
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.runtime")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "voicewake.runtime")
 
     private var recognizer: SFSpeechRecognizer?
     // Lazily created on start to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth

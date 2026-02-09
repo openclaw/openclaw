@@ -14,7 +14,7 @@ x-i18n:
 
 ## 名称由来
 
-OpenClaw = CLAW + TARDIS，因为每只太空龙虾都需要一台时空机器。
+EasyHub = CLAW + TARDIS，因为每只太空龙虾都需要一台时空机器。
 
 ## 致谢
 

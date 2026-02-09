@@ -1,7 +1,7 @@
 ---
-summary: "Use Xiaomi MiMo (mimo-v2-flash) with OpenClaw"
+summary: "Use Xiaomi MiMo (mimo-v2-flash) with EasyHub"
 read_when:
-  - You want Xiaomi MiMo models in OpenClaw
+  - You want Xiaomi MiMo models in EasyHub
   - You need XIAOMI_API_KEY setup
 title: "Xiaomi MiMo"
 ---
@@ -10,7 +10,7 @@ title: "Xiaomi MiMo"
 
 Xiaomi MiMo is the API platform for **MiMo** models. It provides REST APIs compatible with
 OpenAI and Anthropic formats and uses API keys for authentication. Create your API key in
-the [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys). OpenClaw uses
+the [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys). EasyHub uses
 the `xiaomi` provider with a Xiaomi MiMo API key.
 
 ## Model overview
@@ -22,9 +22,9 @@ the `xiaomi` provider with a Xiaomi MiMo API key.
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice xiaomi-api-key
+EasyHub onboard --auth-choice xiaomi-api-key
 # or non-interactive
-openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
+EasyHub onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
 ```
 
 ## Config snippet

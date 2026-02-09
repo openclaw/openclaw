@@ -16,7 +16,7 @@ x-i18n:
 
 # 文本转语音（TTS）
 
-OpenClaw 可以使用 ElevenLabs、OpenAI 或 Edge TTS 将出站回复转换为音频。它可以在任何 OpenClaw 能发送音频的地方工作；Telegram 会显示圆形语音消息气泡。
+EasyHub 可以使用 ElevenLabs、OpenAI 或 Edge TTS 将出站回复转换为音频。它可以在任何 EasyHub 能发送音频的地方工作；Telegram 会显示圆形语音消息气泡。
 
 ## 支持的服务
 
@@ -37,7 +37,7 @@ Edge TTS 通过 `node-edge-tts` 库使用 Microsoft Edge 的在线神经网络 T
 - `ELEVENLABS_API_KEY`（或 `XI_API_KEY`）
 - `OPENAI_API_KEY`
 
-Edge TTS **不**需要 API 密钥。如果没有找到 API 密钥，OpenClaw 默认使用 Edge TTS（除非通过 `messages.tts.edge.enabled=false` 禁用）。
+Edge TTS **不**需要 API 密钥。如果没有找到 API 密钥，EasyHub 默认使用 Edge TTS（除非通过 `messages.tts.edge.enabled=false` 禁用）。
 
 如果配置了多个提供商，首先使用选定的提供商，其他作为备用选项。自动摘要使用配置的 `summaryModel`（或 `agents.defaults.model.primary`），所以如果你启用摘要，该提供商也必须经过认证。
 
@@ -58,7 +58,7 @@ Edge TTS **不**需要 API 密钥。如果没有找到 API 密钥，OpenClaw 默
 
 ## 配置
 
-TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [Gateway 网关配置](/gateway/configuration)中。
+TTS 配置位于 `easyhub.json` 中的 `messages.tts` 下。完整 schema 在 [Gateway 网关配置](/gateway/configuration)中。
 
 ### 最小配置（启用 + 提供商）
 
@@ -155,7 +155,7 @@ TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [
       auto: "always",
       maxTextLength: 4000,
       timeoutMs: 30000,
-      prefsPath: "~/.openclaw/settings/tts.json",
+      prefsPath: "~/.easyhub/settings/tts.json",
     },
   },
 }
@@ -199,7 +199,7 @@ TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [
 - `enabled`：旧版开关（doctor 将其迁移到 `auto`）。
 - `mode`：`"final"`（默认）或 `"all"`（包括工具/分块回复）。
 - `provider`：`"elevenlabs"`、`"openai"` 或 `"edge"`（自动备用）。
-- 如果 `provider` **未设置**，OpenClaw 优先选择 `openai`（如果有密钥），然后是 `elevenlabs`（如果有密钥），否则是 `edge`。
+- 如果 `provider` **未设置**，EasyHub 优先选择 `openai`（如果有密钥），然后是 `elevenlabs`（如果有密钥），否则是 `edge`。
 - `summaryModel`：用于自动摘要的可选廉价模型；默认为 `agents.defaults.model.primary`。
   - 接受 `provider/model` 或配置的模型别名。
 - `modelOverrides`：允许模型发出 TTS 指令（默认开启）。
@@ -282,7 +282,7 @@ Here you go.
 
 ## 单用户偏好
 
-斜杠命令将本地覆盖写入 `prefsPath`（默认：`~/.openclaw/settings/tts.json`，可通过 `OPENCLAW_TTS_PREFS` 或 `messages.tts.prefsPath` 覆盖）。
+斜杠命令将本地覆盖写入 `prefsPath`（默认：`~/.easyhub/settings/tts.json`，可通过 `EASYHUB_TTS_PREFS` 或 `messages.tts.prefsPath` 覆盖）。
 
 存储的字段：
 
@@ -303,13 +303,13 @@ Here you go.
   - `node-edge-tts` 接受 `outputFormat`，但并非所有格式都可从 Edge 服务获得。citeturn2search0
   - 输出格式值遵循 Microsoft 语音输出格式（包括 Ogg/WebM Opus）。citeturn1search0
   - Telegram `sendVoice` 接受 OGG/MP3/M4A；如果你需要有保证的 Opus 语音消息，请使用 OpenAI/ElevenLabs。citeturn1search1
-  - 如果配置的 Edge 输出格式失败，OpenClaw 会使用 MP3 重试。
+  - 如果配置的 Edge 输出格式失败，EasyHub 会使用 MP3 重试。
 
 OpenAI/ElevenLabs 格式是固定的；Telegram 期望 Opus 以获得语音消息用户体验。
 
 ## 自动 TTS 行为
 
-启用后，OpenClaw：
+启用后，EasyHub：
 
 - 如果回复已包含媒体或 `MEDIA:` 指令，则跳过 TTS。
 - 跳过非常短的回复（< 10 字符）。
@@ -337,7 +337,7 @@ OpenAI/ElevenLabs 格式是固定的；Telegram 期望 Opus 以获得语音消�
 
 只有一个命令：`/tts`。参见[斜杠命令](/tools/slash-commands)了解启用详情。
 
-Discord 注意：`/tts` 是 Discord 的内置命令，所以 OpenClaw 在那里注册 `/voice` 作为原生命令。文本 `/tts ...` 仍然有效。
+Discord 注意：`/tts` 是 Discord 的内置命令，所以 EasyHub 在那里注册 `/voice` 作为原生命令。文本 `/tts ...` 仍然有效。
 
 ```
 /tts off
@@ -348,7 +348,7 @@ Discord 注意：`/tts` 是 Discord 的内置命令，所以 OpenClaw 在那里�
 /tts provider openai
 /tts limit 2000
 /tts summary off
-/tts audio Hello from OpenClaw
+/tts audio Hello from EasyHub
 ```
 
 注意事项：

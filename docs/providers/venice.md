@@ -1,7 +1,7 @@
 ---
-summary: "Use Venice AI privacy-focused models in OpenClaw"
+summary: "Use Venice AI privacy-focused models in EasyHub"
 read_when:
-  - You want privacy-focused inference in OpenClaw
+  - You want privacy-focused inference in EasyHub
   - You want Venice AI setup guidance
 title: "Venice AI"
 ---
@@ -12,7 +12,7 @@ title: "Venice AI"
 
 Venice AI provides privacy-focused AI inference with support for uncensored models and access to major proprietary models through their anonymized proxy. All inference is private by default—no training on your data, no logging.
 
-## Why Venice in OpenClaw
+## Why Venice in EasyHub
 
 - **Private inference** for open-source models (no logging).
 - **Uncensored models** when you need them.
@@ -47,7 +47,7 @@ Venice offers two privacy levels — understanding this is key to choosing your 
 2. Go to **Settings → API Keys → Create new key**
 3. Copy your API key (format: `vapi_xxxxxxxxxxxx`)
 
-### 2. Configure OpenClaw
+### 2. Configure EasyHub
 
 **Option A: Environment Variable**
 
@@ -58,7 +58,7 @@ export VENICE_API_KEY="vapi_xxxxxxxxxxxx"
 **Option B: Interactive Setup (Recommended)**
 
 ```bash
-openclaw onboard --auth-choice venice-api-key
+EasyHub onboard --auth-choice venice-api-key
 ```
 
 This will:
@@ -71,7 +71,7 @@ This will:
 **Option C: Non-interactive**
 
 ```bash
-openclaw onboard --non-interactive \
+EasyHub onboard --non-interactive \
   --auth-choice venice-api-key \
   --venice-api-key "vapi_xxxxxxxxxxxx"
 ```
@@ -79,12 +79,12 @@ openclaw onboard --non-interactive \
 ### 3. Verify Setup
 
 ```bash
-openclaw chat --model venice/llama-3.3-70b "Hello, are you working?"
+EasyHub chat --model venice/llama-3.3-70b "Hello, are you working?"
 ```
 
 ## Model Selection
 
-After setup, OpenClaw shows all available Venice models. Pick based on your needs:
+After setup, EasyHub shows all available Venice models. Pick based on your needs:
 
 - **Default (our pick)**: `venice/llama-3.3-70b` for private, balanced performance.
 - **Best overall quality**: `venice/claude-opus-45` for hard jobs (Opus remains the strongest).
@@ -94,19 +94,19 @@ After setup, OpenClaw shows all available Venice models. Pick based on your need
 Change your default model anytime:
 
 ```bash
-openclaw models set venice/claude-opus-45
-openclaw models set venice/llama-3.3-70b
+EasyHub models set venice/claude-opus-45
+EasyHub models set venice/llama-3.3-70b
 ```
 
 List all available models:
 
 ```bash
-openclaw models list | grep venice
+EasyHub models list | grep venice
 ```
 
-## Configure via `openclaw configure`
+## Configure via `EasyHub configure`
 
-1. Run `openclaw configure`
+1. Run `EasyHub configure`
 2. Select **Model/auth**
 3. Choose **Venice AI**
 
@@ -162,7 +162,7 @@ openclaw models list | grep venice
 
 ## Model Discovery
 
-OpenClaw automatically discovers models from the Venice API when `VENICE_API_KEY` is set. If the API is unreachable, it falls back to a static catalog.
+EasyHub automatically discovers models from the Venice API when `VENICE_API_KEY` is set. If the API is unreachable, it falls back to a static catalog.
 
 The `/models` endpoint is public (no auth needed for listing), but inference requires a valid API key.
 
@@ -195,19 +195,19 @@ Venice uses a credit-based system. Check [venice.ai/pricing](https://venice.ai/p
 
 ```bash
 # Use default private model
-openclaw chat --model venice/llama-3.3-70b
+EasyHub chat --model venice/llama-3.3-70b
 
 # Use Claude via Venice (anonymized)
-openclaw chat --model venice/claude-opus-45
+EasyHub chat --model venice/claude-opus-45
 
 # Use uncensored model
-openclaw chat --model venice/venice-uncensored
+EasyHub chat --model venice/venice-uncensored
 
 # Use vision model with image
-openclaw chat --model venice/qwen3-vl-235b-a22b
+EasyHub chat --model venice/qwen3-vl-235b-a22b
 
 # Use coding model
-openclaw chat --model venice/qwen3-coder-480b-a35b-instruct
+EasyHub chat --model venice/qwen3-coder-480b-a35b-instruct
 ```
 
 ## Troubleshooting
@@ -216,14 +216,14 @@ openclaw chat --model venice/qwen3-coder-480b-a35b-instruct
 
 ```bash
 echo $VENICE_API_KEY
-openclaw models list | grep venice
+EasyHub models list | grep venice
 ```
 
 Ensure the key starts with `vapi_`.
 
 ### Model not available
 
-The Venice model catalog updates dynamically. Run `openclaw models list` to see currently available models. Some models may be temporarily offline.
+The Venice model catalog updates dynamically. Run `EasyHub models list` to see currently available models. Some models may be temporarily offline.
 
 ### Connection issues
 

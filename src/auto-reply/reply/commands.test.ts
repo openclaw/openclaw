@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import {
   addSubagentRunForTests,
@@ -31,7 +31,7 @@ vi.mock("./commands-context-report.js", () => ({
 let testWorkspaceDir = os.tmpdir();
 
 beforeAll(async () => {
-  testWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commands-"));
+  testWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-commands-"));
   await fs.writeFile(path.join(testWorkspaceDir, "AGENTS.md"), "# Agents\n", "utf-8");
 });
 
@@ -39,7 +39,7 @@ afterAll(async () => {
   await fs.rm(testWorkspaceDir, { recursive: true, force: true });
 });
 
-function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
+function buildParams(commandBody: string, cfg: EasyHubConfig, ctxOverrides?: Partial<MsgContext>) {
   const ctx = {
     Body: commandBody,
     CommandBody: commandBody,
@@ -83,7 +83,7 @@ describe("handleCommands gating", () => {
     const cfg = {
       commands: { bash: false, text: true },
       whatsapp: { allowFrom: ["*"] },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/bash echo hi", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -95,7 +95,7 @@ describe("handleCommands gating", () => {
     const cfg = {
       commands: { bash: true, text: true },
       whatsapp: { allowFrom: ["*"] },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/bash echo hi", cfg);
     params.elevated = {
       enabled: true,
@@ -111,7 +111,7 @@ describe("handleCommands gating", () => {
     const cfg = {
       commands: { config: false, debug: false, text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/config show", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -122,7 +122,7 @@ describe("handleCommands gating", () => {
     const cfg = {
       commands: { config: false, debug: false, text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/debug show", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -136,7 +136,7 @@ describe("handleCommands bash alias", () => {
     const cfg = {
       commands: { bash: true, text: true },
       whatsapp: { allowFrom: ["*"] },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("!poll", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -148,7 +148,7 @@ describe("handleCommands bash alias", () => {
     const cfg = {
       commands: { bash: true, text: true },
       whatsapp: { allowFrom: ["*"] },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("!stop", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -169,7 +169,7 @@ describe("handleCommands plugin commands", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/card", cfg);
     const commandResult = await handleCommands(params);
 
@@ -184,7 +184,7 @@ describe("handleCommands identity", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/whoami", cfg, {
       SenderId: "12345",
       SenderUsername: "TestUser",
@@ -204,7 +204,7 @@ describe("handleCommands hooks", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/new take notes", cfg);
     const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
 
@@ -220,7 +220,7 @@ describe("handleCommands context", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/context", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -232,7 +232,7 @@ describe("handleCommands context", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/context list", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -244,7 +244,7 @@ describe("handleCommands context", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/context detail", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -259,7 +259,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/subagents list", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -281,7 +281,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/subagents list", cfg, {
       CommandSource: "native",
       CommandTargetSessionKey: "agent:main:main",
@@ -299,7 +299,7 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/status", cfg);
     params.resolvedVerboseLevel = "on";
     const result = await handleCommands(params);
@@ -312,7 +312,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/subagents foo", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -324,7 +324,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/subagents info", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -347,7 +347,7 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/status", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -382,7 +382,7 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/status", cfg);
     params.resolvedVerboseLevel = "on";
     const result = await handleCommands(params);
@@ -409,7 +409,7 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/subagents info 1", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -425,7 +425,7 @@ describe("handleCommands /tts", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       messages: { tts: { prefsPath: path.join(testWorkspaceDir, "tts.json") } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const params = buildParams("/tts", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);

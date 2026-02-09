@@ -1,29 +1,29 @@
 type StateDirEnvSnapshot = {
-  openclawStateDir: string | undefined;
+  EasyHubStateDir: string | undefined;
   clawdbotStateDir: string | undefined;
 };
 
 export function snapshotStateDirEnv(): StateDirEnvSnapshot {
   return {
-    openclawStateDir: process.env.OPENCLAW_STATE_DIR,
-    clawdbotStateDir: process.env.CLAWDBOT_STATE_DIR,
+    EasyHubStateDir: process.env.EASYHUB_STATE_DIR,
+    clawdbotStateDir: process.env.EASYHUB_STATE_DIR,
   };
 }
 
 export function restoreStateDirEnv(snapshot: StateDirEnvSnapshot): void {
-  if (snapshot.openclawStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
+  if (snapshot.EasyHubStateDir === undefined) {
+    delete process.env.EASYHUB_STATE_DIR;
   } else {
-    process.env.OPENCLAW_STATE_DIR = snapshot.openclawStateDir;
+    process.env.EASYHUB_STATE_DIR = snapshot.EasyHubStateDir;
   }
   if (snapshot.clawdbotStateDir === undefined) {
-    delete process.env.CLAWDBOT_STATE_DIR;
+    delete process.env.EASYHUB_STATE_DIR;
   } else {
-    process.env.CLAWDBOT_STATE_DIR = snapshot.clawdbotStateDir;
+    process.env.EASYHUB_STATE_DIR = snapshot.clawdbotStateDir;
   }
 }
 
 export function setStateDirEnv(stateDir: string): void {
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  delete process.env.CLAWDBOT_STATE_DIR;
+  process.env.EASYHUB_STATE_DIR = stateDir;
+  delete process.env.EASYHUB_STATE_DIR;
 }

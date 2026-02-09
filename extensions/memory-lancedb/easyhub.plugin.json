@@ -15,7 +15,7 @@
     },
     "dbPath": {
       "label": "Database Path",
-      "placeholder": "~/.openclaw/memory/lancedb",
+      "placeholder": "~/.easyhub/memory/lancedb",
       "advanced": true
     },
     "autoCapture": {

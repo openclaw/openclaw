@@ -20,7 +20,7 @@ macOS 权限授予是脆弱的。TCC 将权限授予与应用的代码签名、B
 
 ## 稳定权限的要求
 
-- 相同路径：从固定位置运行应用（对于 OpenClaw，为 `dist/OpenClaw.app`）。
+- 相同路径：从固定位置运行应用（对于 EasyHub，为 `dist/EasyHub.app`）。
 - 相同 Bundle 标识符：更改 Bundle ID 会创建新的权限身份。
 - 已签名的应用：未签名或临时签名的构建不会持久化权限。
 - 一致的签名：使用真实的 Apple Development 或 Developer ID 证书，以确保签名在多次构建之间保持稳定。

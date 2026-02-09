@@ -26,7 +26,7 @@ describe("resolveBootstrapFilesForRun", () => {
       ];
     });
 
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const workspaceDir = await makeTempWorkspace("EasyHub-bootstrap-");
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.some((file) => file.name === "EXTRA.md")).toBe(true);
@@ -51,7 +51,7 @@ describe("resolveBootstrapContextForRun", () => {
       ];
     });
 
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const workspaceDir = await makeTempWorkspace("EasyHub-bootstrap-");
     const result = await resolveBootstrapContextForRun({ workspaceDir });
     const extra = result.contextFiles.find((file) => file.path === "EXTRA.md");
 

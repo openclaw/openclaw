@@ -13,7 +13,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 
 1. Create a Discord bot and copy the bot token.
 2. In the Discord app settings, enable **Message Content Intent** (and **Server Members Intent** if you plan to use allowlists or name lookups).
-3. Set the token for OpenClaw:
+3. Set the token for EasyHub:
    - Env: `DISCORD_BOT_TOKEN=...`
    - Or config: `channels.discord.token: "..."`.
    - If both are set, config takes precedence (env fallback is default-account only).
@@ -36,7 +36,7 @@ Minimal config:
 
 ## Goals
 
-- Talk to OpenClaw via Discord DMs or guild channels.
+- Talk to EasyHub via Discord DMs or guild channels.
 - Direct chats collapse into the agent's main session (default `agent:main:main`); guild channels stay isolated as `agent:<agentId>:discord:channel:<channelId>` (display names use `discord:<guildSlug>#<channelSlug>`).
 - Group DMs are ignored by default; enable via `channels.discord.dm.groupEnabled` and optionally restrict by `channels.discord.dm.groupChannels`.
 - Keep routing deterministic: replies always go back to the channel they arrived on.
@@ -45,12 +45,12 @@ Minimal config:
 
 1. Create a Discord application → Bot, enable the intents you need (DMs + guild messages + message content), and grab the bot token.
 2. Invite the bot to your server with the permissions required to read/send messages where you want to use it.
-3. Configure OpenClaw with `channels.discord.token` (or `DISCORD_BOT_TOKEN` as a fallback).
+3. Configure EasyHub with `channels.discord.token` (or `DISCORD_BOT_TOKEN` as a fallback).
 4. Run the gateway; it auto-starts the Discord channel when a token is available (config first, env fallback) and `channels.discord.enabled` is not `false`.
    - If you prefer env vars, set `DISCORD_BOT_TOKEN` (a config block is optional).
 5. Direct chats: use `user:<id>` (or a `<@id>` mention) when delivering; all turns land in the shared `main` session. Bare numeric IDs are ambiguous and rejected.
 6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default and can be set per guild or per channel.
-7. Direct chats: secure by default via `channels.discord.dm.policy` (default: `"pairing"`). Unknown senders get a pairing code (expires after 1 hour); approve via `openclaw pairing approve discord <code>`.
+7. Direct chats: secure by default via `channels.discord.dm.policy` (default: `"pairing"`). Unknown senders get a pairing code (expires after 1 hour); approve via `EasyHub pairing approve discord <code>`.
    - To keep old “open to anyone” behavior: set `channels.discord.dm.policy="open"` and `channels.discord.dm.allowFrom=["*"]`.
    - To hard-allowlist: set `channels.discord.dm.policy="allowlist"` and list senders in `channels.discord.dm.allowFrom`.
    - To ignore all DMs: set `channels.discord.dm.enabled=false` or `channels.discord.dm.policy="disabled"`.
@@ -82,7 +82,7 @@ Disable with:
 
 ## How to create your own bot
 
-This is the “Discord Developer Portal” setup for running OpenClaw in a server (guild) channel like `#help`.
+This is the “Discord Developer Portal” setup for running EasyHub in a server (guild) channel like `#help`.
 
 ### 1) Create the Discord app + bot user
 
@@ -91,7 +91,7 @@ This is the “Discord Developer Portal” setup for running OpenClaw in a serve
    - **Bot** → **Add Bot**
    - Copy the **Bot Token** (this is what you put in `DISCORD_BOT_TOKEN`)
 
-### 2) Enable the gateway intents OpenClaw needs
+### 2) Enable the gateway intents EasyHub needs
 
 Discord blocks “privileged intents” unless you explicitly enable them.
 
@@ -127,7 +127,7 @@ Copy the generated URL, open it, pick your server, and install the bot.
 
 ### 4) Get the ids (guild/user/channel)
 
-Discord uses numeric ids everywhere; OpenClaw config prefers ids.
+Discord uses numeric ids everywhere; EasyHub config prefers ids.
 
 1. Discord (desktop/web) → **User Settings** → **Advanced** → enable **Developer Mode**
 2. Right-click:
@@ -135,7 +135,7 @@ Discord uses numeric ids everywhere; OpenClaw config prefers ids.
    - Channel (e.g. `#help`) → **Copy Channel ID**
    - Your user → **Copy User ID**
 
-### 5) Configure OpenClaw
+### 5) Configure EasyHub
 
 #### Token
 
@@ -196,7 +196,7 @@ Notes:
 - If `channels` is present, any channel not listed is denied by default.
 - Use a `"*"` channel entry to apply defaults across all channels; explicit channel entries override the wildcard.
 - Threads inherit parent channel config (allowlist, `requireMention`, skills, prompts, etc.) unless you add the thread channel id explicitly.
-- Owner hint: when a per-guild or per-channel `users` allowlist matches the sender, OpenClaw treats that sender as the owner in the system prompt. For a global owner across channels, set `commands.ownerAllowFrom`.
+- Owner hint: when a per-guild or per-channel `users` allowlist matches the sender, EasyHub treats that sender as the owner in the system prompt. For a global owner across channels, set `commands.ownerAllowFrom`.
 - Bot-authored messages are ignored by default; set `channels.discord.allowBots=true` to allow them (own messages remain filtered).
 - Warning: If you allow replies to other bots (`channels.discord.allowBots=true`), prevent bot-to-bot reply loops with `requireMention`, `channels.discord.guilds.*.channels.<id>.users` allowlists, and/or clear guardrails in `AGENTS.md` and `SOUL.md`.
 
@@ -208,7 +208,7 @@ Notes:
 
 ### Troubleshooting
 
-- First: run `openclaw doctor` and `openclaw channels status --probe` (actionable warnings + quick audits).
+- First: run `EasyHub doctor` and `EasyHub channels status --probe` (actionable warnings + quick audits).
 - **“Used disallowed intents”**: enable **Message Content Intent** (and likely **Server Members Intent**) in the Developer Portal, then restart the gateway.
 - **Bot connects but never replies in a guild channel**:
   - Missing **Message Content Intent**, or
@@ -287,12 +287,12 @@ Outbound Discord API calls retry on rate limits (429) using Discord `retry_after
         policy: "pairing", // pairing | allowlist | open | disabled
         allowFrom: ["123456789012345678", "steipete"],
         groupEnabled: false,
-        groupChannels: ["openclaw-dm"],
+        groupChannels: ["EasyHub-dm"],
       },
       guilds: {
         "*": { requireMention: true },
         "123456789012345678": {
-          slug: "friends-of-openclaw",
+          slug: "friends-of-EasyHub",
           requireMention: false,
           reactionNotifications: "own",
           users: ["987654321098765432", "steipete"],
@@ -368,7 +368,7 @@ Reaction notifications use `guilds.<id>.reactionNotifications`:
 ### PluralKit (PK) support
 
 Enable PK lookups so proxied messages resolve to the underlying system + member.
-When enabled, OpenClaw uses the member identity for allowlists and labels the
+When enabled, EasyHub uses the member identity for allowlists and labels the
 sender as `Member (PK:System)` to avoid accidental Discord pings.
 
 ```json5
@@ -442,14 +442,14 @@ Allowlist matching notes:
 - When `guilds.<id>.channels` is omitted, all channels in the allowlisted guild are allowed.
 - To allow **no channels**, set `channels.discord.groupPolicy: "disabled"` (or keep an empty allowlist).
 - The configure wizard accepts `Guild/Channel` names (public + private) and resolves them to IDs when possible.
-- On startup, OpenClaw resolves channel/user names in allowlists to IDs (when the bot can search members)
+- On startup, EasyHub resolves channel/user names in allowlists to IDs (when the bot can search members)
   and logs the mapping; unresolved entries are kept as typed.
 
 Native command notes:
 
-- The registered commands mirror OpenClaw’s chat commands.
+- The registered commands mirror EasyHub’s chat commands.
 - Native commands honor the same allowlists as DMs/guild messages (`channels.discord.dm.allowFrom`, `channels.discord.guilds`, per-channel rules).
-- Slash commands may still be visible in Discord UI to users who aren’t allowlisted; OpenClaw enforces allowlists on execution and replies “not authorized”.
+- Slash commands may still be visible in Discord UI to users who aren’t allowlisted; EasyHub enforces allowlists on execution and replies “not authorized”.
 
 ## Tool actions
 
@@ -473,4 +473,4 @@ Emoji can be unicode (e.g., `✅`) or custom emoji syntax like `<:party_blob:123
 
 - Treat the bot token like a password; prefer the `DISCORD_BOT_TOKEN` env var on supervised hosts or lock down the config file permissions.
 - Only grant the bot permissions it needs (typically Read/Send Messages).
-- If the bot is stuck or rate limited, restart the gateway (`openclaw gateway --force`) after confirming no other processes own the Discord session.
+- If the bot is stuck or rate limited, restart the gateway (`EasyHub gateway --force`) after confirming no other processes own the Discord session.

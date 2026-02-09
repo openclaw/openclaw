@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
+import type { EasyHubConfig } from "EasyHub/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "EasyHub/plugin-sdk";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 
 export type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
@@ -17,7 +17,7 @@ export type ResolvedGoogleChatAccount = {
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 
-function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
+function listConfiguredAccountIds(cfg: EasyHubConfig): string[] {
   const accounts = cfg.channels?.["googlechat"]?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return [];
@@ -25,7 +25,7 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   return Object.keys(accounts).filter(Boolean);
 }
 
-export function listGoogleChatAccountIds(cfg: OpenClawConfig): string[] {
+export function listGoogleChatAccountIds(cfg: EasyHubConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
   if (ids.length === 0) {
     return [DEFAULT_ACCOUNT_ID];
@@ -33,7 +33,7 @@ export function listGoogleChatAccountIds(cfg: OpenClawConfig): string[] {
   return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
-export function resolveDefaultGoogleChatAccountId(cfg: OpenClawConfig): string {
+export function resolveDefaultGoogleChatAccountId(cfg: EasyHubConfig): string {
   const channel = cfg.channels?.["googlechat"];
   if (channel?.defaultAccount?.trim()) {
     return channel.defaultAccount.trim();
@@ -46,7 +46,7 @@ export function resolveDefaultGoogleChatAccountId(cfg: OpenClawConfig): string {
 }
 
 function resolveAccountConfig(
-  cfg: OpenClawConfig,
+  cfg: EasyHubConfig,
   accountId: string,
 ): GoogleChatAccountConfig | undefined {
   const accounts = cfg.channels?.["googlechat"]?.accounts;
@@ -57,7 +57,7 @@ function resolveAccountConfig(
 }
 
 function mergeGoogleChatAccountConfig(
-  cfg: OpenClawConfig,
+  cfg: EasyHubConfig,
   accountId: string,
 ): GoogleChatAccountConfig {
   const raw = cfg.channels?.["googlechat"] ?? {};
@@ -119,7 +119,7 @@ function resolveCredentialsFromConfig(params: {
 }
 
 export function resolveGoogleChatAccount(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   accountId?: string | null;
 }): ResolvedGoogleChatAccount {
   const accountId = normalizeAccountId(params.accountId);
@@ -140,7 +140,7 @@ export function resolveGoogleChatAccount(params: {
   };
 }
 
-export function listEnabledGoogleChatAccounts(cfg: OpenClawConfig): ResolvedGoogleChatAccount[] {
+export function listEnabledGoogleChatAccounts(cfg: EasyHubConfig): ResolvedGoogleChatAccount[] {
   return listGoogleChatAccountIds(cfg)
     .map((accountId) => resolveGoogleChatAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

@@ -11,11 +11,11 @@ x-i18n:
 
 # Pi 集成架构
 
-本文档描述了 OpenClaw 如何与 [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) 及其相关包（`pi-ai`、`pi-agent-core`、`pi-tui`）集成以实现其 AI 智能体能力。
+本文档描述了 EasyHub 如何与 [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) 及其相关包（`pi-ai`、`pi-agent-core`、`pi-tui`）集成以实现其 AI 智能体能力。
 
 ## 概述
 
-OpenClaw 使用 pi SDK 将 AI 编码智能体嵌入到其消息 Gateway 网关架构中。OpenClaw 不是将 pi 作为子进程生成或使用 RPC 模式，而是通过 `createAgentSession()` 直接导入并实例化 pi 的 `AgentSession`。这种嵌入式方法提供了：
+EasyHub 使用 pi SDK 将 AI 编码智能体嵌入到其消息 Gateway 网关架构中。EasyHub 不是将 pi 作为子进程生成或使用 RPC 模式，而是通过 `createAgentSession()` 直接导入并实例化 pi 的 `AgentSession`。这种嵌入式方法提供了：
 
 - 对会话生命周期和事件处理的完全控制
 - 自定义工具注入（消息、沙箱、渠道特定操作）
@@ -40,7 +40,7 @@ OpenClaw 使用 pi SDK 将 AI 编码智能体嵌入到其消息 Gateway 网关�
 | `pi-ai`           | 核心 LLM 抽象：`Model`、`streamSimple`、消息类型、提供商 API                               |
 | `pi-agent-core`   | 智能体循环、工具执行、`AgentMessage` 类型                                                  |
 | `pi-coding-agent` | 高级 SDK：`createAgentSession`、`SessionManager`、`AuthStorage`、`ModelRegistry`、内置工具 |
-| `pi-tui`          | 终端 UI 组件（用于 OpenClaw 的本地 TUI 模式）                                              |
+| `pi-tui`          | 终端 UI 组件（用于 EasyHub 的本地 TUI 模式）                                              |
 
 ## 文件结构
 
@@ -83,7 +83,7 @@ src/agents/
 ├── pi-embedded-helpers.ts         # Error classification, turn validation
 ├── pi-embedded-helpers/           # Helper modules
 ├── pi-embedded-utils.ts           # Formatting utilities
-├── pi-tools.ts                    # createOpenClawCodingTools()
+├── pi-tools.ts                    # createEasyHubCodingTools()
 ├── pi-tools.abort.ts              # AbortSignal wrapping for tools
 ├── pi-tools.policy.ts             # Tool allowlist/denylist policy
 ├── pi-tools.read.ts               # Read tool customizations
@@ -115,7 +115,7 @@ src/agents/
 ├── sandbox.ts                     # Sandbox context resolution
 ├── sandbox/                       # Sandbox subsystem
 ├── channel-tools.ts               # Channel-specific tool injection
-├── openclaw-tools.ts              # OpenClaw-specific tools
+├── EasyHub-tools.ts              # EasyHub-specific tools
 ├── bash-tools.ts                  # exec/process tools
 ├── apply-patch.ts                 # apply_patch tool (OpenAI)
 ├── tools/                         # Individual tool implementations
@@ -149,7 +149,7 @@ const result = await runEmbeddedPiAgent({
   sessionKey: "main:whatsapp:+1234567890",
   sessionFile: "/path/to/session.jsonl",
   workspaceDir: "/path/to/workspace",
-  config: openclawConfig,
+  config: EasyHubConfig,
   prompt: "Hello, how are you?",
   provider: "anthropic",
   model: "claude-sonnet-4-20250514",
@@ -240,8 +240,8 @@ SDK 处理完整的智能体循环：发送到 LLM、执行工具调用、流式
 ### 工具管道
 
 1. **基础工具**：pi 的 `codingTools`（read、bash、edit、write）
-2. **自定义替换**：OpenClaw 将 bash 替换为 `exec`/`process`，为沙箱自定义 read/edit/write
-3. **OpenClaw 工具**：消息、浏览器、画布、会话、定时任务、Gateway 网关等
+2. **自定义替换**：EasyHub 将 bash 替换为 `exec`/`process`，为沙箱自定义 read/edit/write
+3. **EasyHub 工具**：消息、浏览器、画布、会话、定时任务、Gateway 网关等
 4. **渠道工具**：Discord/Telegram/Slack/WhatsApp 特定的操作工具
 5. **策略过滤**：工具按配置文件、提供商、智能体、群组、沙箱策略过滤
 6. **Schema 规范化**：为 Gemini/OpenAI 的特殊情况清理 Schema
@@ -279,11 +279,11 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
 }
 ```
 
-这确保 OpenClaw 的策略过滤、沙箱集成和扩展工具集在各提供商之间保持一致。
+这确保 EasyHub 的策略过滤、沙箱集成和扩展工具集在各提供商之间保持一致。
 
 ## 系统提示构建
 
-系统提示在 `buildAgentSystemPrompt()`（`system-prompt.ts`）中构建。它组装一个完整的提示，包含工具、工具调用风格、安全护栏、OpenClaw CLI 参考、Skills、文档、工作区、沙箱、消息、回复标签、语音、静默回复、心跳、运行时元数据等部分，以及启用时的记忆和反应，还有可选的上下文文件和额外系统提示内容。部分内容在子智能体使用的最小提示模式下会被裁剪。
+系统提示在 `buildAgentSystemPrompt()`（`system-prompt.ts`）中构建。它组装一个完整的提示，包含工具、工具调用风格、安全护栏、EasyHub CLI 参考、Skills、文档、工作区、沙箱、消息、回复标签、语音、静默回复、心跳、运行时元数据等部分，以及启用时的记忆和反应，还有可选的上下文文件和额外系统提示内容。部分内容在子智能体使用的最小提示模式下会被裁剪。
 
 提示在会话创建后通过 `applySystemPromptOverrideToSession()` 应用：
 
@@ -302,7 +302,7 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 const sessionManager = SessionManager.open(params.sessionFile);
 ```
 
-OpenClaw 用 `guardSessionManager()` 包装它以确保工具结果安全。
+EasyHub 用 `guardSessionManager()` 包装它以确保工具结果安全。
 
 ### 会话缓存
 
@@ -332,7 +332,7 @@ const compactResult = await compactEmbeddedPiSessionDirect({
 
 ### 认证配置文件
 
-OpenClaw 维护一个认证配置文件存储，每个提供商有多个 API 密钥：
+EasyHub 维护一个认证配置文件存储，每个提供商有多个 API 密钥：
 
 ```typescript
 const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
@@ -380,7 +380,7 @@ if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
 
 ## Pi 扩展
 
-OpenClaw 加载自定义 pi 扩展以实现特殊行为：
+EasyHub 加载自定义 pi 扩展以实现特殊行为：
 
 ### 压缩安全护栏
 
@@ -507,7 +507,7 @@ if (sandboxRoot) {
 
 ## TUI 集成
 
-OpenClaw 还有一个本地 TUI 模式，直接使用 pi-tui 组件：
+EasyHub 还有一个本地 TUI 模式，直接使用 pi-tui 组件：
 
 ```typescript
 // src/tui/tui.ts
@@ -518,12 +518,12 @@ import { ... } from "@mariozechner/pi-tui";
 
 ## 与 Pi CLI 的主要区别
 
-| 方面     | Pi CLI                  | OpenClaw 嵌入式                                                                                 |
+| 方面     | Pi CLI                  | EasyHub 嵌入式                                                                                 |
 | -------- | ----------------------- | ----------------------------------------------------------------------------------------------- |
 | 调用方式 | `pi` 命令 / RPC         | 通过 `createAgentSession()` 的 SDK                                                              |
-| 工具     | 默认编码工具            | 自定义 OpenClaw 工具套件                                                                        |
+| 工具     | 默认编码工具            | 自定义 EasyHub 工具套件                                                                        |
 | 系统提示 | AGENTS.md + prompts     | 按渠道/上下文动态生成                                                                           |
-| 会话存储 | `~/.pi/agent/sessions/` | `~/.openclaw/agents/<agentId>/sessions/`（或 `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`） |
+| 会话存储 | `~/.pi/agent/sessions/` | `~/.easyhub/agents/<agentId>/sessions/`（或 `$EASYHUB_STATE_DIR/agents/<agentId>/sessions/`） |
 | 认证     | 单一凭证                | 带轮换的多配置文件                                                                              |
 | 扩展     | 从磁盘加载              | 编程方式 + 磁盘路径                                                                             |
 | 事件处理 | TUI 渲染                | 基于回调（onBlockReply 等）                                                                     |
@@ -610,10 +610,10 @@ import { ... } from "@mariozechner/pi-tui";
 - `src/agents/pi-settings.test.ts`
 - `src/agents/pi-tool-definition-adapter.test.ts`
 - `src/agents/pi-tools-agent-config.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping-b.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping-d.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping-f.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping.test.ts`
+- `src/agents/pi-tools.create-EasyHub-coding-tools.adds-claude-style-aliases-schemas-without-dropping-b.test.ts`
+- `src/agents/pi-tools.create-EasyHub-coding-tools.adds-claude-style-aliases-schemas-without-dropping-d.test.ts`
+- `src/agents/pi-tools.create-EasyHub-coding-tools.adds-claude-style-aliases-schemas-without-dropping-f.test.ts`
+- `src/agents/pi-tools.create-EasyHub-coding-tools.adds-claude-style-aliases-schemas-without-dropping.test.ts`
 - `src/agents/pi-tools.policy.test.ts`
 - `src/agents/pi-tools.safe-bins.test.ts`
 - `src/agents/pi-tools.workspace-paths.test.ts`

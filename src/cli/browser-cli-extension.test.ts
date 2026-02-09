@@ -25,7 +25,7 @@ function writeManifest(dir: string) {
 
 describe("bundled extension resolver", () => {
   it("walks up to find the assets directory", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ext-root-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-ext-root-"));
     const here = path.join(root, "dist", "cli");
     const assets = path.join(root, "assets", "chrome-extension");
 
@@ -41,7 +41,7 @@ describe("bundled extension resolver", () => {
   });
 
   it("prefers the nearest assets directory", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ext-root-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-ext-root-"));
     const here = path.join(root, "dist", "cli");
     const distAssets = path.join(root, "dist", "assets", "chrome-extension");
     const rootAssets = path.join(root, "assets", "chrome-extension");
@@ -61,7 +61,7 @@ describe("bundled extension resolver", () => {
 
 describe("browser extension install", () => {
   it("installs into the state dir (never node_modules)", async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ext-"));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-ext-"));
 
     try {
       const { installChromeExtension } = await import("./browser-cli-extension.js");
@@ -77,9 +77,9 @@ describe("browser extension install", () => {
   });
 
   it("copies extension path to clipboard", async () => {
-    const prev = process.env.OPENCLAW_STATE_DIR;
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ext-path-"));
-    process.env.OPENCLAW_STATE_DIR = tmp;
+    const prev = process.env.EASYHUB_STATE_DIR;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-ext-path-"));
+    process.env.EASYHUB_STATE_DIR = tmp;
 
     try {
       copyToClipboard.mockReset();
@@ -107,9 +107,9 @@ describe("browser extension install", () => {
       expect(copyToClipboard).toHaveBeenCalledWith(dir);
     } finally {
       if (prev === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.EASYHUB_STATE_DIR;
       } else {
-        process.env.OPENCLAW_STATE_DIR = prev;
+        process.env.EASYHUB_STATE_DIR = prev;
       }
     }
   });

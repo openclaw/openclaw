@@ -28,7 +28,7 @@ Perform a thorough review-only PR assessment and return a structured recommendat
 
 ## Known Failure Modes
 
-- If you see "fatal: not a git repository", you are in the wrong directory. Use `~/dev/openclaw` if available; otherwise ask user.
+- If you see "fatal: not a git repository", you are in the wrong directory. Use `~/dev/EasyHub` if available; otherwise ask user.
 - Do not stop after printing the checklist. That is not completion.
 
 ## Writing Style for Output
@@ -51,7 +51,7 @@ Create a checklist of all review steps, print it, then continue and execute the 
 Use an isolated worktree for all review work.
 
 ```sh
-cd ~/dev/openclaw
+cd ~/dev/EasyHub
 # Sanity: confirm you are in the repo
 git rev-parse --show-toplevel
 
@@ -151,7 +151,7 @@ Review correctness, design, performance, and ergonomics.
 
 8. Perform a security review
 
-Assume OpenClaw subagents run with full disk access, including git, gh, and shell. Check auth, input validation, secrets, dependencies, tool safety, and privacy.
+Assume EasyHub subagents run with full disk access, including git, gh, and shell. Check auth, input validation, secrets, dependencies, tool safety, and privacy.
 
 9. Review tests and verification
 

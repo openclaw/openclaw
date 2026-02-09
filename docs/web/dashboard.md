@@ -30,17 +30,17 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 ## Fast path (recommended)
 
 - After onboarding, the CLI auto-opens the dashboard and prints a clean (non-tokenized) link.
-- Re-open anytime: `openclaw dashboard` (copies link, opens browser if possible, shows SSH hint if headless).
-- If the UI prompts for auth, paste the token from `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
+- Re-open anytime: `EasyHub dashboard` (copies link, opens browser if possible, shows SSH hint if headless).
+- If the UI prompts for auth, paste the token from `gateway.auth.token` (or `EASYHUB_GATEWAY_TOKEN`) into Control UI settings.
 
 ## Token basics (local vs remote)
 
 - **Localhost**: open `http://127.0.0.1:18789/`.
-- **Token source**: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`); the UI stores a copy in localStorage after you connect.
+- **Token source**: `gateway.auth.token` (or `EASYHUB_GATEWAY_TOKEN`); the UI stores a copy in localStorage after you connect.
 - **Not localhost**: use Tailscale Serve (tokenless if `gateway.auth.allowTailscale: true`), tailnet bind with a token, or an SSH tunnel. See [Web surfaces](/web).
 
 ## If you see “unauthorized” / 1008
 
-- Ensure the gateway is reachable (local: `openclaw status`; remote: SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`).
-- Retrieve the token from the gateway host: `openclaw config get gateway.auth.token` (or generate one: `openclaw doctor --generate-gateway-token`).
+- Ensure the gateway is reachable (local: `EasyHub status`; remote: SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`).
+- Retrieve the token from the gateway host: `EasyHub config get gateway.auth.token` (or generate one: `EasyHub doctor --generate-gateway-token`).
 - In the dashboard settings, paste the token into the auth field, then connect.

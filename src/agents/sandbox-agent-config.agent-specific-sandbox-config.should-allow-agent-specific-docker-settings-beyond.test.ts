@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 
 // We need to test the internal defaultSandboxConfig function, but it's not exported.
 // Instead, we test the behavior through resolveSandboxContext which uses it.
@@ -82,7 +82,7 @@ describe("Agent-specific sandbox config", () => {
   it("should allow agent-specific docker settings beyond setupCommand", async () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -97,7 +97,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/EasyHub-work",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -124,7 +124,7 @@ describe("Agent-specific sandbox config", () => {
   it("should override with agent-specific sandbox mode 'off'", async () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -135,7 +135,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "main",
-            workspace: "~/openclaw",
+            workspace: "~/EasyHub",
             sandbox: {
               mode: "off", // Agent override
             },
@@ -156,7 +156,7 @@ describe("Agent-specific sandbox config", () => {
   it("should use agent-specific sandbox mode 'all'", async () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -166,7 +166,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "family",
-            workspace: "~/openclaw-family",
+            workspace: "~/EasyHub-family",
             sandbox: {
               mode: "all", // Agent override
               scope: "agent",
@@ -188,7 +188,7 @@ describe("Agent-specific sandbox config", () => {
   it("should use agent-specific scope", async () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -199,7 +199,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/EasyHub-work",
             sandbox: {
               mode: "all",
               scope: "agent", // Agent override

@@ -180,7 +180,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
   it("announces auto-compaction in verbose mode and tracks count", async () => {
     const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-")),
+      await fs.mkdtemp(path.join(tmpdir(), "EasyHub-compaction-")),
       "sessions.json",
     );
     const sessionEntry = { sessionId: "session", updatedAt: Date.now() };

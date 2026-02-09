@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawPluginApi } from "../plugins/types.js";
+import type { EasyHubPluginApi } from "../plugins/types.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import type { HookEntry } from "./types.js";
 import { shouldIncludeHook } from "./config.js";
@@ -13,19 +13,19 @@ export type PluginHookLoadResult = {
   errors: string[];
 };
 
-function resolveHookDir(api: OpenClawPluginApi, dir: string): string {
+function resolveHookDir(api: EasyHubPluginApi, dir: string): string {
   if (path.isAbsolute(dir)) {
     return dir;
   }
   return path.resolve(path.dirname(api.source), dir);
 }
 
-function normalizePluginHookEntry(api: OpenClawPluginApi, entry: HookEntry): HookEntry {
+function normalizePluginHookEntry(api: EasyHubPluginApi, entry: HookEntry): HookEntry {
   return {
     ...entry,
     hook: {
       ...entry.hook,
-      source: "openclaw-plugin",
+      source: "EasyHub-plugin",
       pluginId: api.id,
     },
     metadata: {
@@ -38,7 +38,7 @@ function normalizePluginHookEntry(api: OpenClawPluginApi, entry: HookEntry): Hoo
 
 async function loadHookHandler(
   entry: HookEntry,
-  api: OpenClawPluginApi,
+  api: EasyHubPluginApi,
 ): Promise<InternalHookHandler | null> {
   try {
     const url = pathToFileURL(entry.hook.handlerPath).href;
@@ -58,13 +58,13 @@ async function loadHookHandler(
 }
 
 export async function registerPluginHooksFromDir(
-  api: OpenClawPluginApi,
+  api: EasyHubPluginApi,
   dir: string,
 ): Promise<PluginHookLoadResult> {
   const resolvedDir = resolveHookDir(api, dir);
   const hooks = loadHookEntriesFromDir({
     dir: resolvedDir,
-    source: "openclaw-plugin",
+    source: "EasyHub-plugin",
     pluginId: api.id,
   });
 

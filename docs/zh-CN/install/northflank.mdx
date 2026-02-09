@@ -9,25 +9,25 @@ x-i18n:
   workflow: 15
 ---
 
-通过一键模板在 Northflank 上部署 OpenClaw，然后在浏览器中完成设置。
+通过一键模板在 Northflank 上部署 EasyHub，然后在浏览器中完成设置。
 这是最简单的"无需在服务器上使用终端"的方式：Northflank 为你运行 Gateway网关，
 你通过 `/setup` 网页向导配置一切。
 
 ## 如何开始
 
-1. 点击 [Deploy OpenClaw](https://northflank.com/stacks/deploy-openclaw) 打开模板。
+1. 点击 [Deploy EasyHub](https://northflank.com/stacks/deploy-EasyHub) 打开模板。
 2. 如果你还没有账户，请创建一个 [Northflank 账户](https://app.northflank.com/signup)。
-3. 点击 **Deploy OpenClaw now**。
+3. 点击 **Deploy EasyHub now**。
 4. 设置必需的环境变量：`SETUP_PASSWORD`。
-5. 点击 **Deploy stack** 构建并运行 OpenClaw 模板。
+5. 点击 **Deploy stack** 构建并运行 EasyHub 模板。
 6. 等待部署完成，然后点击 **View resources**。
-7. 打开 OpenClaw 服务。
-8. 打开公开的 OpenClaw URL，在 `/setup` 完成设置。
-9. 在 `/openclaw` 打开控制面板 UI。
+7. 打开 EasyHub 服务。
+8. 打开公开的 EasyHub URL，在 `/setup` 完成设置。
+9. 在 `/EasyHub` 打开控制面板 UI。
 
 ## 你将获得
 
-- 托管的 OpenClaw Gateway网关 + 控制面板 UI
+- 托管的 EasyHub Gateway网关 + 控制面板 UI
 - `/setup` 处的网页设置向导（无需终端命令）
 - 通过 Northflank Volume（`/data`）实现持久化存储，配置/凭据/工作区在重新部署后不会丢失
 
@@ -37,7 +37,7 @@ x-i18n:
 2. 选择模型/认证提供商并粘贴你的密钥。
 3. （可选）添加 Telegram/Discord/Slack 令牌。
 4. 点击 **Run setup**。
-5. 在 `https://<your-northflank-domain>/openclaw` 打开控制面板 UI。
+5. 在 `https://<your-northflank-domain>/EasyHub` 打开控制面板 UI。
 
 如果 Telegram 私信设置为配对模式，设置向导可以审批配对码。
 

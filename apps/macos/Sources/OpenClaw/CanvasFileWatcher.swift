@@ -10,7 +10,7 @@ final class CanvasFileWatcher: @unchecked Sendable {
 
     init(url: URL, onChange: @escaping () -> Void) {
         self.url = url
-        self.queue = DispatchQueue(label: "ai.openclaw.canvaswatcher")
+        self.queue = DispatchQueue(label: "ai.EasyHub.canvaswatcher")
         self.onChange = onChange
     }
 

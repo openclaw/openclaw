@@ -5,7 +5,7 @@ import OSLog
 actor RemoteTunnelManager {
     static let shared = RemoteTunnelManager()
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "remote-tunnel")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "remote-tunnel")
     private var controlTunnel: RemotePortTunnel?
     private var restartInFlight = false
     private var lastRestartAt: Date?
@@ -31,7 +31,7 @@ actor RemoteTunnelManager {
             tunnel.terminate()
             self.controlTunnel = nil
         }
-        // If a previous OpenClaw run already has an SSH listener on the expected port (common after restarts),
+        // If a previous EasyHub run already has an SSH listener on the expected port (common after restarts),
         // reuse it instead of spawning new ssh processes that immediately fail with "Address already in use".
         let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
         if let desc = await PortGuardian.shared.describe(port: Int(desiredPort)),

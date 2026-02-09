@@ -1,10 +1,10 @@
 import AppKit
-import OpenClawKit
+import EasyHubKit
 import Foundation
 import OSLog
 import Security
 
-private let deepLinkLogger = Logger(subsystem: "ai.openclaw", category: "DeepLink")
+private let deepLinkLogger = Logger(subsystem: "ai.easyhub", category: "DeepLink")
 
 @MainActor
 final class DeepLinkHandler {
@@ -23,7 +23,7 @@ final class DeepLinkHandler {
             return
         }
         guard !AppStateStore.shared.isPaused else {
-            self.presentAlert(title: "OpenClaw is paused", message: "Unpause OpenClaw to run agent actions.")
+            self.presentAlert(title: "EasyHub is paused", message: "Unpause EasyHub to run agent actions.")
             return
         }
 
@@ -51,7 +51,7 @@ final class DeepLinkHandler {
             let trimmed = messagePreview.count > 240 ? "\(messagePreview.prefix(240))…" : messagePreview
             let body =
                 "Run the agent with this message?\n\n\(trimmed)\n\nURL:\n\(originalURL.absoluteString)"
-            guard self.confirm(title: "Run OpenClaw agent?", message: body) else { return }
+            guard self.confirm(title: "Run EasyHub agent?", message: body) else { return }
         }
 
         if AppStateStore.shared.connectionMode == .local {

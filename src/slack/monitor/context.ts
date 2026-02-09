@@ -1,6 +1,6 @@
 import type { App } from "@slack/bolt";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
-import type { OpenClawConfig, SlackReactionNotificationMode } from "../../config/config.js";
+import type { EasyHubConfig, SlackReactionNotificationMode } from "../../config/config.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { SlackMessageEvent } from "../types.js";
@@ -49,7 +49,7 @@ export function normalizeSlackChannelType(
 }
 
 export type SlackMonitorContext = {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   accountId: string;
   botToken: string;
   app: App;
@@ -122,7 +122,7 @@ export type SlackMonitorContext = {
 };
 
 export function createSlackMonitorContext(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   accountId: string;
   botToken: string;
   app: App;

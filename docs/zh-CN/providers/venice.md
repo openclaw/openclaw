@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想在 OpenClaw 中使用注重隐私的推理服务
+  - 你想在 EasyHub 中使用注重隐私的推理服务
   - 你需要 Venice AI 设置指导
-summary: 在 OpenClaw 中使用 Venice AI 注重隐私的模型
+summary: 在 EasyHub 中使用 Venice AI 注重隐私的模型
 title: Venice AI
 x-i18n:
   generated_at: "2026-02-01T21:36:03Z"
@@ -19,7 +19,7 @@ x-i18n:
 
 Venice AI 提供注重隐私的 AI 推理服务，支持无审查模型，并可通过其匿名代理访问主流专有模型。所有推理默认私密——不会用你的数据训练，不会记录日志。
 
-## 为什么在 OpenClaw 中使用 Venice
+## 为什么在 EasyHub 中使用 Venice
 
 - **私密推理**，适用于开源模型（无日志记录）。
 - 需要时可使用**无审查模型**。
@@ -54,7 +54,7 @@ Venice 提供两种隐私级别——理解这一点是选择模型的关键：
 2. 前往 **Settings → API Keys → Create new key**
 3. 复制你的 API 密钥（格式：`vapi_xxxxxxxxxxxx`）
 
-### 2. 配置 OpenClaw
+### 2. 配置 EasyHub
 
 **方案 A：环境变量**
 
@@ -65,7 +65,7 @@ export VENICE_API_KEY="vapi_xxxxxxxxxxxx"
 **方案 B：交互式设置（推荐）**
 
 ```bash
-openclaw onboard --auth-choice venice-api-key
+EasyHub onboard --auth-choice venice-api-key
 ```
 
 这将：
@@ -78,7 +78,7 @@ openclaw onboard --auth-choice venice-api-key
 **方案 C：非交互式**
 
 ```bash
-openclaw onboard --non-interactive \
+EasyHub onboard --non-interactive \
   --auth-choice venice-api-key \
   --venice-api-key "vapi_xxxxxxxxxxxx"
 ```
@@ -86,12 +86,12 @@ openclaw onboard --non-interactive \
 ### 3. 验证设置
 
 ```bash
-openclaw chat --model venice/llama-3.3-70b "Hello, are you working?"
+EasyHub chat --model venice/llama-3.3-70b "Hello, are you working?"
 ```
 
 ## 模型选择
 
-设置完成后，OpenClaw 会显示所有可用的 Venice 模型。根据你的需求选择：
+设置完成后，EasyHub 会显示所有可用的 Venice 模型。根据你的需求选择：
 
 - **默认（我们的推荐）**：`venice/llama-3.3-70b`，私密且性能均衡。
 - **最佳整体质量**：`venice/claude-opus-45`，适合复杂任务（Opus 仍然是最强的）。
@@ -101,19 +101,19 @@ openclaw chat --model venice/llama-3.3-70b "Hello, are you working?"
 随时更改默认模型：
 
 ```bash
-openclaw models set venice/claude-opus-45
-openclaw models set venice/llama-3.3-70b
+EasyHub models set venice/claude-opus-45
+EasyHub models set venice/llama-3.3-70b
 ```
 
 列出所有可用模型：
 
 ```bash
-openclaw models list | grep venice
+EasyHub models list | grep venice
 ```
 
-## 通过 `openclaw configure` 配置
+## 通过 `EasyHub configure` 配置
 
-1. 运行 `openclaw configure`
+1. 运行 `EasyHub configure`
 2. 选择 **Model/auth**
 3. 选择 **Venice AI**
 
@@ -169,7 +169,7 @@ openclaw models list | grep venice
 
 ## 模型发现
 
-当设置了 `VENICE_API_KEY` 时，OpenClaw 会自动从 Venice API 发现模型。如果 API 不可达，则回退到静态目录。
+当设置了 `VENICE_API_KEY` 时，EasyHub 会自动从 Venice API 发现模型。如果 API 不可达，则回退到静态目录。
 
 `/models` 端点是公开的（列出模型无需认证），但推理需要有效的 API 密钥。
 
@@ -202,19 +202,19 @@ Venice 使用积分制。请查看 [venice.ai/pricing](https://venice.ai/pricing
 
 ```bash
 # 使用默认私密模型
-openclaw chat --model venice/llama-3.3-70b
+EasyHub chat --model venice/llama-3.3-70b
 
 # 通过 Venice 使用 Claude（匿名化）
-openclaw chat --model venice/claude-opus-45
+EasyHub chat --model venice/claude-opus-45
 
 # 使用无审查模型
-openclaw chat --model venice/venice-uncensored
+EasyHub chat --model venice/venice-uncensored
 
 # 使用视觉模型处理图像
-openclaw chat --model venice/qwen3-vl-235b-a22b
+EasyHub chat --model venice/qwen3-vl-235b-a22b
 
 # 使用编程模型
-openclaw chat --model venice/qwen3-coder-480b-a35b-instruct
+EasyHub chat --model venice/qwen3-coder-480b-a35b-instruct
 ```
 
 ## 故障排除
@@ -223,14 +223,14 @@ openclaw chat --model venice/qwen3-coder-480b-a35b-instruct
 
 ```bash
 echo $VENICE_API_KEY
-openclaw models list | grep venice
+EasyHub models list | grep venice
 ```
 
 确保密钥以 `vapi_` 开头。
 
 ### 模型不可用
 
-Venice 模型目录会动态更新。运行 `openclaw models list` 查看当前可用的模型。部分模型可能暂时离线。
+Venice 模型目录会动态更新。运行 `EasyHub models list` 查看当前可用的模型。部分模型可能暂时离线。
 
 ### 连接问题
 

@@ -1,6 +1,6 @@
-# OpenClaw (iOS)
+# EasyHub (iOS)
 
-This is an **alpha** iOS app that connects to an OpenClaw Gateway as a `role: node`.
+This is an **alpha** iOS app that connects to an EasyHub Gateway as a `role: node`.
 
 Expect rough edges:
 
@@ -21,7 +21,7 @@ If your Gateway has the `device-pair` plugin installed:
 
 1. In Telegram, message your bot: `/pair`
 2. Copy the **setup code** message
-3. On iOS: OpenClaw → Settings → Gateway → paste setup code → Connect
+3. On iOS: EasyHub → Settings → Gateway → paste setup code → Connect
 4. Back in Telegram: `/pair approve`
 
 ## Build And Run
@@ -41,7 +41,7 @@ pnpm ios:open
 
 Then in Xcode:
 
-1. Select the `OpenClaw` scheme
+1. Select the `EasyHub` scheme
 2. Select a simulator or a connected device
 3. Run
 
@@ -58,9 +58,9 @@ pnpm ios:build
 ```bash
 cd apps/ios
 xcodegen generate
-xcodebuild test -project OpenClaw.xcodeproj -scheme OpenClaw -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild test -project EasyHub.xcodeproj -scheme EasyHub -destination "platform=iOS Simulator,name=iPhone 17"
 ```
 
 ## Shared Code
 
-- `apps/shared/OpenClawKit` contains the shared transport/types used by the iOS app.
+- `apps/shared/EasyHubKit` contains the shared transport/types used by the iOS app.

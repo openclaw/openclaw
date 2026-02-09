@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { applyPatch } from "./apply-patch.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-patch-"));
   try {
     return await fn(dir);
   } finally {

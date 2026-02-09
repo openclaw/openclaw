@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -17,7 +17,7 @@ describe("resolveOutboundTarget", () => {
   });
 
   it("falls back to whatsapp allowFrom via config", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       channels: { whatsapp: { allowFrom: ["+1555"] } },
     };
     const res = resolveOutboundTarget({

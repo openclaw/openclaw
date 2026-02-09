@@ -27,39 +27,39 @@ describe("gateway e2e", () => {
     async () => {
       const prev = {
         home: process.env.HOME,
-        configPath: process.env.OPENCLAW_CONFIG_PATH,
-        token: process.env.OPENCLAW_GATEWAY_TOKEN,
-        skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-        skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-        skipCron: process.env.OPENCLAW_SKIP_CRON,
-        skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-        skipBrowser: process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER,
+        configPath: process.env.EASYHUB_CONFIG_PATH,
+        token: process.env.EASYHUB_GATEWAY_TOKEN,
+        skipChannels: process.env.EASYHUB_SKIP_CHANNELS,
+        skipGmail: process.env.EASYHUB_SKIP_GMAIL_WATCHER,
+        skipCron: process.env.EASYHUB_SKIP_CRON,
+        skipCanvas: process.env.EASYHUB_SKIP_CANVAS_HOST,
+        skipBrowser: process.env.EASYHUB_SKIP_BROWSER_CONTROL_SERVER,
       };
 
       const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
 
-      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-mock-home-"));
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-gw-mock-home-"));
       process.env.HOME = tempHome;
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.EASYHUB_SKIP_CHANNELS = "1";
+      process.env.EASYHUB_SKIP_GMAIL_WATCHER = "1";
+      process.env.EASYHUB_SKIP_CRON = "1";
+      process.env.EASYHUB_SKIP_CANVAS_HOST = "1";
+      process.env.EASYHUB_SKIP_BROWSER_CONTROL_SERVER = "1";
 
       const token = `test-${randomUUID()}`;
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+      process.env.EASYHUB_GATEWAY_TOKEN = token;
 
-      const workspaceDir = path.join(tempHome, "openclaw");
+      const workspaceDir = path.join(tempHome, "EasyHub");
       await fs.mkdir(workspaceDir, { recursive: true });
 
       const nonceA = randomUUID();
       const nonceB = randomUUID();
-      const toolProbePath = path.join(workspaceDir, `.openclaw-tool-probe.${nonceA}.txt`);
+      const toolProbePath = path.join(workspaceDir, `.EasyHub-tool-probe.${nonceA}.txt`);
       await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-      const configDir = path.join(tempHome, ".openclaw");
+      const configDir = path.join(tempHome, ".easyhub");
       await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
+      const configPath = path.join(configDir, "easyhub.json");
 
       const cfg = {
         agents: { defaults: { workspace: workspaceDir } },
@@ -89,7 +89,7 @@ describe("gateway e2e", () => {
       };
 
       await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      process.env.EASYHUB_CONFIG_PATH = configPath;
 
       const port = await getFreeGatewayPort();
       const server = await startGatewayServer(port, {
@@ -139,13 +139,13 @@ describe("gateway e2e", () => {
         await fs.rm(tempHome, { recursive: true, force: true });
         restore();
         process.env.HOME = prev.home;
-        process.env.OPENCLAW_CONFIG_PATH = prev.configPath;
-        process.env.OPENCLAW_GATEWAY_TOKEN = prev.token;
-        process.env.OPENCLAW_SKIP_CHANNELS = prev.skipChannels;
-        process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prev.skipGmail;
-        process.env.OPENCLAW_SKIP_CRON = prev.skipCron;
-        process.env.OPENCLAW_SKIP_CANVAS_HOST = prev.skipCanvas;
-        process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = prev.skipBrowser;
+        process.env.EASYHUB_CONFIG_PATH = prev.configPath;
+        process.env.EASYHUB_GATEWAY_TOKEN = prev.token;
+        process.env.EASYHUB_SKIP_CHANNELS = prev.skipChannels;
+        process.env.EASYHUB_SKIP_GMAIL_WATCHER = prev.skipGmail;
+        process.env.EASYHUB_SKIP_CRON = prev.skipCron;
+        process.env.EASYHUB_SKIP_CANVAS_HOST = prev.skipCanvas;
+        process.env.EASYHUB_SKIP_BROWSER_CONTROL_SERVER = prev.skipBrowser;
       }
     },
   );
@@ -153,27 +153,27 @@ describe("gateway e2e", () => {
   it("runs wizard over ws and writes auth token config", { timeout: 90_000 }, async () => {
     const prev = {
       home: process.env.HOME,
-      stateDir: process.env.OPENCLAW_STATE_DIR,
-      configPath: process.env.OPENCLAW_CONFIG_PATH,
-      token: process.env.OPENCLAW_GATEWAY_TOKEN,
-      skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-      skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.OPENCLAW_SKIP_CRON,
-      skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-      skipBrowser: process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER,
+      stateDir: process.env.EASYHUB_STATE_DIR,
+      configPath: process.env.EASYHUB_CONFIG_PATH,
+      token: process.env.EASYHUB_GATEWAY_TOKEN,
+      skipChannels: process.env.EASYHUB_SKIP_CHANNELS,
+      skipGmail: process.env.EASYHUB_SKIP_GMAIL_WATCHER,
+      skipCron: process.env.EASYHUB_SKIP_CRON,
+      skipCanvas: process.env.EASYHUB_SKIP_CANVAS_HOST,
+      skipBrowser: process.env.EASYHUB_SKIP_BROWSER_CONTROL_SERVER,
     };
 
-    process.env.OPENCLAW_SKIP_CHANNELS = "1";
-    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-    process.env.OPENCLAW_SKIP_CRON = "1";
-    process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-    process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.EASYHUB_SKIP_CHANNELS = "1";
+    process.env.EASYHUB_SKIP_GMAIL_WATCHER = "1";
+    process.env.EASYHUB_SKIP_CRON = "1";
+    process.env.EASYHUB_SKIP_CANVAS_HOST = "1";
+    process.env.EASYHUB_SKIP_BROWSER_CONTROL_SERVER = "1";
+    delete process.env.EASYHUB_GATEWAY_TOKEN;
 
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-home-"));
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-wizard-home-"));
     process.env.HOME = tempHome;
-    delete process.env.OPENCLAW_STATE_DIR;
-    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.EASYHUB_STATE_DIR;
+    delete process.env.EASYHUB_CONFIG_PATH;
 
     const wizardToken = `wiz-${randomUUID()}`;
     const port = await getFreeGatewayPort();
@@ -265,14 +265,14 @@ describe("gateway e2e", () => {
       await server2.close({ reason: "wizard auth verify" });
       await fs.rm(tempHome, { recursive: true, force: true });
       process.env.HOME = prev.home;
-      process.env.OPENCLAW_STATE_DIR = prev.stateDir;
-      process.env.OPENCLAW_CONFIG_PATH = prev.configPath;
-      process.env.OPENCLAW_GATEWAY_TOKEN = prev.token;
-      process.env.OPENCLAW_SKIP_CHANNELS = prev.skipChannels;
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prev.skipGmail;
-      process.env.OPENCLAW_SKIP_CRON = prev.skipCron;
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = prev.skipCanvas;
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = prev.skipBrowser;
+      process.env.EASYHUB_STATE_DIR = prev.stateDir;
+      process.env.EASYHUB_CONFIG_PATH = prev.configPath;
+      process.env.EASYHUB_GATEWAY_TOKEN = prev.token;
+      process.env.EASYHUB_SKIP_CHANNELS = prev.skipChannels;
+      process.env.EASYHUB_SKIP_GMAIL_WATCHER = prev.skipGmail;
+      process.env.EASYHUB_SKIP_CRON = prev.skipCron;
+      process.env.EASYHUB_SKIP_CANVAS_HOST = prev.skipCanvas;
+      process.env.EASYHUB_SKIP_BROWSER_CONTROL_SERVER = prev.skipBrowser;
     }
   });
 });

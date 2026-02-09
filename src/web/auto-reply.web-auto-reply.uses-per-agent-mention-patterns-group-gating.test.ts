@@ -47,7 +47,7 @@ const rmDirWithRetries = async (dir: string): Promise<void> => {
 beforeEach(async () => {
   resetInboundDedupe();
   previousHome = process.env.HOME;
-  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-"));
+  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-web-home-"));
   process.env.HOME = tempHome;
 });
 
@@ -62,7 +62,7 @@ afterEach(async () => {
 const _makeSessionStore = async (
   entries: Record<string, unknown> = {},
 ): Promise<{ storePath: string; cleanup: () => Promise<void> }> => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-session-"));
   const storePath = path.join(dir, "sessions.json");
   await fs.writeFile(storePath, JSON.stringify(entries));
   const cleanup = async () => {
@@ -201,7 +201,7 @@ describe("web auto-reply", () => {
           groups: { "*": { requireMention: false } },
         },
       },
-      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      messages: { groupChat: { mentionPatterns: ["@EasyHub"] } },
     }));
 
     let capturedOnMessage:
@@ -249,7 +249,7 @@ describe("web auto-reply", () => {
           groups: { "999@g.us": { requireMention: false } },
         },
       },
-      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      messages: { groupChat: { mentionPatterns: ["@EasyHub"] } },
     }));
 
     let capturedOnMessage:
@@ -266,7 +266,7 @@ describe("web auto-reply", () => {
     expect(capturedOnMessage).toBeDefined();
 
     await capturedOnMessage?.({
-      body: "@openclaw hello",
+      body: "@EasyHub hello",
       from: "123@g.us",
       conversationId: "123@g.us",
       chatId: "123@g.us",
@@ -302,7 +302,7 @@ describe("web auto-reply", () => {
           },
         },
       },
-      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      messages: { groupChat: { mentionPatterns: ["@EasyHub"] } },
     }));
 
     let capturedOnMessage:

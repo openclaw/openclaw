@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/slack",
+  "name": "@easyhub/slack",
   "version": "2026.2.6-3",
-  "description": "OpenClaw Slack channel plugin",
+  "description": "EasyHub Slack channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ]

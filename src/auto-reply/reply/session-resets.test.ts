@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -36,7 +36,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     });
   }
 
-  function makeCfg(params: { storePath: string; allowFrom: string[] }): OpenClawConfig {
+  function makeCfg(params: { storePath: string; allowFrom: string[] }): EasyHubConfig {
     return {
       session: { store: params.storePath, idleMinutes: 999 },
       channels: {
@@ -45,11 +45,11 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
           groupPolicy: "open",
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
   }
 
   it("Reset trigger /new works for authorized sender in WhatsApp group", async () => {
-    const storePath = await createStorePath("openclaw-group-reset-");
+    const storePath = await createStorePath("EasyHub-group-reset-");
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
     const existingSessionId = "existing-session-123";
     await seedSessionStore({
@@ -91,7 +91,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
   });
 
   it("Reset trigger /new blocked for unauthorized sender in existing session", async () => {
-    const storePath = await createStorePath("openclaw-group-reset-unauth-");
+    const storePath = await createStorePath("EasyHub-group-reset-unauth-");
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
     const existingSessionId = "existing-session-123";
 
@@ -133,7 +133,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
   });
 
   it("Reset trigger works when RawBody is clean but Body has wrapped context", async () => {
-    const storePath = await createStorePath("openclaw-group-rawbody-");
+    const storePath = await createStorePath("EasyHub-group-rawbody-");
     const sessionKey = "agent:main:whatsapp:group:g1";
     const existingSessionId = "existing-session-123";
     await seedSessionStore({
@@ -172,7 +172,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
   });
 
   it("Reset trigger /new works when SenderId is LID but SenderE164 is authorized", async () => {
-    const storePath = await createStorePath("openclaw-group-reset-lid-");
+    const storePath = await createStorePath("EasyHub-group-reset-lid-");
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
     const existingSessionId = "existing-session-123";
     await seedSessionStore({
@@ -214,7 +214,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
   });
 
   it("Reset trigger /new blocked when SenderId is LID but SenderE164 is unauthorized", async () => {
-    const storePath = await createStorePath("openclaw-group-reset-lid-unauth-");
+    const storePath = await createStorePath("EasyHub-group-reset-lid-unauth-");
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
     const existingSessionId = "existing-session-123";
     await seedSessionStore({
@@ -276,7 +276,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
   }
 
   it("Reset trigger /reset works when Slack message has a leading <@...> mention token", async () => {
-    const storePath = await createStorePath("openclaw-slack-channel-reset-");
+    const storePath = await createStorePath("EasyHub-slack-channel-reset-");
     const sessionKey = "agent:main:slack:channel:c1";
     const existingSessionId = "existing-session-123";
     await seedSessionStore({
@@ -287,7 +287,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
 
     const cfg = {
       session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const channelMessageCtx = {
       Body: "<@U123> /reset",
@@ -316,7 +316,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
   });
 
   it("Reset trigger /new preserves args when Slack message has a leading <@...> mention token", async () => {
-    const storePath = await createStorePath("openclaw-slack-channel-new-");
+    const storePath = await createStorePath("EasyHub-slack-channel-new-");
     const sessionKey = "agent:main:slack:channel:c2";
     const existingSessionId = "existing-session-123";
     await seedSessionStore({
@@ -327,7 +327,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
 
     const cfg = {
       session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const channelMessageCtx = {
       Body: "<@U123> /new take notes",
@@ -358,7 +358,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
 
 describe("applyResetModelOverride", () => {
   it("selects a model hint and strips it from the body", async () => {
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as EasyHubConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
     const sessionEntry = {
       sessionId: "s1",
@@ -388,7 +388,7 @@ describe("applyResetModelOverride", () => {
   });
 
   it("clears auth profile overrides when reset applies a model", async () => {
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as EasyHubConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
     const sessionEntry = {
       sessionId: "s1",
@@ -421,7 +421,7 @@ describe("applyResetModelOverride", () => {
   });
 
   it("skips when resetTriggered is false", async () => {
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as EasyHubConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
     const sessionEntry = {
       sessionId: "s1",
@@ -462,7 +462,7 @@ describe("prependSystemEvents", () => {
     enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });
 
     const result = await prependSystemEvents({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as EasyHubConfig,
       sessionKey: "agent:main:main",
       isMainSession: false,
       isNewSession: false,

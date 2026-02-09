@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ConfigFileSnapshot } from "./types.openclaw.js";
+import type { ConfigFileSnapshot } from "./types.easyhub.js";
 import {
   REDACTED_SENTINEL,
   redactConfigSnapshot,
@@ -8,7 +8,7 @@ import {
 
 function makeSnapshot(config: Record<string, unknown>, raw?: string): ConfigFileSnapshot {
   return {
-    path: "/home/user/.openclaw/config.json5",
+    path: "/home/user/.easyhub/config.json5",
     exists: true,
     raw: raw ?? JSON.stringify(config),
     parsed: config,

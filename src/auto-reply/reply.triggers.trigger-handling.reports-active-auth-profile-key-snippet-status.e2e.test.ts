@@ -69,7 +69,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
       vi.mocked(abortEmbeddedPiRun).mockClear();
       return await fn(home);
     },
-    { prefix: "openclaw-triggers-" },
+    { prefix: "EasyHub-triggers-" },
   );
 }
 
@@ -78,7 +78,7 @@ function makeCfg(home: string) {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-5",
-        workspace: join(home, "openclaw"),
+        workspace: join(home, "EasyHub"),
       },
     },
     channels: {
@@ -98,7 +98,7 @@ describe("trigger handling", () => {
   it("reports active auth profile and key snippet in status", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
-      const agentDir = join(home, ".openclaw", "agents", "main", "agent");
+      const agentDir = join(home, ".easyhub", "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(
         join(agentDir, "auth-profiles.json"),

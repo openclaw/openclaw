@@ -1,15 +1,15 @@
 {
-  "name": "@openclaw/memory-core",
+  "name": "@easyhub/memory-core",
   "version": "2026.2.6-3",
-  "description": "OpenClaw core memory search plugin",
+  "description": "EasyHub core memory search plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.1.26"
+    "EasyHub": ">=2026.1.26"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ]

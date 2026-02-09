@@ -8,7 +8,7 @@ title: "Media Understanding"
 
 # Media Understanding (Inbound) — 2026-01-17
 
-OpenClaw can **summarize inbound media** (image/audio/video) before the reply pipeline runs. It auto‑detects when local tools or provider keys are available, and can be disabled or customized. If understanding is off, models still receive the original files/URLs as usual.
+EasyHub can **summarize inbound media** (image/audio/video) before the reply pipeline runs. It auto‑detects when local tools or provider keys are available, and can be disabled or customized. If understanding is off, models still receive the original files/URLs as usual.
 
 ## Goals
 
@@ -125,13 +125,13 @@ Rules:
 - If media exceeds `maxBytes`, that model is skipped and the **next model is tried**.
 - If the model returns more than `maxChars`, output is trimmed.
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
-- If `<capability>.enabled: true` but no models are configured, OpenClaw tries the
+- If `<capability>.enabled: true` but no models are configured, EasyHub tries the
   **active reply model** when its provider supports the capability.
 
 ### Auto-detect media understanding (default)
 
 If `tools.media.<capability>.enabled` is **not** set to `false` and you haven’t
-configured models, OpenClaw auto-detects in this order and **stops at the first
+configured models, EasyHub auto-detects in this order and **stops at the first
 working option**:
 
 1. **Local CLIs** (audio only; if installed)
@@ -163,7 +163,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 ## Capabilities (optional)
 
 If you set `capabilities`, the entry only runs for those media types. For shared
-lists, OpenClaw can infer defaults:
+lists, EasyHub can infer defaults:
 
 - `openai`, `anthropic`, `minimax`: **image**
 - `google` (Gemini API): **image + audio + video**
@@ -173,7 +173,7 @@ lists, OpenClaw can infer defaults:
 For CLI entries, **set `capabilities` explicitly** to avoid surprising matches.
 If you omit `capabilities`, the entry is eligible for the list it appears in.
 
-## Provider support matrix (OpenClaw integrations)
+## Provider support matrix (EasyHub integrations)
 
 | Capability | Provider integration                             | Notes                                             |
 | ---------- | ------------------------------------------------ | ------------------------------------------------- |

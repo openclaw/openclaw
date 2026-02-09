@@ -1,8 +1,8 @@
 ---
 read_when:
   - 添加或修改智能体工具
-  - 停用或更改 `openclaw-*` Skills
-summary: OpenClaw 的智能体工具接口（browser、canvas、nodes、message、cron），替代旧版 `openclaw-*` Skills
+  - 停用或更改 `EasyHub-*` Skills
+summary: EasyHub 的智能体工具接口（browser、canvas、nodes、message、cron），替代旧版 `EasyHub-*` Skills
 title: 工具
 x-i18n:
   generated_at: "2026-02-03T10:12:41Z"
@@ -13,15 +13,15 @@ x-i18n:
   workflow: 15
 ---
 
-# 工具（OpenClaw）
+# 工具（EasyHub）
 
-OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具**。
-这些工具取代了旧的 `openclaw-*` Skills：工具是类型化的，无需调用 shell，
+EasyHub 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具**。
+这些工具取代了旧的 `EasyHub-*` Skills：工具是类型化的，无需调用 shell，
 智能体应该直接依赖它们。
 
 ## 禁用工具
 
-你可以通过 `openclaw.json` 中的 `tools.allow` / `tools.deny` 全局允许/拒绝工具
+你可以通过 `easyhub.json` 中的 `tools.allow` / `tools.deny` 全局允许/拒绝工具
 （deny 优先）。这会阻止不允许的工具被发送到模型提供商。
 
 ```json5
@@ -34,7 +34,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 
 - 匹配不区分大小写。
 - 支持 `*` 通配符（`"*"` 表示所有工具）。
-- 如果 `tools.allow` 仅引用未知或未加载的插件工具名称，OpenClaw 会记录警告并忽略允许列表，以确保核心工具保持可用。
+- 如果 `tools.allow` 仅引用未知或未加载的插件工具名称，EasyHub 会记录警告并忽略允许列表，以确保核心工具保持可用。
 
 ## 工具配置文件（基础允许列表）
 
@@ -158,7 +158,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 - `group:automation`：`cron`、`gateway`
 - `group:messaging`：`message`
 - `group:nodes`：`nodes`
-- `group:openclaw`：所有内置 OpenClaw 工具（不包括提供商插件）
+- `group:EasyHub`：所有内置 EasyHub 工具（不包括提供商插件）
 
 示例（仅允许文件工具 + browser）：
 
@@ -213,7 +213,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 - 如果不允许 `process`，`exec` 会同步运行并忽略 `yieldMs`/`background`。
 - `elevated` 受 `tools.elevated` 加上任何 `agents.list[].tools.elevated` 覆盖的门控（两者都必须允许），是 `host=gateway` + `security=full` 的别名。
 - `elevated` 仅在智能体被沙箱隔离时改变行为（否则是空操作）。
-- `host=node` 可以针对 macOS 配套应用或无头节点主机（`openclaw node run`）。
+- `host=node` 可以针对 macOS 配套应用或无头节点主机（`EasyHub node run`）。
 - Gateway 网关/节点审批和允许列表：[执行审批](/tools/exec-approvals)。
 
 ### `process`
@@ -241,7 +241,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 
 注意：
 
-- 需要 Brave API 密钥（推荐：`openclaw configure --section web`，或设置 `BRAVE_API_KEY`）。
+- 需要 Brave API 密钥（推荐：`EasyHub configure --section web`，或设置 `BRAVE_API_KEY`）。
 - 通过 `tools.web.search.enabled` 启用。
 - 响应被缓存（默认 15 分钟）。
 - 参见 [Web 工具](/tools/web) 了解设置。
@@ -266,7 +266,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 
 ### `browser`
 
-控制专用的 OpenClaw 管理的浏览器。
+控制专用的 EasyHub 管理的浏览器。
 
 核心操作：
 
@@ -318,7 +318,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 - 底层使用 Gateway 网关 `node.invoke`。
 - 如果未提供 `node`，工具会选择默认值（单个连接的节点或本地 mac 节点）。
 - A2UI 仅限 v0.8（无 `createSurface`）；CLI 会拒绝 v0.9 JSONL 并显示行错误。
-- 快速冒烟测试：`openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"`。
+- 快速冒烟测试：`EasyHub nodes canvas a2ui push --node <id> --text "Hello from A2UI"`。
 
 ### `nodes`
 
@@ -420,7 +420,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 
 核心操作：
 
-- `restart`（授权 + 发送 `SIGUSR1` 进行进程内重启；`openclaw gateway` 就地重启）
+- `restart`（授权 + 发送 `SIGUSR1` 进行进程内重启；`EasyHub gateway` 就地重启）
 - `config.get` / `config.schema`
 - `config.apply`（验证 + 写入配置 + 重启 + 唤醒）
 - `config.patch`（合并部分更新 + 重启 + 唤醒）

@@ -9,7 +9,7 @@ import type { GatewayRequestContext } from "./types.js";
 // so they are attached to the current leaf with a `parentId` and do not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
   it("appends a Pi session entry that includes parentId", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-inject-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-chat-inject-"));
     const transcriptPath = path.join(dir, "sess.jsonl");
 
     // Minimal Pi session header so SessionManager can open/append safely.

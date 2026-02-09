@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import OpenClaw
+@testable import EasyHub
 
 @Suite struct VoiceWakeOverlayTests {
     @Test func guardTokenDropsWhenNoActive() {

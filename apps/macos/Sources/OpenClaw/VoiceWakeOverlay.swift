@@ -8,10 +8,10 @@ import SwiftUI
 final class VoiceWakeOverlayController {
     static let shared = VoiceWakeOverlayController()
 
-    let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.overlay")
+    let logger = Logger(subsystem: "ai.easyhub", category: "voicewake.overlay")
     let enableUI: Bool
 
-    /// Keep the voice wake overlay above any other OpenClaw windows, but below the system’s pop-up menus.
+    /// Keep the voice wake overlay above any other EasyHub windows, but below the system’s pop-up menus.
     /// (Menu bar menus typically live at `.popUpMenu`.)
     static let preferredWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 4)
 

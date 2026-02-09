@@ -14,7 +14,7 @@ x-i18n:
 
 # 渠道与路由
 
-OpenClaw 将回复**路由回消息来源的渠道**。模型不会选择渠道；路由是确定性的，由主机配置控制。
+EasyHub 将回复**路由回消息来源的渠道**。模型不会选择渠道；路由是确定性的，由主机配置控制。
 
 ## 关键术语
 
@@ -59,7 +59,7 @@ OpenClaw 将回复**路由回消息来源的渠道**。模型不会选择渠道�
 
 ## 广播组（运行多个智能体）
 
-广播组允许你为同一对端运行**多个智能体**，**在 OpenClaw 正常回复时**触发（例如：在 WhatsApp 群组中，经过提及/激活门控之后）。
+广播组允许你为同一对端运行**多个智能体**，**在 EasyHub 正常回复时**触发（例如：在 WhatsApp 群组中，经过提及/激活门控之后）。
 
 配置：
 
@@ -85,7 +85,7 @@ OpenClaw 将回复**路由回消息来源的渠道**。模型不会选择渠道�
 ```json5
 {
   agents: {
-    list: [{ id: "support", name: "Support", workspace: "~/.openclaw/workspace-support" }],
+    list: [{ id: "support", name: "Support", workspace: "~/.easyhub/workspace-support" }],
   },
   bindings: [
     { match: { channel: "slack", teamId: "T123" }, agentId: "support" },
@@ -96,9 +96,9 @@ OpenClaw 将回复**路由回消息来源的渠道**。模型不会选择渠道�
 
 ## 会话存储
 
-会话存储位于状态目录下（默认 `~/.openclaw`）：
+会话存储位于状态目录下（默认 `~/.easyhub`）：
 
-- `~/.openclaw/agents/<agentId>/sessions/sessions.json`
+- `~/.easyhub/agents/<agentId>/sessions/sessions.json`
 - JSONL 记录文件与存储位于同一目录
 
 你可以通过 `session.store` 和 `{agentId}` 模板来覆盖存储路径。

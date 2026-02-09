@@ -2,7 +2,7 @@
 read_when:
   - 你想对配置/状态运行快速安全审计
   - 你想应用安全的"修复"建议（chmod、收紧默认值）
-summary: "`openclaw security` 的 CLI 参考（审计和修复常见安全隐患）"
+summary: "`EasyHub security` 的 CLI 参考（审计和修复常见安全隐患）"
 title: security
 x-i18n:
   generated_at: "2026-02-03T07:45:13Z"
@@ -13,7 +13,7 @@ x-i18n:
   workflow: 15
 ---
 
-# `openclaw security`
+# `EasyHub security`
 
 安全工具（审计 + 可选修复）。
 
@@ -24,9 +24,9 @@ x-i18n:
 ## 审计
 
 ```bash
-openclaw security audit
-openclaw security audit --deep
-openclaw security audit --fix
+EasyHub security audit
+EasyHub security audit --deep
+EasyHub security audit --fix
 ```
 
 当多个私信发送者共享主会话时，审计会发出警告，并建议对共享收件箱使用 `session.dmScope="per-channel-peer"`（或多账户渠道使用 `per-account-channel-peer`）。

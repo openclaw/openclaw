@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 
 enum AgentWorkspace {
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "workspace")
+    private static let logger = Logger(subsystem: "ai.easyhub", category: "workspace")
     static let agentsFilename = "AGENTS.md"
     static let soulFilename = "SOUL.md"
     static let identityFilename = "IDENTITY.md"
@@ -34,7 +34,7 @@ enum AgentWorkspace {
 
     static func resolveWorkspaceURL(from userInput: String?) -> URL {
         let trimmed = userInput?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmed.isEmpty { return OpenClawConfigFile.defaultWorkspaceURL() }
+        if trimmed.isEmpty { return EasyHubConfigFile.defaultWorkspaceURL() }
         let expanded = (trimmed as NSString).expandingTildeInPath
         return URL(fileURLWithPath: expanded, isDirectory: true)
     }
@@ -154,7 +154,7 @@ enum AgentWorkspace {
 
     static func defaultTemplate() -> String {
         let fallback = """
-        # AGENTS.md - OpenClaw Workspace
+        # AGENTS.md - EasyHub Workspace
 
         This folder is the assistant's working directory.
 
@@ -265,7 +265,7 @@ enum AgentWorkspace {
         - Timezone (optional)
         - Notes
 
-        3) ~/.openclaw/openclaw.json
+        3) ~/.easyhub/easyhub.json
         Set identity.name, identity.theme, identity.emoji to match IDENTITY.md.
 
         ## Cleanup

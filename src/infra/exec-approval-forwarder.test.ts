@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 
 const baseRequest = {
@@ -30,7 +30,7 @@ describe("exec approval forwarder", () => {
     const deliver = vi.fn().mockResolvedValue([]);
     const cfg = {
       approvals: { exec: { enabled: true, mode: "session" } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const forwarder = createExecApprovalForwarder({
       getConfig: () => cfg,
@@ -65,7 +65,7 @@ describe("exec approval forwarder", () => {
           targets: [{ channel: "telegram", to: "123" }],
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const forwarder = createExecApprovalForwarder({
       getConfig: () => cfg,
@@ -92,7 +92,7 @@ describe("exec approval forwarder", () => {
           targets: [{ channel: "telegram", to: "123" }],
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const forwarder = createExecApprovalForwarder({
       getConfig: () => cfg,
@@ -117,7 +117,7 @@ describe("exec approval forwarder", () => {
           targets: [{ channel: "telegram", to: "123" }],
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const forwarder = createExecApprovalForwarder({
       getConfig: () => cfg,
@@ -148,7 +148,7 @@ describe("exec approval forwarder", () => {
           targets: [{ channel: "telegram", to: "123" }],
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
 
     const forwarder = createExecApprovalForwarder({
       getConfig: () => cfg,

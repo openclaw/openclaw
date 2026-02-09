@@ -1,4 +1,4 @@
-import OpenClawProtocol
+import EasyHubProtocol
 import Foundation
 
 struct SkillsStatusReport: Codable {

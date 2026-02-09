@@ -2,7 +2,7 @@
 read_when:
   - 添加或修改插件/扩展
   - 记录插件安装或加载规则
-summary: OpenClaw 插件/扩展：发现、配置和安全
+summary: EasyHub 插件/扩展：发现、配置和安全
 title: 插件
 x-i18n:
   generated_at: "2026-02-03T07:55:25Z"
@@ -17,22 +17,22 @@ x-i18n:
 
 ## 快速开始（插件新手？）
 
-插件只是一个**小型代码模块**，用额外功能（命令、工具和 Gateway 网关 RPC）扩展 OpenClaw。
+插件只是一个**小型代码模块**，用额外功能（命令、工具和 Gateway 网关 RPC）扩展 EasyHub。
 
-大多数时候，当你想要一个尚未内置到核心 OpenClaw 的功能（或你想将可选功能排除在主安装之外）时，你会使用插件。
+大多数时候，当你想要一个尚未内置到核心 EasyHub 的功能（或你想将可选功能排除在主安装之外）时，你会使用插件。
 
 快速路径：
 
 1. 查看已加载的内容：
 
 ```bash
-openclaw plugins list
+EasyHub plugins list
 ```
 
 2. 安装官方插件（例如：Voice Call）：
 
 ```bash
-openclaw plugins install @openclaw/voice-call
+EasyHub plugins install @easyhub/voice-call
 ```
 
 3. 重启 Gateway 网关，然后在 `plugins.entries.<id>.config` 下配置。
@@ -41,21 +41,21 @@ openclaw plugins install @openclaw/voice-call
 
 ## 可用插件（官方）
 
-- 从 2026.1.15 起 Microsoft Teams 仅作为插件提供；如果使用 Teams，请安装 `@openclaw/msteams`。
+- 从 2026.1.15 起 Microsoft Teams 仅作为插件提供；如果使用 Teams，请安装 `@easyhub/msteams`。
 - Memory (Core) — 捆绑的记忆搜索插件（通过 `plugins.slots.memory` 默认启用）
 - Memory (LanceDB) — 捆绑的长期记忆插件（自动召回/捕获；设置 `plugins.slots.memory = "memory-lancedb"`）
-- [Voice Call](/plugins/voice-call) — `@openclaw/voice-call`
-- [Zalo Personal](/plugins/zalouser) — `@openclaw/zalouser`
-- [Matrix](/channels/matrix) — `@openclaw/matrix`
-- [Nostr](/channels/nostr) — `@openclaw/nostr`
-- [Zalo](/channels/zalo) — `@openclaw/zalo`
-- [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
+- [Voice Call](/plugins/voice-call) — `@easyhub/voice-call`
+- [Zalo Personal](/plugins/zalouser) — `@easyhub/zalouser`
+- [Matrix](/channels/matrix) — `@easyhub/matrix`
+- [Nostr](/channels/nostr) — `@easyhub/nostr`
+- [Zalo](/channels/zalo) — `@easyhub/zalo`
+- [Microsoft Teams](/channels/msteams) — `@easyhub/msteams`
 - Google Antigravity OAuth（提供商认证）— 作为 `google-antigravity-auth` 捆绑（默认禁用）
 - Gemini CLI OAuth（提供商认证）— 作为 `google-gemini-cli-auth` 捆绑（默认禁用）
 - Qwen OAuth（提供商认证）— 作为 `qwen-portal-auth` 捆绑（默认禁用）
 - Copilot Proxy（提供商认证）— 本地 VS Code Copilot Proxy 桥接；与内置 `github-copilot` 设备登录不同（捆绑，默认禁用）
 
-OpenClaw 插件是通过 jiti 在运行时加载的 **TypeScript 模块**。**配置验证不会执行插件代码**；它使用插件清单和 JSON Schema。参见 [插件清单](/plugins/manifest)。
+EasyHub 插件是通过 jiti 在运行时加载的 **TypeScript 模块**。**配置验证不会执行插件代码**；它使用插件清单和 JSON Schema。参见 [插件清单](/plugins/manifest)。
 
 插件可以注册：
 
@@ -77,7 +77,7 @@ OpenClaw 插件是通过 jiti 在运行时加载的 **TypeScript 模块**。**�
 
 ```ts
 const result = await api.runtime.tts.textToSpeechTelephony({
-  text: "Hello from OpenClaw",
+  text: "Hello from EasyHub",
   cfg: api.config,
 });
 ```
@@ -90,7 +90,7 @@ const result = await api.runtime.tts.textToSpeechTelephony({
 
 ## 发现和优先级
 
-OpenClaw 按顺序扫描：
+EasyHub 按顺序扫描：
 
 1. 配置路径
 
@@ -98,32 +98,32 @@ OpenClaw 按顺序扫描：
 
 2. 工作区扩展
 
-- `<workspace>/.openclaw/extensions/*.ts`
-- `<workspace>/.openclaw/extensions/*/index.ts`
+- `<workspace>/.easyhub/extensions/*.ts`
+- `<workspace>/.easyhub/extensions/*/index.ts`
 
 3. 全局扩展
 
-- `~/.openclaw/extensions/*.ts`
-- `~/.openclaw/extensions/*/index.ts`
+- `~/.easyhub/extensions/*.ts`
+- `~/.easyhub/extensions/*/index.ts`
 
-4. 捆绑扩展（随 OpenClaw 一起发布，**默认禁用**）
+4. 捆绑扩展（随 EasyHub 一起发布，**默认禁用**）
 
-- `<openclaw>/extensions/*`
+- `<EasyHub>/extensions/*`
 
-捆绑插件必须通过 `plugins.entries.<id>.enabled` 或 `openclaw plugins enable <id>` 显式启用。已安装的插件默认启用，但可以用相同方式禁用。
+捆绑插件必须通过 `plugins.entries.<id>.enabled` 或 `EasyHub plugins enable <id>` 显式启用。已安装的插件默认启用，但可以用相同方式禁用。
 
-每个插件必须在其根目录中包含 `openclaw.plugin.json` 文件。如果路径指向文件，则插件根目录是文件的目录，必须包含清单。
+每个插件必须在其根目录中包含 `EasyHub.plugin.json` 文件。如果路径指向文件，则插件根目录是文件的目录，必须包含清单。
 
 如果多个插件解析到相同的 id，上述顺序中的第一个匹配项获胜，较低优先级的副本被忽略。
 
 ### 包集合
 
-插件目录可以包含带有 `openclaw.extensions` 的 `package.json`：
+插件目录可以包含带有 `EasyHub.extensions` 的 `package.json`：
 
 ```json
 {
   "name": "my-pack",
-  "openclaw": {
+  "EasyHub": {
     "extensions": ["./src/safety.ts", "./src/tools.ts"]
   }
 }
@@ -135,14 +135,14 @@ OpenClaw 按顺序扫描：
 
 ### 渠道目录元数据
 
-渠道插件可以通过 `openclaw.channel` 广播新手引导元数据，通过 `openclaw.install` 广播安装提示。这使核心目录保持无数据。
+渠道插件可以通过 `EasyHub.channel` 广播新手引导元数据，通过 `EasyHub.install` 广播安装提示。这使核心目录保持无数据。
 
 示例：
 
 ```json
 {
-  "name": "@openclaw/nextcloud-talk",
-  "openclaw": {
+  "name": "@easyhub/nextcloud-talk",
+  "EasyHub": {
     "extensions": ["./index.ts"],
     "channel": {
       "id": "nextcloud-talk",
@@ -155,7 +155,7 @@ OpenClaw 按顺序扫描：
       "aliases": ["nc-talk", "nc"]
     },
     "install": {
-      "npmSpec": "@openclaw/nextcloud-talk",
+      "npmSpec": "@easyhub/nextcloud-talk",
       "localPath": "extensions/nextcloud-talk",
       "defaultChoice": "npm"
     }
@@ -163,13 +163,13 @@ OpenClaw 按顺序扫描：
 }
 ```
 
-OpenClaw 还可以合并**外部渠道目录**（例如，MPM 注册表导出）。将 JSON 文件放在以下位置之一：
+EasyHub 还可以合并**外部渠道目录**（例如，MPM 注册表导出）。将 JSON 文件放在以下位置之一：
 
-- `~/.openclaw/mpm/plugins.json`
-- `~/.openclaw/mpm/catalog.json`
-- `~/.openclaw/plugins/catalog.json`
+- `~/.easyhub/mpm/plugins.json`
+- `~/.easyhub/mpm/catalog.json`
+- `~/.easyhub/plugins/catalog.json`
 
-或将 `OPENCLAW_PLUGIN_CATALOG_PATHS`（或 `OPENCLAW_MPM_CATALOG_PATHS`）指向一个或多个 JSON 文件（逗号/分号/`PATH` 分隔）。每个文件应包含 `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`。
+或将 `EASYHUB_PLUGIN_CATALOG_PATHS`（或 `EASYHUB_MPM_CATALOG_PATHS`）指向一个或多个 JSON 文件（逗号/分号/`PATH` 分隔）。每个文件应包含 `{ "entries": [ { "name": "@scope/pkg", "EasyHub": { "channel": {...}, "install": {...} } } ] }`。
 
 ## 插件 ID
 
@@ -178,7 +178,7 @@ OpenClaw 还可以合并**外部渠道目录**（例如，MPM 注册表导出）
 - 包集合：`package.json` 的 `name`
 - 独立文件：文件基本名称（`~/.../voice-call.ts` → `voice-call`）
 
-如果插件导出 `id`，OpenClaw 会使用它，但当它与配置的 id 不匹配时会发出警告。
+如果插件导出 `id`，EasyHub 会使用它，但当它与配置的 id 不匹配时会发出警告。
 
 ## 配置
 
@@ -210,7 +210,7 @@ OpenClaw 还可以合并**外部渠道目录**（例如，MPM 注册表导出）
 
 - `entries`、`allow`、`deny` 或 `slots` 中的未知插件 id 是**错误**。
 - 未知的 `channels.<id>` 键是**错误**，除非插件清单声明了渠道 id。
-- 插件配置使用嵌入在 `openclaw.plugin.json`（`configSchema`）中的 JSON Schema 进行验证。
+- 插件配置使用嵌入在 `EasyHub.plugin.json`（`configSchema`）中的 JSON Schema 进行验证。
 - 如果插件被禁用，其配置会保留并发出**警告**。
 
 ## 插件槽位（独占类别）
@@ -233,7 +233,7 @@ OpenClaw 还可以合并**外部渠道目录**（例如，MPM 注册表导出）
 
 控制界面使用 `config.schema`（JSON Schema + `uiHints`）来渲染更好的表单。
 
-OpenClaw 在运行时根据发现的插件增强 `uiHints`：
+EasyHub 在运行时根据发现的插件增强 `uiHints`：
 
 - 为 `plugins.entries.<id>` / `.enabled` / `.config` 添加每插件标签
 - 在以下位置合并可选的插件提供的配置字段提示：
@@ -264,24 +264,24 @@ OpenClaw 在运行时根据发现的插件增强 `uiHints`：
 ## CLI
 
 ```bash
-openclaw plugins list
-openclaw plugins info <id>
-openclaw plugins install <path>                 # copy a local file/dir into ~/.openclaw/extensions/<id>
-openclaw plugins install ./extensions/voice-call # relative path ok
-openclaw plugins install ./plugin.tgz           # install from a local tarball
-openclaw plugins install ./plugin.zip           # install from a local zip
-openclaw plugins install -l ./extensions/voice-call # link (no copy) for dev
-openclaw plugins install @openclaw/voice-call # install from npm
-openclaw plugins update <id>
-openclaw plugins update --all
-openclaw plugins enable <id>
-openclaw plugins disable <id>
-openclaw plugins doctor
+EasyHub plugins list
+EasyHub plugins info <id>
+EasyHub plugins install <path>                 # copy a local file/dir into ~/.easyhub/extensions/<id>
+EasyHub plugins install ./extensions/voice-call # relative path ok
+EasyHub plugins install ./plugin.tgz           # install from a local tarball
+EasyHub plugins install ./plugin.zip           # install from a local zip
+EasyHub plugins install -l ./extensions/voice-call # link (no copy) for dev
+EasyHub plugins install @easyhub/voice-call # install from npm
+EasyHub plugins update <id>
+EasyHub plugins update --all
+EasyHub plugins enable <id>
+EasyHub plugins disable <id>
+EasyHub plugins doctor
 ```
 
 `plugins update` 仅适用于在 `plugins.installs` 下跟踪的 npm 安装。
 
-插件也可以注册自己的顶级命令（例如：`openclaw voicecall`）。
+插件也可以注册自己的顶级命令（例如：`EasyHub voicecall`）。
 
 ## 插件 API（概述）
 
@@ -297,7 +297,7 @@ openclaw plugins doctor
 ### 示例
 
 ```
-import { registerPluginHooksFromDir } from "openclaw/plugin-sdk";
+import { registerPluginHooksFromDir } from "EasyHub/plugin-sdk";
 
 export default function register(api) {
   registerPluginHooksFromDir(api, "./hooks");
@@ -308,16 +308,16 @@ export default function register(api) {
 
 - 钩子目录遵循正常的钩子结构（`HOOK.md` + `handler.ts`）。
 - 钩子资格规则仍然适用（操作系统/二进制文件/环境/配置要求）。
-- 插件管理的钩子在 `openclaw hooks list` 中显示为 `plugin:<id>`。
-- 你不能通过 `openclaw hooks` 启用/禁用插件管理的钩子；而是启用/禁用插件。
+- 插件管理的钩子在 `EasyHub hooks list` 中显示为 `plugin:<id>`。
+- 你不能通过 `EasyHub hooks` 启用/禁用插件管理的钩子；而是启用/禁用插件。
 
 ## 提供商插件（模型认证）
 
-插件可以注册**模型提供商认证**流程，以便用户可以在 OpenClaw 内运行 OAuth 或 API 密钥设置（无需外部脚本）。
+插件可以注册**模型提供商认证**流程，以便用户可以在 EasyHub 内运行 OAuth 或 API 密钥设置（无需外部脚本）。
 
 通过 `api.registerProvider(...)` 注册提供商。每个提供商暴露一个或多个认证方法（OAuth、API 密钥、设备码等）。这些方法驱动：
 
-- `openclaw models auth login --provider <id> [--method <id>]`
+- `EasyHub models auth login --provider <id> [--method <id>]`
 
 示例：
 
@@ -537,7 +537,7 @@ export default function (api) {
 - `isAuthorizedSender`：发送者是否是授权用户
 - `args`：命令后传递的参数（如果 `acceptsArgs: true`）
 - `commandBody`：完整的命令文本
-- `config`：当前 OpenClaw 配置
+- `config`：当前 EasyHub 配置
 
 命令选项：
 
@@ -599,14 +599,14 @@ export default function (api) {
 
 推荐的打包方式：
 
-- 主包：`openclaw`（本仓库）
-- 插件：`@openclaw/*` 下的独立 npm 包（例如：`@openclaw/voice-call`）
+- 主包：`EasyHub`（本仓库）
+- 插件：`@easyhub/*` 下的独立 npm 包（例如：`@easyhub/voice-call`）
 
 发布契约：
 
-- 插件 `package.json` 必须包含带有一个或多个入口文件的 `openclaw.extensions`。
+- 插件 `package.json` 必须包含带有一个或多个入口文件的 `EasyHub.extensions`。
 - 入口文件可以是 `.js` 或 `.ts`（jiti 在运行时加载 TS）。
-- `openclaw plugins install <npm-spec>` 使用 `npm pack`，提取到 `~/.openclaw/extensions/<id>/`，并在配置中启用它。
+- `EasyHub plugins install <npm-spec>` 使用 `npm pack`，提取到 `~/.easyhub/extensions/<id>/`，并在配置中启用它。
 - 配置键稳定性：作用域包被规范化为 `plugins.entries.*` 的**无作用域** id。
 
 ## 示例插件：Voice Call
@@ -615,7 +615,7 @@ export default function (api) {
 
 - 源码：`extensions/voice-call`
 - Skills：`skills/voice-call`
-- CLI：`openclaw voicecall start|status`
+- CLI：`EasyHub voicecall start|status`
 - 工具：`voice_call`
 - RPC：`voicecall.start`、`voicecall.status`
 - 配置（twilio）：`provider: "twilio"` + `twilio.accountSid/authToken/from`（可选 `statusCallbackUrl`、`twimlUrl`）
@@ -636,4 +636,4 @@ export default function (api) {
 插件可以（也应该）附带测试：
 
 - 仓库内插件可以在 `src/**` 下保留 Vitest 测试（例如：`src/plugins/voice-call.plugin.test.ts`）。
-- 单独发布的插件应运行自己的 CI（lint/构建/测试）并验证 `openclaw.extensions` 指向构建的入口点（`dist/index.js`）。
+- 单独发布的插件应运行自己的 CI（lint/构建/测试）并验证 `EasyHub.extensions` 指向构建的入口点（`dist/index.js`）。

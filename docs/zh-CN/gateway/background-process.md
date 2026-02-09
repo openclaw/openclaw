@@ -15,7 +15,7 @@ x-i18n:
 
 # 后台 Exec + Process 工具
 
-OpenClaw 通过 `exec` 工具运行 shell 命令，并将长时间运行的任务保存在内存中。`process` 工具管理这些后台会话。
+EasyHub 通过 `exec` 工具运行 shell 命令，并将长时间运行的任务保存在内存中。`process` 工具管理这些后台会话。
 
 ## exec 工具
 
@@ -44,7 +44,7 @@ OpenClaw 通过 `exec` 工具运行 shell 命令，并将长时间运行的任�
 
 - `PI_BASH_YIELD_MS`：默认 yield 时间（毫秒）
 - `PI_BASH_MAX_OUTPUT_CHARS`：内存输出上限（字符）
-- `OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS`：每个流的待处理 stdout/stderr 上限（字符）
+- `EASYHUB_BASH_PENDING_MAX_OUTPUT_CHARS`：每个流的待处理 stdout/stderr 上限（字符）
 - `PI_BASH_JOB_TTL_MS`：已完成会话的 TTL（毫秒，限制在 1 分钟至 3 小时之间）
 
 配置（推荐）：

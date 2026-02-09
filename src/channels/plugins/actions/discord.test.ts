@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { EasyHubConfig } from "../../../config/config.js";
 type SendMessageDiscord = typeof import("../../../discord/send.js").sendMessageDiscord;
 type SendPollDiscord = typeof import("../../../discord/send.js").sendPollDiscord;
 
@@ -33,7 +33,7 @@ const loadDiscordMessageActions = async () => {
 
 describe("discord message actions", () => {
   it("lists channel and upload actions by default", async () => {
-    const cfg = { channels: { discord: { token: "d0" } } } as OpenClawConfig;
+    const cfg = { channels: { discord: { token: "d0" } } } as EasyHubConfig;
     const discordMessageActions = await loadDiscordMessageActions();
     const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
 
@@ -45,7 +45,7 @@ describe("discord message actions", () => {
   it("respects disabled channel actions", async () => {
     const cfg = {
       channels: { discord: { token: "d0", actions: { channels: false } } },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const discordMessageActions = await loadDiscordMessageActions();
     const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
 
@@ -64,7 +64,7 @@ describe("handleDiscordMessageAction", () => {
         to: "channel:123",
         message: "hi",
       },
-      cfg: {} as OpenClawConfig,
+      cfg: {} as EasyHubConfig,
       accountId: "ops",
     });
 
@@ -89,7 +89,7 @@ describe("handleDiscordMessageAction", () => {
         pollOption: ["Yes", "No"],
         accountId: "marve",
       },
-      cfg: {} as OpenClawConfig,
+      cfg: {} as EasyHubConfig,
     });
 
     expect(sendPollDiscord).toHaveBeenCalledWith(
@@ -114,7 +114,7 @@ describe("handleDiscordMessageAction", () => {
         channelId: "123",
         message: "hi",
       },
-      cfg: {} as OpenClawConfig,
+      cfg: {} as EasyHubConfig,
       accountId: "ops",
     });
 
@@ -140,7 +140,7 @@ describe("handleDiscordMessageAction", () => {
         channelId: "123",
         message: "hi",
       },
-      cfg: {} as OpenClawConfig,
+      cfg: {} as EasyHubConfig,
       accountId: "ops",
     });
 

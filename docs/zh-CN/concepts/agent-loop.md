@@ -12,11 +12,11 @@ x-i18n:
   workflow: 15
 ---
 
-# 智能体循环（OpenClaw）
+# 智能体循环（EasyHub）
 
 智能体循环是智能体的完整"真实"运行：接收 → 上下文组装 → 模型推理 → 工具执行 → 流式回复 → 持久化。这是将消息转化为操作和最终回复的权威路径，同时保持会话状态的一致性。
 
-在 OpenClaw 中，循环是每个会话的单次序列化运行，在模型思考、调用工具和流式输出时发出生命周期和流事件。本文档解释了这个真实循环是如何端到端连接的。
+在 EasyHub 中，循环是每个会话的单次序列化运行，在模型思考、调用工具和流式输出时发出生命周期和流事件。本文档解释了这个真实循环是如何端到端连接的。
 
 ## 入口点
 
@@ -37,7 +37,7 @@ x-i18n:
    - 订阅 pi 事件并流式传输助手/工具增量
    - 强制执行超时 -> 超时则中止运行
    - 返回有效负载 + 使用元数据
-4. `subscribeEmbeddedPiSession` 将 pi-agent-core 事件桥接到 OpenClaw `agent` 流：
+4. `subscribeEmbeddedPiSession` 将 pi-agent-core 事件桥接到 EasyHub `agent` 流：
    - 工具事件 => `stream: "tool"`
    - 助手增量 => `stream: "assistant"`
    - 生命周期事件 => `stream: "lifecycle"`（`phase: "start" | "end" | "error"`）
@@ -60,13 +60,13 @@ x-i18n:
 
 ## 提示组装 + 系统提示
 
-- 系统提示由 OpenClaw 的基础提示、Skills 提示、引导上下文和每次运行的覆盖构建。
+- 系统提示由 EasyHub 的基础提示、Skills 提示、引导上下文和每次运行的覆盖构建。
 - 强制执行模型特定的限制和压缩保留令牌。
 - 参见[系统提示](/concepts/system-prompt)了解模型看到的内容。
 
 ## 钩子点（可以拦截的位置）
 
-OpenClaw 有两个钩子系统：
+EasyHub 有两个钩子系统：
 
 - **内部钩子**（Gateway 网关钩子）：用于命令和生命周期事件的事件驱动脚本。
 - **插件钩子**：智能体/工具生命周期和 Gateway 网关管道中的扩展点。

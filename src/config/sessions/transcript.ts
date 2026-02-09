@@ -113,7 +113,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     role: "assistant",
     content: [{ type: "text", text: mirrorText }],
     api: "openai-responses",
-    provider: "openclaw",
+    provider: "EasyHub",
     model: "delivery-mirror",
     usage: {
       input: 0,

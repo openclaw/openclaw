@@ -2,7 +2,7 @@
 read_when:
   - 设置 Mattermost
   - 调试 Mattermost 路由
-summary: Mattermost 机器人设置和 OpenClaw 配置
+summary: Mattermost 机器人设置和 EasyHub 配置
 title: Mattermost
 x-i18n:
   generated_at: "2026-02-03T07:43:43Z"
@@ -26,16 +26,16 @@ Mattermost 以插件形式提供，不包含在核心安装中。
 通过 CLI 安装（npm 注册表）：
 
 ```bash
-openclaw plugins install @openclaw/mattermost
+EasyHub plugins install @easyhub/mattermost
 ```
 
 本地检出（从 git 仓库运行时）：
 
 ```bash
-openclaw plugins install ./extensions/mattermost
+EasyHub plugins install ./extensions/mattermost
 ```
 
-如果你在配置/新手引导期间选择 Mattermost 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
+如果你在配置/新手引导期间选择 Mattermost 并检测到 git 检出，EasyHub 会自动提供本地安装路径。
 
 详情：[插件](/tools/plugin)
 
@@ -44,7 +44,7 @@ openclaw plugins install ./extensions/mattermost
 1. 安装 Mattermost 插件。
 2. 创建 Mattermost bot 账户并复制 **bot token**。
 3. 复制 Mattermost **基础 URL**（例如 `https://chat.example.com`）。
-4. 配置 OpenClaw 并启动 Gateway 网关。
+4. 配置 EasyHub 并启动 Gateway 网关。
 
 最小配置：
 
@@ -100,8 +100,8 @@ Mattermost 自动响应私信。频道行为由 `chatmode` 控制：
 
 - 默认：`channels.mattermost.dmPolicy = "pairing"`（未知发送者会收到配对码）。
 - 通过以下方式批准：
-  - `openclaw pairing list mattermost`
-  - `openclaw pairing approve mattermost <CODE>`
+  - `EasyHub pairing list mattermost`
+  - `EasyHub pairing approve mattermost <CODE>`
 - 公开私信：`channels.mattermost.dmPolicy="open"` 加上 `channels.mattermost.allowFrom=["*"]`。
 
 ## 频道（群组）
@@ -112,7 +112,7 @@ Mattermost 自动响应私信。频道行为由 `chatmode` 控制：
 
 ## 出站投递目标
 
-在 `openclaw message send` 或 cron/webhooks 中使用这些目标格式：
+在 `EasyHub message send` 或 cron/webhooks 中使用这些目标格式：
 
 - `channel:<id>` 用于频道
 - `user:<id>` 用于私信

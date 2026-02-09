@@ -1,6 +1,6 @@
 import Contacts
 import Foundation
-import OpenClawKit
+import EasyHubKit
 
 final class ContactsService: ContactsServicing {
     private static var payloadKeys: [CNKeyDescriptor] {
@@ -14,7 +14,7 @@ final class ContactsService: ContactsServicing {
         ]
     }
 
-    func search(params: OpenClawContactsSearchParams) async throws -> OpenClawContactsSearchPayload {
+    func search(params: EasyHubContactsSearchParams) async throws -> EasyHubContactsSearchPayload {
         let store = CNContactStore()
         let status = CNContactStore.authorizationStatus(for: .contacts)
         let authorized = await Self.ensureAuthorization(store: store, status: status)
@@ -43,10 +43,10 @@ final class ContactsService: ContactsServicing {
         let sliced = Array(contacts.prefix(limit))
         let payload = sliced.map { Self.payload(from: $0) }
 
-        return OpenClawContactsSearchPayload(contacts: payload)
+        return EasyHubContactsSearchPayload(contacts: payload)
     }
 
-    func add(params: OpenClawContactsAddParams) async throws -> OpenClawContactsAddPayload {
+    func add(params: EasyHubContactsAddParams) async throws -> EasyHubContactsAddPayload {
         let store = CNContactStore()
         let status = CNContactStore.authorizationStatus(for: .contacts)
         let authorized = await Self.ensureAuthorization(store: store, status: status)
@@ -78,7 +78,7 @@ final class ContactsService: ContactsServicing {
                 phoneNumbers: phoneNumbers,
                 emails: emails)
             {
-                return OpenClawContactsAddPayload(contact: Self.payload(from: existing))
+                return EasyHubContactsAddPayload(contact: Self.payload(from: existing))
             }
         }
 
@@ -109,7 +109,7 @@ final class ContactsService: ContactsServicing {
             persisted = contact
         }
 
-        return OpenClawContactsAddPayload(contact: Self.payload(from: persisted))
+        return EasyHubContactsAddPayload(contact: Self.payload(from: persisted))
     }
 
     private static func ensureAuthorization(store: CNContactStore, status: CNAuthorizationStatus) async -> Bool {
@@ -192,8 +192,8 @@ final class ContactsService: ContactsServicing {
         return normalized.isEmpty ? trimmed : normalized
     }
 
-    private static func payload(from contact: CNContact) -> OpenClawContactPayload {
-        OpenClawContactPayload(
+    private static func payload(from contact: CNContact) -> EasyHubContactPayload {
+        EasyHubContactPayload(
             identifier: contact.identifier,
             displayName: CNContactFormatter.string(from: contact, style: .fullName)
                 ?? "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespacesAndNewlines),

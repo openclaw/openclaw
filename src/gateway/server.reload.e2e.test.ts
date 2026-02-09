@@ -172,22 +172,22 @@ describe("gateway hot reload", () => {
   let prevSkipGmail: string | undefined;
 
   beforeEach(() => {
-    prevSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-    prevSkipGmail = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-    process.env.OPENCLAW_SKIP_CHANNELS = "0";
-    delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+    prevSkipChannels = process.env.EASYHUB_SKIP_CHANNELS;
+    prevSkipGmail = process.env.EASYHUB_SKIP_GMAIL_WATCHER;
+    process.env.EASYHUB_SKIP_CHANNELS = "0";
+    delete process.env.EASYHUB_SKIP_GMAIL_WATCHER;
   });
 
   afterEach(() => {
     if (prevSkipChannels === undefined) {
-      delete process.env.OPENCLAW_SKIP_CHANNELS;
+      delete process.env.EASYHUB_SKIP_CHANNELS;
     } else {
-      process.env.OPENCLAW_SKIP_CHANNELS = prevSkipChannels;
+      process.env.EASYHUB_SKIP_CHANNELS = prevSkipChannels;
     }
     if (prevSkipGmail === undefined) {
-      delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+      delete process.env.EASYHUB_SKIP_GMAIL_WATCHER;
     } else {
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prevSkipGmail;
+      process.env.EASYHUB_SKIP_GMAIL_WATCHER = prevSkipGmail;
     }
   });
 

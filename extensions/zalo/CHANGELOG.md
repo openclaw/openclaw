@@ -4,103 +4,103 @@
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.2.6-2
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.2.6
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.2.4
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.2.2
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.31
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.30
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.29
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.23
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.22
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.21
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.20
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.17-1
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.17
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.16
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.15
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 2026.1.14
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core EasyHub release numbers.
 
 ## 0.1.0
 

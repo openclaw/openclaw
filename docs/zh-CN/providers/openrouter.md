@@ -1,8 +1,8 @@
 ---
 read_when:
   - 你想用一个 API 密钥访问多种 LLM
-  - 你想在 OpenClaw 中通过 OpenRouter 运行模型
-summary: 使用 OpenRouter 的统一 API 在 OpenClaw 中访问多种模型
+  - 你想在 EasyHub 中通过 OpenRouter 运行模型
+summary: 使用 OpenRouter 的统一 API 在 EasyHub 中访问多种模型
 title: OpenRouter
 x-i18n:
   generated_at: "2026-02-01T21:35:19Z"
@@ -20,7 +20,7 @@ OpenRouter 提供了一个**统一 API**，通过单一端点和 API 密钥将�
 ## CLI 设置
 
 ```bash
-openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
+EasyHub onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
 ```
 
 ## 配置片段

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { agentCommand } from "../commands/agent.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
@@ -51,7 +51,7 @@ async function loadBootFile(
 }
 
 export async function runBootOnce(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   deps: CliDeps;
   workspaceDir: string;
 }): Promise<BootRunResult> {

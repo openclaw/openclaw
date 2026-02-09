@@ -15,9 +15,9 @@ x-i18n:
 
 # Deepgram（音频转录）
 
-Deepgram 是一个语音转文字 API。在 OpenClaw 中，它通过 `tools.media.audio` 用于**接收音频/语音消息的转录**。
+Deepgram 是一个语音转文字 API。在 EasyHub 中，它通过 `tools.media.audio` 用于**接收音频/语音消息的转录**。
 
-启用后，OpenClaw 会将音频文件上传到 Deepgram，并将转录文本注入回复管道（`{{Transcript}}` + `[Audio]` 块）。这**不是流式**处理；它使用的是预录音转录端点。
+启用后，EasyHub 会将音频文件上传到 Deepgram，并将转录文本注入回复管道（`{{Transcript}}` + `[Audio]` 块）。这**不是流式**处理；它使用的是预录音转录端点。
 
 网站：https://deepgram.com  
 文档：https://developers.deepgram.com

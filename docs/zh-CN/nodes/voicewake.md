@@ -15,7 +15,7 @@ x-i18n:
 
 # 语音唤醒（全局唤醒词）
 
-OpenClaw 将**唤醒词作为单一全局列表**，由 **Gateway 网关**拥有。
+EasyHub 将**唤醒词作为单一全局列表**，由 **Gateway 网关**拥有。
 
 - **没有**每节点的自定义唤醒词。
 - **任何节点/应用 UI 都可以编辑**列表；更改由 Gateway 网关持久化并广播给所有人。
@@ -25,12 +25,12 @@ OpenClaw 将**唤醒词作为单一全局列表**，由 **Gateway 网关**拥有
 
 唤醒词存储在 Gateway 网关机器上：
 
-- `~/.openclaw/settings/voicewake.json`
+- `~/.easyhub/settings/voicewake.json`
 
 结构：
 
 ```json
-{ "triggers": ["openclaw", "claude", "computer"], "updatedAtMs": 1730000000000 }
+{ "triggers": ["EasyHub", "claude", "computer"], "updatedAtMs": 1730000000000 }
 ```
 
 ## 协议

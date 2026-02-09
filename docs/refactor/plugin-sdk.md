@@ -34,13 +34,13 @@ Contents (examples):
 
 Delivery:
 
-- Publish as `openclaw/plugin-sdk` (or export from core under `openclaw/plugin-sdk`).
+- Publish as `EasyHub/plugin-sdk` (or export from core under `EasyHub/plugin-sdk`).
 - Semver with explicit stability guarantees.
 
 ### 2) Plugin Runtime (execution surface, injected)
 
 Scope: everything that touches core runtime behavior.
-Accessed via `OpenClawPluginApi.runtime` so plugins never import `src/**`.
+Accessed via `EasyHubPluginApi.runtime` so plugins never import `src/**`.
 
 Proposed surface (minimal but complete):
 
@@ -49,8 +49,8 @@ export type PluginRuntime = {
   channel: {
     text: {
       chunkMarkdownText(text: string, limit: number): string[];
-      resolveTextChunkLimit(cfg: OpenClawConfig, channel: string, accountId?: string): number;
-      hasControlCommand(text: string, cfg: OpenClawConfig): boolean;
+      resolveTextChunkLimit(cfg: EasyHubConfig, channel: string, accountId?: string): number;
+      hasControlCommand(text: string, cfg: EasyHubConfig): boolean;
     };
     reply: {
       dispatchReplyWithBufferedBlockDispatcher(params: {
@@ -94,12 +94,12 @@ export type PluginRuntime = {
       ): Promise<{ path: string; contentType?: string }>;
     };
     mentions: {
-      buildMentionRegexes(cfg: OpenClawConfig, agentId?: string): RegExp[];
+      buildMentionRegexes(cfg: EasyHubConfig, agentId?: string): RegExp[];
       matchesMentionPatterns(text: string, regexes: RegExp[]): boolean;
     };
     groups: {
       resolveGroupPolicy(
-        cfg: OpenClawConfig,
+        cfg: EasyHubConfig,
         channel: string,
         accountId: string,
         groupId: string,
@@ -110,7 +110,7 @@ export type PluginRuntime = {
         defaultConfig?: unknown;
       };
       resolveRequireMention(
-        cfg: OpenClawConfig,
+        cfg: EasyHubConfig,
         channel: string,
         accountId: string,
         groupId: string,
@@ -125,7 +125,7 @@ export type PluginRuntime = {
         onFlush: (entries: T[]) => Promise<void>;
         onError?: (err: unknown) => void;
       }): { push: (v: T) => void; flush: () => Promise<void> };
-      resolveInboundDebounceMs(cfg: OpenClawConfig, channel: string): number;
+      resolveInboundDebounceMs(cfg: EasyHubConfig, channel: string): number;
     };
     commands: {
       resolveCommandAuthorizedFromAuthorizers(params: {
@@ -139,7 +139,7 @@ export type PluginRuntime = {
     getChildLogger(name: string): PluginLogger;
   };
   state: {
-    resolveStateDir(cfg: OpenClawConfig): string;
+    resolveStateDir(cfg: EasyHubConfig): string;
   };
 };
 ```
@@ -154,8 +154,8 @@ Notes:
 
 ### Phase 0: scaffolding
 
-- Introduce `openclaw/plugin-sdk`.
-- Add `api.runtime` to `OpenClawPluginApi` with the surface above.
+- Introduce `EasyHub/plugin-sdk`.
+- Add `api.runtime` to `EasyHubPluginApi` with the surface above.
 - Maintain existing imports during a transition window (deprecation warnings).
 
 ### Phase 1: bridge cleanup (low risk)
@@ -189,7 +189,7 @@ Notes:
 
 - SDK: semver, published, documented changes.
 - Runtime: versioned per core release. Add `api.runtime.version`.
-- Plugins declare a required runtime range (e.g., `openclawRuntime: ">=2026.2.0"`).
+- Plugins declare a required runtime range (e.g., `EasyHubRuntime: ">=2026.2.0"`).
 
 ## Testing strategy
 

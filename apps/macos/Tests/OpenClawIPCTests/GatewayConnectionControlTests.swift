@@ -1,8 +1,8 @@
-import OpenClawKit
+import EasyHubKit
 import Foundation
 import Testing
-@testable import OpenClaw
-@testable import OpenClawIPC
+@testable import EasyHub
+@testable import EasyHubIPC
 
 private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
     var state: URLSessionTask.State = .running

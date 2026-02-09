@@ -89,14 +89,14 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
         if chordActive, !self.active {
             self.active = true
             Task {
-                Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
+                Logger(subsystem: "ai.easyhub", category: "voicewake.ptt")
                     .info("ptt hotkey down")
                 await self.beginAction()
             }
         } else if !chordActive, self.active {
             self.active = false
             Task {
-                Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
+                Logger(subsystem: "ai.easyhub", category: "voicewake.ptt")
                     .info("ptt hotkey up")
                 await self.endAction()
             }
@@ -112,7 +112,7 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
 actor VoicePushToTalk {
     static let shared = VoicePushToTalk()
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "voicewake.ptt")
 
     private var recognizer: SFSpeechRecognizer?
     // Lazily created on begin() to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth

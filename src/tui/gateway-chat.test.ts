@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const loadConfig = vi.fn();
 const resolveGatewayPort = vi.fn();
 
-const originalEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-const originalEnvPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+const originalEnvToken = process.env.EASYHUB_GATEWAY_TOKEN;
+const originalEnvPassword = process.env.EASYHUB_GATEWAY_PASSWORD;
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -22,21 +22,21 @@ describe("resolveGatewayConnection", () => {
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     resolveGatewayPort.mockReturnValue(18789);
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.EASYHUB_GATEWAY_TOKEN;
+    delete process.env.EASYHUB_GATEWAY_PASSWORD;
   });
 
   afterEach(() => {
     if (originalEnvToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.EASYHUB_GATEWAY_TOKEN;
     } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = originalEnvToken;
+      process.env.EASYHUB_GATEWAY_TOKEN = originalEnvToken;
     }
 
     if (originalEnvPassword === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      delete process.env.EASYHUB_GATEWAY_PASSWORD;
     } else {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = originalEnvPassword;
+      process.env.EASYHUB_GATEWAY_PASSWORD = originalEnvPassword;
     }
   });
 

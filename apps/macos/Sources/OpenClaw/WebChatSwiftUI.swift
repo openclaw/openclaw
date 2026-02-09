@@ -1,13 +1,13 @@
 import AppKit
-import OpenClawChatUI
-import OpenClawKit
-import OpenClawProtocol
+import EasyHubChatUI
+import EasyHubKit
+import EasyHubProtocol
 import Foundation
 import OSLog
 import QuartzCore
 import SwiftUI
 
-private let webChatSwiftLogger = Logger(subsystem: "ai.openclaw", category: "WebChatSwiftUI")
+private let webChatSwiftLogger = Logger(subsystem: "ai.easyhub", category: "WebChatSwiftUI")
 
 private enum WebChatSwiftUILayout {
     static let windowSize = NSSize(width: 500, height: 840)
@@ -16,8 +16,8 @@ private enum WebChatSwiftUILayout {
     static let anchorPadding: CGFloat = 8
 }
 
-struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
-    func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
+struct MacGatewayChatTransport: EasyHubChatTransport, Sendable {
+    func requestHistory(sessionKey: String) async throws -> EasyHubChatHistoryPayload {
         try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
     }
 
@@ -31,7 +31,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
             timeoutMs: 10000)
     }
 
-    func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
+    func listSessions(limit: Int?) async throws -> EasyHubChatSessionsListResponse {
         var params: [String: AnyCodable] = [
             "includeGlobal": AnyCodable(true),
             "includeUnknown": AnyCodable(false),
@@ -43,7 +43,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
             method: "sessions.list",
             params: params,
             timeoutMs: 15000)
-        return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        return try JSONDecoder().decode(EasyHubChatSessionsListResponse.self, from: data)
     }
 
     func sendMessage(
@@ -51,7 +51,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
         message: String,
         thinking: String,
         idempotencyKey: String,
-        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+        attachments: [EasyHubChatAttachmentPayload]) async throws -> EasyHubChatSendResponse
     {
         try await GatewayConnection.shared.chatSend(
             sessionKey: sessionKey,
@@ -65,7 +65,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
         try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
     }
 
-    func events() -> AsyncStream<OpenClawChatTransportEvent> {
+    func events() -> AsyncStream<EasyHubChatTransportEvent> {
         AsyncStream { continuation in
             let task = Task {
                 do {
@@ -89,11 +89,11 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
         }
     }
 
-    static func mapPushToTransportEvent(_ push: GatewayPush) -> OpenClawChatTransportEvent? {
+    static func mapPushToTransportEvent(_ push: GatewayPush) -> EasyHubChatTransportEvent? {
         switch push {
         case let .snapshot(hello):
             let ok = (try? JSONDecoder().decode(
-                OpenClawGatewayHealthOK.self,
+                EasyHubGatewayHealthOK.self,
                 from: JSONEncoder().encode(hello.snapshot.health)))?.ok ?? true
             return .health(ok: ok)
 
@@ -102,7 +102,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
             case "health":
                 guard let payload = evt.payload else { return nil }
                 let ok = (try? JSONDecoder().decode(
-                    OpenClawGatewayHealthOK.self,
+                    EasyHubGatewayHealthOK.self,
                     from: JSONEncoder().encode(payload)))?.ok ?? true
                 return .health(ok: ok)
             case "tick":
@@ -110,7 +110,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
             case "chat":
                 guard let payload = evt.payload else { return nil }
                 guard let chat = try? JSONDecoder().decode(
-                    OpenClawChatEventPayload.self,
+                    EasyHubChatEventPayload.self,
                     from: JSONEncoder().encode(payload))
                 else {
                     return nil
@@ -119,7 +119,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
             case "agent":
                 guard let payload = evt.payload else { return nil }
                 guard let agent = try? JSONDecoder().decode(
-                    OpenClawAgentEventPayload.self,
+                    EasyHubAgentEventPayload.self,
                     from: JSONEncoder().encode(payload))
                 else {
                     return nil
@@ -141,7 +141,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
 final class WebChatSwiftUIWindowController {
     private let presentation: WebChatPresentation
     private let sessionKey: String
-    private let hosting: NSHostingController<OpenClawChatView>
+    private let hosting: NSHostingController<EasyHubChatView>
     private let contentController: NSViewController
     private var window: NSWindow?
     private var dismissMonitor: Any?
@@ -152,12 +152,12 @@ final class WebChatSwiftUIWindowController {
         self.init(sessionKey: sessionKey, presentation: presentation, transport: MacGatewayChatTransport())
     }
 
-    init(sessionKey: String, presentation: WebChatPresentation, transport: any OpenClawChatTransport) {
+    init(sessionKey: String, presentation: WebChatPresentation, transport: any EasyHubChatTransport) {
         self.sessionKey = sessionKey
         self.presentation = presentation
-        let vm = OpenClawChatViewModel(sessionKey: sessionKey, transport: transport)
+        let vm = EasyHubChatViewModel(sessionKey: sessionKey, transport: transport)
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
-        self.hosting = NSHostingController(rootView: OpenClawChatView(
+        self.hosting = NSHostingController(rootView: EasyHubChatView(
             viewModel: vm,
             showsSessionSwitcher: true,
             userAccent: accent))
@@ -268,7 +268,7 @@ final class WebChatSwiftUIWindowController {
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false)
-            window.title = "OpenClaw Chat"
+            window.title = "EasyHub Chat"
             window.contentViewController = contentViewController
             window.isReleasedWhenClosed = false
             window.titleVisibility = .visible
@@ -311,7 +311,7 @@ final class WebChatSwiftUIWindowController {
 
     private static func makeContentController(
         for presentation: WebChatPresentation,
-        hosting: NSHostingController<OpenClawChatView>) -> NSViewController
+        hosting: NSHostingController<EasyHubChatView>) -> NSViewController
     {
         let controller = NSViewController()
         let effectView = NSVisualEffectView()

@@ -20,15 +20,15 @@ x-i18n:
 
 Zalo 以插件形式提供，不包含在核心安装中。
 
-- 通过 CLI 安装：`openclaw plugins install @openclaw/zalo`
+- 通过 CLI 安装：`EasyHub plugins install @easyhub/zalo`
 - 或在新手引导期间选择 **Zalo** 并确认安装提示
 - 详情：[插件](/tools/plugin)
 
 ## 快速设置（初学者）
 
 1. 安装 Zalo 插件：
-   - 从源代码检出：`openclaw plugins install ./extensions/zalo`
-   - 从 npm（如果已发布）：`openclaw plugins install @openclaw/zalo`
+   - 从源代码检出：`EasyHub plugins install ./extensions/zalo`
+   - 从 npm（如果已发布）：`EasyHub plugins install @easyhub/zalo`
    - 或在新手引导中选择 **Zalo** 并确认安装提示
 2. 设置 token：
    - 环境变量：`ZALO_BOT_TOKEN=...`
@@ -109,8 +109,8 @@ Zalo 是一款专注于越南市场的即时通讯应用；其 Bot API 让 Gatew
 
 - 默认：`channels.zalo.dmPolicy = "pairing"`。未知发送者会收到配对码；消息在批准前会被忽略（配对码 1 小时后过期）。
 - 通过以下方式批准：
-  - `openclaw pairing list zalo`
-  - `openclaw pairing approve zalo <CODE>`
+  - `EasyHub pairing list zalo`
+  - `EasyHub pairing approve zalo <CODE>`
 - 配对是默认的令牌交换方式。详情：[配对](/channels/pairing)
 - `channels.zalo.allowFrom` 接受数字用户 ID（无用户名查找功能）。
 
@@ -148,15 +148,15 @@ Zalo 是一款专注于越南市场的即时通讯应用；其 Bot API 让 Gatew
 ## 投递目标（CLI/cron）
 
 - 使用聊天 id 作为目标。
-- 示例：`openclaw message send --channel zalo --target 123456789 --message "hi"`。
+- 示例：`EasyHub message send --channel zalo --target 123456789 --message "hi"`。
 
 ## 故障排除
 
 **Bot 不响应：**
 
-- 检查 token 是否有效：`openclaw channels status --probe`
+- 检查 token 是否有效：`EasyHub channels status --probe`
 - 验证发送者已被批准（配对或 allowFrom）
-- 检查 Gateway 网关日志：`openclaw logs --follow`
+- 检查 Gateway 网关日志：`EasyHub logs --follow`
 
 **Webhook 未收到事件：**
 

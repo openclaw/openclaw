@@ -2,7 +2,7 @@
 read_when:
   - 编辑系统提示词文本、工具列表或时间/心跳部分
   - 更改工作区引导或 Skills 注入行为
-summary: OpenClaw 系统提示词包含的内容及其组装方式
+summary: EasyHub 系统提示词包含的内容及其组装方式
 title: 系统提示词
 x-i18n:
   generated_at: "2026-02-03T07:46:58Z"
@@ -15,9 +15,9 @@ x-i18n:
 
 # 系统提示词
 
-OpenClaw 为每次智能体运行构建自定义系统提示词。该提示词由 **OpenClaw 拥有**，不使用 p-coding-agent 默认提示词。
+EasyHub 为每次智能体运行构建自定义系统提示词。该提示词由 **EasyHub 拥有**，不使用 p-coding-agent 默认提示词。
 
-该提示词由 OpenClaw 组装并注入到每次智能体运行中。
+该提示词由 EasyHub 组装并注入到每次智能体运行中。
 
 ## 结构
 
@@ -26,9 +26,9 @@ OpenClaw 为每次智能体运行构建自定义系统提示词。该提示词�
 - **Tooling**：当前工具列表 + 简短描述。
 - **Safety**：简短的防护提醒，避免追求权力的行为或绕过监督。
 - **Skills**（如果可用）：告诉模型如何按需加载 Skill 指令。
-- **OpenClaw Self-Update**：如何运行 `config.apply` 和 `update.run`。
+- **EasyHub Self-Update**：如何运行 `config.apply` 和 `update.run`。
 - **Workspace**：工作目录（`agents.defaults.workspace`）。
-- **Documentation**：OpenClaw 文档的本地路径（仓库或 npm 包）以及何时阅读它们。
+- **Documentation**：EasyHub 文档的本地路径（仓库或 npm 包）以及何时阅读它们。
 - **Workspace Files (injected)**：表示下方包含引导文件。
 - **Sandbox**（启用时）：表示沙箱隔离运行时、沙箱路径，以及是否可用提权执行。
 - **Current Date & Time**：用户本地时间、时区和时间格式。
@@ -41,10 +41,10 @@ OpenClaw 为每次智能体运行构建自定义系统提示词。该提示词�
 
 ## 提示词模式
 
-OpenClaw 可以为子智能体渲染更小的系统提示词。运行时为每次运行设置一个 `promptMode`（不是面向用户的配置）：
+EasyHub 可以为子智能体渲染更小的系统提示词。运行时为每次运行设置一个 `promptMode`（不是面向用户的配置）：
 
 - `full`（默认）：包含上述所有部分。
-- `minimal`：用于子智能体；省略 **Skills**、**Memory Recall**、**OpenClaw Self-Update**、**Model Aliases**、**User Identity**、**Reply Tags**、**Messaging**、**Silent Replies** 和 **Heartbeats**。Tooling、**Safety**、Workspace、Sandbox、Current Date & Time（已知时）、Runtime 和注入的上下文仍然可用。
+- `minimal`：用于子智能体；省略 **Skills**、**Memory Recall**、**EasyHub Self-Update**、**Model Aliases**、**User Identity**、**Reply Tags**、**Messaging**、**Silent Replies** 和 **Heartbeats**。Tooling、**Safety**、Workspace、Sandbox、Current Date & Time（已知时）、Runtime 和注入的上下文仍然可用。
 - `none`：仅返回基本身份行。
 
 当 `promptMode=minimal` 时，额外注入的提示词标记为 **Subagent Context** 而不是 **Group Chat Context**。
@@ -82,7 +82,7 @@ OpenClaw 可以为子智能体渲染更小的系统提示词。运行时为每�
 
 ## Skills
 
-当存在符合条件的 Skills 时，OpenClaw 注入一个紧凑的**可用 Skills 列表**（`formatSkillsForPrompt`），其中包含每个 Skill 的**文件路径**。提示词指示模型使用 `read` 加载列出位置（工作区、托管或内置）的 SKILL.md。如果没有符合条件的 Skills，则省略 Skills 部分。
+当存在符合条件的 Skills 时，EasyHub 注入一个紧凑的**可用 Skills 列表**（`formatSkillsForPrompt`），其中包含每个 Skill 的**文件路径**。提示词指示模型使用 `read` 加载列出位置（工作区、托管或内置）的 SKILL.md。如果没有符合条件的 Skills，则省略 Skills 部分。
 
 ```
 <available_skills>
@@ -98,4 +98,4 @@ OpenClaw 可以为子智能体渲染更小的系统提示词。运行时为每�
 
 ## 文档
 
-如果可用，系统提示词包含一个 **Documentation** 部分，指向本地 OpenClaw 文档目录（仓库工作区中的 `docs/` 或打包的 npm 包文档），并注明公共镜像、源仓库、社区 Discord 和 ClawHub (https://clawhub.com) 用于 Skills 发现。提示词指示模型首先查阅本地文档了解 OpenClaw 行为、命令、配置或架构，并尽可能自己运行 `openclaw status`（仅在无法访问时询问用户）。
+如果可用，系统提示词包含一个 **Documentation** 部分，指向本地 EasyHub 文档目录（仓库工作区中的 `docs/` 或打包的 npm 包文档），并注明公共镜像、源仓库、社区 Discord 和 ClawHub (https://clawhub.com) 用于 Skills 发现。提示词指示模型首先查阅本地文档了解 EasyHub 行为、命令、配置或架构，并尽可能自己运行 `EasyHub status`（仅在无法访问时询问用户）。

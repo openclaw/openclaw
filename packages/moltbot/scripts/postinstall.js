@@ -1,1 +1,1 @@
-console.warn("moltbot renamed -> openclaw");
+console.warn("moltbot renamed -> EasyHub");

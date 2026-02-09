@@ -1,4 +1,4 @@
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot, ChannelStatusIssue } from "EasyHub/plugin-sdk";
 
 type ZalouserAccountStatus = {
   accountId?: unknown;
@@ -68,7 +68,7 @@ export function collectZalouserStatusIssues(
           accountId,
           kind: "auth",
           message: "Not authenticated (no zca session).",
-          fix: "Run: openclaw channels login --channel zalouser",
+          fix: "Run: EasyHub channels login --channel zalouser",
         });
       }
       continue;

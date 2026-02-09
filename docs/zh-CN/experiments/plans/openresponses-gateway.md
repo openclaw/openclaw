@@ -1,6 +1,6 @@
 ---
 last_updated: "2026-01-19"
-owner: openclaw
+owner: EasyHub
 status: draft
 summary: 计划：添加 OpenResponses /v1/responses 端点并干净地弃用 chat completions
 title: OpenResponses Gateway 网关计划
@@ -17,7 +17,7 @@ x-i18n:
 
 ## 背景
 
-OpenClaw Gateway 网关目前在 `/v1/chat/completions` 暴露了一个最小的 OpenAI 兼容 Chat Completions 端点（参见 [OpenAI Chat Completions](/gateway/openai-http-api)）。
+EasyHub Gateway 网关目前在 `/v1/chat/completions` 暴露了一个最小的 OpenAI 兼容 Chat Completions 端点（参见 [OpenAI Chat Completions](/gateway/openai-http-api)）。
 
 Open Responses 是基于 OpenAI Responses API 的开放推理标准。它专为智能体工作流设计，使用基于项目的输入加语义流式事件。OpenResponses 规范定义的是 `/v1/responses`，而不是 `/v1/chat/completions`。
 

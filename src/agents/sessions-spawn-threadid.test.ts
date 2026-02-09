@@ -22,7 +22,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createEasyHubTools } from "./easyhub-tools.js";
 import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
@@ -53,7 +53,7 @@ describe("sessions_spawn requesterOrigin threading", () => {
   });
 
   it("captures threadId in requesterOrigin", async () => {
-    const tool = createOpenClawTools({
+    const tool = createEasyHubTools({
       agentSessionKey: "main",
       agentChannel: "telegram",
       agentTo: "telegram:123",
@@ -78,7 +78,7 @@ describe("sessions_spawn requesterOrigin threading", () => {
   });
 
   it("stores requesterOrigin without threadId when none is provided", async () => {
-    const tool = createOpenClawTools({
+    const tool = createEasyHubTools({
       agentSessionKey: "main",
       agentChannel: "telegram",
       agentTo: "telegram:123",

@@ -77,9 +77,9 @@ curl http://localhost:3456/v1/chat/completions \
   }'
 ```
 
-### 与 OpenClaw 配合使用
+### 与 EasyHub 配合使用
 
-你可以将 OpenClaw 指向该代理作为自定义 OpenAI 兼容端点：
+你可以将 EasyHub 指向该代理作为自定义 OpenAI 兼容端点：
 
 ```json5
 {
@@ -144,12 +144,12 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 
 ## 注意事项
 
-- 这是一个**社区工具**，并非由 Anthropic 或 OpenClaw 官方支持
+- 这是一个**社区工具**，并非由 Anthropic 或 EasyHub 官方支持
 - 需要有效的 Claude Max/Pro 订阅并已认证 Claude Code CLI
 - 代理在本地运行，不会将数据发送到任何第三方服务器
 - 完全支持流式响应
 
 ## 另请参阅
 
-- [Anthropic 提供商](/providers/anthropic) - OpenClaw 与 Claude 的原生集成，使用 setup-token 或 API 密钥
+- [Anthropic 提供商](/providers/anthropic) - EasyHub 与 Claude 的原生集成，使用 setup-token 或 API 密钥
 - [OpenAI 提供商](/providers/openai) - 适用于 OpenAI/Codex 订阅

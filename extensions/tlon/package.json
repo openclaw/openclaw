@@ -1,16 +1,16 @@
 {
-  "name": "@openclaw/tlon",
+  "name": "@easyhub/tlon",
   "version": "2026.2.6-3",
-  "description": "OpenClaw Tlon/Urbit channel plugin",
+  "description": "EasyHub Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
     "@urbit/aura": "^3.0.0",
     "@urbit/http-api": "^3.0.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ],
@@ -25,7 +25,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/tlon",
+      "npmSpec": "@easyhub/tlon",
       "localPath": "extensions/tlon",
       "defaultChoice": "npm"
     }

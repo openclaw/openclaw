@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
@@ -45,7 +45,7 @@ function formatApiKeySnippet(apiKey: string): string {
 
 function resolveModelAuthLabel(
   provider?: string,
-  cfg?: OpenClawConfig,
+  cfg?: EasyHubConfig,
   sessionEntry?: SessionEntry,
   agentDir?: string,
 ): string | undefined {
@@ -101,7 +101,7 @@ function resolveModelAuthLabel(
 }
 
 export async function buildStatusReply(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   command: CommandContext;
   sessionEntry?: SessionEntry;
   sessionKey: string;

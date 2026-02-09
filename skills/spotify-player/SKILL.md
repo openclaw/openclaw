@@ -4,7 +4,7 @@ description: Terminal Spotify playback/search via spogo (preferred) or spotify_p
 homepage: https://www.spotify.com
 metadata:
   {
-    "openclaw":
+    "EasyHub":
       {
         "emoji": "🎵",
         "requires": { "anyBins": ["spogo", "spotify_player"] },

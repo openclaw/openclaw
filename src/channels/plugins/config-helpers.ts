@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 
 type ChannelSection = {
@@ -7,12 +7,12 @@ type ChannelSection = {
 };
 
 export function setAccountEnabledInConfigSection(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   sectionKey: string;
   accountId: string;
   enabled: boolean;
   allowTopLevel?: boolean;
-}): OpenClawConfig {
+}): EasyHubConfig {
   const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
@@ -27,7 +27,7 @@ export function setAccountEnabledInConfigSection(params: {
           enabled: params.enabled,
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
   }
 
   const baseAccounts = base?.accounts ?? {};
@@ -47,15 +47,15 @@ export function setAccountEnabledInConfigSection(params: {
         },
       },
     },
-  } as OpenClawConfig;
+  } as EasyHubConfig;
 }
 
 export function deleteAccountFromConfigSection(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   sectionKey: string;
   accountId: string;
   clearBaseFields?: string[];
-}): OpenClawConfig {
+}): EasyHubConfig {
   const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
@@ -78,7 +78,7 @@ export function deleteAccountFromConfigSection(params: {
           accounts: Object.keys(accounts).length ? accounts : undefined,
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
   }
 
   if (baseAccounts && Object.keys(baseAccounts).length > 0) {
@@ -98,14 +98,14 @@ export function deleteAccountFromConfigSection(params: {
           accounts: Object.keys(baseAccounts).length ? baseAccounts : undefined,
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
   }
 
   const nextChannels = { ...params.cfg.channels } as Record<string, unknown>;
   delete nextChannels[params.sectionKey];
-  const nextCfg = { ...params.cfg } as OpenClawConfig;
+  const nextCfg = { ...params.cfg } as EasyHubConfig;
   if (Object.keys(nextChannels).length > 0) {
-    nextCfg.channels = nextChannels as OpenClawConfig["channels"];
+    nextCfg.channels = nextChannels as EasyHubConfig["channels"];
   } else {
     delete nextCfg.channels;
   }

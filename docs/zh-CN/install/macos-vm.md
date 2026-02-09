@@ -1,10 +1,10 @@
 ---
 read_when:
-  - 你想让 OpenClaw 与你的主 macOS 环境隔离
+  - 你想让 EasyHub 与你的主 macOS 环境隔离
   - 你想在沙箱中集成 iMessage（BlueBubbles）
   - 你想要一个可重置、可克隆的 macOS 环境
   - 你想比较本地与托管 macOS VM 选项
-summary: 在沙箱隔离的 macOS VM（本地或托管）中运行 OpenClaw，当你需要隔离或 iMessage 时
+summary: 在沙箱隔离的 macOS VM（本地或托管）中运行 EasyHub，当你需要隔离或 iMessage 时
 title: macOS 虚拟机
 x-i18n:
   generated_at: "2026-02-03T07:53:09Z"
@@ -15,7 +15,7 @@ x-i18n:
   workflow: 15
 ---
 
-# 在 macOS 虚拟机上运行 OpenClaw（沙箱隔离）
+# 在 macOS 虚拟机上运行 EasyHub（沙箱隔离）
 
 ## 推荐默认方案（大多数用户）
 
@@ -29,7 +29,7 @@ x-i18n:
 
 ### 在你的 Apple Silicon Mac 上运行本地 VM（Lume）
 
-使用 [Lume](https://cua.ai/docs/lume) 在你现有的 Apple Silicon Mac 上的沙箱 macOS VM 中运行 OpenClaw。
+使用 [Lume](https://cua.ai/docs/lume) 在你现有的 Apple Silicon Mac 上的沙箱 macOS VM 中运行 EasyHub。
 
 这为你提供：
 
@@ -52,10 +52,10 @@ x-i18n:
 ## 快速路径（Lume，有经验的用户）
 
 1. 安装 Lume
-2. `lume create openclaw --os macos --ipsw latest`
+2. `lume create EasyHub --os macos --ipsw latest`
 3. 完成设置助手，启用远程登录（SSH）
-4. `lume run openclaw --no-display`
-5. SSH 进入，安装 OpenClaw，配置渠道
+4. `lume run EasyHub --no-display`
+5. SSH 进入，安装 EasyHub，配置渠道
 6. 完成
 
 ---
@@ -94,7 +94,7 @@ lume --version
 ## 2) 创建 macOS VM
 
 ```bash
-lume create openclaw --os macos --ipsw latest
+lume create EasyHub --os macos --ipsw latest
 ```
 
 这会下载 macOS 并创建 VM。VNC 窗口会自动打开。
@@ -122,7 +122,7 @@ lume create openclaw --os macos --ipsw latest
 ## 4) 获取 VM 的 IP 地址
 
 ```bash
-lume get openclaw
+lume get EasyHub
 ```
 
 查找 IP 地址（通常是 `192.168.64.x`）。
@@ -139,13 +139,13 @@ ssh youruser@192.168.64.X
 
 ---
 
-## 6) 安装 OpenClaw
+## 6) 安装 EasyHub
 
 在 VM 内：
 
 ```bash
-npm install -g openclaw@latest
-openclaw onboard --install-daemon
+npm install -g EasyHub@latest
+EasyHub onboard --install-daemon
 ```
 
 按照新手引导提示设置你的模型提供商（Anthropic、OpenAI 等）。
@@ -157,7 +157,7 @@ openclaw onboard --install-daemon
 编辑配置文件：
 
 ```bash
-nano ~/.openclaw/openclaw.json
+nano ~/.easyhub/easyhub.json
 ```
 
 添加你的渠道：
@@ -179,7 +179,7 @@ nano ~/.openclaw/openclaw.json
 然后登录 WhatsApp（扫描二维码）：
 
 ```bash
-openclaw channels login
+EasyHub channels login
 ```
 
 ---
@@ -189,23 +189,23 @@ openclaw channels login
 停止 VM 并在无显示器模式下重启：
 
 ```bash
-lume stop openclaw
-lume run openclaw --no-display
+lume stop EasyHub
+lume run EasyHub --no-display
 ```
 
-VM 在后台运行。OpenClaw 的守护进程保持 Gateway 网关运行。
+VM 在后台运行。EasyHub 的守护进程保持 Gateway 网关运行。
 
 检查状态：
 
 ```bash
-ssh youruser@192.168.64.X "openclaw status"
+ssh youruser@192.168.64.X "EasyHub status"
 ```
 
 ---
 
 ## 额外：iMessage 集成
 
-这是在 macOS 上运行的杀手级功能。使用 [BlueBubbles](https://bluebubbles.app) 将 iMessage 添加到 OpenClaw。
+这是在 macOS 上运行的杀手级功能。使用 [BlueBubbles](https://bluebubbles.app) 将 iMessage 添加到 EasyHub。
 
 在 VM 内：
 
@@ -214,7 +214,7 @@ ssh youruser@192.168.64.X "openclaw status"
 3. 启用 Web API 并设置密码
 4. 将 BlueBubbles webhooks 指向你的 Gateway 网关（示例：`https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`）
 
-添加到你的 OpenClaw 配置：
+添加到你的 EasyHub 配置：
 
 ```json
 {
@@ -239,16 +239,16 @@ ssh youruser@192.168.64.X "openclaw status"
 在进一步自定义之前，快照你的干净状态：
 
 ```bash
-lume stop openclaw
-lume clone openclaw openclaw-golden
+lume stop EasyHub
+lume clone EasyHub EasyHub-golden
 ```
 
 随时重置：
 
 ```bash
-lume stop openclaw && lume delete openclaw
-lume clone openclaw-golden openclaw
-lume run openclaw --no-display
+lume stop EasyHub && lume delete EasyHub
+lume clone EasyHub-golden EasyHub
+lume run EasyHub --no-display
 ```
 
 ---
@@ -270,9 +270,9 @@ lume run openclaw --no-display
 | 问题                    | 解决方案                                                         |
 | ----------------------- | ---------------------------------------------------------------- |
 | 无法 SSH 进入 VM        | 检查 VM 的系统设置中是否启用了"远程登录"                         |
-| VM IP 未显示            | 等待 VM 完全启动，再次运行 `lume get openclaw`                   |
+| VM IP 未显示            | 等待 VM 完全启动，再次运行 `lume get EasyHub`                   |
 | 找不到 Lume 命令        | 将 `~/.local/bin` 添加到你的 PATH                                |
-| WhatsApp 二维码扫描失败 | 确保运行 `openclaw channels login` 时你是登录到 VM（而不是主机） |
+| WhatsApp 二维码扫描失败 | 确保运行 `EasyHub channels login` 时你是登录到 VM（而不是主机） |
 
 ---
 

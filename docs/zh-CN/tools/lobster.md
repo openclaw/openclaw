@@ -1,9 +1,9 @@
 ---
-description: Typed workflow runtime for OpenClaw — composable pipelines with approval gates.
+description: Typed workflow runtime for EasyHub — composable pipelines with approval gates.
 read_when:
   - 你想要具有显式审批的确定性多步骤工作流
   - 你需要恢复工作流而不重新运行早期步骤
-summary: OpenClaw 的类型化工作流运行时，支持可恢复的审批关卡。
+summary: EasyHub 的类型化工作流运行时，支持可恢复的审批关卡。
 title: Lobster
 x-i18n:
   generated_at: "2026-02-03T10:11:30Z"
@@ -16,7 +16,7 @@ x-i18n:
 
 # Lobster
 
-Lobster 是一个工作流外壳，让 OpenClaw 能够将多步骤工具序列作为单个确定性操作运行，并带有显式审批检查点。
+Lobster 是一个工作流外壳，让 EasyHub 能够将多步骤工具序列作为单个确定性操作运行，并带有显式审批检查点。
 
 ## 亮点
 
@@ -26,7 +26,7 @@ Lobster 是一个工作流外壳，让 OpenClaw 能够将多步骤工具序列�
 
 如今，复杂的工作流需要多次来回的工具调用。每次调用都消耗 token，LLM 必须编排每一步。Lobster 将这种编排移入类型化运行时：
 
-- **一次调用代替多次**：OpenClaw 运行一次 Lobster 工具调用并获得结构化结果。
+- **一次调用代替多次**：EasyHub 运行一次 Lobster 工具调用并获得结构化结果。
 - **内置审批**：副作用（发送邮件、发布评论）会暂停工作流，直到明确批准。
 - **可恢复**：暂停的工作流返回一个令牌；批准并恢复而无需重新运行所有内容。
 
@@ -42,7 +42,7 @@ Lobster 故意很小。目标不是"一种新语言"，而是一个可预测的�
 
 ## 工作原理
 
-OpenClaw 以**工具模式**启动本地 `lobster` CLI，并从 stdout 解析 JSON 信封。
+EasyHub 以**工具模式**启动本地 `lobster` CLI，并从 stdout 解析 JSON 信封。
 如果管道暂停等待审批，工具会返回一个 `resumeToken`，以便你稍后继续。
 
 ## 模式：小型 CLI + JSON 管道 + 审批
@@ -79,7 +79,7 @@ AI 触发工作流；Lobster 执行步骤。审批关卡使副作用显式且可
 
 ```bash
 gog.gmail.search --query 'newer_than:1d' \
-  | openclaw.invoke --tool message --action send --each --item-key message --args-json '{"provider":"telegram","to":"..."}'
+  | EasyHub.invoke --tool message --action send --each --item-key message --args-json '{"provider":"telegram","to":"..."}'
 ```
 
 ## 纯 JSON 的 LLM 步骤（llm-task）
@@ -111,7 +111,7 @@ gog.gmail.search --query 'newer_than:1d' \
 在管道中使用它：
 
 ```lobster
-openclaw.invoke --tool llm-task --action json --args-json '{
+EasyHub.invoke --tool llm-task --action json --args-json '{
   "prompt": "Given the input email, return intent and draft.",
   "input": { "subject": "Hello", "body": "Can you help?" },
   "schema": {
@@ -130,7 +130,7 @@ openclaw.invoke --tool llm-task --action json --args-json '{
 
 ## 工作流文件（.lobster）
 
-Lobster 可以运行包含 `name`、`args`、`steps`、`env`、`condition` 和 `approval` 字段的 YAML/JSON 工作流文件。在 OpenClaw 工具调用中，将 `pipeline` 设置为文件路径。
+Lobster 可以运行包含 `name`、`args`、`steps`、`env`、`condition` 和 `approval` 字段的 YAML/JSON 工作流文件。在 EasyHub 工具调用中，将 `pipeline` 设置为文件路径。
 
 ```yaml
 name: inbox-triage
@@ -160,7 +160,7 @@ steps:
 
 ## 安装 Lobster
 
-在运行 OpenClaw Gateway 网关的**同一主机**上安装 Lobster CLI（参见 [Lobster 仓库](https://github.com/openclaw/lobster)），并确保 `lobster` 在 `PATH` 中。
+在运行 EasyHub Gateway 网关的**同一主机**上安装 Lobster CLI（参见 [Lobster 仓库](https://github.com/EasyHub/lobster)），并确保 `lobster` 在 `PATH` 中。
 如果你想使用自定义二进制位置，在工具调用中传递**绝对**路径 `lobsterPath`。
 
 ## 启用工具
@@ -197,7 +197,7 @@ Lobster 是一个**可选**的插件工具（默认未启用）。
 避免使用 `tools.allow: ["lobster"]`，除非你打算在限制性白名单模式下运行。
 
 注意：白名单对于可选插件是自愿加入的。如果你的白名单只包含
-插件工具（如 `lobster`），OpenClaw 会保持核心工具启用。要限制核心
+插件工具（如 `lobster`），EasyHub 会保持核心工具启用。要限制核心
 工具，也要在白名单中包含你想要的核心工具或组。
 
 ## 示例：邮件分类
@@ -206,12 +206,12 @@ Lobster 是一个**可选**的插件工具（默认未启用）。
 
 ```
 用户："检查我的邮件并起草回复"
-→ openclaw 调用 gmail.list
+→ EasyHub 调用 gmail.list
 → LLM 总结
 → 用户："给 #2 和 #5 起草回复"
 → LLM 起草
 → 用户："发送 #2"
-→ openclaw 调用 gmail.send
+→ EasyHub 调用 gmail.send
 （每天重复，不记得已分类的内容）
 ```
 
@@ -325,7 +325,7 @@ OpenProse 与 Lobster 配合良好：使用 `/prose` 编排多智能体准备，
 ## 安全
 
 - **仅限本地子进程** — 插件本身不进行网络调用。
-- **无密钥** — Lobster 不管理 OAuth；它调用管理 OAuth 的 OpenClaw 工具。
+- **无密钥** — Lobster 不管理 OAuth；它调用管理 OAuth 的 EasyHub 工具。
 - **沙箱感知** — 当工具上下文处于沙箱隔离状态时禁用。
 - **加固** — 如果指定，`lobsterPath` 必须是绝对路径；强制执行超时和输出上限。
 

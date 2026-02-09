@@ -23,7 +23,7 @@ const makeResponse = (): {
 
 describe("handleControlUiHttpRequest", () => {
   it("sets anti-clickjacking headers for Control UI responses", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-ui-"));
     try {
       await fs.writeFile(path.join(tmp, "index.html"), "<html></html>\n");
       const { res, setHeader } = makeResponse();

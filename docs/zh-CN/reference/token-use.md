@@ -2,7 +2,7 @@
 read_when:
   - 解释 token 使用量、成本或上下文窗口时
   - 调试上下文增长或压缩行为时
-summary: OpenClaw 如何构建提示上下文并报告 token 使用量 + 成本
+summary: EasyHub 如何构建提示上下文并报告 token 使用量 + 成本
 title: Token 使用与成本
 x-i18n:
   generated_at: "2026-02-03T07:54:57Z"
@@ -15,12 +15,12 @@ x-i18n:
 
 # Token 使用与成本
 
-OpenClaw 跟踪的是 **token**，而不是字符。Token 是模型特定的，但大多数
+EasyHub 跟踪的是 **token**，而不是字符。Token 是模型特定的，但大多数
 OpenAI 风格的模型对于英文文本平均约 4 个字符为一个 token。
 
 ## 系统提示词如何构建
 
-OpenClaw 在每次运行时组装自己的系统提示词。它包括：
+EasyHub 在每次运行时组装自己的系统提示词。它包括：
 
 - 工具列表 + 简短描述
 - Skills 列表（仅元数据；指令通过 `read` 按需加载）
@@ -54,12 +54,12 @@ OpenClaw 在每次运行时组装自己的系统提示词。它包括：
 - `/usage off|tokens|full` → 在每个回复后附加**每响应使用量页脚**。
   - 每会话持久化（存储为 `responseUsage`）。
   - OAuth 认证**隐藏成本**（仅 token）。
-- `/usage cost` → 从 OpenClaw 会话日志显示本地成本摘要。
+- `/usage cost` → 从 EasyHub 会话日志显示本地成本摘要。
 
 其他界面：
 
 - **TUI/Web TUI：** 支持 `/status` + `/usage`。
-- **CLI：** `openclaw status --usage` 和 `openclaw channels list` 显示
+- **CLI：** `EasyHub status --usage` 和 `EasyHub channels list` 显示
   提供商配额窗口（不是每响应成本）。
 
 ## 成本估算（显示时）
@@ -71,12 +71,12 @@ models.providers.<provider>.models[].cost
 ```
 
 这些是 `input`、`output`、`cacheRead` 和
-`cacheWrite` 的**每 1M token 美元**。如果缺少定价，OpenClaw 仅显示 token。OAuth 令牌
+`cacheWrite` 的**每 1M token 美元**。如果缺少定价，EasyHub 仅显示 token。OAuth 令牌
 永远不显示美元成本。
 
 ## 缓存 TTL 和修剪影响
 
-提供商提示缓存仅在缓存 TTL 窗口内适用。OpenClaw 可以
+提供商提示缓存仅在缓存 TTL 窗口内适用。EasyHub 可以
 选择性地运行**缓存 TTL 修剪**：它在缓存 TTL
 过期后修剪会话，然后重置缓存窗口，以便后续请求可以重用
 新缓存的上下文，而不是重新缓存完整历史。这在会话空闲超过 TTL 时

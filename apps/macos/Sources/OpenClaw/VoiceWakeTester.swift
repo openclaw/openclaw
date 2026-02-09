@@ -30,7 +30,7 @@ final class VoiceWakeTester {
     private var currentTriggers: [String] = []
     private var holdingAfterDetect = false
     private var detectedText: String?
-    private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "voicewake")
     private let silenceWindow: TimeInterval = 1.0
 
     init(locale: Locale = .current) {

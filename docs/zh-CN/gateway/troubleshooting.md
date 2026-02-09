@@ -1,7 +1,7 @@
 ---
 read_when:
   - 调查运行时问题或故障
-summary: OpenClaw 常见故障的快速故障排除指南
+summary: EasyHub 常见故障的快速故障排除指南
 title: 故障排除
 x-i18n:
   generated_at: "2026-02-03T10:09:42Z"
@@ -14,7 +14,7 @@ x-i18n:
 
 # 故障排除 🔧
 
-当 OpenClaw 出现异常时，以下是解决方法。
+当 EasyHub 出现异常时，以下是解决方法。
 
 如果你只想快速分类问题，请先查看常见问题的[最初的六十秒](/help/faq#first-60-seconds-if-somethings-broken)。本页深入介绍运行时故障和诊断。
 
@@ -26,15 +26,15 @@ x-i18n:
 
 | 命令                               | 它告诉你什么                                                                          | 何时使用                              |
 | ---------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------- |
-| `openclaw status`                  | 本地摘要：操作系统 + 更新、Gateway 网关可达性/模式、服务、智能体/会话、提供商配置状态 | 首次检查，快速概览                    |
-| `openclaw status --all`            | 完整本地诊断（只读、可粘贴、相对安全）包括日志尾部                                    | 当你需要分享调试报告时                |
-| `openclaw status --deep`           | 运行 Gateway 网关健康检查（包括提供商探测；需要可达的 Gateway 网关）                  | 当"已配置"不意味着"正常工作"时        |
-| `openclaw gateway probe`           | Gateway 网关发现 + 可达性（本地 + 远程目标）                                          | 当你怀疑正在探测错误的 Gateway 网关时 |
-| `openclaw channels status --probe` | 向运行中的 Gateway 网关查询渠道状态（并可选探测）                                     | 当 Gateway 网关可达但渠道异常时       |
-| `openclaw gateway status`          | 监管程序状态（launchd/systemd/schtasks）、运行时 PID/退出、最后的 Gateway 网关错误    | 当服务"看起来已加载"但没有运行时      |
-| `openclaw logs --follow`           | 实时日志（运行时问题的最佳信号）                                                      | 当你需要实际的故障原因时              |
+| `EasyHub status`                  | 本地摘要：操作系统 + 更新、Gateway 网关可达性/模式、服务、智能体/会话、提供商配置状态 | 首次检查，快速概览                    |
+| `EasyHub status --all`            | 完整本地诊断（只读、可粘贴、相对安全）包括日志尾部                                    | 当你需要分享调试报告时                |
+| `EasyHub status --deep`           | 运行 Gateway 网关健康检查（包括提供商探测；需要可达的 Gateway 网关）                  | 当"已配置"不意味着"正常工作"时        |
+| `EasyHub gateway probe`           | Gateway 网关发现 + 可达性（本地 + 远程目标）                                          | 当你怀疑正在探测错误的 Gateway 网关时 |
+| `EasyHub channels status --probe` | 向运行中的 Gateway 网关查询渠道状态（并可选探测）                                     | 当 Gateway 网关可达但渠道异常时       |
+| `EasyHub gateway status`          | 监管程序状态（launchd/systemd/schtasks）、运行时 PID/退出、最后的 Gateway 网关错误    | 当服务"看起来已加载"但没有运行时      |
+| `EasyHub logs --follow`           | 实时日志（运行时问题的最佳信号）                                                      | 当你需要实际的故障原因时              |
 
-**分享输出：** 优先使用 `openclaw status --all`（它会隐藏令牌）。如果你粘贴 `openclaw status`，考虑先设置 `OPENCLAW_SHOW_SECRETS=0`（令牌预览）。
+**分享输出：** 优先使用 `EasyHub status --all`（它会隐藏令牌）。如果你粘贴 `EasyHub status`，考虑先设置 `EASYHUB_SHOW_SECRETS=0`（令牌预览）。
 
 另请参阅：[健康检查](/gateway/health) 和 [日志](/logging)。
 
@@ -50,14 +50,14 @@ x-i18n:
 - 重新运行新手引导并为该智能体选择 **Anthropic**。
 - 或在 **Gateway 网关主机**上粘贴 setup-token：
   ```bash
-  openclaw models auth setup-token --provider anthropic
+  EasyHub models auth setup-token --provider anthropic
   ```
 - 或将 `auth-profiles.json` 从主智能体目录复制到新智能体目录。
 
 验证：
 
 ```bash
-openclaw models status
+EasyHub models status
 ```
 
 ### OAuth token refresh failed（Anthropic Claude 订阅）
@@ -70,15 +70,15 @@ openclaw models status
 
 ```bash
 # 在 Gateway 网关主机上运行（粘贴 setup-token）
-openclaw models auth setup-token --provider anthropic
-openclaw models status
+EasyHub models auth setup-token --provider anthropic
+EasyHub models status
 ```
 
 如果你在其他地方生成了令牌：
 
 ```bash
-openclaw models auth paste-token --provider anthropic
-openclaw models status
+EasyHub models auth paste-token --provider anthropic
+EasyHub models status
 ```
 
 更多详情：[Anthropic](/providers/anthropic) 和 [OAuth](/concepts/oauth)。
@@ -110,19 +110,19 @@ openclaw models status
 **检查：**
 
 ```bash
-openclaw gateway status
-openclaw doctor
+EasyHub gateway status
+EasyHub doctor
 ```
 
 Doctor/service 将显示运行时状态（PID/最后退出）和日志提示。
 
 **日志：**
 
-- 优先：`openclaw logs --follow`
-- 文件日志（始终）：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`（或你配置的 `logging.file`）
-- macOS LaunchAgent（如果已安装）：`$OPENCLAW_STATE_DIR/logs/gateway.log` 和 `gateway.err.log`
-- Linux systemd（如果已安装）：`journalctl --user -u openclaw-gateway[-<profile>].service -n 200 --no-pager`
-- Windows：`schtasks /Query /TN "OpenClaw Gateway (<profile>)" /V /FO LIST`
+- 优先：`EasyHub logs --follow`
+- 文件日志（始终）：`/tmp/EasyHub/EasyHub-YYYY-MM-DD.log`（或你配置的 `logging.file`）
+- macOS LaunchAgent（如果已安装）：`$EASYHUB_STATE_DIR/logs/gateway.log` 和 `gateway.err.log`
+- Linux systemd（如果已安装）：`journalctl --user -u EasyHub-gateway[-<profile>].service -n 200 --no-pager`
+- Windows：`schtasks /Query /TN "EasyHub Gateway (<profile>)" /V /FO LIST`
 
 **启用更多日志：**
 
@@ -147,25 +147,25 @@ Gateway 网关拒绝启动。
 
 - 运行向导并将 Gateway 网关运行模式设置为 **Local**：
   ```bash
-  openclaw configure
+  EasyHub configure
   ```
 - 或直接设置：
   ```bash
-  openclaw config set gateway.mode local
+  EasyHub config set gateway.mode local
   ```
 
 **如果你打算运行远程 Gateway 网关：**
 
 - 设置远程 URL 并保持 `gateway.mode=remote`：
   ```bash
-  openclaw config set gateway.mode remote
-  openclaw config set gateway.remote.url "wss://gateway.example.com"
+  EasyHub config set gateway.mode remote
+  EasyHub config set gateway.remote.url "wss://gateway.example.com"
   ```
 
 **仅临时/开发使用：** 传递 `--allow-unconfigured` 以在没有
 `gateway.mode=local` 的情况下启动 Gateway 网关。
 
-**还没有配置文件？** 运行 `openclaw setup` 创建初始配置，然后重新运行
+**还没有配置文件？** 运行 `EasyHub setup` 创建初始配置，然后重新运行
 Gateway 网关。
 
 ### 服务环境（PATH + 运行时）
@@ -177,13 +177,13 @@ Gateway 网关服务使用**最小 PATH** 运行以避免 shell/管理器的干�
 
 这有意排除版本管理器（nvm/fnm/volta/asdf）和包
 管理器（pnpm/npm），因为服务不加载你的 shell 初始化。运行时
-变量如 `DISPLAY` 应该放在 `~/.openclaw/.env` 中（由 Gateway 网关早期加载）。
+变量如 `DISPLAY` 应该放在 `~/.easyhub/.env` 中（由 Gateway 网关早期加载）。
 在 `host=gateway` 上的 Exec 运行会将你的登录 shell `PATH` 合并到 exec 环境中，
 所以缺少的工具通常意味着你的 shell 初始化没有导出它们（或设置
 `tools.exec.pathPrepend`）。参见 [/tools/exec](/tools/exec)。
 
 WhatsApp + Telegram 渠道需要 **Node**；不支持 Bun。如果你的
-服务是用 Bun 或版本管理的 Node 路径安装的，运行 `openclaw doctor`
+服务是用 Bun 或版本管理的 Node 路径安装的，运行 `EasyHub doctor`
 迁移到系统 Node 安装。
 
 ### 沙箱中 Skill 缺少 API 密钥
@@ -196,7 +196,7 @@ WhatsApp + Telegram 渠道需要 **Node**；不支持 Bun。如果你的
 
 - 设置 `agents.defaults.sandbox.docker.env`（或每个智能体的 `agents.list[].sandbox.docker.env`）
 - 或将密钥烘焙到你的自定义沙箱镜像中
-- 然后运行 `openclaw sandbox recreate --agent <id>`（或 `--all`）
+- 然后运行 `EasyHub sandbox recreate --agent <id>`（或 `--all`）
 
 ### 服务运行但端口未监听
 
@@ -211,31 +211,31 @@ Gateway 网关可能拒绝绑定。
 
 **检查：**
 
-- `gateway.mode` 必须为 `local` 才能运行 `openclaw gateway` 和服务。
-- 如果你设置了 `gateway.mode=remote`，**CLI 默认**使用远程 URL。服务可能仍在本地运行，但你的 CLI 可能在探测错误的位置。使用 `openclaw gateway status` 查看服务解析的端口 + 探测目标（或传递 `--url`）。
-- `openclaw gateway status` 和 `openclaw doctor` 在服务看起来正在运行但端口关闭时会显示日志中的**最后 Gateway 网关错误**。
+- `gateway.mode` 必须为 `local` 才能运行 `EasyHub gateway` 和服务。
+- 如果你设置了 `gateway.mode=remote`，**CLI 默认**使用远程 URL。服务可能仍在本地运行，但你的 CLI 可能在探测错误的位置。使用 `EasyHub gateway status` 查看服务解析的端口 + 探测目标（或传递 `--url`）。
+- `EasyHub gateway status` 和 `EasyHub doctor` 在服务看起来正在运行但端口关闭时会显示日志中的**最后 Gateway 网关错误**。
 - 非本地回环绑定（`lan`/`tailnet`/`custom`，或本地回环不可用时的 `auto`）需要认证：
-  `gateway.auth.token`（或 `OPENCLAW_GATEWAY_TOKEN`）。
+  `gateway.auth.token`（或 `EASYHUB_GATEWAY_TOKEN`）。
 - `gateway.remote.token` 仅用于远程 CLI 调用；它**不**启用本地认证。
 - `gateway.token` 被忽略；使用 `gateway.auth.token`。
 
-**如果 `openclaw gateway status` 显示配置不匹配**
+**如果 `EasyHub gateway status` 显示配置不匹配**
 
 - `Config (cli): ...` 和 `Config (service): ...` 通常应该匹配。
 - 如果不匹配，你几乎肯定是在编辑一个配置而服务运行的是另一个。
-- 修复：从你希望服务使用的相同 `--profile` / `OPENCLAW_STATE_DIR` 重新运行 `openclaw gateway install --force`。
+- 修复：从你希望服务使用的相同 `--profile` / `EASYHUB_STATE_DIR` 重新运行 `EasyHub gateway install --force`。
 
-**如果 `openclaw gateway status` 报告服务配置问题**
+**如果 `EasyHub gateway status` 报告服务配置问题**
 
 - 监管程序配置（launchd/systemd/schtasks）缺少当前默认值。
-- 修复：运行 `openclaw doctor` 更新它（或 `openclaw gateway install --force` 完全重写）。
+- 修复：运行 `EasyHub doctor` 更新它（或 `EasyHub gateway install --force` 完全重写）。
 
 **如果 `Last gateway error:` 提到"refusing to bind … without auth"**
 
 - 你将 `gateway.bind` 设置为非本地回环模式（`lan`/`tailnet`/`custom`，或本地回环不可用时的 `auto`）但没有配置认证。
-- 修复：设置 `gateway.auth.mode` + `gateway.auth.token`（或导出 `OPENCLAW_GATEWAY_TOKEN`）并重启服务。
+- 修复：设置 `gateway.auth.mode` + `gateway.auth.token`（或导出 `EASYHUB_GATEWAY_TOKEN`）并重启服务。
 
-**如果 `openclaw gateway status` 显示 `bind=tailnet` 但未找到 tailnet 接口**
+**如果 `EasyHub gateway status` 显示 `bind=tailnet` 但未找到 tailnet 接口**
 
 - Gateway 网关尝试绑定到 Tailscale IP（100.64.0.0/10）但在主机上未检测到。
 - 修复：在该机器上启动 Tailscale（或将 `gateway.bind` 改为 `loopback`/`lan`）。
@@ -252,7 +252,7 @@ Gateway 网关可能拒绝绑定。
 **检查：**
 
 ```bash
-openclaw gateway status
+EasyHub gateway status
 ```
 
 它将显示监听器和可能的原因（Gateway 网关已在运行、SSH 隧道）。
@@ -260,7 +260,7 @@ openclaw gateway status
 
 ### 检测到额外的工作区文件夹
 
-如果你从旧版本升级，你的磁盘上可能仍有 `~/openclaw`。
+如果你从旧版本升级，你的磁盘上可能仍有 `~/EasyHub`。
 多个工作区目录可能导致令人困惑的认证或状态漂移，因为
 只有一个工作区是活动的。
 
@@ -269,7 +269,7 @@ openclaw gateway status
 
 ### 主聊天在沙箱工作区中运行
 
-症状：`pwd` 或文件工具显示 `~/.openclaw/sandboxes/...` 即使你
+症状：`pwd` 或文件工具显示 `~/.easyhub/sandboxes/...` 即使你
 期望的是主机工作区。
 
 **原因：** `agents.defaults.sandbox.mode: "non-main"` 基于 `session.mainKey`（默认 `"main"`）判断。
@@ -295,13 +295,13 @@ openclaw gateway status
 
 ### "Agent failed before reply: Unknown model: anthropic/claude-haiku-3-5"
 
-OpenClaw 有意拒绝**较旧/不安全的模型**（尤其是那些更容易受到提示词注入攻击的模型）。如果你看到此错误，该模型名称已不再支持。
+EasyHub 有意拒绝**较旧/不安全的模型**（尤其是那些更容易受到提示词注入攻击的模型）。如果你看到此错误，该模型名称已不再支持。
 
 **修复：**
 
 - 为提供商选择**最新**模型并更新你的配置或模型别名。
-- 如果你不确定哪些模型可用，运行 `openclaw models list` 或
-  `openclaw models scan` 并选择一个支持的模型。
+- 如果你不确定哪些模型可用，运行 `EasyHub models list` 或
+  `EasyHub models scan` 并选择一个支持的模型。
 - 检查 Gateway 网关日志以获取详细的失败原因。
 
 另请参阅：[模型 CLI](/cli/models) 和 [模型提供商](/concepts/model-providers)。
@@ -311,7 +311,7 @@ OpenClaw 有意拒绝**较旧/不安全的模型**（尤其是那些更容易受
 **检查 1：** 发送者是否在白名单中？
 
 ```bash
-openclaw status
+EasyHub status
 ```
 
 在输出中查找 `AllowFrom: ...`。
@@ -322,15 +322,15 @@ openclaw status
 # 消息必须匹配 mentionPatterns 或显式提及；默认值在渠道 groups/guilds 中。
 # 多智能体：`agents.list[].groupChat.mentionPatterns` 覆盖全局模式。
 grep -n "agents\\|groupChat\\|mentionPatterns\\|channels\\.whatsapp\\.groups\\|channels\\.telegram\\.groups\\|channels\\.imessage\\.groups\\|channels\\.discord\\.guilds" \
-  "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
+  "${EASYHUB_CONFIG_PATH:-$HOME/.easyhub/easyhub.json}"
 ```
 
 **检查 3：** 检查日志
 
 ```bash
-openclaw logs --follow
+EasyHub logs --follow
 # 或者如果你想快速过滤：
-tail -f "$(ls -t /tmp/openclaw/openclaw-*.log | head -1)" | grep "blocked\\|skip\\|unauthorized"
+tail -f "$(ls -t /tmp/EasyHub/EasyHub-*.log | head -1)" | grep "blocked\\|skip\\|unauthorized"
 ```
 
 ### 配对码未到达
@@ -340,7 +340,7 @@ tail -f "$(ls -t /tmp/openclaw/openclaw-*.log | head -1)" | grep "blocked\\|skip
 **检查 1：** 是否已有待处理的请求在等待？
 
 ```bash
-openclaw pairing list <channel>
+EasyHub pairing list <channel>
 ```
 
 待处理的私信配对请求默认每个渠道上限为 **3 个**。如果列表已满，新请求将不会生成代码，直到一个被批准或过期。
@@ -348,7 +348,7 @@ openclaw pairing list <channel>
 **检查 2：** 请求是否已创建但未发送回复？
 
 ```bash
-openclaw logs --follow | grep "pairing request"
+EasyHub logs --follow | grep "pairing request"
 ```
 
 **检查 3：** 确认该渠道的 `dmPolicy` 不是 `open`/`allowlist`。
@@ -359,15 +359,15 @@ openclaw logs --follow | grep "pairing request"
 
 **变通方法：** 在提及时添加一些文字：
 
-- ❌ `@openclaw` + 图片
-- ✅ `@openclaw check this` + 图片
+- ❌ `@EasyHub` + 图片
+- ✅ `@EasyHub check this` + 图片
 
 ### 会话未恢复
 
 **检查 1：** 会话文件是否存在？
 
 ```bash
-ls -la ~/.openclaw/agents/<agentId>/sessions/
+ls -la ~/.easyhub/agents/<agentId>/sessions/
 ```
 
 **检查 2：** 重置窗口是否太短？
@@ -404,26 +404,26 @@ ls -la ~/.openclaw/agents/<agentId>/sessions/
 
 ```bash
 # 检查本地状态（凭证、会话、排队事件）
-openclaw status
+EasyHub status
 # 探测运行中的 Gateway 网关 + 渠道（WA 连接 + Telegram + Discord API）
-openclaw status --deep
+EasyHub status --deep
 
 # 查看最近的连接事件
-openclaw logs --limit 200 | grep "connection\\|disconnect\\|logout"
+EasyHub logs --limit 200 | grep "connection\\|disconnect\\|logout"
 ```
 
 **修复：** 通常在 Gateway 网关运行后会自动重连。如果卡住，重启 Gateway 网关进程（无论你如何监管它），或使用详细输出手动运行：
 
 ```bash
-openclaw gateway --verbose
+EasyHub gateway --verbose
 ```
 
 如果你已登出/取消关联：
 
 ```bash
-openclaw channels logout
-trash "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/credentials" # 如果 logout 无法完全清除所有内容
-openclaw channels login --verbose       # 重新扫描二维码
+EasyHub channels logout
+trash "${EASYHUB_STATE_DIR:-$HOME/.EasyHub}/credentials" # 如果 logout 无法完全清除所有内容
+EasyHub channels login --verbose       # 重新扫描二维码
 ```
 
 ### 媒体发送失败
@@ -443,12 +443,12 @@ ls -la /path/to/your/image.jpg
 **检查 3：** 检查媒体日志
 
 ```bash
-grep "media\\|fetch\\|download" "$(ls -t /tmp/openclaw/openclaw-*.log | head -1)" | tail -20
+grep "media\\|fetch\\|download" "$(ls -t /tmp/EasyHub/EasyHub-*.log | head -1)" | tail -20
 ```
 
 ### 高内存使用
 
-OpenClaw 在内存中保留对话历史。
+EasyHub 在内存中保留对话历史。
 
 **修复：** 定期重启或设置会话限制：
 
@@ -464,28 +464,28 @@ OpenClaw 在内存中保留对话历史。
 
 ### "Gateway won't start — configuration invalid"
 
-当配置包含未知键、格式错误的值或无效类型时，OpenClaw 现在拒绝启动。
+当配置包含未知键、格式错误的值或无效类型时，EasyHub 现在拒绝启动。
 这是为了安全而故意设计的。
 
 用 Doctor 修复：
 
 ```bash
-openclaw doctor
-openclaw doctor --fix
+EasyHub doctor
+EasyHub doctor --fix
 ```
 
 注意事项：
 
-- `openclaw doctor` 报告每个无效条目。
-- `openclaw doctor --fix` 应用迁移/修复并重写配置。
-- 诊断命令如 `openclaw logs`、`openclaw health`、`openclaw status`、`openclaw gateway status` 和 `openclaw gateway probe` 即使配置无效也能运行。
+- `EasyHub doctor` 报告每个无效条目。
+- `EasyHub doctor --fix` 应用迁移/修复并重写配置。
+- 诊断命令如 `EasyHub logs`、`EasyHub health`、`EasyHub status`、`EasyHub gateway status` 和 `EasyHub gateway probe` 即使配置无效也能运行。
 
 ### "All models failed" — 我应该首先检查什么？
 
 - **凭证**存在于正在尝试的提供商（认证配置文件 + 环境变量）。
 - **模型路由**：确认 `agents.defaults.model.primary` 和回退是你可以访问的模型。
-- `/tmp/openclaw/…` 中的 **Gateway 网关日志**以获取确切的提供商错误。
-- **模型状态**：使用 `/model status`（聊天）或 `openclaw models status`（CLI）。
+- `/tmp/EasyHub/…` 中的 **Gateway 网关日志**以获取确切的提供商错误。
+- **模型状态**：使用 `/model status`（聊天）或 `EasyHub models status`（CLI）。
 
 ### 我在我的个人 WhatsApp 号码上运行 — 为什么自聊天很奇怪？
 
@@ -510,13 +510,13 @@ openclaw doctor --fix
 再次运行登录命令并扫描二维码：
 
 ```bash
-openclaw channels login
+EasyHub channels login
 ```
 
 ### `main` 上的构建错误 — 标准修复路径是什么？
 
 1. `git pull origin main && pnpm install`
-2. `openclaw doctor`
+2. `EasyHub doctor`
 3. 检查 GitHub issues 或 Discord
 4. 临时变通方法：检出较旧的提交
 
@@ -531,8 +531,8 @@ openclaw channels login
 git status   # 确保你在仓库根目录
 pnpm install
 pnpm build
-openclaw doctor
-openclaw gateway restart
+EasyHub doctor
+EasyHub gateway restart
 ```
 
 原因：pnpm 是此仓库配置的包管理器。
@@ -545,13 +545,13 @@ openclaw gateway restart
 切换**到 git 安装**：
 
 ```bash
-curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
+curl -fsSL https://EasyHub.ai/install.sh | bash -s -- --install-method git --no-onboard
 ```
 
 切换**到 npm 全局**：
 
 ```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
+curl -fsSL https://EasyHub.ai/install.sh | bash
 ```
 
 注意事项：
@@ -559,8 +559,8 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 - git 流程仅在仓库干净时才 rebase。先提交或 stash 更改。
 - 切换后，运行：
   ```bash
-  openclaw doctor
-  openclaw gateway restart
+  EasyHub doctor
+  EasyHub gateway restart
   ```
 
 ### Telegram 分块流式传输没有在工具调用之间分割文本。为什么？
@@ -595,20 +595,20 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 3. 将 `requireMention: false` 放在 `channels.discord.guilds` **下面**（全局或每个频道）。
    顶级 `channels.discord.requireMention` 不是支持的键。
 4. 确保机器人有 **Message Content Intent** 和频道权限。
-5. 运行 `openclaw channels status --probe` 获取审计提示。
+5. 运行 `EasyHub channels status --probe` 获取审计提示。
 
 文档：[Discord](/channels/discord)、[渠道故障排除](/channels/troubleshooting)。
 
 ### Cloud Code Assist API 错误：invalid tool schema（400）。现在怎么办？
 
 这几乎总是**工具模式兼容性**问题。Cloud Code Assist
-端点接受 JSON Schema 的严格子集。OpenClaw 在当前 `main` 中清理/规范化工具
+端点接受 JSON Schema 的严格子集。EasyHub 在当前 `main` 中清理/规范化工具
 模式，但修复尚未包含在最后一个版本中（截至
 2026 年 1 月 13 日）。
 
 修复清单：
 
-1. **更新 OpenClaw**：
+1. **更新 EasyHub**：
    - 如果你可以从源代码运行，拉取 `main` 并重启 Gateway 网关。
    - 否则，等待包含模式清理器的下一个版本。
 2. 避免不支持的关键字如 `anyOf/oneOf/allOf`、`patternProperties`、
@@ -631,7 +631,7 @@ tccutil reset All bot.molt.mac.debug
 ```
 
 **修复 2：强制使用新的 Bundle ID**
-如果重置不起作用，在 [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) 中更改 `BUNDLE_ID`（例如，添加 `.test` 后缀）并重新构建。这会强制 macOS 将其视为新应用。
+如果重置不起作用，在 [`scripts/package-mac-app.sh`](https://github.com/EasyHub/EasyHub/blob/main/scripts/package-mac-app.sh) 中更改 `BUNDLE_ID`（例如，添加 `.test` 后缀）并重新构建。这会强制 macOS 将其视为新应用。
 
 ### Gateway 网关卡在"Starting..."
 
@@ -641,9 +641,9 @@ tccutil reset All bot.molt.mac.debug
 如果 Gateway 网关由 launchd 监管，杀死 PID 只会重新生成它。先停止监管程序：
 
 ```bash
-openclaw gateway status
-openclaw gateway stop
-# 或：launchctl bootout gui/$UID/bot.molt.gateway（用 bot.molt.<profile> 替换；旧版 com.openclaw.* 仍然有效）
+EasyHub gateway status
+EasyHub gateway stop
+# 或：launchctl bootout gui/$UID/bot.molt.gateway（用 bot.molt.<profile> 替换；旧版 com.EasyHub.* 仍然有效）
 ```
 
 **修复 2：端口被占用（查找监听器）**
@@ -661,11 +661,11 @@ kill -9 <PID> # 最后手段
 ```
 
 **修复 3：检查 CLI 安装**
-确保全局 `openclaw` CLI 已安装且与应用版本匹配：
+确保全局 `EasyHub` CLI 已安装且与应用版本匹配：
 
 ```bash
-openclaw --version
-npm install -g openclaw@<version>
+EasyHub --version
+npm install -g EasyHub@<version>
 ```
 
 ## 调试模式
@@ -674,43 +674,43 @@ npm install -g openclaw@<version>
 
 ```bash
 # 在配置中打开跟踪日志：
-#   ${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json} -> { logging: { level: "trace" } }
+#   ${EASYHUB_CONFIG_PATH:-$HOME/.easyhub/easyhub.json} -> { logging: { level: "trace" } }
 #
 # 然后运行详细命令将调试输出镜像到标准输出：
-openclaw gateway --verbose
-openclaw channels login --verbose
+EasyHub gateway --verbose
+EasyHub channels login --verbose
 ```
 
 ## 日志位置
 
 | 日志                             | 位置                                                                                                                                                                                                                                                                                                                      |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Gateway 网关文件日志（结构化）   | `/tmp/openclaw/openclaw-YYYY-MM-DD.log`（或 `logging.file`）                                                                                                                                                                                                                                                              |
-| Gateway 网关服务日志（监管程序） | macOS：`$OPENCLAW_STATE_DIR/logs/gateway.log` + `gateway.err.log`（默认：`~/.openclaw/logs/...`；配置文件使用 `~/.openclaw-<profile>/logs/...`）<br />Linux：`journalctl --user -u openclaw-gateway[-<profile>].service -n 200 --no-pager`<br />Windows：`schtasks /Query /TN "OpenClaw Gateway (<profile>)" /V /FO LIST` |
-| 会话文件                         | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                                                                                                                                                                                                                                                                          |
-| 媒体缓存                         | `$OPENCLAW_STATE_DIR/media/`                                                                                                                                                                                                                                                                                              |
-| 凭证                             | `$OPENCLAW_STATE_DIR/credentials/`                                                                                                                                                                                                                                                                                        |
+| Gateway 网关文件日志（结构化）   | `/tmp/EasyHub/EasyHub-YYYY-MM-DD.log`（或 `logging.file`）                                                                                                                                                                                                                                                              |
+| Gateway 网关服务日志（监管程序） | macOS：`$EASYHUB_STATE_DIR/logs/gateway.log` + `gateway.err.log`（默认：`~/.easyhub/logs/...`；配置文件使用 `~/.EasyHub-<profile>/logs/...`）<br />Linux：`journalctl --user -u EasyHub-gateway[-<profile>].service -n 200 --no-pager`<br />Windows：`schtasks /Query /TN "EasyHub Gateway (<profile>)" /V /FO LIST` |
+| 会话文件                         | `$EASYHUB_STATE_DIR/agents/<agentId>/sessions/`                                                                                                                                                                                                                                                                          |
+| 媒体缓存                         | `$EASYHUB_STATE_DIR/media/`                                                                                                                                                                                                                                                                                              |
+| 凭证                             | `$EASYHUB_STATE_DIR/credentials/`                                                                                                                                                                                                                                                                                        |
 
 ## 健康检查
 
 ```bash
 # 监管程序 + 探测目标 + 配置路径
-openclaw gateway status
+EasyHub gateway status
 # 包括系统级扫描（旧版/额外服务、端口监听器）
-openclaw gateway status --deep
+EasyHub gateway status --deep
 
 # Gateway 网关是否可达？
-openclaw health --json
+EasyHub health --json
 # 如果失败，使用连接详情重新运行：
-openclaw health --verbose
+EasyHub health --verbose
 
 # 默认端口上是否有东西在监听？
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 
 # 最近活动（RPC 日志尾部）
-openclaw logs --follow
+EasyHub logs --follow
 # 如果 RPC 宕机的备用方案
-tail -20 /tmp/openclaw/openclaw-*.log
+tail -20 /tmp/EasyHub/EasyHub-*.log
 ```
 
 ## 重置所有内容
@@ -718,23 +718,23 @@ tail -20 /tmp/openclaw/openclaw-*.log
 核选项：
 
 ```bash
-openclaw gateway stop
+EasyHub gateway stop
 # 如果你安装了服务并想要干净安装：
-# openclaw gateway uninstall
+# EasyHub gateway uninstall
 
-trash "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
-openclaw channels login         # 重新配对 WhatsApp
-openclaw gateway restart           # 或：openclaw gateway
+trash "${EASYHUB_STATE_DIR:-$HOME/.EasyHub}"
+EasyHub channels login         # 重新配对 WhatsApp
+EasyHub gateway restart           # 或：EasyHub gateway
 ```
 
 ⚠️ 这会丢失所有会话并需要重新配对 WhatsApp。
 
 ## 获取帮助
 
-1. 首先检查日志：`/tmp/openclaw/`（默认：`openclaw-YYYY-MM-DD.log`，或你配置的 `logging.file`）
+1. 首先检查日志：`/tmp/EasyHub/`（默认：`EasyHub-YYYY-MM-DD.log`，或你配置的 `logging.file`）
 2. 在 GitHub 上搜索现有问题
 3. 提交新问题时包含：
-   - OpenClaw 版本
+   - EasyHub 版本
    - 相关日志片段
    - 重现步骤
    - 你的配置（隐藏密钥！）

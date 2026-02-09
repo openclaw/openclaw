@@ -19,14 +19,14 @@ SOUL Evil 钩子在清除窗口期间或随机概率下，将**注入的** `SOUL
 
 ## 工作原理
 
-当 `agent:bootstrap` 运行时，该钩子可以在系统提示词组装之前，在内存中替换 `SOUL.md` 的内容。如果 `SOUL_EVIL.md` 缺失或为空，OpenClaw 会记录警告并保留正常的 `SOUL.md`。
+当 `agent:bootstrap` 运行时，该钩子可以在系统提示词组装之前，在内存中替换 `SOUL.md` 的内容。如果 `SOUL_EVIL.md` 缺失或为空，EasyHub 会记录警告并保留正常的 `SOUL.md`。
 
 子智能体运行**不会**在其引导文件中包含 `SOUL.md`，因此此钩子对子智能体没有影响。
 
 ## 启用
 
 ```bash
-openclaw hooks enable soul-evil
+EasyHub hooks enable soul-evil
 ```
 
 然后设置配置：

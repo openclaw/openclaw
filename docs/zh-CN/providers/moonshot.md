@@ -29,13 +29,13 @@ Moonshot 提供兼容 OpenAI 端点的 Kimi API。配置提供商并将默认模
   {/_ moonshot-kimi-k2-ids:end _/}
 
 ```bash
-openclaw onboard --auth-choice moonshot-api-key
+EasyHub onboard --auth-choice moonshot-api-key
 ```
 
 Kimi Coding：
 
 ```bash
-openclaw onboard --auth-choice kimi-code-api-key
+EasyHub onboard --auth-choice kimi-code-api-key
 ```
 
 注意：Moonshot 和 Kimi Coding 是独立的提供商。密钥不可互换，端点不同，模型引用也不同（Moonshot 使用 `moonshot/...`，Kimi Coding 使用 `kimi-coding/...`）。

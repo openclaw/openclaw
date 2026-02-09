@@ -1,5 +1,5 @@
-import OpenClawKit
-import OpenClawProtocol
+import EasyHubKit
+import EasyHubProtocol
 import Foundation
 import Observation
 import OSLog
@@ -22,7 +22,7 @@ final class CronJobsStore {
     var lastError: String?
     var statusMessage: String?
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "cron.ui")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "cron.ui")
     private var refreshTask: Task<Void, Never>?
     private var runsTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?

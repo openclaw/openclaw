@@ -16,7 +16,7 @@ x-i18n:
 
 # CLI 后端（回退运行时）
 
-当 API 提供商宕机、被限流或暂时异常时，OpenClaw 可以运行**本地 AI CLI** 作为**纯文本回退**。这是有意保守的设计：
+当 API 提供商宕机、被限流或暂时异常时，EasyHub 可以运行**本地 AI CLI** 作为**纯文本回退**。这是有意保守的设计：
 
 - **工具被禁用**（无工具调用）。
 - **文本输入 → 文本输出**（可靠）。
@@ -27,16 +27,16 @@ x-i18n:
 
 ## 新手友好快速开始
 
-你可以**无需任何配置**使用 Claude Code CLI（OpenClaw 自带内置默认值）：
+你可以**无需任何配置**使用 Claude Code CLI（EasyHub 自带内置默认值）：
 
 ```bash
-openclaw agent --message "hi" --model claude-cli/opus-4.5
+EasyHub agent --message "hi" --model claude-cli/opus-4.5
 ```
 
 Codex CLI 也可以开箱即用：
 
 ```bash
-openclaw agent --message "hi" --model codex-cli/gpt-5.2-codex
+EasyHub agent --message "hi" --model codex-cli/gpt-5.2-codex
 ```
 
 如果你的 Gateway 网关在 launchd/systemd 下运行且 PATH 很精简，只需添加命令路径：
@@ -81,7 +81,7 @@ openclaw agent --message "hi" --model codex-cli/gpt-5.2-codex
 注意事项：
 
 - 如果你使用 `agents.defaults.models`（允许列表），必须包含 `claude-cli/...`。
-- 如果主要提供商失败（认证、限流、超时），OpenClaw 将接着尝试 CLI 后端。
+- 如果主要提供商失败（认证、限流、超时），EasyHub 将接着尝试 CLI 后端。
 
 ## 配置概览
 
@@ -135,7 +135,7 @@ agents.defaults.cliBackends
 ## 工作原理
 
 1. **选择后端**基于提供商前缀（`claude-cli/...`）。
-2. **构建系统提示**使用相同的 OpenClaw 提示 + 工作区上下文。
+2. **构建系统提示**使用相同的 EasyHub 提示 + 工作区上下文。
 3. **执行 CLI**并带有会话 ID（如果支持），使历史记录保持一致。
 4. **解析输出**（JSON 或纯文本）并返回最终文本。
 5. **持久化会话 ID**按后端，使后续请求复用相同的 CLI 会话。
@@ -158,7 +158,7 @@ imageArg: "--image",
 imageMode: "repeat"
 ```
 
-OpenClaw 会将 base64 图像写入临时文件。如果设置了 `imageArg`，这些路径作为 CLI 参数传递。如果缺少 `imageArg`，OpenClaw 会将文件路径附加到提示中（路径注入），这对于从纯路径自动加载本地文件的 CLI 来说已经足够（Claude Code CLI 行为）。
+EasyHub 会将 base64 图像写入临时文件。如果设置了 `imageArg`，这些路径作为 CLI 参数传递。如果缺少 `imageArg`，EasyHub 会将文件路径附加到提示中（路径注入），这对于从纯路径自动加载本地文件的 CLI 来说已经足够（Claude Code CLI 行为）。
 
 ## 输入 / 输出
 
@@ -174,7 +174,7 @@ OpenClaw 会将 base64 图像写入临时文件。如果设置了 `imageArg`，�
 
 ## 默认值（内置）
 
-OpenClaw 自带 `claude-cli` 的默认值：
+EasyHub 自带 `claude-cli` 的默认值：
 
 - `command: "claude"`
 - `args: ["-p", "--output-format", "json", "--dangerously-skip-permissions"]`
@@ -185,7 +185,7 @@ OpenClaw 自带 `claude-cli` 的默认值：
 - `systemPromptWhen: "first"`
 - `sessionMode: "always"`
 
-OpenClaw 也自带 `codex-cli` 的默认值：
+EasyHub 也自带 `codex-cli` 的默认值：
 
 - `command: "codex"`
 - `args: ["exec","--json","--color","never","--sandbox","read-only","--skip-git-repo-check"]`
@@ -200,10 +200,10 @@ OpenClaw 也自带 `codex-cli` 的默认值：
 
 ## 限制
 
-- **无 OpenClaw 工具**（CLI 后端永远不会收到工具调用）。某些 CLI 可能仍会运行它们自己的智能体工具。
+- **无 EasyHub 工具**（CLI 后端永远不会收到工具调用）。某些 CLI 可能仍会运行它们自己的智能体工具。
 - **无流式传输**（CLI 输出被收集后返回）。
 - **结构化输出**取决于 CLI 的 JSON 格式。
-- **Codex CLI 会话**通过文本输出恢复（无 JSONL），这比初始的 `--json` 运行结构化程度低。OpenClaw 会话仍然正常工作。
+- **Codex CLI 会话**通过文本输出恢复（无 JSONL），这比初始的 `--json` 运行结构化程度低。EasyHub 会话仍然正常工作。
 
 ## 故障排除
 

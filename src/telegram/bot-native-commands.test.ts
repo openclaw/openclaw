@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -17,7 +17,7 @@ describe("registerTelegramNativeCommands", () => {
     listSkillCommandsForAgents.mockReset();
   });
 
-  const buildParams = (cfg: OpenClawConfig, accountId = "default") => ({
+  const buildParams = (cfg: EasyHubConfig, accountId = "default") => ({
     bot: {
       api: {
         setMyCommands: vi.fn().mockResolvedValue(undefined),
@@ -47,7 +47,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("scopes skill commands when account binding exists", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "butler" }],
       },
@@ -68,7 +68,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("keeps skill commands unscoped without a matching binding", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "butler" }],
       },

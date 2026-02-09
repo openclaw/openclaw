@@ -2,7 +2,7 @@
 title: Deploy on Render
 ---
 
-Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
+Deploy EasyHub on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
 
 ## Prerequisites
 
@@ -11,7 +11,7 @@ Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yam
 
 ## Deploy with a Render Blueprint
 
-[Deploy to Render](https://render.com/deploy?repo=https://github.com/openclaw/openclaw)
+[Deploy to Render](https://render.com/deploy?repo=https://github.com/EasyHub/EasyHub)
 
 Clicking this link will:
 
@@ -24,12 +24,12 @@ Once deployed, your service URL follows the pattern `https://<service-name>.onre
 ## Understanding the Blueprint
 
 Render Blueprints are YAML files that define your infrastructure. The `render.yaml` in this
-repository configures everything needed to run OpenClaw:
+repository configures everything needed to run EasyHub:
 
 ```yaml
 services:
   - type: web
-    name: openclaw
+    name: EasyHub
     runtime: docker
     plan: starter
     healthCheckPath: /health
@@ -38,14 +38,14 @@ services:
         value: "8080"
       - key: SETUP_PASSWORD
         sync: false # prompts during deploy
-      - key: OPENCLAW_STATE_DIR
-        value: /data/.openclaw
-      - key: OPENCLAW_WORKSPACE_DIR
+      - key: EASYHUB_STATE_DIR
+        value: /data/.EasyHub
+      - key: EASYHUB_WORKSPACE_DIR
         value: /data/workspace
-      - key: OPENCLAW_GATEWAY_TOKEN
+      - key: EASYHUB_GATEWAY_TOKEN
         generateValue: true # auto-generates a secure token
     disk:
-      name: openclaw-data
+      name: EasyHub-data
       mountPath: /data
       sizeGB: 1
 ```
@@ -83,7 +83,7 @@ The Blueprint defaults to `starter`. To use free tier, change `plan: free` in yo
 
 ### Access the Control UI
 
-The web dashboard is available at `https://<your-service>.onrender.com/openclaw`.
+The web dashboard is available at `https://<your-service>.onrender.com/EasyHub`.
 
 ## Render Dashboard features
 
@@ -105,7 +105,7 @@ Modify variables in **Dashboard → your service → Environment**. Changes trig
 
 ### Auto-deploy
 
-If you use the original OpenClaw repository, Render will not auto-deploy your OpenClaw. To update it, run a manual Blueprint sync from the dashboard.
+If you use the original EasyHub repository, Render will not auto-deploy your EasyHub. To update it, run a manual Blueprint sync from the dashboard.
 
 ## Custom domain
 
@@ -121,7 +121,7 @@ Render supports horizontal and vertical scaling:
 - **Vertical**: Change the plan to get more CPU/RAM
 - **Horizontal**: Increase instance count (Standard plan and above)
 
-For OpenClaw, vertical scaling is usually sufficient. Horizontal scaling requires sticky sessions or external state management.
+For EasyHub, vertical scaling is usually sufficient. Horizontal scaling requires sticky sessions or external state management.
 
 ## Backups and migration
 
@@ -131,7 +131,7 @@ Export your configuration and workspace at any time:
 https://<your-service>.onrender.com/setup/export
 ```
 
-This downloads a portable backup you can restore on any OpenClaw host.
+This downloads a portable backup you can restore on any EasyHub host.
 
 ## Troubleshooting
 

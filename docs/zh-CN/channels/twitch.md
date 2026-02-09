@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 为 OpenClaw 设置 Twitch 聊天集成
+  - 为 EasyHub 设置 Twitch 聊天集成
 summary: Twitch 聊天机器人配置和设置
 title: Twitch
 x-i18n:
@@ -14,7 +14,7 @@ x-i18n:
 
 # Twitch（插件）
 
-通过 IRC 连接支持 Twitch 聊天。OpenClaw 以 Twitch 用户（机器人账户）身份连接，在频道中接收和发送消息。
+通过 IRC 连接支持 Twitch 聊天。EasyHub 以 Twitch 用户（机器人账户）身份连接，在频道中接收和发送消息。
 
 ## 需要插件
 
@@ -23,13 +23,13 @@ Twitch 作为插件发布，未与核心安装捆绑。
 通过 CLI 安装（npm 注册表）：
 
 ```bash
-openclaw plugins install @openclaw/twitch
+EasyHub plugins install @easyhub/twitch
 ```
 
 本地检出（从 git 仓库运行时）：
 
 ```bash
-openclaw plugins install ./extensions/twitch
+EasyHub plugins install ./extensions/twitch
 ```
 
 详情：[插件](/tools/plugin)
@@ -43,7 +43,7 @@ openclaw plugins install ./extensions/twitch
    - 复制 **Client ID** 和 **Access Token**
 3. 查找你的 Twitch 用户 ID：https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/
 4. 配置令牌：
-   - 环境变量：`OPENCLAW_TWITCH_ACCESS_TOKEN=...`（仅限默认账户）
+   - 环境变量：`EASYHUB_TWITCH_ACCESS_TOKEN=...`（仅限默认账户）
    - 或配置：`channels.twitch.accessToken`
    - 如果两者都设置，配置优先（环境变量回退仅适用于默认账户）。
 5. 启动 Gateway 网关。
@@ -57,8 +57,8 @@ openclaw plugins install ./extensions/twitch
   channels: {
     twitch: {
       enabled: true,
-      username: "openclaw", // 机器人的 Twitch 账户
-      accessToken: "oauth:abc123...", // OAuth Access Token（或使用 OPENCLAW_TWITCH_ACCESS_TOKEN 环境变量）
+      username: "EasyHub", // 机器人的 Twitch 账户
+      accessToken: "oauth:abc123...", // OAuth Access Token（或使用 EASYHUB_TWITCH_ACCESS_TOKEN 环境变量）
       clientId: "xyz789...", // Token Generator 中的 Client ID
       channel: "vevisk", // 要加入的 Twitch 频道聊天（必填）
       allowFrom: ["123456789"], // （推荐）仅限你的 Twitch 用户 ID - 从 https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/ 获取
@@ -91,7 +91,7 @@ openclaw plugins install ./extensions/twitch
 **环境变量（仅限默认账户）：**
 
 ```bash
-OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
+EASYHUB_TWITCH_ACCESS_TOKEN=oauth:abc123...
 ```
 
 **或配置：**
@@ -101,7 +101,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
   channels: {
     twitch: {
       enabled: true,
-      username: "openclaw",
+      username: "EasyHub",
       accessToken: "oauth:abc123...",
       clientId: "xyz789...",
       channel: "vevisk",
@@ -163,13 +163,13 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
     twitch: {
       accounts: {
         channel1: {
-          username: "openclaw",
+          username: "EasyHub",
           accessToken: "oauth:abc123...",
           clientId: "xyz789...",
           channel: "vevisk",
         },
         channel2: {
-          username: "openclaw",
+          username: "EasyHub",
           accessToken: "oauth:def456...",
           clientId: "uvw012...",
           channel: "secondchannel",
@@ -258,8 +258,8 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 首先，运行诊断命令：
 
 ```bash
-openclaw doctor
-openclaw channels status --probe
+EasyHub doctor
+EasyHub channels status --probe
 ```
 
 ### 机器人不响应消息
@@ -323,7 +323,7 @@ Access token refreshed for user 123456 (expires in 14400s)
   channels: {
     twitch: {
       enabled: true,
-      username: "openclaw",
+      username: "EasyHub",
       accessToken: "oauth:abc123...",
       clientId: "xyz789...",
       channel: "vevisk",

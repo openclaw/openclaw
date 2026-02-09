@@ -16,7 +16,7 @@ x-i18n:
 
 # Gateway 网关协议（WebSocket）
 
-Gateway 网关 WS 协议是 OpenClaw 的**单一控制平面 + 节点传输**。所有客户端（CLI、Web UI、macOS 应用、iOS/Android 节点、无头节点）都通过 WebSocket 连接，并在握手时声明其**角色** + **作用域**。
+Gateway 网关 WS 协议是 EasyHub 的**单一控制平面 + 节点传输**。所有客户端（CLI、Web UI、macOS 应用、iOS/Android 节点、无头节点）都通过 WebSocket 连接，并在握手时声明其**角色** + **作用域**。
 
 ## 传输
 
@@ -58,7 +58,7 @@ Gateway 网关 → 客户端（连接前质询）：
     "permissions": {},
     "auth": { "token": "…" },
     "locale": "en-US",
-    "userAgent": "openclaw-cli/1.2.3",
+    "userAgent": "EasyHub-cli/1.2.3",
     "device": {
       "id": "device_fingerprint",
       "publicKey": "…",
@@ -116,7 +116,7 @@ Gateway 网关 → 客户端：
     "permissions": { "camera.capture": true, "screen.record": false },
     "auth": { "token": "…" },
     "locale": "en-US",
-    "userAgent": "openclaw-ios/1.2.3",
+    "userAgent": "EasyHub-ios/1.2.3",
     "device": {
       "id": "device_fingerprint",
       "publicKey": "…",
@@ -190,7 +190,7 @@ Gateway 网关将这些视为**声明**并强制执行服务器端允许列表�
 
 ## 认证
 
-- 如果设置了 `OPENCLAW_GATEWAY_TOKEN`（或 `--token`），`connect.params.auth.token`
+- 如果设置了 `EASYHUB_GATEWAY_TOKEN`（或 `--token`），`connect.params.auth.token`
   必须匹配，否则套接字将被关闭。
 - 配对后，Gateway 网关会颁发一个作用于连接角色 + 作用域的**设备令牌**。它在 `hello-ok.auth.deviceToken` 中返回，
   客户端应将其持久化以供将来连接使用。

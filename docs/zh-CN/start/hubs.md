@@ -1,7 +1,7 @@
 ---
 read_when:
   - 你想要一份完整的文档地图
-summary: 链接到每篇 OpenClaw 文档的导航中心
+summary: 链接到每篇 EasyHub 文档的导航中心
 title: 文档导航中心
 x-i18n:
   generated_at: "2026-02-04T17:55:29Z"
@@ -29,7 +29,7 @@ x-i18n:
 - [文档目录](/start/docs-directory)
 - [配置](/gateway/configuration)
 - [配置示例](/gateway/configuration-examples)
-- [OpenClaw 助手](/start/openclaw)
+- [EasyHub 助手](/start/EasyHub)
 - [展示](/start/showcase)
 - [背景故事](/start/lore)
 

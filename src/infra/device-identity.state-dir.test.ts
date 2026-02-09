@@ -20,8 +20,8 @@ describe("device identity state dir defaults", () => {
     restoreStateDirEnv(envSnapshot);
   });
 
-  it("writes the default identity file under OPENCLAW_STATE_DIR", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-identity-state-"));
+  it("writes the default identity file under EASYHUB_STATE_DIR", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-identity-state-"));
     const stateDir = path.join(tempRoot, "state");
     setStateDirEnv(stateDir);
     vi.resetModules();

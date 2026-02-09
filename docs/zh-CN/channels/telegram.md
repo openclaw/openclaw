@@ -117,7 +117,7 @@ Telegram 机器人默认启用**隐私模式**，这会限制它们接收哪些�
 
 ## 草稿流式传输
 
-OpenClaw 可以在 Telegram 私信中使用 `sendMessageDraft` 流式传输部分回复。
+EasyHub 可以在 Telegram 私信中使用 `sendMessageDraft` 流式传输部分回复。
 
 要求：
 
@@ -132,11 +132,11 @@ OpenClaw 可以在 Telegram 私信中使用 `sendMessageDraft` 流式传输部�
 - 出站 Telegram 文本使用 `parse_mode: "HTML"`（Telegram 支持的标签子集）。
 - 类 Markdown 输入被渲染为 **Telegram 安全 HTML**（粗体/斜体/删除线/代码/链接）；块级元素被扁平化为带换行/项目符号的文本。
 - 来自模型的原始 HTML 会被转义，以避免 Telegram 解析错误。
-- 如果 Telegram 拒绝 HTML 负载，OpenClaw 会以纯文本重试相同的消息。
+- 如果 Telegram 拒绝 HTML 负载，EasyHub 会以纯文本重试相同的消息。
 
 ## 命令（原生 + 自定义）
 
-OpenClaw 在启动时向 Telegram 的机器人菜单注册原生命令（如 `/status`、`/reset`、`/model`）。
+EasyHub 在启动时向 Telegram 的机器人菜单注册原生命令（如 `/status`、`/reset`、`/model`）。
 你可以通过配置向菜单添加自定义命令：
 
 ```json5
@@ -161,7 +161,7 @@ OpenClaw 在启动时向 Telegram 的机器人菜单注册原生命令（如 `/s
 
 注意：
 
-- 自定义命令**仅是菜单条目**；除非你在其他地方处理它们，否则 OpenClaw 不会实现它们。
+- 自定义命令**仅是菜单条目**；除非你在其他地方处理它们，否则 EasyHub 不会实现它们。
 - 命令名称会被规范化（去除前导 `/`，转为小写），必须匹配 `a-z`、`0-9`、`_`（1-32 个字符）。
 - 自定义命令**不能覆盖原生命令**。冲突会被忽略并记录日志。
 - 如果禁用了 `commands.native`，则只注册自定义命令（如果没有则清空）。
@@ -239,7 +239,7 @@ OpenClaw 在启动时向 Telegram 的机器人菜单注册原生命令（如 `/s
 
 **提示：** 要获取你自己的用户 ID，私信机器人，它会回复你的用户 ID（配对消息），或者在命令启用后使用 `/whoami`。
 
-**隐私注意：** `@userinfobot` 是第三方机器人。如果你更倾向于其他方式，将机器人添加到群组，发送一条消息，然后使用 `openclaw logs --follow` 读取 `chat.id`，或使用 Bot API `getUpdates`。
+**隐私注意：** `@userinfobot` 是第三方机器人。如果你更倾向于其他方式，将机器人添加到群组，发送一条消息，然后使用 `EasyHub logs --follow` 读取 `chat.id`，或使用 Bot API `getUpdates`。
 
 ## 配置写入
 
@@ -247,7 +247,7 @@ OpenClaw 在启动时向 Telegram 的机器人菜单注册原生命令（如 `/s
 
 这发生在以下情况：
 
-- 群组升级为超级群组，Telegram 发出 `migrate_to_chat_id`（聊天 ID 更改）。OpenClaw 可以自动迁移 `channels.telegram.groups`。
+- 群组升级为超级群组，Telegram 发出 `migrate_to_chat_id`（聊天 ID 更改）。EasyHub 可以自动迁移 `channels.telegram.groups`。
 - 你在 Telegram 聊天中运行 `/config set` 或 `/config unset`（需要 `commands.config: true`）。
 
 禁用方式：
@@ -260,7 +260,7 @@ OpenClaw 在启动时向 Telegram 的机器人菜单注册原生命令（如 `/s
 
 ## 话题（论坛超级群组）
 
-Telegram 论坛话题在每条消息中包含 `message_thread_id`。OpenClaw：
+Telegram 论坛话题在每条消息中包含 `message_thread_id`。EasyHub：
 
 - 将 `:topic:<threadId>` 附加到 Telegram 群组会话键，使每个话题隔离。
 - 发送输入指示器和回复时带上 `message_thread_id`，使响应保持在话题内。
@@ -269,7 +269,7 @@ Telegram 论坛话题在每条消息中包含 `message_thread_id`。OpenClaw：
 - 话题特定配置可在 `channels.telegram.groups.<chatId>.topics.<threadId>` 下设置（skills、允许列表、自动回复、系统提示、禁用）。
 - 话题配置继承群组设置（requireMention、允许列表、skills、提示、enabled），除非每话题覆盖。
 
-私聊在某些边缘情况下可能包含 `message_thread_id`。OpenClaw 保持私信会话键不变，但在存在线程 id 时仍将其用于回复/草稿流式传输。
+私聊在某些边缘情况下可能包含 `message_thread_id`。EasyHub 保持私信会话键不变，但在存在线程 id 时仍将其用于回复/草稿流式传输。
 
 ## 内联按钮
 
@@ -354,8 +354,8 @@ Telegram 功能可以在两个级别配置（上面显示的对象形式；旧�
 
 - 默认：`channels.telegram.dmPolicy = "pairing"`。未知发送者收到配对码；在批准之前消息被忽略（配对码 1 小时后过期）。
 - 批准方式：
-  - `openclaw pairing list telegram`
-  - `openclaw pairing approve telegram <CODE>`
+  - `EasyHub pairing list telegram`
+  - `EasyHub pairing approve telegram <CODE>`
 - 配对是 Telegram 私信使用的默认 token 交换。详情：[配对](/channels/pairing)
 - `channels.telegram.allowFrom` 接受数字用户 ID（推荐）或 `@username` 条目。这**不是**机器人用户名；使用人类发送者的 ID。向导接受 `@username` 并在可能时将其解析为数字 ID。
 
@@ -364,7 +364,7 @@ Telegram 功能可以在两个级别配置（上面显示的对象形式；旧�
 更安全（无第三方机器人）：
 
 1. 启动 Gateway 网关并私信你的机器人。
-2. 运行 `openclaw logs --follow` 并查找 `from.id`。
+2. 运行 `EasyHub logs --follow` 并查找 `from.id`。
 
 备选（官方 Bot API）：
 
@@ -418,7 +418,7 @@ Telegram 通过标签支持可选的线程回复：
 ## 音频消息（语音 vs 文件）
 
 Telegram 区分**语音备忘录**（圆形气泡）和**音频文件**（元数据卡片）。
-OpenClaw 默认使用音频文件以保持向后兼容性。
+EasyHub 默认使用音频文件以保持向后兼容性。
 
 要在智能体回复中强制使用语音备忘录气泡，在回复中的任何位置包含此标签：
 
@@ -440,11 +440,11 @@ OpenClaw 默认使用音频文件以保持向后兼容性。
 
 ## 贴纸
 
-OpenClaw 支持接收和发送 Telegram 贴纸，并具有智能缓存功能。
+EasyHub 支持接收和发送 Telegram 贴纸，并具有智能缓存功能。
 
 ### 接收贴纸
 
-当用户发送贴纸时，OpenClaw 根据贴纸类型处理：
+当用户发送贴纸时，EasyHub 根据贴纸类型处理：
 
 - **静态贴纸（WEBP）：** 下载并通过视觉处理。贴纸在消息内容中显示为 `<media:sticker>` 占位符。
 - **动画贴纸（TGS）：** 跳过（Lottie 格式不支持处理）。
@@ -461,7 +461,7 @@ OpenClaw 支持接收和发送 Telegram 贴纸，并具有智能缓存功能。
 
 ### 贴纸缓存
 
-贴纸通过 AI 的视觉功能处理以生成描述。由于相同的贴纸经常重复发送，OpenClaw 缓存这些描述以避免冗余的 API 调用。
+贴纸通过 AI 的视觉功能处理以生成描述。由于相同的贴纸经常重复发送，EasyHub 缓存这些描述以避免冗余的 API 调用。
 
 **工作原理：**
 
@@ -469,7 +469,7 @@ OpenClaw 支持接收和发送 Telegram 贴纸，并具有智能缓存功能。
 2. **缓存存储：** 描述与贴纸的文件 ID、表情符号和集合名称一起保存。
 3. **后续遇到：** 当再次看到相同贴纸时，直接使用缓存的描述。图像不会发送给 AI。
 
-**缓存位置：** `~/.openclaw/telegram/sticker-cache.json`
+**缓存位置：** `~/.easyhub/telegram/sticker-cache.json`
 
 **缓存条目格式：**
 
@@ -573,7 +573,7 @@ OpenClaw 支持接收和发送 Telegram 贴纸，并具有智能缓存功能。
 ## 流式传输（草稿）
 
 Telegram 可以在智能体生成响应时流式传输**草稿气泡**。
-OpenClaw 使用 Bot API `sendMessageDraft`（不是真实消息），然后将最终回复作为普通消息发送。
+EasyHub 使用 Bot API `sendMessageDraft`（不是真实消息），然后将最终回复作为普通消息发送。
 
 要求（Telegram Bot API 9.3+）：
 
@@ -615,7 +615,7 @@ OpenClaw 使用 Bot API `sendMessageDraft`（不是真实消息），然后将�
 ## 反应通知
 
 **反应工作原理：**
-Telegram 反应作为**单独的 `message_reaction` 事件**到达，而不是消息负载中的属性。当用户添加反应时，OpenClaw：
+Telegram 反应作为**单独的 `message_reaction` 事件**到达，而不是消息负载中的属性。当用户添加反应时，EasyHub：
 
 1. 从 Telegram API 接收 `message_reaction` 更新
 2. 将其转换为**系统事件**，格式为：`"Telegram reaction added: {emoji} by {user} on msg {id}"`
@@ -654,14 +654,14 @@ Telegram 反应作为**单独的 `message_reaction` 事件**到达，而不是�
 
 **要求：**
 
-- Telegram 机器人必须在 `allowed_updates` 中明确请求 `message_reaction`（由 OpenClaw 自动配置）
+- Telegram 机器人必须在 `allowed_updates` 中明确请求 `message_reaction`（由 EasyHub 自动配置）
 - 对于 webhook 模式，反应包含在 webhook `allowed_updates` 中
 - 对于轮询模式，反应包含在 `getUpdates` `allowed_updates` 中
 
 ## 投递目标（CLI/cron）
 
 - 使用聊天 id（`123456789`）或用户名（`@name`）作为目标。
-- 示例：`openclaw message send --channel telegram --target 123456789 --message "hi"`。
+- 示例：`EasyHub message send --channel telegram --target 123456789 --message "hi"`。
 
 ## 故障排除
 
@@ -669,8 +669,8 @@ Telegram 反应作为**单独的 `message_reaction` 事件**到达，而不是�
 
 - 如果你设置了 `channels.telegram.groups.*.requireMention=false`，Telegram 的 Bot API **隐私模式**必须禁用。
   - BotFather：`/setprivacy` → **Disable**（然后从群组中移除并重新添加机器人）
-- `openclaw channels status` 在配置期望未提及群组消息时显示警告。
-- `openclaw channels status --probe` 可以额外检查显式数字群组 ID 的成员资格（它无法审计通配符 `"*"` 规则）。
+- `EasyHub channels status` 在配置期望未提及群组消息时显示警告。
+- `EasyHub channels status --probe` 可以额外检查显式数字群组 ID 的成员资格（它无法审计通配符 `"*"` 规则）。
 - 快速测试：`/activation always`（仅会话级别；使用配置以持久化）
 
 **机器人完全看不到群组消息：**
@@ -678,7 +678,7 @@ Telegram 反应作为**单独的 `message_reaction` 事件**到达，而不是�
 - 如果设置了 `channels.telegram.groups`，群组必须被列出或使用 `"*"`
 - 在 @BotFather 中检查隐私设置 →"Group Privacy"应为 **OFF**
 - 验证机器人确实是成员（不仅仅是没有读取权限的管理员）
-- 检查 Gateway 网关日志：`openclaw logs --follow`（查找"skipping group message"）
+- 检查 Gateway 网关日志：`EasyHub logs --follow`（查找"skipping group message"）
 
 **机器人响应提及但不响应 `/activation always`：**
 
@@ -693,7 +693,7 @@ Telegram 反应作为**单独的 `message_reaction` 事件**到达，而不是�
 **长轮询在 Node 22+ 上立即中止（通常与代理/自定义 fetch 有关）：**
 
 - Node 22+ 对 `AbortSignal` 实例更严格；外部信号可以立即中止 `fetch` 调用。
-- 升级到规范化中止信号的 OpenClaw 构建版本，或在可以升级之前在 Node 20 上运行 Gateway 网关。
+- 升级到规范化中止信号的 EasyHub 构建版本，或在可以升级之前在 Node 20 上运行 Gateway 网关。
 
 **机器人启动后静默停止响应（或日志显示 `HttpError: Network request ... failed`）：**
 

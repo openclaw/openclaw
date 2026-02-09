@@ -14,7 +14,7 @@ Use these when a task is clearly tied to a script; otherwise prefer the CLI.
 ## Conventions
 
 - Scripts are **optional** unless referenced in docs or release checklists.
-- Prefer CLI surfaces when they exist (example: auth monitoring uses `openclaw models status --check`).
+- Prefer CLI surfaces when they exist (example: auth monitoring uses `EasyHub models status --check`).
 - Assume scripts are host‑specific; read them before running on a new machine.
 
 ## Auth monitoring scripts

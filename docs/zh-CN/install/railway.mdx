@@ -9,7 +9,7 @@ x-i18n:
   workflow: 15
 ---
 
-通过一键模板在 Railway 上部署 OpenClaw，并在浏览器中完成设置。
+通过一键模板在 Railway 上部署 EasyHub，并在浏览器中完成设置。
 这是最简单的"无需在服务器上使用终端"的方式：Railway 为你运行 Gateway网关，
 你只需通过 `/setup` 网页向导完成所有配置。
 
@@ -37,11 +37,11 @@ Railway 会：
 然后打开：
 
 - `https://<your-railway-domain>/setup` — 设置向导（需密码保护）
-- `https://<your-railway-domain>/openclaw` — 控制面板 UI
+- `https://<your-railway-domain>/EasyHub` — 控制面板 UI
 
 ## 你将获得
 
-- 托管的 OpenClaw Gateway网关 + 控制面板 UI
+- 托管的 EasyHub Gateway网关 + 控制面板 UI
 - `/setup` 网页设置向导（无需终端命令）
 - 通过 Railway Volume（`/data`）实现持久化存储，配置/凭证/工作区在重新部署后不会丢失
 - 在 `/setup/export` 导出备份，方便日后从 Railway 迁移
@@ -66,9 +66,9 @@ Railway 会：
 
 - `SETUP_PASSWORD`（必需）
 - `PORT=8080`（必需 — 必须与公共网络中的端口一致）
-- `OPENCLAW_STATE_DIR=/data/.openclaw`（推荐）
-- `OPENCLAW_WORKSPACE_DIR=/data/workspace`（推荐）
-- `OPENCLAW_GATEWAY_TOKEN`（推荐；请视为管理员密钥）
+- `EASYHUB_STATE_DIR=/data/.easyhub`（推荐）
+- `EASYHUB_WORKSPACE_DIR=/data/workspace`（推荐）
+- `EASYHUB_GATEWAY_TOKEN`（推荐；请视为管理员密钥）
 
 ## 设置流程
 
@@ -103,4 +103,4 @@ Railway 会：
 
 - `https://<your-railway-domain>/setup/export`
 
-这会导出你的 OpenClaw 状态和工作区，方便你迁移到其他主机而不丢失配置或记忆。
+这会导出你的 EasyHub 状态和工作区，方便你迁移到其他主机而不丢失配置或记忆。

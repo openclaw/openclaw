@@ -19,7 +19,7 @@ x-i18n:
 
 1. 创建一个 Slack 应用并启用 **Socket Mode**。
 2. 创建一个 **App Token**（`xapp-...`）和 **Bot Token**（`xoxb-...`）。
-3. 为 OpenClaw 设置令牌并启动 Gateway 网关。
+3. 为 EasyHub 设置令牌并启动 Gateway 网关。
 
 最小配置：
 
@@ -49,14 +49,14 @@ x-i18n:
    - `channel_rename`
    - `pin_added`、`pin_removed`
 6. 邀请机器人加入你希望它读取的频道。
-7. Slash Commands → 如果你使用 `channels.slack.slashCommand`，创建 `/openclaw`。如果启用原生命令，为每个内置命令添加一个斜杠命令（名称与 `/help` 相同）。除非你设置 `channels.slack.commands.native: true`，否则 Slack 默认关闭原生命令（全局 `commands.native` 是 `"auto"`，对 Slack 保持关闭）。
+7. Slash Commands → 如果你使用 `channels.slack.slashCommand`，创建 `/EasyHub`。如果启用原生命令，为每个内置命令添加一个斜杠命令（名称与 `/help` 相同）。除非你设置 `channels.slack.commands.native: true`，否则 Slack 默认关闭原生命令（全局 `commands.native` 是 `"auto"`，对 Slack 保持关闭）。
 8. App Home → 启用 **Messages Tab** 以便用户可以私信机器人。
 
 使用下面的 manifest 以保持权限范围和事件同步。
 
 多账户支持：使用 `channels.slack.accounts` 配置每个账户的令牌和可选的 `name`。参见 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) 了解共享模式。
 
-### OpenClaw 配置（最小）
+### EasyHub 配置（最小）
 
 通过环境变量设置令牌（推荐）：
 
@@ -79,7 +79,7 @@ x-i18n:
 
 ### 用户令牌（可选）
 
-OpenClaw 可以使用 Slack 用户令牌（`xoxp-...`）进行读取操作（历史记录、置顶、表情回应、表情符号、成员信息）。默认情况下保持只读：当存在用户令牌时，读取优先使用用户令牌，而写入仍然使用 bot 令牌，除非你明确选择加入。即使设置了 `userTokenReadOnly: false`，当 bot 令牌可用时，写入仍然优先使用 bot 令牌。
+EasyHub 可以使用 Slack 用户令牌（`xoxp-...`）进行读取操作（历史记录、置顶、表情回应、表情符号、成员信息）。默认情况下保持只读：当存在用户令牌时，读取优先使用用户令牌，而写入仍然使用 bot 令牌，除非你明确选择加入。即使设置了 `userTokenReadOnly: false`，当 bot 令牌可用时，写入仍然优先使用 bot 令牌。
 
 用户令牌在配置文件中配置（不支持环境变量）。对于多账户，设置 `channels.slack.accounts.<id>.userToken`。
 
@@ -117,7 +117,7 @@ OpenClaw 可以使用 Slack 用户令牌（`xoxp-...`）进行读取操作（历
 #### 令牌使用
 
 - 读取操作（历史记录、表情回应列表、置顶列表、表情符号列表、成员信息、搜索）在配置了用户令牌时优先使用用户令牌，否则使用 bot 令牌。
-- 写入操作（发送/编辑/删除消息、添加/移除表情回应、置顶/取消置顶、文件上传）默认使用 bot 令牌。如果 `userTokenReadOnly: false` 且没有可用的 bot 令牌，OpenClaw 会回退到用户令牌。
+- 写入操作（发送/编辑/删除消息、添加/移除表情回应、置顶/取消置顶、文件上传）默认使用 bot 令牌。如果 `userTokenReadOnly: false` 且没有可用的 bot 令牌，EasyHub 会回退到用户令牌。
 
 ### 历史上下文
 
@@ -141,7 +141,7 @@ HTTP 模式使用 Events API + Interactivity + Slash Commands，共享一个请�
 示例请求 URL：
 `https://gateway-host/slack/events`
 
-### OpenClaw 配置（最小）
+### EasyHub 配置（最小）
 
 ```json5
 {
@@ -166,12 +166,12 @@ HTTP 模式使用 Events API + Interactivity + Slash Commands，共享一个请�
 ```json
 {
   "display_information": {
-    "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "name": "EasyHub",
+    "description": "Slack connector for EasyHub"
   },
   "features": {
     "bot_user": {
-      "display_name": "OpenClaw",
+      "display_name": "EasyHub",
       "always_online": false
     },
     "app_home": {
@@ -180,8 +180,8 @@ HTTP 模式使用 Events API + Interactivity + Slash Commands，共享一个请�
     },
     "slash_commands": [
       {
-        "command": "/openclaw",
-        "description": "Send a message to OpenClaw",
+        "command": "/EasyHub",
+        "description": "Send a message to EasyHub",
         "should_escape": false
       }
     ]
@@ -343,7 +343,7 @@ Slack 仅使用 Socket Mode（无 HTTP webhook 服务器）。提供两个令牌
     },
     "slashCommand": {
       "enabled": true,
-      "name": "openclaw",
+      "name": "EasyHub",
       "sessionPrefix": "slack:slash",
       "ephemeral": true
     },
@@ -368,7 +368,7 @@ Slack 仅使用 Socket Mode（无 HTTP webhook 服务器）。提供两个令牌
 
 ## 回复线程
 
-默认情况下，OpenClaw 在主频道回复。使用 `channels.slack.replyToMode` 控制自动线程：
+默认情况下，EasyHub 在主频道回复。使用 `channels.slack.replyToMode` 控制自动线程：
 
 | 模式    | 行为                                                                                         |
 | ------- | -------------------------------------------------------------------------------------------- |
@@ -463,14 +463,14 @@ Slack 仅使用 Socket Mode（无 HTTP webhook 服务器）。提供两个令牌
 - 私信共享 `main` 会话（与 WhatsApp/Telegram 相同）。
 - 频道映射到 `agent:<agentId>:slack:channel:<channelId>` 会话。
 - 斜杠命令使用 `agent:<agentId>:slack:slash:<userId>` 会话（前缀可通过 `channels.slack.slashCommand.sessionPrefix` 配置）。
-- 如果 Slack 未提供 `channel_type`，OpenClaw 会从频道 ID 前缀（`D`、`C`、`G`）推断并默认为 `channel` 以保持会话键稳定。
+- 如果 Slack 未提供 `channel_type`，EasyHub 会从频道 ID 前缀（`D`、`C`、`G`）推断并默认为 `channel` 以保持会话键稳定。
 - 原生命令注册使用 `commands.native`（全局默认 `"auto"` → Slack 关闭），可以使用 `channels.slack.commands.native` 按工作空间覆盖。文本命令需要独立的 `/...` 消息，可以使用 `commands.text: false` 禁用。Slack 斜杠命令在 Slack 应用中管理，不会自动移除。使用 `commands.useAccessGroups: false` 绕过命令的访问组检查。
 - 完整命令列表 + 配置：[斜杠命令](/tools/slash-commands)
 
 ## 私信安全（配对）
 
 - 默认：`channels.slack.dm.policy="pairing"` — 未知的私信发送者会收到配对码（1 小时后过期）。
-- 通过以下方式批准：`openclaw pairing approve slack <code>`。
+- 通过以下方式批准：`EasyHub pairing approve slack <code>`。
 - 要允许任何人：设置 `channels.slack.dm.policy="open"` 和 `channels.slack.dm.allowFrom=["*"]`。
 - `channels.slack.dm.allowFrom` 接受用户 ID、@用户名或邮箱（在令牌允许时启动时解析）。向导在设置期间接受用户名，并在令牌允许时将其解析为 ID。
 
@@ -480,7 +480,7 @@ Slack 仅使用 Socket Mode（无 HTTP webhook 服务器）。提供两个令牌
 - `allowlist` 要求频道列在 `channels.slack.channels` 中。
 - 如果你只设置了 `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` 而从未创建 `channels.slack` 部分，运行时默认将 `groupPolicy` 设为 `open`。添加 `channels.slack.groupPolicy`、`channels.defaults.groupPolicy` 或频道白名单来锁定它。
 - 配置向导接受 `#channel` 名称，并在可能时（公开 + 私有）将其解析为 ID；如果存在多个匹配，它优先选择活跃的频道。
-- 启动时，OpenClaw 将白名单中的频道/用户名解析为 ID（在令牌允许时）并记录映射；未解析的条目按原样保留。
+- 启动时，EasyHub 将白名单中的频道/用户名解析为 ID（在令牌允许时）并记录映射；未解析的条目按原样保留。
 - 要**不允许任何频道**，设置 `channels.slack.groupPolicy: "disabled"`（或保留空白名单）。
 
 频道选项（`channels.slack.channels.<id>` 或 `channels.slack.channels.<name>`）：

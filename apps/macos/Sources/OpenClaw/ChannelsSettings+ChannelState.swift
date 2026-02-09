@@ -1,4 +1,4 @@
-import OpenClawProtocol
+import EasyHubProtocol
 import SwiftUI
 
 extension ChannelsSettings {

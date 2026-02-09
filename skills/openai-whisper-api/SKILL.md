@@ -4,7 +4,7 @@ description: Transcribe audio via OpenAI Audio Transcriptions API (Whisper).
 homepage: https://platform.openai.com/docs/guides/speech-to-text
 metadata:
   {
-    "openclaw":
+    "EasyHub":
       {
         "emoji": "☁️",
         "requires": { "bins": ["curl"], "env": ["OPENAI_API_KEY"] },
@@ -39,7 +39,7 @@ Defaults:
 
 ## API key
 
-Set `OPENAI_API_KEY`, or configure it in `~/.openclaw/openclaw.json`:
+Set `OPENAI_API_KEY`, or configure it in `~/.easyhub/easyhub.json`:
 
 ```json5
 {

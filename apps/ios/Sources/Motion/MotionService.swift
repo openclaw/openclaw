@@ -1,9 +1,9 @@
 import CoreMotion
 import Foundation
-import OpenClawKit
+import EasyHubKit
 
 final class MotionService: MotionServicing {
-    func activities(params: OpenClawMotionActivityParams) async throws -> OpenClawMotionActivityPayload {
+    func activities(params: EasyHubMotionActivityParams) async throws -> EasyHubMotionActivityPayload {
         guard CMMotionActivityManager.isActivityAvailable() else {
             throw NSError(domain: "Motion", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "MOTION_UNAVAILABLE: activity not supported on this device",
@@ -20,7 +20,7 @@ final class MotionService: MotionServicing {
         let limit = max(1, min(params.limit ?? 200, 1000))
 
         let manager = CMMotionActivityManager()
-        let mapped = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[OpenClawMotionActivityEntry], Error>) in
+        let mapped = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[EasyHubMotionActivityEntry], Error>) in
             manager.queryActivityStarting(from: start, to: end, to: OperationQueue()) { activity, error in
                 if let error {
                     cont.resume(throwing: error)
@@ -28,7 +28,7 @@ final class MotionService: MotionServicing {
                     let formatter = ISO8601DateFormatter()
                     let sliced = Array((activity ?? []).suffix(limit))
                     let entries = sliced.map { entry in
-                        OpenClawMotionActivityEntry(
+                        EasyHubMotionActivityEntry(
                             startISO: formatter.string(from: entry.startDate),
                             endISO: formatter.string(from: end),
                             confidence: Self.confidenceString(entry.confidence),
@@ -44,10 +44,10 @@ final class MotionService: MotionServicing {
             }
         }
 
-        return OpenClawMotionActivityPayload(activities: mapped)
+        return EasyHubMotionActivityPayload(activities: mapped)
     }
 
-    func pedometer(params: OpenClawPedometerParams) async throws -> OpenClawPedometerPayload {
+    func pedometer(params: EasyHubPedometerParams) async throws -> EasyHubPedometerPayload {
         guard CMPedometer.isStepCountingAvailable() else {
             throw NSError(domain: "Motion", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "PEDOMETER_UNAVAILABLE: step counting not supported",
@@ -62,13 +62,13 @@ final class MotionService: MotionServicing {
 
         let (start, end) = Self.resolveRange(startISO: params.startISO, endISO: params.endISO)
         let pedometer = CMPedometer()
-        let payload = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<OpenClawPedometerPayload, Error>) in
+        let payload = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<EasyHubPedometerPayload, Error>) in
             pedometer.queryPedometerData(from: start, to: end) { data, error in
                 if let error {
                     cont.resume(throwing: error)
                 } else {
                     let formatter = ISO8601DateFormatter()
-                    let payload = OpenClawPedometerPayload(
+                    let payload = EasyHubPedometerPayload(
                         startISO: formatter.string(from: start),
                         endISO: formatter.string(from: end),
                         steps: data?.numberOfSteps.intValue,

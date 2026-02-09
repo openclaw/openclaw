@@ -8,14 +8,14 @@ title: "Hooks"
 
 # Hooks
 
-Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in OpenClaw.
+Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in EasyHub.
 
 ## Getting Oriented
 
 Hooks are small scripts that run when something happens. There are two kinds:
 
 - **Hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
-- **Webhooks**: external HTTP webhooks that let other systems trigger work in OpenClaw. See [Webhook Hooks](/automation/webhook) or use `openclaw webhooks` for Gmail helper commands.
+- **Webhooks**: external HTTP webhooks that let other systems trigger work in EasyHub. See [Webhook Hooks](/automation/webhook) or use `EasyHub webhooks` for Gmail helper commands.
 
 Hooks can also be bundled inside plugins; see [Plugins](/tools/plugin#plugin-hooks).
 
@@ -35,54 +35,54 @@ The hooks system allows you to:
 - Save session context to memory when `/new` is issued
 - Log all commands for auditing
 - Trigger custom automations on agent lifecycle events
-- Extend OpenClaw's behavior without modifying core code
+- Extend EasyHub's behavior without modifying core code
 
 ## Getting Started
 
 ### Bundled Hooks
 
-OpenClaw ships with four bundled hooks that are automatically discovered:
+EasyHub ships with four bundled hooks that are automatically discovered:
 
-- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new`
-- **📝 command-logger**: Logs all command events to `~/.openclaw/logs/commands.log`
+- **💾 session-memory**: Saves session context to your agent workspace (default `~/.easyhub/workspace/memory/`) when you issue `/new`
+- **📝 command-logger**: Logs all command events to `~/.easyhub/logs/commands.log`
 - **🚀 boot-md**: Runs `BOOT.md` when the gateway starts (requires internal hooks enabled)
 - **😈 soul-evil**: Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance
 
 List available hooks:
 
 ```bash
-openclaw hooks list
+EasyHub hooks list
 ```
 
 Enable a hook:
 
 ```bash
-openclaw hooks enable session-memory
+EasyHub hooks enable session-memory
 ```
 
 Check hook status:
 
 ```bash
-openclaw hooks check
+EasyHub hooks check
 ```
 
 Get detailed information:
 
 ```bash
-openclaw hooks info session-memory
+EasyHub hooks info session-memory
 ```
 
 ### Onboarding
 
-During onboarding (`openclaw onboard`), you'll be prompted to enable recommended hooks. The wizard automatically discovers eligible hooks and presents them for selection.
+During onboarding (`EasyHub onboard`), you'll be prompted to enable recommended hooks. The wizard automatically discovers eligible hooks and presents them for selection.
 
 ## Hook Discovery
 
 Hooks are automatically discovered from three directories (in order of precedence):
 
 1. **Workspace hooks**: `<workspace>/hooks/` (per-agent, highest precedence)
-2. **Managed hooks**: `~/.openclaw/hooks/` (user-installed, shared across workspaces)
-3. **Bundled hooks**: `<openclaw>/dist/hooks/bundled/` (shipped with OpenClaw)
+2. **Managed hooks**: `~/.easyhub/hooks/` (user-installed, shared across workspaces)
+3. **Bundled hooks**: `<EasyHub>/dist/hooks/bundled/` (shipped with EasyHub)
 
 Managed hook directories can be either a **single hook** or a **hook pack** (package directory).
 
@@ -96,11 +96,11 @@ my-hook/
 
 ## Hook Packs (npm/archives)
 
-Hook packs are standard npm packages that export one or more hooks via `openclaw.hooks` in
+Hook packs are standard npm packages that export one or more hooks via `EasyHub.hooks` in
 `package.json`. Install them with:
 
 ```bash
-openclaw hooks install <path-or-spec>
+EasyHub hooks install <path-or-spec>
 ```
 
 Example `package.json`:
@@ -109,14 +109,14 @@ Example `package.json`:
 {
   "name": "@acme/my-hooks",
   "version": "0.1.0",
-  "openclaw": {
+  "EasyHub": {
     "hooks": ["./hooks/my-hook", "./hooks/other-hook"]
   }
 }
 ```
 
 Each entry points to a hook directory containing `HOOK.md` and `handler.ts` (or `index.ts`).
-Hook packs can ship dependencies; they will be installed under `~/.openclaw/hooks/<id>`.
+Hook packs can ship dependencies; they will be installed under `~/.easyhub/hooks/<id>`.
 
 ## Hook Structure
 
@@ -128,9 +128,9 @@ The `HOOK.md` file contains metadata in YAML frontmatter plus Markdown documenta
 ---
 name: my-hook
 description: "Short description of what this hook does"
-homepage: https://docs.openclaw.ai/hooks#my-hook
+homepage: https://docs.EasyHub.ai/hooks#my-hook
 metadata:
-  { "openclaw": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
+  { "EasyHub": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
 ---
 
 # My Hook
@@ -154,7 +154,7 @@ No configuration needed.
 
 ### Metadata Fields
 
-The `metadata.openclaw` object supports:
+The `metadata.easyhub` object supports:
 
 - **`emoji`**: Display emoji for CLI (e.g., `"💾"`)
 - **`events`**: Array of events to listen for (e.g., `["command:new", "command:reset"]`)
@@ -214,7 +214,7 @@ Each event includes:
     senderId?: string,
     workspaceDir?: string,
     bootstrapFiles?: WorkspaceBootstrapFile[],
-    cfg?: OpenClawConfig
+    cfg?: EasyHubConfig
   }
 }
 ```
@@ -242,7 +242,7 @@ Triggered when the gateway starts:
 
 ### Tool Result Hooks (Plugin API)
 
-These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before OpenClaw persists them.
+These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before EasyHub persists them.
 
 - **`tool_result_persist`**: transform tool results before they are written to the session transcript. Must be synchronous; return the updated tool result payload or `undefined` to keep it as-is. See [Agent Loop](/concepts/agent-loop).
 
@@ -261,13 +261,13 @@ Planned event types:
 ### 1. Choose Location
 
 - **Workspace hooks** (`<workspace>/hooks/`): Per-agent, highest precedence
-- **Managed hooks** (`~/.openclaw/hooks/`): Shared across workspaces
+- **Managed hooks** (`~/.easyhub/hooks/`): Shared across workspaces
 
 ### 2. Create Directory Structure
 
 ```bash
-mkdir -p ~/.openclaw/hooks/my-hook
-cd ~/.openclaw/hooks/my-hook
+mkdir -p ~/.easyhub/hooks/my-hook
+cd ~/.easyhub/hooks/my-hook
 ```
 
 ### 3. Create HOOK.md
@@ -276,7 +276,7 @@ cd ~/.openclaw/hooks/my-hook
 ---
 name: my-hook
 description: "Does something useful"
-metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
+metadata: { "EasyHub": { "emoji": "🎯", "events": ["command:new"] } }
 ---
 
 # My Custom Hook
@@ -305,10 +305,10 @@ export default handler;
 
 ```bash
 # Verify hook is discovered
-openclaw hooks list
+EasyHub hooks list
 
 # Enable it
-openclaw hooks enable my-hook
+EasyHub hooks enable my-hook
 
 # Restart your gateway process (menu bar app restart on macOS, or restart your dev process)
 
@@ -402,46 +402,46 @@ The old config format still works for backwards compatibility:
 
 ```bash
 # List all hooks
-openclaw hooks list
+EasyHub hooks list
 
 # Show only eligible hooks
-openclaw hooks list --eligible
+EasyHub hooks list --eligible
 
 # Verbose output (show missing requirements)
-openclaw hooks list --verbose
+EasyHub hooks list --verbose
 
 # JSON output
-openclaw hooks list --json
+EasyHub hooks list --json
 ```
 
 ### Hook Information
 
 ```bash
 # Show detailed info about a hook
-openclaw hooks info session-memory
+EasyHub hooks info session-memory
 
 # JSON output
-openclaw hooks info session-memory --json
+EasyHub hooks info session-memory --json
 ```
 
 ### Check Eligibility
 
 ```bash
 # Show eligibility summary
-openclaw hooks check
+EasyHub hooks check
 
 # JSON output
-openclaw hooks check --json
+EasyHub hooks check --json
 ```
 
 ### Enable/Disable
 
 ```bash
 # Enable a hook
-openclaw hooks enable session-memory
+EasyHub hooks enable session-memory
 
 # Disable a hook
-openclaw hooks disable command-logger
+EasyHub hooks disable command-logger
 ```
 
 ## Bundled hook reference
@@ -454,7 +454,7 @@ Saves session context to memory when you issue `/new`.
 
 **Requirements**: `workspace.dir` must be configured
 
-**Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/.openclaw/workspace`)
+**Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/.easyhub/workspace`)
 
 **What it does**:
 
@@ -482,7 +482,7 @@ Saves session context to memory when you issue `/new`.
 **Enable**:
 
 ```bash
-openclaw hooks enable session-memory
+EasyHub hooks enable session-memory
 ```
 
 ### command-logger
@@ -493,7 +493,7 @@ Logs all command events to a centralized audit file.
 
 **Requirements**: None
 
-**Output**: `~/.openclaw/logs/commands.log`
+**Output**: `~/.easyhub/logs/commands.log`
 
 **What it does**:
 
@@ -512,19 +512,19 @@ Logs all command events to a centralized audit file.
 
 ```bash
 # View recent commands
-tail -n 20 ~/.openclaw/logs/commands.log
+tail -n 20 ~/.easyhub/logs/commands.log
 
 # Pretty-print with jq
-cat ~/.openclaw/logs/commands.log | jq .
+cat ~/.easyhub/logs/commands.log | jq .
 
 # Filter by action
-grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
+grep '"action":"new"' ~/.easyhub/logs/commands.log | jq .
 ```
 
 **Enable**:
 
 ```bash
-openclaw hooks enable command-logger
+EasyHub hooks enable command-logger
 ```
 
 ### soul-evil
@@ -540,7 +540,7 @@ Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by
 **Enable**:
 
 ```bash
-openclaw hooks enable soul-evil
+EasyHub hooks enable soul-evil
 ```
 
 **Config**:
@@ -581,7 +581,7 @@ Internal hooks must be enabled for this to run.
 **Enable**:
 
 ```bash
-openclaw hooks enable boot-md
+EasyHub hooks enable boot-md
 ```
 
 ## Best Practices
@@ -638,13 +638,13 @@ const handler: HookHandler = async (event) => {
 Specify exact events in metadata when possible:
 
 ```yaml
-metadata: { "openclaw": { "events": ["command:new"] } } # Specific
+metadata: { "EasyHub": { "events": ["command:new"] } } # Specific
 ```
 
 Rather than:
 
 ```yaml
-metadata: { "openclaw": { "events": ["command"] } } # General - more overhead
+metadata: { "EasyHub": { "events": ["command"] } } # General - more overhead
 ```
 
 ## Debugging
@@ -664,7 +664,7 @@ Registered hook: boot-md -> gateway:startup
 List all discovered hooks:
 
 ```bash
-openclaw hooks list --verbose
+EasyHub hooks list --verbose
 ```
 
 ### Check Registration
@@ -683,7 +683,7 @@ const handler: HookHandler = async (event) => {
 Check why a hook isn't eligible:
 
 ```bash
-openclaw hooks info my-hook
+EasyHub hooks info my-hook
 ```
 
 Look for missing requirements in the output.
@@ -699,7 +699,7 @@ Monitor gateway logs to see hook execution:
 ./scripts/clawlog.sh -f
 
 # Other platforms
-tail -f ~/.openclaw/gateway.log
+tail -f ~/.easyhub/gateway.log
 ```
 
 ### Test Hooks Directly
@@ -775,21 +775,21 @@ Session reset
 1. Check directory structure:
 
    ```bash
-   ls -la ~/.openclaw/hooks/my-hook/
+   ls -la ~/.easyhub/hooks/my-hook/
    # Should show: HOOK.md, handler.ts
    ```
 
 2. Verify HOOK.md format:
 
    ```bash
-   cat ~/.openclaw/hooks/my-hook/HOOK.md
+   cat ~/.easyhub/hooks/my-hook/HOOK.md
    # Should have YAML frontmatter with name and metadata
    ```
 
 3. List all discovered hooks:
 
    ```bash
-   openclaw hooks list
+   EasyHub hooks list
    ```
 
 ### Hook Not Eligible
@@ -797,7 +797,7 @@ Session reset
 Check requirements:
 
 ```bash
-openclaw hooks info my-hook
+EasyHub hooks info my-hook
 ```
 
 Look for missing:
@@ -812,7 +812,7 @@ Look for missing:
 1. Verify hook is enabled:
 
    ```bash
-   openclaw hooks list
+   EasyHub hooks list
    # Should show ✓ next to enabled hooks
    ```
 
@@ -860,8 +860,8 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 1. Create hook directory:
 
    ```bash
-   mkdir -p ~/.openclaw/hooks/my-hook
-   mv ./hooks/handlers/my-handler.ts ~/.openclaw/hooks/my-hook/handler.ts
+   mkdir -p ~/.easyhub/hooks/my-hook
+   mv ./hooks/handlers/my-handler.ts ~/.easyhub/hooks/my-hook/handler.ts
    ```
 
 2. Create HOOK.md:
@@ -870,7 +870,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
    ---
    name: my-hook
    description: "My custom hook"
-   metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
+   metadata: { "EasyHub": { "emoji": "🎯", "events": ["command:new"] } }
    ---
 
    # My Hook
@@ -896,7 +896,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 4. Verify and restart your gateway process:
 
    ```bash
-   openclaw hooks list
+   EasyHub hooks list
    # Should show: 🎯 my-hook ✓
    ```
 
@@ -911,6 +911,6 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 ## See Also
 
 - [CLI Reference: hooks](/cli/hooks)
-- [Bundled Hooks README](https://github.com/openclaw/openclaw/tree/main/src/hooks/bundled)
+- [Bundled Hooks README](https://github.com/EasyHub/EasyHub/tree/main/src/hooks/bundled)
 - [Webhook Hooks](/automation/webhook)
 - [Configuration](/gateway/configuration#hooks)

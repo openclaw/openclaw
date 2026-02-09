@@ -3,9 +3,9 @@ import Foundation
 import SwiftUI
 
 enum DebugActions {
-    private static let verboseDefaultsKey = "openclaw.debug.verboseMain"
+    private static let verboseDefaultsKey = "EasyHub.debug.verboseMain"
     private static let sessionMenuLimit = 12
-    private static let onboardingSeenKey = "openclaw.onboardingSeen"
+    private static let onboardingSeenKey = "EasyHub.onboardingSeen"
 
     @MainActor
     static func openAgentEventsWindow() {
@@ -38,7 +38,7 @@ enum DebugActions {
 
     @MainActor
     static func openConfigFolder() {
-        let url = OpenClawPaths.stateDirURL
+        let url = EasyHubPaths.stateDirURL
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
@@ -61,7 +61,7 @@ enum DebugActions {
     }
 
     static func sendTestNotification() async {
-        _ = await NotificationManager().send(title: "OpenClaw", body: "Test notification", sound: nil)
+        _ = await NotificationManager().send(title: "EasyHub", body: "Test notification", sound: nil)
     }
 
     static func sendDebugVoice() async -> Result<String, DebugActionError> {
@@ -193,7 +193,7 @@ enum DebugActions {
     @MainActor
     private static func resolveSessionStorePath() -> String {
         let defaultPath = SessionLoader.defaultStorePath
-        let configURL = OpenClawPaths.configURL
+        let configURL = EasyHubPaths.configURL
         guard
             let data = try? Data(contentsOf: configURL),
             let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

@@ -1,5 +1,5 @@
 import Foundation
-import OpenClawKit
+import EasyHubKit
 
 @MainActor
 final class NodeCapabilityRouter {

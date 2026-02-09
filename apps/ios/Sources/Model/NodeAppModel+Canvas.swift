@@ -14,7 +14,7 @@ extension NodeAppModel {
         if let host = base.host, Self.isLoopbackHost(host) {
             return nil
         }
-        return base.appendingPathComponent("__openclaw__/a2ui/").absoluteString + "?platform=ios"
+        return base.appendingPathComponent("__EASYHUB__/a2ui/").absoluteString + "?platform=ios"
     }
 
     private static func isLoopbackHost(_ host: String) -> Bool {

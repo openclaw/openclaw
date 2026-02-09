@@ -24,6 +24,6 @@ export function renderSystemdUnavailableHints(options: { wsl?: boolean } = {}): 
   }
   return [
     "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
-    `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway")}\`.`,
+    `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("EasyHub gateway")}\`.`,
   ];
 }

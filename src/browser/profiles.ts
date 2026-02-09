@@ -79,7 +79,7 @@ export function getUsedPorts(
 }
 
 export const PROFILE_COLORS = [
-  "#FF4500", // Orange-red (openclaw default)
+  "#FF4500", // Orange-red (EasyHub default)
   "#0066CC", // Blue
   "#00AA00", // Green
   "#9933FF", // Purple

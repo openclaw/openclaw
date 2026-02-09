@@ -8,13 +8,13 @@ title: "Auth Monitoring"
 
 # Auth monitoring
 
-OpenClaw exposes OAuth expiry health via `openclaw models status`. Use that for
+EasyHub exposes OAuth expiry health via `EasyHub models status`. Use that for
 automation and alerting; scripts are optional extras for phone workflows.
 
 ## Preferred: CLI check (portable)
 
 ```bash
-openclaw models status --check
+EasyHub models status --check
 ```
 
 Exit codes:
@@ -30,15 +30,15 @@ This works in cron/systemd and requires no extra scripts.
 These live under `scripts/` and are **optional**. They assume SSH access to the
 gateway host and are tuned for systemd + Termux.
 
-- `scripts/claude-auth-status.sh` now uses `openclaw models status --json` as the
+- `scripts/claude-auth-status.sh` now uses `EasyHub models status --json` as the
   source of truth (falling back to direct file reads if the CLI is unavailable),
-  so keep `openclaw` on `PATH` for timers.
+  so keep `EasyHub` on `PATH` for timers.
 - `scripts/auth-monitor.sh`: cron/systemd timer target; sends alerts (ntfy or phone).
-- `scripts/systemd/openclaw-auth-monitor.{service,timer}`: systemd user timer.
-- `scripts/claude-auth-status.sh`: Claude Code + OpenClaw auth checker (full/json/simple).
+- `scripts/systemd/EasyHub-auth-monitor.{service,timer}`: systemd user timer.
+- `scripts/claude-auth-status.sh`: Claude Code + EasyHub auth checker (full/json/simple).
 - `scripts/mobile-reauth.sh`: guided re‑auth flow over SSH.
 - `scripts/termux-quick-auth.sh`: one‑tap widget status + open auth URL.
 - `scripts/termux-auth-widget.sh`: full guided widget flow.
-- `scripts/termux-sync-widget.sh`: sync Claude Code creds → OpenClaw.
+- `scripts/termux-sync-widget.sh`: sync Claude Code creds → EasyHub.
 
 If you don’t need phone automation or systemd timers, skip these scripts.

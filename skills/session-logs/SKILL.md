@@ -1,7 +1,7 @@
 ---
 name: session-logs
 description: Search and analyze your own session logs (older/parent conversations) using jq.
-metadata: { "openclaw": { "emoji": "📜", "requires": { "bins": ["jq", "rg"] } } }
+metadata: { "EasyHub": { "emoji": "📜", "requires": { "bins": ["jq", "rg"] } } }
 ---
 
 # session-logs
@@ -14,7 +14,7 @@ Use this skill when the user asks about prior chats, parent conversations, or hi
 
 ## Location
 
-Session logs live at: `~/.openclaw/agents/<agentId>/sessions/` (use the `agent=<id>` value from the system prompt Runtime line).
+Session logs live at: `~/.easyhub/agents/<agentId>/sessions/` (use the `agent=<id>` value from the system prompt Runtime line).
 
 - **`sessions.json`** - Index mapping session keys to session IDs
 - **`<session-id>.jsonl`** - Full conversation transcript per session
@@ -34,7 +34,7 @@ Each `.jsonl` file contains messages with:
 ### List all sessions by date and size
 
 ```bash
-for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl; do
+for f in ~/.easyhub/agents/<agentId>/sessions/*.jsonl; do
   date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
   size=$(ls -lh "$f" | awk '{print $5}')
   echo "$date $size $(basename $f)"
@@ -44,7 +44,7 @@ done | sort -r
 ### Find sessions from a specific day
 
 ```bash
-for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl; do
+for f in ~/.easyhub/agents/<agentId>/sessions/*.jsonl; do
   head -1 "$f" | jq -r '.timestamp' | grep -q "2026-01-06" && echo "$f"
 done
 ```
@@ -70,7 +70,7 @@ jq -s '[.[] | .message.usage.cost.total // 0] | add' <session>.jsonl
 ### Daily cost summary
 
 ```bash
-for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl; do
+for f in ~/.easyhub/agents/<agentId>/sessions/*.jsonl; do
   date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
   cost=$(jq -s '[.[] | .message.usage.cost.total // 0] | add' "$f")
   echo "$date $cost"
@@ -98,7 +98,7 @@ jq -r '.message.content[]? | select(.type == "toolCall") | .name' <session>.json
 ### Search across ALL sessions for a phrase
 
 ```bash
-rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl
+rg -l "phrase" ~/.easyhub/agents/<agentId>/sessions/*.jsonl
 ```
 
 ## Tips
@@ -111,5 +111,5 @@ rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl
 ## Fast text-only hint (low noise)
 
 ```bash
-jq -r 'select(.type=="message") | .message.content[]? | select(.type=="text") | .text' ~/.openclaw/agents/<agentId>/sessions/<id>.jsonl | rg 'keyword'
+jq -r 'select(.type=="message") | .message.content[]? | select(.type=="text") | .text' ~/.easyhub/agents/<agentId>/sessions/<id>.jsonl | rg 'keyword'
 ```

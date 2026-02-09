@@ -1,7 +1,7 @@
 ---
 read_when:
   - 调试仅限 Node 的开发脚本或 watch 模式失败
-  - 排查 OpenClaw 中 tsx/esbuild 加载器崩溃问题
+  - 排查 EasyHub 中 tsx/esbuild 加载器崩溃问题
 summary: Node + tsx "__name is not a function" 崩溃说明及解决方法
 title: Node + tsx 崩溃
 x-i18n:
@@ -17,10 +17,10 @@ x-i18n:
 
 ## 概述
 
-通过 Node 使用 `tsx` 运行 OpenClaw 时，启动阶段报错：
+通过 Node 使用 `tsx` 运行 EasyHub 时，启动阶段报错：
 
 ```
-[openclaw] Failed to start CLI: TypeError: __name is not a function
+[EasyHub] Failed to start CLI: TypeError: __name is not a function
     at createSubsystemLogger (.../src/logging/subsystem.ts:203:25)
     at .../src/agents/auth-profiles/constants.ts:25:20
 ```
@@ -63,7 +63,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## 回归历史
 
 - `2871657e`（2026-01-06）：脚本从 Bun 改为 tsx，使 Bun 成为可选项。
-- 在此之前（Bun 路径），`openclaw status` 和 `gateway:watch` 均正常工作。
+- 在此之前（Bun 路径），`EasyHub status` 和 `gateway:watch` 均正常工作。
 
 ## 解决方法
 
@@ -71,9 +71,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 - 使用 Node + tsc watch，然后运行编译产物：
   ```bash
   pnpm exec tsc --watch --preserveWatchOutput
-  node --watch openclaw.mjs status
+  node --watch easyhub.mjs status
   ```
-- 已在本地确认：`pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` 在 Node 25 上可正常运行。
+- 已在本地确认：`pnpm exec tsc -p tsconfig.json` + `node easyhub.mjs status` 在 Node 25 上可正常运行。
 - 如果可能，在 TS 加载器中禁用 esbuild 的 keepNames（防止插入 `__name` 辅助函数）；tsx 目前不提供此配置项。
 - 在 Node LTS（22/24）上测试 `tsx`，确认该问题是否为 Node 25 特有。
 

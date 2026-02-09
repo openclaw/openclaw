@@ -1,7 +1,7 @@
 ---
 read_when: You want a dedicated explanation of sandboxing or need to tune agents.defaults.sandbox.
 status: active
-summary: OpenClaw 沙箱隔离的工作原理：模式、作用域、工作区访问和镜像
+summary: EasyHub 沙箱隔离的工作原理：模式、作用域、工作区访问和镜像
 title: 沙箱隔离
 x-i18n:
   generated_at: "2026-02-03T07:49:29Z"
@@ -14,7 +14,7 @@ x-i18n:
 
 # 沙箱隔离
 
-OpenClaw 可以**在 Docker 容器内运行工具**以减少影响范围。
+EasyHub 可以**在 Docker 容器内运行工具**以减少影响范围。
 这是**可选的**，由配置控制（`agents.defaults.sandbox` 或 `agents.list[].sandbox`）。如果沙箱隔离关闭，工具在主机上运行。
 Gateway 网关保留在主机上；启用时工具执行在隔离的沙箱中运行。
 
@@ -58,12 +58,12 @@ Gateway 网关保留在主机上；启用时工具执行在隔离的沙箱中运
 
 `agents.defaults.sandbox.workspaceAccess` 控制**沙箱可以看到什么**：
 
-- `"none"`（默认）：工具看到 `~/.openclaw/sandboxes` 下的沙箱工作区。
+- `"none"`（默认）：工具看到 `~/.easyhub/sandboxes` 下的沙箱工作区。
 - `"ro"`：以只读方式在 `/agent` 挂载智能体工作区（禁用 `write`/`edit`/`apply_patch`）。
 - `"rw"`：以读写方式在 `/workspace` 挂载智能体工作区。
 
 入站媒体被复制到活动沙箱工作区（`media/inbound/*`）。
-Skills 注意事项：`read` 工具以沙箱为根。使用 `workspaceAccess: "none"` 时，OpenClaw 将符合条件的 Skills 镜像到沙箱工作区（`.../skills`）以便可以读取。使用 `"rw"` 时，工作区 Skills 可从 `/workspace/skills` 读取。
+Skills 注意事项：`read` 工具以沙箱为根。使用 `workspaceAccess: "none"` 时，EasyHub 将符合条件的 Skills 镜像到沙箱工作区（`.../skills`）以便可以读取。使用 `"rw"` 时，工作区 Skills 可从 `/workspace/skills` 读取。
 
 ## 自定义绑定挂载
 
@@ -107,7 +107,7 @@ Skills 注意事项：`read` 工具以沙箱为根。使用 `workspaceAccess: "n
 
 ## 镜像 + 设置
 
-默认镜像：`openclaw-sandbox:bookworm-slim`
+默认镜像：`EasyHub-sandbox:bookworm-slim`
 
 构建一次：
 
@@ -155,7 +155,7 @@ Docker 安装和容器化 Gateway 网关在此：
 
 调试：
 
-- 使用 `openclaw sandbox explain` 检查生效的沙箱模式、工具策略和修复配置键。
+- 使用 `EasyHub sandbox explain` 检查生效的沙箱模式、工具策略和修复配置键。
 - 参见[沙箱 vs 工具策略 vs 提权](/gateway/sandbox-vs-tool-policy-vs-elevated)了解"为什么被阻止？"的心智模型。
   保持锁定。
 

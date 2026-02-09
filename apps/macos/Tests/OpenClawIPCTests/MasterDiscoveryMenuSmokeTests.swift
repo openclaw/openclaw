@@ -1,7 +1,7 @@
-import OpenClawDiscovery
+import EasyHubDiscovery
 import SwiftUI
 import Testing
-@testable import OpenClaw
+@testable import EasyHub
 
 @Suite(.serialized)
 @MainActor

@@ -1,15 +1,15 @@
 {
-  "name": "@openclaw/zalouser",
+  "name": "@easyhub/zalouser",
   "version": "2026.2.6-3",
-  "description": "OpenClaw Zalo Personal Account plugin via zca-cli",
+  "description": "EasyHub Zalo Personal Account plugin via zca-cli",
   "type": "module",
   "dependencies": {
     "@sinclair/typebox": "0.34.48"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ],
@@ -27,7 +27,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/zalouser",
+      "npmSpec": "@easyhub/zalouser",
       "localPath": "extensions/zalouser",
       "defaultChoice": "npm"
     }

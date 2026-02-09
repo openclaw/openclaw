@@ -1,6 +1,6 @@
 import AppKit
-import OpenClawKit
-import OpenClawProtocol
+import EasyHubKit
+import EasyHubProtocol
 import Foundation
 import Observation
 import OSLog
@@ -10,7 +10,7 @@ import OSLog
 final class DevicePairingApprovalPrompter {
     static let shared = DevicePairingApprovalPrompter()
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "device-pairing")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "device-pairing")
     private var task: Task<Void, Never>?
     private var isStopping = false
     private var isPresenting = false

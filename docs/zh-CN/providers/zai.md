@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想在 OpenClaw 中使用 Z.AI / GLM 模型
+  - 你想在 EasyHub 中使用 Z.AI / GLM 模型
   - 你需要简单的 ZAI_API_KEY 配置
-summary: 在 OpenClaw 中使用智谱 AI（GLM 模型）
+summary: 在 EasyHub 中使用智谱 AI（GLM 模型）
 title: Z.AI
 x-i18n:
   generated_at: "2026-02-01T21:36:13Z"
@@ -15,14 +15,14 @@ x-i18n:
 
 # Z.AI
 
-Z.AI 是 **GLM** 模型的 API 平台。它为 GLM 提供 REST API，并使用 API 密钥进行身份验证。请在 Z.AI 控制台中创建你的 API 密钥。OpenClaw 通过 `zai` 提供商配合 Z.AI API 密钥使用。
+Z.AI 是 **GLM** 模型的 API 平台。它为 GLM 提供 REST API，并使用 API 密钥进行身份验证。请在 Z.AI 控制台中创建你的 API 密钥。EasyHub 通过 `zai` 提供商配合 Z.AI API 密钥使用。
 
 ## CLI 设置
 
 ```bash
-openclaw onboard --auth-choice zai-api-key
+EasyHub onboard --auth-choice zai-api-key
 # 或非交互式
-openclaw onboard --zai-api-key "$ZAI_API_KEY"
+EasyHub onboard --zai-api-key "$ZAI_API_KEY"
 ```
 
 ## 配置片段

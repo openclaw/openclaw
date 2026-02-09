@@ -8,10 +8,10 @@ title: "Deepgram"
 
 # Deepgram (Audio Transcription)
 
-Deepgram is a speech-to-text API. In OpenClaw it is used for **inbound audio/voice note
+Deepgram is a speech-to-text API. In EasyHub it is used for **inbound audio/voice note
 transcription** via `tools.media.audio`.
 
-When enabled, OpenClaw uploads the audio file to Deepgram and injects the transcript
+When enabled, EasyHub uploads the audio file to Deepgram and injects the transcript
 into the reply pipeline (`{{Transcript}}` + `[Audio]` block). This is **not streaming**;
 it uses the pre-recorded transcription endpoint.
 

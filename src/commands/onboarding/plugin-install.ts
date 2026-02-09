@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -9,12 +9,12 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import { recordPluginInstall } from "../../plugins/installs.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { loadEasyHubPlugins } from "../../plugins/loader.js";
 
 type InstallChoice = "npm" | "local" | "skip";
 
 type InstallResult = {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   installed: boolean;
 };
 
@@ -57,7 +57,7 @@ function resolveLocalPath(
   return null;
 }
 
-function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
+function addPluginLoadPath(cfg: EasyHubConfig, pluginPath: string): EasyHubConfig {
   const existing = cfg.plugins?.load?.paths ?? [];
   const merged = Array.from(new Set([...existing, pluginPath]));
   return {
@@ -103,7 +103,7 @@ async function promptInstallChoice(params: {
 }
 
 function resolveInstallDefaultChoice(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   entry: ChannelPluginCatalogEntry;
   localPath?: string | null;
 }): InstallChoice {
@@ -126,7 +126,7 @@ function resolveInstallDefaultChoice(params: {
 }
 
 export async function ensureOnboardingPluginInstalled(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   entry: ChannelPluginCatalogEntry;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -200,14 +200,14 @@ export async function ensureOnboardingPluginInstalled(params: {
 }
 
 export function reloadOnboardingPluginRegistry(params: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   runtime: RuntimeEnv;
   workspaceDir?: string;
 }): void {
   const workspaceDir =
     params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   const log = createSubsystemLogger("plugins");
-  loadOpenClawPlugins({
+  loadEasyHubPlugins({
     config: params.cfg,
     workspaceDir,
     cache: false,

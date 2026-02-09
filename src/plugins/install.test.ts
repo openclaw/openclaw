@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const tempDirs: string[] = [];
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-plugin-install-${randomUUID()}`);
+  const dir = path.join(os.tmpdir(), `EasyHub-plugin-install-${randomUUID()}`);
   fs.mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   return dir;
@@ -92,7 +92,7 @@ afterEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
-  it("installs into ~/.openclaw/extensions and uses unscoped id", async () => {
+  it("installs into ~/.easyhub/extensions and uses unscoped id", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
     const pkgDir = path.join(workDir, "package");
@@ -100,9 +100,9 @@ describe("installPluginFromArchive", () => {
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
       JSON.stringify({
-        name: "@openclaw/voice-call",
+        name: "@easyhub/voice-call",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
+        EasyHub: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -138,9 +138,9 @@ describe("installPluginFromArchive", () => {
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
       JSON.stringify({
-        name: "@openclaw/voice-call",
+        name: "@easyhub/voice-call",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
+        EasyHub: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -180,9 +180,9 @@ describe("installPluginFromArchive", () => {
     zip.file(
       "package/package.json",
       JSON.stringify({
-        name: "@openclaw/zipper",
+        name: "@easyhub/zipper",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
+        EasyHub: { extensions: ["./dist/index.js"] },
       }),
     );
     zip.file("package/dist/index.js", "export {};");
@@ -214,9 +214,9 @@ describe("installPluginFromArchive", () => {
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
       JSON.stringify({
-        name: "@openclaw/voice-call",
+        name: "@easyhub/voice-call",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
+        EasyHub: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -232,9 +232,9 @@ describe("installPluginFromArchive", () => {
       fs.writeFileSync(
         path.join(pkgDir, "package.json"),
         JSON.stringify({
-          name: "@openclaw/voice-call",
+          name: "@easyhub/voice-call",
           version: "0.0.2",
-          openclaw: { extensions: ["./dist/index.js"] },
+          EasyHub: { extensions: ["./dist/index.js"] },
         }),
         "utf-8",
       );
@@ -278,7 +278,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "@evil/..",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
+        EasyHub: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -314,7 +314,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "@evil/.",
         version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
+        EasyHub: { extensions: ["./dist/index.js"] },
       }),
       "utf-8",
     );
@@ -340,14 +340,14 @@ describe("installPluginFromArchive", () => {
     expect(result.error).toContain("reserved path segment");
   });
 
-  it("rejects packages without openclaw.extensions", async () => {
+  it("rejects packages without EasyHub.extensions", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
     const pkgDir = path.join(workDir, "package");
     fs.mkdirSync(pkgDir, { recursive: true });
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/nope", version: "0.0.1" }),
+      JSON.stringify({ name: "@easyhub/nope", version: "0.0.1" }),
       "utf-8",
     );
 
@@ -367,7 +367,7 @@ describe("installPluginFromArchive", () => {
     if (result.ok) {
       return;
     }
-    expect(result.error).toContain("openclaw.extensions");
+    expect(result.error).toContain("EasyHub.extensions");
   });
 
   it("warns when plugin contains dangerous code patterns", async () => {
@@ -380,7 +380,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "dangerous-plugin",
         version: "1.0.0",
-        openclaw: { extensions: ["index.js"] },
+        EasyHub: { extensions: ["index.js"] },
       }),
     );
     fs.writeFileSync(
@@ -417,7 +417,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "hidden-entry-plugin",
         version: "1.0.0",
-        openclaw: { extensions: [".hidden/index.js"] },
+        EasyHub: { extensions: [".hidden/index.js"] },
       }),
     );
     fs.writeFileSync(
@@ -467,7 +467,7 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({
         name: "scan-fail-plugin",
         version: "1.0.0",
-        openclaw: { extensions: ["index.js"] },
+        EasyHub: { extensions: ["index.js"] },
       }),
     );
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};");

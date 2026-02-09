@@ -17,7 +17,7 @@ x-i18n:
 
 最后更新：2026-01-21
 
-OpenClaw 提供三个更新渠道：
+EasyHub 提供三个更新渠道：
 
 - **stable**：npm dist-tag `latest`。
 - **beta**：npm dist-tag `beta`（测试中的构建）。
@@ -31,9 +31,9 @@ OpenClaw 提供三个更新渠道：
 Git checkout：
 
 ```bash
-openclaw update --channel stable
-openclaw update --channel beta
-openclaw update --channel dev
+EasyHub update --channel stable
+EasyHub update --channel beta
+EasyHub update --channel dev
 ```
 
 - `stable`/`beta` 检出最新匹配的标签（通常是同一个标签）。
@@ -42,16 +42,16 @@ openclaw update --channel dev
 npm/pnpm 全局安装：
 
 ```bash
-openclaw update --channel stable
-openclaw update --channel beta
-openclaw update --channel dev
+EasyHub update --channel stable
+EasyHub update --channel beta
+EasyHub update --channel dev
 ```
 
 这会通过相应的 npm dist-tag（`latest`、`beta`、`dev`）进行更新。
 
-当你使用 `--channel` **显式**切换渠道时，OpenClaw 还会对齐安装方式：
+当你使用 `--channel` **显式**切换渠道时，EasyHub 还会对齐安装方式：
 
-- `dev` 确保有一个 git checkout（默认 `~/openclaw`，可通过 `OPENCLAW_GIT_DIR` 覆盖），
+- `dev` 确保有一个 git checkout（默认 `~/EasyHub`，可通过 `EASYHUB_GIT_DIR` 覆盖），
   更新它，并从该 checkout 安装全局 CLI。
 - `stable`/`beta` 使用匹配的 dist-tag 从 npm 安装。
 
@@ -59,7 +59,7 @@ openclaw update --channel dev
 
 ## 插件和渠道
 
-当你使用 `openclaw update` 切换渠道时，OpenClaw 还会同步插件来源：
+当你使用 `EasyHub update` 切换渠道时，EasyHub 还会同步插件来源：
 
 - `dev` 优先使用 git checkout 中的内置插件。
 - `stable` 和 `beta` 恢复 npm 安装的插件包。

@@ -9,7 +9,7 @@ x-i18n:
   workflow: 15
 ---
 
-使用基础设施即代码方式在 Render 上部署 OpenClaw。内置的 `render.yaml` Blueprint 以声明式方式定义了你的整个技术栈——服务、磁盘、环境变量，让你只需一键即可完成部署，并将基础设施与代码一同进行版本管理。
+使用基础设施即代码方式在 Render 上部署 EasyHub。内置的 `render.yaml` Blueprint 以声明式方式定义了你的整个技术栈——服务、磁盘、环境变量，让你只需一键即可完成部署，并将基础设施与代码一同进行版本管理。
 
 ## 前提条件
 
@@ -19,7 +19,7 @@ x-i18n:
 ## 使用 Render Blueprint 部署
 
 <a
-  href="https://render.com/deploy?repo=https://github.com/openclaw/openclaw"
+  href="https://render.com/deploy?repo=https://github.com/EasyHub/EasyHub"
   target="_blank"
   rel="noreferrer"
 >
@@ -36,12 +36,12 @@ x-i18n:
 
 ## 了解 Blueprint
 
-Render Blueprint 是定义基础设施的 YAML 文件。本仓库中的 `render.yaml` 配置了运行 OpenClaw 所需的一切：
+Render Blueprint 是定义基础设施的 YAML 文件。本仓库中的 `render.yaml` 配置了运行 EasyHub 所需的一切：
 
 ```yaml
 services:
   - type: web
-    name: openclaw
+    name: EasyHub
     runtime: docker
     plan: starter
     healthCheckPath: /health
@@ -50,14 +50,14 @@ services:
         value: "8080"
       - key: SETUP_PASSWORD
         sync: false # prompts during deploy
-      - key: OPENCLAW_STATE_DIR
-        value: /data/.openclaw
-      - key: OPENCLAW_WORKSPACE_DIR
+      - key: EASYHUB_STATE_DIR
+        value: /data/.EasyHub
+      - key: EASYHUB_WORKSPACE_DIR
         value: /data/workspace
-      - key: OPENCLAW_GATEWAY_TOKEN
+      - key: EASYHUB_GATEWAY_TOKEN
         generateValue: true # auto-generates a secure token
     disk:
-      name: openclaw-data
+      name: EasyHub-data
       mountPath: /data
       sizeGB: 1
 ```
@@ -94,7 +94,7 @@ Blueprint 默认使用 `starter`。如需使用免费套餐，请在你 fork 的
 
 ### 访问控制面板
 
-Web 管理面板位于 `https://<your-service>.onrender.com/openclaw`。
+Web 管理面板位于 `https://<your-service>.onrender.com/EasyHub`。
 
 ## Render 仪表盘功能
 
@@ -116,7 +116,7 @@ Web 管理面板位于 `https://<your-service>.onrender.com/openclaw`。
 
 ### 自动部署
 
-如果你使用的是原始 OpenClaw 仓库，Render 不会自动部署你的 OpenClaw。要更新它，请在仪表盘中手动执行 Blueprint 同步。
+如果你使用的是原始 EasyHub 仓库，Render 不会自动部署你的 EasyHub。要更新它，请在仪表盘中手动执行 Blueprint 同步。
 
 ## 自定义域名
 
@@ -132,7 +132,7 @@ Render 支持水平和垂直扩展：
 - **垂直扩展**：更改套餐以获取更多 CPU/内存
 - **水平扩展**：增加实例数量（Standard 套餐及以上）
 
-对于 OpenClaw，垂直扩展通常就足够了。水平扩展需要粘性会话或外部状态管理。
+对于 EasyHub，垂直扩展通常就足够了。水平扩展需要粘性会话或外部状态管理。
 
 ## 备份与迁移
 
@@ -142,7 +142,7 @@ Render 支持水平和垂直扩展：
 https://<your-service>.onrender.com/setup/export
 ```
 
-这将下载一个可移植的备份文件，你可以在任何 OpenClaw 主机上恢复。
+这将下载一个可移植的备份文件，你可以在任何 EasyHub 主机上恢复。
 
 ## 故障排除
 

@@ -1,4 +1,4 @@
-import OpenClawProtocol
+import EasyHubProtocol
 import Observation
 import SwiftUI
 

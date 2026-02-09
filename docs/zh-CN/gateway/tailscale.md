@@ -15,24 +15,24 @@ x-i18n:
 
 # Tailscale（Gateway 网关仪表盘）
 
-OpenClaw 可以为 Gateway 网关仪表盘和 WebSocket 端口自动配置 Tailscale **Serve**（tailnet）或 **Funnel**（公共）。这使 Gateway 网关保持绑定到 loopback，同时 Tailscale 提供 HTTPS、路由和（对于 Serve）身份头。
+EasyHub 可以为 Gateway 网关仪表盘和 WebSocket 端口自动配置 Tailscale **Serve**（tailnet）或 **Funnel**（公共）。这使 Gateway 网关保持绑定到 loopback，同时 Tailscale 提供 HTTPS、路由和（对于 Serve）身份头。
 
 ## 模式
 
 - `serve`：仅限 Tailnet 的 Serve，通过 `tailscale serve`。Gateway 网关保持在 `127.0.0.1` 上。
-- `funnel`：通过 `tailscale funnel` 的公共 HTTPS。OpenClaw 需要共享密码。
+- `funnel`：通过 `tailscale funnel` 的公共 HTTPS。EasyHub 需要共享密码。
 - `off`：默认（无 Tailscale 自动化）。
 
 ## 认证
 
 设置 `gateway.auth.mode` 来控制握手：
 
-- `token`（设置 `OPENCLAW_GATEWAY_TOKEN` 时的默认值）
-- `password`（通过 `OPENCLAW_GATEWAY_PASSWORD` 或配置的共享密钥）
+- `token`（设置 `EASYHUB_GATEWAY_TOKEN` 时的默认值）
+- `password`（通过 `EASYHUB_GATEWAY_PASSWORD` 或配置的共享密钥）
 
 当 `tailscale.mode = "serve"` 且 `gateway.auth.allowTailscale` 为 `true` 时，
-有效的 Serve 代理请求可以通过 Tailscale 身份头（`tailscale-user-login`）进行认证，无需提供令牌/密码。OpenClaw 通过本地 Tailscale 守护进程（`tailscale whois`）解析 `x-forwarded-for` 地址并将其与头匹配来验证身份，然后才接受它。
-OpenClaw 仅在请求从 loopback 到达并带有 Tailscale 的 `x-forwarded-for`、`x-forwarded-proto` 和 `x-forwarded-host` 头时才将其视为 Serve 请求。
+有效的 Serve 代理请求可以通过 Tailscale 身份头（`tailscale-user-login`）进行认证，无需提供令牌/密码。EasyHub 通过本地 Tailscale 守护进程（`tailscale whois`）解析 `x-forwarded-for` 地址并将其与头匹配来验证身份，然后才接受它。
+EasyHub 仅在请求从 loopback 到达并带有 Tailscale 的 `x-forwarded-for`、`x-forwarded-proto` 和 `x-forwarded-host` 头时才将其视为 Serve 请求。
 要要求显式凭证，设置 `gateway.auth.allowTailscale: false` 或强制 `gateway.auth.mode: "password"`。
 
 ## 配置示例
@@ -82,20 +82,20 @@ OpenClaw 仅在请求从 loopback 到达并带有 Tailscale 的 `x-forwarded-for
 }
 ```
 
-优先使用 `OPENCLAW_GATEWAY_PASSWORD` 而不是将密码提交到磁盘。
+优先使用 `EASYHUB_GATEWAY_PASSWORD` 而不是将密码提交到磁盘。
 
 ## CLI 示例
 
 ```bash
-openclaw gateway --tailscale serve
-openclaw gateway --tailscale funnel --auth password
+EasyHub gateway --tailscale serve
+EasyHub gateway --tailscale funnel --auth password
 ```
 
 ## 注意事项
 
 - Tailscale Serve/Funnel 需要安装并登录 `tailscale` CLI。
 - `tailscale.mode: "funnel"` 除非认证模式为 `password`，否则拒绝启动，以避免公共暴露。
-- 如果你希望 OpenClaw 在关闭时撤销 `tailscale serve` 或 `tailscale funnel` 配置，设置 `gateway.tailscale.resetOnExit`。
+- 如果你希望 EasyHub 在关闭时撤销 `tailscale serve` 或 `tailscale funnel` 配置，设置 `gateway.tailscale.resetOnExit`。
 - `gateway.bind: "tailnet"` 是直接 Tailnet 绑定（无 HTTPS，无 Serve/Funnel）。
 - `gateway.bind: "auto"` 优先 loopback；如果你想要仅 Tailnet，使用 `tailnet`。
 - Serve/Funnel 仅暴露 **Gateway 网关控制 UI + WS**。节点通过相同的 Gateway 网关 WS 端点连接，因此 Serve 可以用于节点访问。

@@ -4,7 +4,7 @@ description: Search for places (restaurants, cafes, etc.) via Google Places API 
 homepage: https://github.com/Hyaxia/local_places
 metadata:
   {
-    "openclaw":
+    "EasyHub":
       {
         "emoji": "📍",
         "requires": { "bins": ["uv"], "env": ["GOOGLE_PLACES_API_KEY"] },

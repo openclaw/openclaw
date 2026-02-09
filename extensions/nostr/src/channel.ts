@@ -3,7 +3,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk";
+} from "EasyHub/plugin-sdk";
 import type { NostrProfile } from "./config-schema.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
@@ -226,7 +226,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         onMessage: async (senderPubkey, text, reply) => {
           ctx.log?.debug(`[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`);
 
-          // Forward to OpenClaw's message pipeline
+          // Forward to EasyHub's message pipeline
           await runtime.channel.reply.handleInboundMessage({
             channel: "nostr",
             accountId: account.accountId,

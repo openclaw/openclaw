@@ -16,7 +16,7 @@ x-i18n:
 
 ## 已支持的功能
 
-- **媒体理解（音频）**：如果音频理解已启用（或自动检测），OpenClaw 会：
+- **媒体理解（音频）**：如果音频理解已启用（或自动检测），EasyHub 会：
   1. 找到第一个音频附件（本地路径或 URL），如有需要则下载。
   2. 在发送给每个模型条目之前执行 `maxBytes` 限制。
   3. 按顺序运行第一个符合条件的模型条目（提供商或 CLI）。
@@ -27,7 +27,7 @@ x-i18n:
 
 ## 自动检测（默认）
 
-如果你**未配置模型**且 `tools.media.audio.enabled` **未**设置为 `false`，OpenClaw 会按以下顺序自动检测，并在找到第一个可用选项时停止：
+如果你**未配置模型**且 `tools.media.audio.enabled` **未**设置为 `false`，EasyHub 会按以下顺序自动检测，并在找到第一个可用选项时停止：
 
 1. **本地 CLI**（如已安装）
    - `sherpa-onnx-offline`（需要 `SHERPA_ONNX_MODEL_DIR` 包含 encoder/decoder/joiner/tokens）

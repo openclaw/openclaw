@@ -23,17 +23,17 @@ Nextcloud Talk 以插件形式提供，不包含在核心安装包中。
 通过 CLI 安装（npm 仓库）：
 
 ```bash
-openclaw plugins install @openclaw/nextcloud-talk
+EasyHub plugins install @easyhub/nextcloud-talk
 ```
 
 本地检出安装（从 git 仓库运行时）：
 
 ```bash
-openclaw plugins install ./extensions/nextcloud-talk
+EasyHub plugins install ./extensions/nextcloud-talk
 ```
 
 如果你在配置/新手引导过程中选择了 Nextcloud Talk，并且检测到 git 检出，
-OpenClaw 将自动提供本地安装路径。
+EasyHub 将自动提供本地安装路径。
 
 详情：[插件](/tools/plugin)
 
@@ -42,10 +42,10 @@ OpenClaw 将自动提供本地安装路径。
 1. 安装 Nextcloud Talk 插件。
 2. 在你的 Nextcloud 服务器上创建机器人：
    ```bash
-   ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature reaction
+   ./occ talk:bot:install "EasyHub" "<shared-secret>" "<webhook-url>" --feature reaction
    ```
 3. 在目标房间设置中启用机器人。
-4. 配置 OpenClaw：
+4. 配置 EasyHub：
    - 配置项：`channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - 或环境变量：`NEXTCLOUD_TALK_BOT_SECRET`（仅默认账户）
 5. 重启 Gateway 网关（或完成新手引导）。
@@ -76,8 +76,8 @@ OpenClaw 将自动提供本地安装路径。
 
 - 默认：`channels.nextcloud-talk.dmPolicy = "pairing"`。未知发送者将收到配对码。
 - 批准方式：
-  - `openclaw pairing list nextcloud-talk`
-  - `openclaw pairing approve nextcloud-talk <CODE>`
+  - `EasyHub pairing list nextcloud-talk`
+  - `EasyHub pairing approve nextcloud-talk <CODE>`
 - 公开私信：`channels.nextcloud-talk.dmPolicy="open"` 加上 `channels.nextcloud-talk.allowFrom=["*"]`。
 
 ## 房间（群组）

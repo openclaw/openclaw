@@ -11,7 +11,7 @@ describe("acquireSessionWriteLock", () => {
       return;
     }
 
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-lock-"));
     try {
       const realDir = path.join(root, "real");
       const linkDir = path.join(root, "link");
@@ -32,7 +32,7 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("keeps the lock file until the last release", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-lock-"));
     try {
       const sessionFile = path.join(root, "sessions.json");
       const lockPath = `${sessionFile}.lock`;
@@ -51,7 +51,7 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("reclaims stale lock files", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-lock-"));
     try {
       const sessionFile = path.join(root, "sessions.json");
       const lockPath = `${sessionFile}.lock`;
@@ -75,7 +75,7 @@ describe("acquireSessionWriteLock", () => {
   it("removes held locks on termination signals", async () => {
     const signals = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
     for (const signal of signals) {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-cleanup-"));
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-lock-cleanup-"));
       try {
         const sessionFile = path.join(root, "sessions.json");
         const lockPath = `${sessionFile}.lock`;
@@ -102,7 +102,7 @@ describe("acquireSessionWriteLock", () => {
     expect(__testing.cleanupSignals).toContain("SIGABRT");
   });
   it("cleans up locks on SIGINT without removing other handlers", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-lock-"));
     const originalKill = process.kill.bind(process);
     const killCalls: Array<NodeJS.Signals | undefined> = [];
     let otherHandlerCalled = false;
@@ -136,7 +136,7 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("cleans up locks on exit", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-lock-"));
     try {
       const sessionFile = path.join(root, "sessions.json");
       const lockPath = `${sessionFile}.lock`;

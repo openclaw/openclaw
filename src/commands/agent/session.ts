@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -39,7 +39,7 @@ type SessionKeyResolution = {
 };
 
 export function resolveSessionKeyForRequest(opts: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   to?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -82,7 +82,7 @@ export function resolveSessionKeyForRequest(opts: {
 }
 
 export function resolveSession(opts: {
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   to?: string;
   sessionId?: string;
   sessionKey?: string;

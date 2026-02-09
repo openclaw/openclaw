@@ -1,11 +1,11 @@
 import Foundation
 import SwabbleKit
 import Testing
-@testable import OpenClaw
+@testable import EasyHub
 
 @Suite struct VoiceWakeRuntimeTests {
     @Test func trimsAfterTriggerKeepsPostSpeech() {
-        let triggers = ["claude", "openclaw"]
+        let triggers = ["claude", "EasyHub"]
         let text = "hey Claude how are you"
         #expect(VoiceWakeRuntime._testTrimmedAfterTrigger(text, triggers: triggers) == "how are you")
     }
@@ -24,8 +24,8 @@ import Testing
     }
 
     @Test func hasContentAfterTriggerFalseWhenOnlyTrigger() {
-        let triggers = ["openclaw"]
-        let text = "hey openclaw"
+        let triggers = ["EasyHub"]
+        let text = "hey EasyHub"
         #expect(!VoiceWakeRuntime._testHasContentAfterTrigger(text, triggers: triggers))
     }
 
@@ -36,30 +36,30 @@ import Testing
     }
 
     @Test func gateRequiresGapBetweenTriggerAndCommand() {
-        let transcript = "hey openclaw do thing"
+        let transcript = "hey EasyHub do thing"
         let segments = makeSegments(
             transcript: transcript,
             words: [
                 ("hey", 0.0, 0.1),
-                ("openclaw", 0.2, 0.1),
+                ("EasyHub", 0.2, 0.1),
                 ("do", 0.35, 0.1),
                 ("thing", 0.5, 0.1),
             ])
-        let config = WakeWordGateConfig(triggers: ["openclaw"], minPostTriggerGap: 0.3)
+        let config = WakeWordGateConfig(triggers: ["EasyHub"], minPostTriggerGap: 0.3)
         #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config) == nil)
     }
 
     @Test func gateAcceptsGapAndExtractsCommand() {
-        let transcript = "hey openclaw do thing"
+        let transcript = "hey EasyHub do thing"
         let segments = makeSegments(
             transcript: transcript,
             words: [
                 ("hey", 0.0, 0.1),
-                ("openclaw", 0.2, 0.1),
+                ("EasyHub", 0.2, 0.1),
                 ("do", 0.9, 0.1),
                 ("thing", 1.1, 0.1),
             ])
-        let config = WakeWordGateConfig(triggers: ["openclaw"], minPostTriggerGap: 0.3)
+        let config = WakeWordGateConfig(triggers: ["EasyHub"], minPostTriggerGap: 0.3)
         #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command == "do thing")
     }
 }

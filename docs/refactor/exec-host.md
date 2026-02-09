@@ -29,11 +29,11 @@ title: "Exec Host Refactor"
 - **Config keys:** `exec.host` + `exec.security` (per-agent override allowed).
 - **Elevation:** keep `/elevated` as an alias for gateway full access.
 - **Ask default:** `on-miss`.
-- **Approvals store:** `~/.openclaw/exec-approvals.json` (JSON, no legacy migration).
+- **Approvals store:** `~/.easyhub/exec-approvals.json` (JSON, no legacy migration).
 - **Runner:** headless system service; UI app hosts a Unix socket for approvals.
 - **Node identity:** use existing `nodeId`.
 - **Socket auth:** Unix socket + token (cross-platform); split later if needed.
-- **Node host state:** `~/.openclaw/node.json` (node id + pairing token).
+- **Node host state:** `~/.easyhub/node.json` (node id + pairing token).
 - **macOS exec host:** run `system.run` inside the macOS app; node host service forwards requests over local IPC.
 - **No XPC helper:** stick to Unix socket + token + peer checks.
 
@@ -103,7 +103,7 @@ Ask is **independent** of allowlist; allowlist can be used with `always` or `on-
 
 ## Approvals store (JSON)
 
-Path: `~/.openclaw/exec-approvals.json`
+Path: `~/.easyhub/exec-approvals.json`
 
 Purpose:
 
@@ -117,7 +117,7 @@ Proposed schema (v1):
 {
   "version": 1,
   "socket": {
-    "path": "~/.openclaw/exec-approvals.sock",
+    "path": "~/.easyhub/exec-approvals.sock",
     "token": "base64-opaque-token"
   },
   "defaults": {
@@ -166,7 +166,7 @@ Notes:
 
 ### IPC
 
-- Unix socket at `~/.openclaw/exec-approvals.sock` (0600).
+- Unix socket at `~/.easyhub/exec-approvals.sock` (0600).
 - Token stored in `exec-approvals.json` (0600).
 - Peer checks: same-UID only.
 - Challenge/response: nonce + HMAC(token, request-hash) to prevent replay.

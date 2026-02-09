@@ -4,7 +4,7 @@ description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, 
 homepage: https://gogcli.sh
 metadata:
   {
-    "openclaw":
+    "EasyHub":
       {
         "emoji": "🎮",
         "requires": { "bins": ["gog"] },

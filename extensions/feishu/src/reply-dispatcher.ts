@@ -5,7 +5,7 @@ import {
   type ClawdbotConfig,
   type RuntimeEnv,
   type ReplyPayload,
-} from "openclaw/plugin-sdk";
+} from "EasyHub/plugin-sdk";
 import type { MentionTarget } from "./mention.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { getFeishuRuntime } from "./runtime.js";

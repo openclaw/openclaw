@@ -1,4 +1,4 @@
-import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "EasyHub/plugin-sdk";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ResolvedFeishuAccount } from "./types.js";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";

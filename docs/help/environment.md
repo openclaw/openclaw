@@ -1,5 +1,5 @@
 ---
-summary: "Where OpenClaw loads environment variables and the precedence order"
+summary: "Where EasyHub loads environment variables and the precedence order"
 read_when:
   - You need to know which env vars are loaded, and in what order
   - You are debugging missing API keys in the Gateway
@@ -9,15 +9,15 @@ title: "Environment Variables"
 
 # Environment variables
 
-OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
+EasyHub pulls environment variables from multiple sources. The rule is **never override existing values**.
 
 ## Precedence (highest → lowest)
 
 1. **Process environment** (what the Gateway process already has from the parent shell/daemon).
 2. **`.env` in the current working directory** (dotenv default; does not override).
-3. **Global `.env`** at `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`; does not override).
-4. **Config `env` block** in `~/.openclaw/openclaw.json` (applied only if missing).
-5. **Optional login-shell import** (`env.shellEnv.enabled` or `OPENCLAW_LOAD_SHELL_ENV=1`), applied only for missing expected keys.
+3. **Global `.env`** at `~/.easyhub/.env` (aka `$EASYHUB_STATE_DIR/.env`; does not override).
+4. **Config `env` block** in `~/.easyhub/easyhub.json` (applied only if missing).
+5. **Optional login-shell import** (`env.shellEnv.enabled` or `EASYHUB_LOAD_SHELL_ENV=1`), applied only for missing expected keys.
 
 If the config file is missing entirely, step 4 is skipped; shell import still runs if enabled.
 
@@ -53,8 +53,8 @@ Two equivalent ways to set inline env vars (both are non-overriding):
 
 Env var equivalents:
 
-- `OPENCLAW_LOAD_SHELL_ENV=1`
-- `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
+- `EASYHUB_LOAD_SHELL_ENV=1`
+- `EASYHUB_SHELL_ENV_TIMEOUT_MS=15000`
 
 ## Env var substitution in config
 
@@ -78,27 +78,27 @@ See [Configuration: Env var substitution](/gateway/configuration#env-var-substit
 
 | Variable               | Purpose                                                                                                                                                                          |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_HOME`        | Override the home directory used for all internal path resolution (`~/.openclaw/`, agent dirs, sessions, credentials). Useful when running OpenClaw as a dedicated service user. |
-| `OPENCLAW_STATE_DIR`   | Override the state directory (default `~/.openclaw`).                                                                                                                            |
-| `OPENCLAW_CONFIG_PATH` | Override the config file path (default `~/.openclaw/openclaw.json`).                                                                                                             |
+| `EASYHUB_HOME`        | Override the home directory used for all internal path resolution (`~/.easyhub/`, agent dirs, sessions, credentials). Useful when running EasyHub as a dedicated service user. |
+| `EASYHUB_STATE_DIR`   | Override the state directory (default `~/.easyhub`).                                                                                                                            |
+| `EASYHUB_CONFIG_PATH` | Override the config file path (default `~/.easyhub/easyhub.json`).                                                                                                             |
 
-### `OPENCLAW_HOME`
+### `EASYHUB_HOME`
 
-When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for all internal path resolution. This enables full filesystem isolation for headless service accounts.
+When set, `EASYHUB_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for all internal path resolution. This enables full filesystem isolation for headless service accounts.
 
-**Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > `os.homedir()`
+**Precedence:** `EASYHUB_HOME` > `$HOME` > `USERPROFILE` > `os.homedir()`
 
 **Example** (macOS LaunchDaemon):
 
 ```xml
 <key>EnvironmentVariables</key>
 <dict>
-  <key>OPENCLAW_HOME</key>
+  <key>EASYHUB_HOME</key>
   <string>/Users/kira</string>
 </dict>
 ```
 
-`OPENCLAW_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using `$HOME` before use.
+`EASYHUB_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using `$HOME` before use.
 
 ## Related
 

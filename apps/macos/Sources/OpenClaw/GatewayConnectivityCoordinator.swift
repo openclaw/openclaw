@@ -7,7 +7,7 @@ import OSLog
 final class GatewayConnectivityCoordinator {
     static let shared = GatewayConnectivityCoordinator()
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "gateway.connectivity")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "gateway.connectivity")
     private var endpointTask: Task<Void, Never>?
     private var lastResolvedURL: URL?
 

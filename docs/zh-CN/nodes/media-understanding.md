@@ -15,7 +15,7 @@ x-i18n:
 
 # 媒体理解（入站）— 2026-01-17
 
-OpenClaw 可以在回复流程运行之前**摘要入站媒体**（图片/音频/视频）。它会自动检测本地工具或提供商密钥是否可用，并且可以禁用或自定义。如果理解关闭，模型仍然会像往常一样接收原始文件/URL。
+EasyHub 可以在回复流程运行之前**摘要入站媒体**（图片/音频/视频）。它会自动检测本地工具或提供商密钥是否可用，并且可以禁用或自定义。如果理解关闭，模型仍然会像往常一样接收原始文件/URL。
 
 ## 目标
 
@@ -131,11 +131,11 @@ CLI 模板还可以使用：
 - 如果媒体超过 `maxBytes`，该模型被跳过，**尝试下一个模型**。
 - 如果模型返回超过 `maxChars`，输出被截断。
 - `prompt` 默认为简单的"Describe the {media}."加上 `maxChars` 指导（仅图片/视频）。
-- 如果 `<capability>.enabled: true` 但未配置模型，当提供商支持该能力时，OpenClaw 尝试**活动的回复模型**。
+- 如果 `<capability>.enabled: true` 但未配置模型，当提供商支持该能力时，EasyHub 尝试**活动的回复模型**。
 
 ### 自动检测媒体理解（默认）
 
-如果 `tools.media.<capability>.enabled` **未**设置为 `false` 且你没有配置模型，OpenClaw 按以下顺序自动检测并**在第一个可用选项处停止**：
+如果 `tools.media.<capability>.enabled` **未**设置为 `false` 且你没有配置模型，EasyHub 按以下顺序自动检测并**在第一个可用选项处停止**：
 
 1. **本地 CLI**（仅音频；如果已安装）
    - `sherpa-onnx-offline`（需要带有 encoder/decoder/joiner/tokens 的 `SHERPA_ONNX_MODEL_DIR`）
@@ -165,7 +165,7 @@ CLI 模板还可以使用：
 
 ## 能力（可选）
 
-如果你设置了 `capabilities`，该条目仅对这些媒体类型运行。对于共享列表，OpenClaw 可以推断默认值：
+如果你设置了 `capabilities`，该条目仅对这些媒体类型运行。对于共享列表，EasyHub 可以推断默认值：
 
 - `openai`、`anthropic`、`minimax`：**图片**
 - `google`（Gemini API）：**图片 + 音频 + 视频**
@@ -174,7 +174,7 @@ CLI 模板还可以使用：
 
 对于 CLI 条目，**显式设置 `capabilities`** 以避免意外匹配。如果你省略 `capabilities`，该条目对它出现的列表都符合条件。
 
-## 提供商支持矩阵（OpenClaw 集成）
+## 提供商支持矩阵（EasyHub 集成）
 
 | 能力 | 提供商集成                                     | 说明                                    |
 | ---- | ---------------------------------------------- | --------------------------------------- |

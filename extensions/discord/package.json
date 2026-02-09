@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/discord",
+  "name": "@easyhub/discord",
   "version": "2026.2.6-3",
-  "description": "OpenClaw Discord channel plugin",
+  "description": "EasyHub Discord channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ]

@@ -1,7 +1,7 @@
 {
   "name": "clawdbot",
   "version": "2026.1.27-beta.1",
-  "description": "Compatibility shim that forwards to openclaw",
+  "description": "Compatibility shim that forwards to EasyHub",
   "bin": {
     "clawdbot": "./bin/clawdbot.js"
   },
@@ -11,6 +11,6 @@
     "./cli-entry": "./bin/clawdbot.js"
   },
   "dependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   }
 }

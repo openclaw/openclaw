@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function resolveBundledHooksDir(): string | undefined {
-  const override = process.env.OPENCLAW_BUNDLED_HOOKS_DIR?.trim();
+  const override = process.env.EASYHUB_BUNDLED_HOOKS_DIR?.trim();
   if (override) {
     return override;
   }
@@ -20,7 +20,7 @@ export function resolveBundledHooksDir(): string | undefined {
   }
 
   // npm: resolve `<packageRoot>/dist/hooks/bundled` relative to this module (compiled hooks).
-  // This path works when installed via npm: node_modules/openclaw/dist/hooks/bundled-dir.js
+  // This path works when installed via npm: node_modules/EasyHub/dist/hooks/bundled-dir.js
   try {
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     const distBundled = path.join(moduleDir, "bundled");

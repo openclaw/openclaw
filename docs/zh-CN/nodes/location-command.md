@@ -109,12 +109,12 @@ UI 行为：
 ## 模型/工具集成
 
 - 工具接口：`nodes` 工具添加 `location_get` 操作（需要节点）。
-- CLI：`openclaw nodes location get --node <id>`。
+- CLI：`EasyHub nodes location get --node <id>`。
 - 智能体指南：仅在用户启用位置并理解范围时调用。
 
 ## UX 文案（建议）
 
 - 关闭："位置共享已禁用。"
-- 使用时："仅当 OpenClaw 打开时。"
+- 使用时："仅当 EasyHub 打开时。"
 - 始终："允许后台位置。需要系统权限。"
 - 精确："使用精确 GPS 位置。关闭以共享大致位置。"

@@ -6,7 +6,7 @@ describe("prepareSlackMessage sender prefix", () => {
   it("prefixes channel bodies with sender label", async () => {
     const ctx = {
       cfg: {
-        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/EasyHub" } },
         channels: { slack: {} },
       },
       accountId: "default",
@@ -39,7 +39,7 @@ describe("prepareSlackMessage sender prefix", () => {
       replyToMode: "off",
       threadHistoryScope: "channel",
       threadInheritParent: false,
-      slashCommand: { command: "/openclaw", enabled: true },
+      slashCommand: { command: "/EasyHub", enabled: true },
       textLimit: 2000,
       ackReactionScope: "off",
       mediaMaxBytes: 1000,

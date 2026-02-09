@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 struct ChatSessionsSheet: View {
-    @Bindable var viewModel: OpenClawChatViewModel
+    @Bindable var viewModel: EasyHubChatViewModel
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

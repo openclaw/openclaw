@@ -1,5 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { EasyHubPluginApi } from "EasyHub/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { Readable } from "stream";
 import { listEnabledFeishuAccounts } from "./accounts.js";
@@ -427,7 +427,7 @@ async function listAppScopes(client: Lark.Client) {
 
 // ============ Tool Registration ============
 
-export function registerFeishuDocTools(api: OpenClawPluginApi) {
+export function registerFeishuDocTools(api: EasyHubPluginApi) {
   if (!api.config) {
     api.logger.debug?.("feishu_doc: No config available, skipping doc tools");
     return;

@@ -90,7 +90,7 @@ public enum ToolDisplayRegistry {
     }
 
     private static func loadConfig() -> ToolDisplayConfig {
-        guard let url = OpenClawKitResources.bundle.url(forResource: "tool-display", withExtension: "json") else {
+        guard let url = EasyHubKitResources.bundle.url(forResource: "tool-display", withExtension: "json") else {
             return self.defaultConfig()
         }
         do {

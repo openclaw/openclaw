@@ -15,7 +15,7 @@ x-i18n:
 
 # Brave Search API
 
-OpenClaw 使用 Brave Search 作为 `web_search` 的默认提供商。
+EasyHub 使用 Brave Search 作为 `web_search` 的默认提供商。
 
 ## 获取 API 密钥
 

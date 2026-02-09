@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/mattermost",
+  "name": "@easyhub/mattermost",
   "version": "2026.2.6-3",
-  "description": "OpenClaw Mattermost channel plugin",
+  "description": "EasyHub Mattermost channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ],
@@ -20,7 +20,7 @@
       "order": 65
     },
     "install": {
-      "npmSpec": "@openclaw/mattermost",
+      "npmSpec": "@easyhub/mattermost",
       "localPath": "extensions/mattermost",
       "defaultChoice": "npm"
     }

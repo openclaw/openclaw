@@ -8,7 +8,7 @@ title: "Brave Search"
 
 # Brave Search API
 
-OpenClaw uses Brave Search as the default provider for `web_search`.
+EasyHub uses Brave Search as the default provider for `web_search`.
 
 ## Get an API key
 

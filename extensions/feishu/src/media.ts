@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig } from "EasyHub/plugin-sdk";
 import fs from "fs";
 import os from "os";
 import path from "path";

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import {
   loadConfig,
   resolveConfigPath,
@@ -24,7 +24,7 @@ export type CallGatewayOptions = {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
-  config?: OpenClawConfig;
+  config?: EasyHubConfig;
   method: string;
   params?: unknown;
   expectFinal?: boolean;
@@ -90,7 +90,7 @@ export function ensureExplicitGatewayAuth(params: {
 }
 
 export function buildGatewayConnectionDetails(
-  options: { config?: OpenClawConfig; url?: string; configPath?: string } = {},
+  options: { config?: EasyHubConfig; url?: string; configPath?: string } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =
@@ -212,8 +212,8 @@ export async function callGateway<T = Record<string, unknown>>(
         ? typeof remote?.token === "string" && remote.token.trim().length > 0
           ? remote.token.trim()
           : undefined
-        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-          process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+        : process.env.EASYHUB_GATEWAY_TOKEN?.trim() ||
+          process.env.EASYHUB_GATEWAY_TOKEN?.trim() ||
           (typeof authToken === "string" && authToken.trim().length > 0
             ? authToken.trim()
             : undefined)
@@ -221,8 +221,8 @@ export async function callGateway<T = Record<string, unknown>>(
   const password =
     explicitAuth.password ||
     (!urlOverride
-      ? process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-        process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
+      ? process.env.EASYHUB_GATEWAY_PASSWORD?.trim() ||
+        process.env.EASYHUB_GATEWAY_PASSWORD?.trim() ||
         (isRemoteMode
           ? typeof remote?.password === "string" && remote.password.trim().length > 0
             ? remote.password.trim()

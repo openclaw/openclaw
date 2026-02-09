@@ -1,7 +1,7 @@
 import CoreLocation
 import Testing
 
-@testable import OpenClaw
+@testable import EasyHub
 
 @Suite("PermissionManager Location")
 struct PermissionManagerLocationTests {

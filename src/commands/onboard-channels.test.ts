@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { discordPlugin } from "../../extensions/discord/src/channel.js";
@@ -75,7 +75,7 @@ describe("setupChannels", () => {
       }),
     };
 
-    await setupChannels({} as OpenClawConfig, runtime, prompter, {
+    await setupChannels({} as EasyHubConfig, runtime, prompter, {
       skipConfirm: true,
       quickstartDefaults: true,
       forceAllowFromChannels: ["whatsapp"],
@@ -130,7 +130,7 @@ describe("setupChannels", () => {
             botToken: "token",
           },
         },
-      } as OpenClawConfig,
+      } as EasyHubConfig,
       runtime,
       prompter,
       {
@@ -194,7 +194,7 @@ describe("setupChannels", () => {
             enabled: false,
           },
         },
-      } as OpenClawConfig,
+      } as EasyHubConfig,
       runtime,
       prompter,
       {

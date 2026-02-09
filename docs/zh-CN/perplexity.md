@@ -15,7 +15,7 @@ x-i18n:
 
 # Perplexity Sonar
 
-OpenClaw 可以使用 Perplexity Sonar 作为 `web_search` 工具。你可以通过 Perplexity 的直连 API 或通过 OpenRouter 连接。
+EasyHub 可以使用 Perplexity Sonar 作为 `web_search` 工具。你可以通过 Perplexity 的直连 API 或通过 OpenRouter 连接。
 
 ## API 选项
 
@@ -69,7 +69,7 @@ OpenClaw 可以使用 Perplexity Sonar 作为 `web_search` 工具。你可以通
 
 如果同时设置了 `PERPLEXITY_API_KEY` 和 `OPENROUTER_API_KEY`，请设置 `tools.web.search.perplexity.baseUrl`（或 `tools.web.search.perplexity.apiKey`）以消除歧义。
 
-如果未设置 base URL，OpenClaw 会根据 API 密钥来源选择默认值：
+如果未设置 base URL，EasyHub 会根据 API 密钥来源选择默认值：
 
 - `PERPLEXITY_API_KEY` 或 `pplx-...` → 直连 Perplexity（`https://api.perplexity.ai`）
 - `OPENROUTER_API_KEY` 或 `sk-or-...` → OpenRouter（`https://openrouter.ai/api/v1`）

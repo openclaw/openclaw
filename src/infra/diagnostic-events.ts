@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
@@ -149,7 +149,7 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
 let seq = 0;
 const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
 
-export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
+export function isDiagnosticsEnabled(config?: EasyHubConfig): boolean {
   return config?.diagnostics?.enabled === true;
 }
 

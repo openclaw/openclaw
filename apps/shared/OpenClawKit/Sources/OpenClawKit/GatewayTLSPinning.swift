@@ -17,7 +17,7 @@ public struct GatewayTLSParams: Sendable {
 }
 
 public enum GatewayTLSStore {
-    private static let suiteName = "ai.openclaw.shared"
+    private static let suiteName = "ai.EasyHub.shared"
     private static let keyPrefix = "gateway.tls."
 
     private static var defaults: UserDefaults {

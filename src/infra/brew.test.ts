@@ -6,7 +6,7 @@ import { resolveBrewExecutable, resolveBrewPathDirs } from "./brew.js";
 
 describe("brew helpers", () => {
   it("resolves brew from ~/.linuxbrew/bin when executable exists", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-brew-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-brew-"));
     try {
       const homebrewBin = path.join(tmp, ".linuxbrew", "bin");
       await fs.mkdir(homebrewBin, { recursive: true });
@@ -22,7 +22,7 @@ describe("brew helpers", () => {
   });
 
   it("prefers HOMEBREW_PREFIX/bin/brew when present", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-brew-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-brew-"));
     try {
       const prefix = path.join(tmp, "prefix");
       const prefixBin = path.join(prefix, "bin");

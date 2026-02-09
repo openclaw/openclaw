@@ -8,7 +8,7 @@ import {
   resolveMentionGating,
   formatAllowlistMatchMeta,
   type HistoryEntry,
-} from "openclaw/plugin-sdk";
+} from "EasyHub/plugin-sdk";
 import type { StoredConversationReference } from "../conversation-store.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";

@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import type { EasyHubPluginApi } from "../../src/plugins/types.js";
 
-export default function register(_api: OpenClawPluginApi) {
+export default function register(_api: EasyHubPluginApi) {
   // OpenProse is delivered via plugin-shipped skills.
 }

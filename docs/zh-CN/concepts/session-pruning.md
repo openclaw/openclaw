@@ -28,7 +28,7 @@ x-i18n:
 
 - **OAuth 或 setup-token** 配置文件：启用 `cache-ttl` 剪枝并将心跳设置为 `1h`。
 - **API 密钥**配置文件：启用 `cache-ttl` 剪枝，将心跳设置为 `30m`，并将 Anthropic 模型的 `cacheControlTtl` 默认为 `1h`。
-- 如果你显式设置了这些值中的任何一个，OpenClaw **不会**覆盖它们。
+- 如果你显式设置了这些值中的任何一个，EasyHub **不会**覆盖它们。
 
 ## 改进内容（成本 + 缓存行为）
 

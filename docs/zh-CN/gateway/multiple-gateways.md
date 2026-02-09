@@ -2,7 +2,7 @@
 read_when:
   - 在同一台机器上运行多个 Gateway 网关
   - 你需要每个 Gateway 网关有隔离的配置/状态/端口
-summary: 在同一主机上运行多个 OpenClaw Gateway 网关（隔离、端口和配置文件）
+summary: 在同一主机上运行多个 EasyHub Gateway 网关（隔离、端口和配置文件）
 title: 多 Gateway 网关
 x-i18n:
   generated_at: "2026-02-03T07:48:13Z"
@@ -19,8 +19,8 @@ x-i18n:
 
 ## 隔离检查清单（必需）
 
-- `OPENCLAW_CONFIG_PATH` — 每个实例的配置文件
-- `OPENCLAW_STATE_DIR` — 每个实例的会话、凭证、缓存
+- `EASYHUB_CONFIG_PATH` — 每个实例的配置文件
+- `EASYHUB_STATE_DIR` — 每个实例的会话、凭证、缓存
 - `agents.defaults.workspace` — 每个实例的工作区根目录
 - `gateway.port`（或 `--port`）— 每个实例唯一
 - 派生端口（浏览器/画布）不得重叠
@@ -29,23 +29,23 @@ x-i18n:
 
 ## 推荐：配置文件（`--profile`）
 
-配置文件自动限定 `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH` 范围并为服务名称添加后缀。
+配置文件自动限定 `EASYHUB_STATE_DIR` + `EASYHUB_CONFIG_PATH` 范围并为服务名称添加后缀。
 
 ```bash
 # main
-openclaw --profile main setup
-openclaw --profile main gateway --port 18789
+EasyHub --profile main setup
+EasyHub --profile main gateway --port 18789
 
 # rescue
-openclaw --profile rescue setup
-openclaw --profile rescue gateway --port 19001
+EasyHub --profile rescue setup
+EasyHub --profile rescue gateway --port 19001
 ```
 
 按配置文件的服务：
 
 ```bash
-openclaw --profile main gateway install
-openclaw --profile rescue gateway install
+EasyHub --profile main gateway install
+EasyHub --profile rescue gateway install
 ```
 
 ## 救援机器人指南
@@ -66,11 +66,11 @@ openclaw --profile rescue gateway install
 ```bash
 # 主机器人（现有或新建，不带 --profile 参数）
 # 运行在端口 18789 + Chrome CDC/Canvas/... 端口
-openclaw onboard
-openclaw gateway install
+EasyHub onboard
+EasyHub gateway install
 
 # 救援机器人（隔离的配置文件 + 端口）
-openclaw --profile rescue onboard
+EasyHub --profile rescue onboard
 # 注意：
 # - 工作区名称默认会添加 -rescue 后缀
 # - 端口应至少为 18789 + 20 个端口，
@@ -78,12 +78,12 @@ openclaw --profile rescue onboard
 # - 其余的新手引导与正常相同
 
 # 安装服务（如果在新手引导期间没有自动完成）
-openclaw --profile rescue gateway install
+EasyHub --profile rescue gateway install
 ```
 
 ## 端口映射（派生）
 
-基础端口 = `gateway.port`（或 `OPENCLAW_GATEWAY_PORT` / `--port`）。
+基础端口 = `gateway.port`（或 `EASYHUB_GATEWAY_PORT` / `--port`）。
 
 - 浏览器控制服务端口 = 基础 + 2（仅 loopback）
 - `canvasHost.port = 基础 + 4`
@@ -101,19 +101,19 @@ openclaw --profile rescue gateway install
 ## 手动环境变量示例
 
 ```bash
-OPENCLAW_CONFIG_PATH=~/.openclaw/main.json \
-OPENCLAW_STATE_DIR=~/.openclaw-main \
-openclaw gateway --port 18789
+EASYHUB_CONFIG_PATH=~/.easyhub/main.json \
+EASYHUB_STATE_DIR=~/.EasyHub-main \
+EasyHub gateway --port 18789
 
-OPENCLAW_CONFIG_PATH=~/.openclaw/rescue.json \
-OPENCLAW_STATE_DIR=~/.openclaw-rescue \
-openclaw gateway --port 19001
+EASYHUB_CONFIG_PATH=~/.easyhub/rescue.json \
+EASYHUB_STATE_DIR=~/.EasyHub-rescue \
+EasyHub gateway --port 19001
 ```
 
 ## 快速检查
 
 ```bash
-openclaw --profile main status
-openclaw --profile rescue status
-openclaw --profile rescue browser status
+EasyHub --profile main status
+EasyHub --profile rescue status
+EasyHub --profile rescue browser status
 ```

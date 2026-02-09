@@ -1,4 +1,4 @@
-import OpenClawKit
+import EasyHubKit
 import Foundation
 
 struct WideAreaGatewayBeacon: Sendable, Equatable {
@@ -50,9 +50,9 @@ enum WideAreaGatewayDiscovery {
             return []
         }
 
-        guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return [] }
+        guard let domain = EasyHubBonjour.wideAreaGatewayServiceDomain else { return [] }
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        let probeName = "_openclaw-gw._tcp.\(domainTrimmed)"
+        let probeName = "_EasyHub-gw._tcp.\(domainTrimmed)"
         guard let ptrLines = context.dig(
             ["+short", "+time=1", "+tries=1", "@\(nameserver)", probeName, "PTR"],
             min(defaultTimeoutSeconds, remaining()))?.split(whereSeparator: \.isNewline),
@@ -66,7 +66,7 @@ enum WideAreaGatewayDiscovery {
             let ptr = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if ptr.isEmpty { continue }
             let ptrName = ptr.hasSuffix(".") ? String(ptr.dropLast()) : ptr
-            let suffix = "._openclaw-gw._tcp.\(domainTrimmed)"
+            let suffix = "._EasyHub-gw._tcp.\(domainTrimmed)"
             let rawInstanceName = ptrName.hasSuffix(suffix)
                 ? String(ptrName.dropLast(suffix.count))
                 : ptrName
@@ -154,9 +154,9 @@ enum WideAreaGatewayDiscovery {
         remaining: () -> TimeInterval,
         dig: @escaping @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?) -> String?
     {
-        guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return nil }
+        guard let domain = EasyHubBonjour.wideAreaGatewayServiceDomain else { return nil }
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        let probeName = "_openclaw-gw._tcp.\(domainTrimmed)"
+        let probeName = "_EasyHub-gw._tcp.\(domainTrimmed)"
 
         let ips = candidates
         candidates.removeAll(keepingCapacity: true)

@@ -19,8 +19,8 @@ x-i18n:
 ## 快速设置（新手）
 
 1. 如果可能，使用**单独的手机号码**（推荐）。
-2. 在 `~/.openclaw/openclaw.json` 中配置 WhatsApp。
-3. 运行 `openclaw channels login` 扫描二维码（关联设备）。
+2. 在 `~/.easyhub/easyhub.json` 中配置 WhatsApp。
+3. 运行 `EasyHub channels login` 扫描二维码（关联设备）。
 4. 启动 Gateway 网关。
 
 最小配置：
@@ -62,13 +62,13 @@ x-i18n:
 
 ## 获取手机号码（两种模式）
 
-WhatsApp 需要真实手机号码进行验证。VoIP 和虚拟号码通常会被封锁。在 WhatsApp 上运行 OpenClaw 有两种支持的方式：
+WhatsApp 需要真实手机号码进行验证。VoIP 和虚拟号码通常会被封锁。在 WhatsApp 上运行 EasyHub 有两种支持的方式：
 
 ### 专用号码（推荐）
 
-为 OpenClaw 使用**单独的手机号码**。最佳用户体验，清晰的路由，无自聊天怪异问题。理想设置：**备用/旧 Android 手机 + eSIM**。保持 Wi-Fi 和电源连接，通过二维码关联。
+为 EasyHub 使用**单独的手机号码**。最佳用户体验，清晰的路由，无自聊天怪异问题。理想设置：**备用/旧 Android 手机 + eSIM**。保持 Wi-Fi 和电源连接，通过二维码关联。
 
-**WhatsApp Business：** 你可以在同一设备上使用不同号码的 WhatsApp Business。非常适合将个人 WhatsApp 分开——安装 WhatsApp Business 并在那里注册 OpenClaw 号码。
+**WhatsApp Business：** 你可以在同一设备上使用不同号码的 WhatsApp Business。非常适合将个人 WhatsApp 分开——安装 WhatsApp Business 并在那里注册 EasyHub 号码。
 
 **示例配置（专用号码，单用户允许列表）：**
 
@@ -85,11 +85,11 @@ WhatsApp 需要真实手机号码进行验证。VoIP 和虚拟号码通常会被
 
 **配对模式（可选）：**
 如果你想使用配对而不是允许列表，请将 `channels.whatsapp.dmPolicy` 设置为 `pairing`。未知发送者会收到配对码；使用以下命令批准：
-`openclaw pairing approve whatsapp <code>`
+`EasyHub pairing approve whatsapp <code>`
 
 ### 个人号码（备选方案）
 
-快速备选方案：在**你自己的号码**上运行 OpenClaw。给自己发消息（WhatsApp"给自己发消息"）进行测试，这样就不会打扰联系人。在设置和实验期间需要在主手机上阅读验证码。**必须启用自聊天模式。**
+快速备选方案：在**你自己的号码**上运行 EasyHub。给自己发消息（WhatsApp"给自己发消息"）进行测试，这样就不会打扰联系人。在设置和实验期间需要在主手机上阅读验证码。**必须启用自聊天模式。**
 当向导询问你的个人 WhatsApp 号码时，输入你将用于发送消息的手机（所有者/发送者），而不是助手号码。
 
 **示例配置（个人号码，自聊天）：**
@@ -104,7 +104,7 @@ WhatsApp 需要真实手机号码进行验证。VoIP 和虚拟号码通常会被
 }
 ```
 
-当设置了 `identity.name` 时，自聊天回复默认为 `[{identity.name}]`（否则为 `[openclaw]`），
+当设置了 `identity.name` 时，自聊天回复默认为 `[{identity.name}]`（否则为 `[EasyHub]`），
 前提是 `messages.responsePrefix` 未设置。明确设置它可以自定义或禁用
 前缀（使用 `""` 来移除）。
 
@@ -121,7 +121,7 @@ WhatsApp 需要真实手机号码进行验证。VoIP 和虚拟号码通常会被
 
 ## 为什么不用 Twilio？
 
-- 早期 OpenClaw 版本支持 Twilio 的 WhatsApp Business 集成。
+- 早期 EasyHub 版本支持 Twilio 的 WhatsApp Business 集成。
 - WhatsApp Business 号码不适合个人助手。
 - Meta 强制执行 24 小时回复窗口；如果你在过去 24 小时内没有回复，商业号码无法发起新消息。
 - 高频或"频繁"使用会触发激进的封锁，因为商业账户不适合发送大量个人助手消息。
@@ -129,13 +129,13 @@ WhatsApp 需要真实手机号码进行验证。VoIP 和虚拟号码通常会被
 
 ## 登录 + 凭证
 
-- 登录命令：`openclaw channels login`（通过关联设备扫描二维码）。
-- 多账户登录：`openclaw channels login --account <id>`（`<id>` = `accountId`）。
+- 登录命令：`EasyHub channels login`（通过关联设备扫描二维码）。
+- 多账户登录：`EasyHub channels login --account <id>`（`<id>` = `accountId`）。
 - 默认账户（省略 `--account` 时）：如果存在则为 `default`，否则为第一个配置的账户 id（排序后）。
-- 凭证存储在 `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`。
+- 凭证存储在 `~/.easyhub/credentials/whatsapp/<accountId>/creds.json`。
 - 备份副本在 `creds.json.bak`（损坏时恢复）。
-- 旧版兼容性：较旧的安装将 Baileys 文件直接存储在 `~/.openclaw/credentials/` 中。
-- 登出：`openclaw channels logout`（或 `--account <id>`）删除 WhatsApp 认证状态（但保留共享的 `oauth.json`）。
+- 旧版兼容性：较旧的安装将 Baileys 文件直接存储在 `~/.easyhub/credentials/` 中。
+- 登出：`EasyHub channels logout`（或 `--account <id>`）删除 WhatsApp 认证状态（但保留共享的 `oauth.json`）。
 - 已登出的 socket => 错误提示重新关联。
 
 ## 入站流程（私信 + 群组）
@@ -145,13 +145,13 @@ WhatsApp 需要真实手机号码进行验证。VoIP 和虚拟号码通常会被
 - 状态/广播聊天被忽略。
 - 直接聊天使用 E.164；群组使用群组 JID。
 - **私信策略**：`channels.whatsapp.dmPolicy` 控制直接聊天访问（默认：`pairing`）。
-  - 配对：未知发送者会收到配对码（通过 `openclaw pairing approve whatsapp <code>` 批准；码在 1 小时后过期）。
+  - 配对：未知发送者会收到配对码（通过 `EasyHub pairing approve whatsapp <code>` 批准；码在 1 小时后过期）。
   - 开放：需要 `channels.whatsapp.allowFrom` 包含 `"*"`。
   - 你关联的 WhatsApp 号码是隐式信任的，因此自身消息会跳过 `channels.whatsapp.dmPolicy` 和 `channels.whatsapp.allowFrom` 检查。
 
 ### 个人号码模式（备选方案）
 
-如果你在**个人 WhatsApp 号码**上运行 OpenClaw，请启用 `channels.whatsapp.selfChatMode`（见上面的示例）。
+如果你在**个人 WhatsApp 号码**上运行 EasyHub，请启用 `channels.whatsapp.selfChatMode`（见上面的示例）。
 
 行为：
 
@@ -192,17 +192,17 @@ WhatsApp 需要真实手机号码进行验证。VoIP 和虚拟号码通常会被
 
 ## WhatsApp 常见问题：发送消息 + 配对
 
-**当我关联 WhatsApp 时，OpenClaw 会给随机联系人发消息吗？**
-不会。默认私信策略是**配对**，因此未知发送者只会收到配对码，他们的消息**不会被处理**。OpenClaw 只会回复它收到的聊天，或你明确触发的发送（智能体/CLI）。
+**当我关联 WhatsApp 时，EasyHub 会给随机联系人发消息吗？**
+不会。默认私信策略是**配对**，因此未知发送者只会收到配对码，他们的消息**不会被处理**。EasyHub 只会回复它收到的聊天，或你明确触发的发送（智能体/CLI）。
 
 **WhatsApp 上的配对是如何工作的？**
 配对是未知发送者的私信门控：
 
 - 来自新发送者的第一条私信返回一个短码（消息不会被处理）。
-- 使用以下命令批准：`openclaw pairing approve whatsapp <code>`（使用 `openclaw pairing list whatsapp` 列出）。
+- 使用以下命令批准：`EasyHub pairing approve whatsapp <code>`（使用 `EasyHub pairing list whatsapp` 列出）。
 - 码在 1 小时后过期；每个渠道的待处理请求上限为 3 个。
 
-**多个人可以在一个 WhatsApp 号码上使用不同的 OpenClaw 实例吗？**
+**多个人可以在一个 WhatsApp 号码上使用不同的 EasyHub 实例吗？**
 可以，通过 `bindings` 将每个发送者路由到不同的智能体（peer `kind: "dm"`，发送者 E.164 如 `+15551234567`）。回复仍然来自**同一个 WhatsApp 账户**，直接聊天会折叠到每个智能体的主会话，因此**每人使用一个智能体**。私信访问控制（`dmPolicy`/`allowFrom`）是每个 WhatsApp 账户全局的。参见[多智能体路由](/concepts/multi-agent)。
 
 **为什么向导会询问我的手机号码？**
@@ -323,14 +323,14 @@ WhatsApp 可以在收到传入消息时立即自动发送表情回应，在机�
   - 仅在第一个媒体项上添加标题。
   - 媒体获取支持 HTTP(S) 和本地路径。
   - 动画 GIF：WhatsApp 期望带有 `gifPlayback: true` 的 MP4 以实现内联循环。
-    - CLI：`openclaw message send --media <mp4> --gif-playback`
+    - CLI：`EasyHub message send --media <mp4> --gif-playback`
     - Gateway 网关：`send` 参数包含 `gifPlayback: true`
 
 ## 语音消息（PTT 音频）
 
 WhatsApp 将音频作为**语音消息**（PTT 气泡）发送。
 
-- 最佳效果：OGG/Opus。OpenClaw 将 `audio/ogg` 重写为 `audio/ogg; codecs=opus`。
+- 最佳效果：OGG/Opus。EasyHub 将 `audio/ogg` 重写为 `audio/ogg; codecs=opus`。
 - WhatsApp 忽略 `[[audio_as_voice]]`（音频已作为语音消息发送）。
 
 ## 媒体限制 + 优化
@@ -390,7 +390,7 @@ WhatsApp 将音频作为**语音消息**（PTT 气泡）发送。
 ## 日志 + 故障排除
 
 - 子系统：`whatsapp/inbound`、`whatsapp/outbound`、`web-heartbeat`、`web-reconnect`。
-- 日志文件：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`（可配置）。
+- 日志文件：`/tmp/EasyHub/EasyHub-YYYY-MM-DD.log`（可配置）。
 - 故障排除指南：[Gateway 网关故障排除](/gateway/troubleshooting)。
 
 ## 故障排除（快速）
@@ -398,12 +398,12 @@ WhatsApp 将音频作为**语音消息**（PTT 气泡）发送。
 **未关联 / 需要二维码登录**
 
 - 症状：`channels status` 显示 `linked: false` 或警告"Not linked"。
-- 修复：在 Gateway 网关主机上运行 `openclaw channels login` 并扫描二维码（WhatsApp → 设置 → 关联设备）。
+- 修复：在 Gateway 网关主机上运行 `EasyHub channels login` 并扫描二维码（WhatsApp → 设置 → 关联设备）。
 
 **已关联但断开连接 / 重连循环**
 
 - 症状：`channels status` 显示 `running, disconnected` 或警告"Linked but disconnected"。
-- 修复：`openclaw doctor`（或重启 Gateway 网关）。如果问题持续，通过 `channels login` 重新关联并检查 `openclaw logs --follow`。
+- 修复：`EasyHub doctor`（或重启 Gateway 网关）。如果问题持续，通过 `channels login` 重新关联并检查 `EasyHub logs --follow`。
 
 **Bun 运行时**
 

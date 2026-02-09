@@ -6,8 +6,8 @@
     {
       "layers" : [
         {
-          "image-name" : "openclaw-mac.png",
-          "name" : "openclaw-mac",
+          "image-name" : "EasyHub-mac.png",
+          "name" : "EasyHub-mac",
           "position" : {
             "scale" : 1.07,
             "translation-in-points" : [

@@ -66,7 +66,7 @@ enum SessionActions {
                 let dir = URL(fileURLWithPath: storePath).deletingLastPathComponent()
                 urls.append(dir.appendingPathComponent("\(sessionId).jsonl"))
             }
-            urls.append(OpenClawPaths.stateDirURL.appendingPathComponent("sessions/\(sessionId).jsonl"))
+            urls.append(EasyHubPaths.stateDirURL.appendingPathComponent("sessions/\(sessionId).jsonl"))
             return urls
         }()
 

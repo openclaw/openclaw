@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 你想将 OpenClaw 连接到 LINE
+  - 你想将 EasyHub 连接到 LINE
   - 你需要配置 LINE webhook + 凭证
   - 你想了解 LINE 特有的消息选项
 summary: LINE Messaging API 插件的配置、设置和使用方法
@@ -16,7 +16,7 @@ x-i18n:
 
 # LINE（插件）
 
-LINE 通过 LINE Messaging API 连接到 OpenClaw。该插件作为 webhook 接收器在 Gateway 网关上运行，使用你的 channel access token + channel secret 进行身份验证。
+LINE 通过 LINE Messaging API 连接到 EasyHub。该插件作为 webhook 接收器在 Gateway 网关上运行，使用你的 channel access token + channel secret 进行身份验证。
 
 状态：通过插件支持。支持私信、群聊、媒体、位置、Flex 消息、模板消息和快捷回复。不支持表情回应和话题回复。
 
@@ -25,13 +25,13 @@ LINE 通过 LINE Messaging API 连接到 OpenClaw。该插件作为 webhook 接�
 安装 LINE 插件：
 
 ```bash
-openclaw plugins install @openclaw/line
+EasyHub plugins install @easyhub/line
 ```
 
 本地检出（从 git 仓库运行时）：
 
 ```bash
-openclaw plugins install ./extensions/line
+EasyHub plugins install ./extensions/line
 ```
 
 ## 配置步骤
@@ -107,8 +107,8 @@ Token/secret 文件：
 私信默认使用配对模式。未知发送者会收到配对码，其消息在获得批准前会被忽略。
 
 ```bash
-openclaw pairing list line
-openclaw pairing approve line <CODE>
+EasyHub pairing list line
+EasyHub pairing approve line <CODE>
 ```
 
 允许列表和策略：

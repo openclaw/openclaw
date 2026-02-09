@@ -5,7 +5,7 @@ describe("buildInboundLine", () => {
   it("prefixes group messages with sender", () => {
     const line = buildInboundLine({
       cfg: {
-        agents: { defaults: { workspace: "/tmp/openclaw" } },
+        agents: { defaults: { workspace: "/tmp/EasyHub" } },
         channels: { whatsapp: { messagePrefix: "" } },
       } as never,
       agentId: "main",

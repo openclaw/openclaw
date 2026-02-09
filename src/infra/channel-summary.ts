@@ -1,6 +1,6 @@
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { type EasyHubConfig, loadConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
@@ -37,7 +37,7 @@ const accountLine = (label: string, details: string[]) =>
 const resolveAccountEnabled = (
   plugin: ChannelPlugin,
   account: unknown,
-  cfg: OpenClawConfig,
+  cfg: EasyHubConfig,
 ): boolean => {
   if (plugin.config.isEnabled) {
     return plugin.config.isEnabled(account, cfg);
@@ -52,7 +52,7 @@ const resolveAccountEnabled = (
 const resolveAccountConfigured = async (
   plugin: ChannelPlugin,
   account: unknown,
-  cfg: OpenClawConfig,
+  cfg: EasyHubConfig,
 ): Promise<boolean> => {
   if (plugin.config.isConfigured) {
     return await plugin.config.isConfigured(account, cfg);
@@ -63,7 +63,7 @@ const resolveAccountConfigured = async (
 const buildAccountSnapshot = (params: {
   plugin: ChannelPlugin;
   account: unknown;
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   accountId: string;
   enabled: boolean;
   configured: boolean;
@@ -81,7 +81,7 @@ const buildAccountSnapshot = (params: {
 
 const formatAllowFrom = (params: {
   plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   accountId?: string | null;
   allowFrom: Array<string | number>;
 }) => {
@@ -98,7 +98,7 @@ const formatAllowFrom = (params: {
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
   plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   includeAllowFrom: boolean;
 }): string[] => {
   const details: string[] = [];
@@ -146,7 +146,7 @@ const buildAccountDetails = (params: {
 };
 
 export async function buildChannelSummary(
-  cfg?: OpenClawConfig,
+  cfg?: EasyHubConfig,
   options?: ChannelSummaryOptions,
 ): Promise<string[]> {
   const effective = cfg ?? loadConfig();

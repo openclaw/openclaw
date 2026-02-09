@@ -1,4 +1,4 @@
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+export type { DmPolicy, GroupPolicy } from "EasyHub/plugin-sdk";
 
 export type BlueBubblesGroupConfig = {
   /** If true, only respond in this group when mentioned. */

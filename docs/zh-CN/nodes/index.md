@@ -20,7 +20,7 @@ x-i18n:
 
 旧版传输：[Bridge 协议](/gateway/bridge-protocol)（TCP JSONL；当前节点已弃用/移除）。
 
-macOS 也可以在**节点模式**下运行：菜单栏应用连接到 Gateway 网关的 WS 服务器，并将其本地 canvas/camera 命令作为节点暴露（因此 `openclaw nodes …` 可以针对这台 Mac 工作）。
+macOS 也可以在**节点模式**下运行：菜单栏应用连接到 Gateway 网关的 WS 服务器，并将其本地 canvas/camera 命令作为节点暴露（因此 `EasyHub nodes …` 可以针对这台 Mac 工作）。
 
 注意事项：
 
@@ -35,17 +35,17 @@ macOS 也可以在**节点模式**下运行：菜单栏应用连接到 Gateway �
 快速 CLI：
 
 ```bash
-openclaw devices list
-openclaw devices approve <requestId>
-openclaw devices reject <requestId>
-openclaw nodes status
-openclaw nodes describe --node <idOrNameOrIp>
+EasyHub devices list
+EasyHub devices approve <requestId>
+EasyHub devices reject <requestId>
+EasyHub nodes status
+EasyHub nodes describe --node <idOrNameOrIp>
 ```
 
 注意事项：
 
 - 当节点的设备配对角色包含 `node` 时，`nodes status` 将节点标记为**已配对**。
-- `node.pair.*`（CLI：`openclaw nodes pending/approve/reject`）是一个单独的 Gateway 网关拥有的
+- `node.pair.*`（CLI：`EasyHub nodes pending/approve/reject`）是一个单独的 Gateway 网关拥有的
   节点配对存储；它**不会**限制 WS `connect` 握手。
 
 ## 远程节点主机（system.run）
@@ -58,14 +58,14 @@ openclaw nodes describe --node <idOrNameOrIp>
 
 - **Gateway 网关主机**：接收消息，运行模型，路由工具调用。
 - **节点主机**：在节点机器上执行 `system.run`/`system.which`。
-- **批准**：通过 `~/.openclaw/exec-approvals.json` 在节点主机上执行。
+- **批准**：通过 `~/.easyhub/exec-approvals.json` 在节点主机上执行。
 
 ### 启动节点主机（前台）
 
 在节点机器上：
 
 ```bash
-openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
+EasyHub node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
 ### 通过 SSH 隧道访问远程 Gateway 网关（loopback 绑定）
@@ -81,20 +81,20 @@ openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ssh -N -L 18790:127.0.0.1:18789 user@gateway-host
 
 # 终端 B：导出 Gateway 网关令牌并通过隧道连接
-export OPENCLAW_GATEWAY_TOKEN="<gateway-token>"
-openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
+export EASYHUB_GATEWAY_TOKEN="<gateway-token>"
+EasyHub node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
 ```
 
 注意事项：
 
-- 令牌是 Gateway 网关配置中的 `gateway.auth.token`（Gateway 网关主机上的 `~/.openclaw/openclaw.json`）。
-- `openclaw node run` 读取 `OPENCLAW_GATEWAY_TOKEN` 进行认证。
+- 令牌是 Gateway 网关配置中的 `gateway.auth.token`（Gateway 网关主机上的 `~/.easyhub/easyhub.json`）。
+- `EasyHub node run` 读取 `EASYHUB_GATEWAY_TOKEN` 进行认证。
 
 ### 启动节点主机（服务）
 
 ```bash
-openclaw node install --host <gateway-host> --port 18789 --display-name "Build Node"
-openclaw node restart
+EasyHub node install --host <gateway-host> --port 18789 --display-name "Build Node"
+EasyHub node restart
 ```
 
 ### 配对 + 命名
@@ -102,35 +102,35 @@ openclaw node restart
 在 Gateway 网关主机上：
 
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
-openclaw nodes list
+EasyHub nodes pending
+EasyHub nodes approve <requestId>
+EasyHub nodes list
 ```
 
 命名选项：
 
-- 在 `openclaw node run` / `openclaw node install` 上使用 `--display-name`（持久化在节点上的 `~/.openclaw/node.json` 中）。
-- `openclaw nodes rename --node <id|name|ip> --name "Build Node"`（Gateway 网关覆盖）。
+- 在 `EasyHub node run` / `EasyHub node install` 上使用 `--display-name`（持久化在节点上的 `~/.easyhub/node.json` 中）。
+- `EasyHub nodes rename --node <id|name|ip> --name "Build Node"`（Gateway 网关覆盖）。
 
 ### 将命令加入允许列表
 
 Exec 批准是**每个节点主机**的。从 Gateway 网关添加允许列表条目：
 
 ```bash
-openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
-openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
+EasyHub approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
+EasyHub approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
 ```
 
-批准存储在节点主机的 `~/.openclaw/exec-approvals.json` 中。
+批准存储在节点主机的 `~/.easyhub/exec-approvals.json` 中。
 
 ### 将 exec 指向节点
 
 配置默认值（Gateway 网关配置）：
 
 ```bash
-openclaw config set tools.exec.host node
-openclaw config set tools.exec.security allowlist
-openclaw config set tools.exec.node "<id-or-name>"
+EasyHub config set tools.exec.host node
+EasyHub config set tools.exec.security allowlist
+EasyHub config set tools.exec.node "<id-or-name>"
 ```
 
 或按会话：
@@ -153,7 +153,7 @@ openclaw config set tools.exec.node "<id-or-name>"
 低级（原始 RPC）：
 
 ```bash
-openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
+EasyHub nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
 ```
 
 对于常见的"给智能体一个 MEDIA 附件"工作流，存在更高级的辅助工具。
@@ -165,17 +165,17 @@ openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"ja
 CLI 辅助工具（写入临时文件并打印 `MEDIA:<path>`）：
 
 ```bash
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format png
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
+EasyHub nodes canvas snapshot --node <idOrNameOrIp> --format png
+EasyHub nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
 ```
 
 ### Canvas 控制
 
 ```bash
-openclaw nodes canvas present --node <idOrNameOrIp> --target https://example.com
-openclaw nodes canvas hide --node <idOrNameOrIp>
-openclaw nodes canvas navigate https://example.com --node <idOrNameOrIp>
-openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
+EasyHub nodes canvas present --node <idOrNameOrIp> --target https://example.com
+EasyHub nodes canvas hide --node <idOrNameOrIp>
+EasyHub nodes canvas navigate https://example.com --node <idOrNameOrIp>
+EasyHub nodes canvas eval --node <idOrNameOrIp> --js "document.title"
 ```
 
 注意事项：
@@ -186,9 +186,9 @@ openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
 ### A2UI（Canvas）
 
 ```bash
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
-openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
+EasyHub nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
+EasyHub nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
+EasyHub nodes canvas a2ui reset --node <idOrNameOrIp>
 ```
 
 注意事项：
@@ -200,16 +200,16 @@ openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
 照片（`jpg`）：
 
 ```bash
-openclaw nodes camera list --node <idOrNameOrIp>
-openclaw nodes camera snap --node <idOrNameOrIp>            # 默认：两个朝向（2 个 MEDIA 行）
-openclaw nodes camera snap --node <idOrNameOrIp> --facing front
+EasyHub nodes camera list --node <idOrNameOrIp>
+EasyHub nodes camera snap --node <idOrNameOrIp>            # 默认：两个朝向（2 个 MEDIA 行）
+EasyHub nodes camera snap --node <idOrNameOrIp> --facing front
 ```
 
 视频片段（`mp4`）：
 
 ```bash
-openclaw nodes camera clip --node <idOrNameOrIp> --duration 10s
-openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
+EasyHub nodes camera clip --node <idOrNameOrIp> --duration 10s
+EasyHub nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 ```
 
 注意事项：
@@ -223,8 +223,8 @@ openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 节点暴露 `screen.record`（mp4）。示例：
 
 ```bash
-openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
-openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
+EasyHub nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
+EasyHub nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
 ```
 
 注意事项：
@@ -242,8 +242,8 @@ openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-
 CLI 辅助工具：
 
 ```bash
-openclaw nodes location get --node <idOrNameOrIp>
-openclaw nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
+EasyHub nodes location get --node <idOrNameOrIp>
+EasyHub nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
 ```
 
 注意事项：
@@ -259,7 +259,7 @@ openclaw nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 1
 低级调用：
 
 ```bash
-openclaw nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from OpenClaw"}'
+EasyHub nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from EasyHub"}'
 ```
 
 注意事项：
@@ -275,8 +275,8 @@ macOS 节点暴露 `system.run`、`system.notify` 和 `system.execApprovals.get/
 示例：
 
 ```bash
-openclaw nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
-openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
+EasyHub nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
+EasyHub nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
 ```
 
 注意事项：
@@ -288,7 +288,7 @@ openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready
 - macOS 节点会丢弃 `PATH` 覆盖；无头节点主机仅在 `PATH` 前置到节点主机 PATH 时才接受它。
 - 在 macOS 节点模式下，`system.run` 受 macOS 应用中的 exec 批准限制（设置 → Exec 批准）。
   Ask/allowlist/full 的行为与无头节点主机相同；被拒绝的提示返回 `SYSTEM_RUN_DENIED`。
-- 在无头节点主机上，`system.run` 受 exec 批准限制（`~/.openclaw/exec-approvals.json`）。
+- 在无头节点主机上，`system.run` 受 exec 批准限制（`~/.easyhub/exec-approvals.json`）。
 
 ## Exec 节点绑定
 
@@ -298,21 +298,21 @@ openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready
 全局默认：
 
 ```bash
-openclaw config set tools.exec.node "node-id-or-name"
+EasyHub config set tools.exec.node "node-id-or-name"
 ```
 
 按智能体覆盖：
 
 ```bash
-openclaw config get agents.list
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
+EasyHub config get agents.list
+EasyHub config set agents.list[0].tools.exec.node "node-id-or-name"
 ```
 
 取消设置以允许任何节点：
 
 ```bash
-openclaw config unset tools.exec.node
-openclaw config unset agents.list[0].tools.exec.node
+EasyHub config unset tools.exec.node
+EasyHub config unset agents.list[0].tools.exec.node
 ```
 
 ## 权限映射
@@ -321,28 +321,28 @@ openclaw config unset agents.list[0].tools.exec.node
 
 ## 无头节点主机（跨平台）
 
-OpenClaw 可以运行**无头节点主机**（无 UI），它连接到 Gateway 网关
+EasyHub 可以运行**无头节点主机**（无 UI），它连接到 Gateway 网关
 WebSocket 并暴露 `system.run` / `system.which`。这在 Linux/Windows
 上或在服务器旁运行最小节点时很有用。
 
 启动它：
 
 ```bash
-openclaw node run --host <gateway-host> --port 18789
+EasyHub node run --host <gateway-host> --port 18789
 ```
 
 注意事项：
 
 - 仍然需要配对（Gateway 网关会显示节点批准提示）。
-- 节点主机将其节点 id、令牌、显示名称和 Gateway 网关连接信息存储在 `~/.openclaw/node.json` 中。
-- Exec 批准通过 `~/.openclaw/exec-approvals.json` 在本地执行
+- 节点主机将其节点 id、令牌、显示名称和 Gateway 网关连接信息存储在 `~/.easyhub/node.json` 中。
+- Exec 批准通过 `~/.easyhub/exec-approvals.json` 在本地执行
   （参见 [Exec 批准](/tools/exec-approvals)）。
 - 在 macOS 上，当配套应用 exec 主机可达时，无头节点主机优先使用它，
-  如果应用不可用则回退到本地执行。设置 `OPENCLAW_NODE_EXEC_HOST=app` 要求
-  使用应用，或设置 `OPENCLAW_NODE_EXEC_FALLBACK=0` 禁用回退。
+  如果应用不可用则回退到本地执行。设置 `EASYHUB_NODE_EXEC_HOST=app` 要求
+  使用应用，或设置 `EASYHUB_NODE_EXEC_FALLBACK=0` 禁用回退。
 - 当 Gateway 网关 WS 使用 TLS 时，添加 `--tls` / `--tls-fingerprint`。
 
 ## Mac 节点模式
 
-- macOS 菜单栏应用作为节点连接到 Gateway 网关 WS 服务器（因此 `openclaw nodes …` 可以针对这台 Mac 工作）。
+- macOS 菜单栏应用作为节点连接到 Gateway 网关 WS 服务器（因此 `EasyHub nodes …` 可以针对这台 Mac 工作）。
 - 在远程模式下，应用为 Gateway 网关端口打开 SSH 隧道并连接到 `localhost`。

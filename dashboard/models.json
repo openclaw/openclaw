@@ -1,0 +1,48 @@
+{
+  "version": "2026-02-09",
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "apiKeyPlaceholder": "sk-ant-...",
+      "models": [
+        { "id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "contextWindow": 200000 },
+        { "id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "contextWindow": 200000 },
+        { "id": "claude-3-opus-20240229", "name": "Claude 3 Opus", "contextWindow": 200000 },
+        { "id": "claude-3-haiku-20240307", "name": "Claude 3 Haiku", "contextWindow": 200000 }
+      ]
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "apiKeyPlaceholder": "sk-...",
+      "models": [
+        { "id": "gpt-4o", "name": "GPT-4o", "contextWindow": 128000 },
+        { "id": "gpt-4o-mini", "name": "GPT-4o Mini", "contextWindow": 128000 },
+        { "id": "gpt-4-turbo", "name": "GPT-4 Turbo", "contextWindow": 128000 },
+        { "id": "o1", "name": "o1", "contextWindow": 200000 },
+        { "id": "o1-mini", "name": "o1 Mini", "contextWindow": 128000 }
+      ]
+    },
+    {
+      "id": "google",
+      "name": "Google",
+      "apiKeyPlaceholder": "AIza...",
+      "models": [
+        { "id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "contextWindow": 1000000 },
+        { "id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro", "contextWindow": 2000000 },
+        { "id": "gemini-1.5-flash", "name": "Gemini 1.5 Flash", "contextWindow": 1000000 }
+      ]
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "apiKeyPlaceholder": "gsk_...",
+      "models": [
+        { "id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B", "contextWindow": 128000 },
+        { "id": "llama-3.1-8b-instant", "name": "Llama 3.1 8B", "contextWindow": 128000 },
+        { "id": "mixtral-8x7b-32768", "name": "Mixtral 8x7B", "contextWindow": 32768 }
+      ]
+    }
+  ]
+}

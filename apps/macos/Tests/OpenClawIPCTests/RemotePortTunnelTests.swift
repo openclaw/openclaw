@@ -1,5 +1,5 @@
 import Testing
-@testable import OpenClaw
+@testable import EasyHub
 
 #if canImport(Darwin)
 import Darwin

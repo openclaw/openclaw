@@ -1,14 +1,14 @@
 ---
 name: slack
-description: Use when you need to control Slack from OpenClaw via the slack tool, including reacting to messages or pinning/unpinning items in Slack channels or DMs.
-metadata: { "openclaw": { "emoji": "💬", "requires": { "config": ["channels.slack"] } } }
+description: Use when you need to control Slack from EasyHub via the slack tool, including reacting to messages or pinning/unpinning items in Slack channels or DMs.
+metadata: { "EasyHub": { "emoji": "💬", "requires": { "config": ["channels.slack"] } } }
 ---
 
 # Slack Actions
 
 ## Overview
 
-Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info. The tool uses the bot token configured for OpenClaw.
+Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info. The tool uses the bot token configured for EasyHub.
 
 ## Inputs to collect
 
@@ -57,7 +57,7 @@ Message context lines include `slack message id` and `channel` fields you can re
 {
   "action": "sendMessage",
   "to": "channel:C123",
-  "content": "Hello from OpenClaw"
+  "content": "Hello from EasyHub"
 }
 ```
 

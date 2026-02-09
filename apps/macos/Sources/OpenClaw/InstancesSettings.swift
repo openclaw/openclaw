@@ -38,7 +38,7 @@ struct InstancesSettings: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Connected Instances")
                     .font(.headline)
-                Text("Latest presence beacons from OpenClaw nodes. Updated periodically.")
+                Text("Latest presence beacons from EasyHub nodes. Updated periodically.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

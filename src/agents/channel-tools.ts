@@ -3,7 +3,7 @@ import type {
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import { getChannelDock } from "../channels/dock.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
@@ -14,7 +14,7 @@ import { defaultRuntime } from "../runtime.js";
  * Returns an empty array if channel is not found or has no actions configured.
  */
 export function listChannelSupportedActions(params: {
-  cfg?: OpenClawConfig;
+  cfg?: EasyHubConfig;
   channel?: string;
 }): ChannelMessageActionName[] {
   if (!params.channel) {
@@ -24,7 +24,7 @@ export function listChannelSupportedActions(params: {
   if (!plugin?.actions?.listActions) {
     return [];
   }
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  const cfg = params.cfg ?? ({} as EasyHubConfig);
   return runPluginListActions(plugin, cfg);
 }
 
@@ -32,14 +32,14 @@ export function listChannelSupportedActions(params: {
  * Get the list of all supported message actions across all configured channels.
  */
 export function listAllChannelSupportedActions(params: {
-  cfg?: OpenClawConfig;
+  cfg?: EasyHubConfig;
 }): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>();
   for (const plugin of listChannelPlugins()) {
     if (!plugin.actions?.listActions) {
       continue;
     }
-    const cfg = params.cfg ?? ({} as OpenClawConfig);
+    const cfg = params.cfg ?? ({} as EasyHubConfig);
     const channelActions = runPluginListActions(plugin, cfg);
     for (const action of channelActions) {
       actions.add(action);
@@ -48,7 +48,7 @@ export function listAllChannelSupportedActions(params: {
   return Array.from(actions);
 }
 
-export function listChannelAgentTools(params: { cfg?: OpenClawConfig }): ChannelAgentTool[] {
+export function listChannelAgentTools(params: { cfg?: EasyHubConfig }): ChannelAgentTool[] {
   // Channel docking: aggregate channel-owned tools (login, etc.).
   const tools: ChannelAgentTool[] = [];
   for (const plugin of listChannelPlugins()) {
@@ -65,7 +65,7 @@ export function listChannelAgentTools(params: { cfg?: OpenClawConfig }): Channel
 }
 
 export function resolveChannelMessageToolHints(params: {
-  cfg?: OpenClawConfig;
+  cfg?: EasyHubConfig;
   channel?: string | null;
   accountId?: string | null;
 }): string[] {
@@ -78,7 +78,7 @@ export function resolveChannelMessageToolHints(params: {
   if (!resolve) {
     return [];
   }
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  const cfg = params.cfg ?? ({} as EasyHubConfig);
   return (resolve({ cfg, accountId: params.accountId }) ?? [])
     .map((entry) => entry.trim())
     .filter(Boolean);
@@ -88,7 +88,7 @@ const loggedListActionErrors = new Set<string>();
 
 function runPluginListActions(
   plugin: ChannelPlugin,
-  cfg: OpenClawConfig,
+  cfg: EasyHubConfig,
 ): ChannelMessageActionName[] {
   if (!plugin.actions?.listActions) {
     return [];

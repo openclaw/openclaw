@@ -103,7 +103,7 @@ struct DebugSettings: View {
                     }
 
                 Text(
-                    "When enabled, OpenClaw won't install or manage \(gatewayLaunchdLabel). " +
+                    "When enabled, EasyHub won't install or manage \(gatewayLaunchdLabel). " +
                         "It will only attach to an existing Gateway.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -203,7 +203,7 @@ struct DebugSettings: View {
                     Button("Copy sample URL") {
                         let msg = "Hello from deep link"
                         let encoded = msg.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? msg
-                        let url = "openclaw://agent?message=\(encoded)&key=\(key)"
+                        let url = "EasyHub://agent?message=\(encoded)&key=\(key)"
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(url, forType: .string)
                     }
@@ -211,7 +211,7 @@ struct DebugSettings: View {
                     Spacer(minLength: 0)
                 }
 
-                Text("Deep links (openclaw://…) are always enabled; the key controls unattended runs.")
+                Text("Deep links (EasyHub://…) are always enabled; the key controls unattended runs.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
@@ -274,7 +274,7 @@ struct DebugSettings: View {
                         Toggle("Write rolling diagnostics log (JSONL)", isOn: self.$diagnosticsFileLogEnabled)
                             .toggleStyle(.checkbox)
                             .help(
-                                "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. " +
+                                "Writes a rotating, local-only log under ~/Library/Logs/EasyHub/. " +
                                     "Enable only while actively debugging.")
 
                         HStack(spacing: 8) {
@@ -382,10 +382,10 @@ struct DebugSettings: View {
         GroupBox("Paths") {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("OpenClaw project root")
+                    Text("EasyHub project root")
                         .font(.caption.weight(.semibold))
                     HStack(spacing: 8) {
-                        TextField("Path to openclaw repo", text: self.$gatewayRootInput)
+                        TextField("Path to EasyHub repo", text: self.$gatewayRootInput)
                             .textFieldStyle(.roundedBorder)
                             .font(.caption.monospaced())
                             .onSubmit { self.saveRelayRoot() }
@@ -393,7 +393,7 @@ struct DebugSettings: View {
                             .buttonStyle(.borderedProminent)
                         Button("Reset") {
                             let def = FileManager().homeDirectoryForCurrentUser
-                                .appendingPathComponent("Projects/openclaw").path
+                                .appendingPathComponent("Projects/EasyHub").path
                             self.gatewayRootInput = def
                             self.saveRelayRoot()
                         }
@@ -423,7 +423,7 @@ struct DebugSettings: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             } else {
-                                Text("Used by the CLI session loader; stored in ~/.openclaw/openclaw.json.")
+                                Text("Used by the CLI session loader; stored in ~/.easyhub/easyhub.json.")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
@@ -524,15 +524,15 @@ struct DebugSettings: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text(
-                        "Note: macOS may require restarting OpenClaw after enabling Accessibility or Screen Recording.")
+                        "Note: macOS may require restarting EasyHub after enabling Accessibility or Screen Recording.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
                     Button {
-                        LaunchdManager.startOpenClaw()
+                        LaunchdManager.startEasyHub()
                     } label: {
-                        Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
+                        Label("Restart EasyHub", systemImage: "arrow.counterclockwise")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -830,7 +830,7 @@ struct DebugSettings: View {
     }
 
     private func configURL() -> URL {
-        OpenClawPaths.configURL
+        EasyHubPaths.configURL
     }
 }
 
@@ -979,7 +979,7 @@ extension DebugSettings {
         view.modelsCount = 3
         view.modelsLoading = false
         view.modelsError = "Failed to load models"
-        view.gatewayRootInput = "/tmp/openclaw"
+        view.gatewayRootInput = "/tmp/EasyHub"
         view.sessionStorePath = "/tmp/sessions.json"
         view.sessionStoreSaveError = "Save failed"
         view.debugSendInFlight = true

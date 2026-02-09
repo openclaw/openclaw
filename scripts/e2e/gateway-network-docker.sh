@@ -2,12 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_NAME="openclaw-gateway-network-e2e"
+IMAGE_NAME="EasyHub-gateway-network-e2e"
 
 PORT="18789"
 TOKEN="e2e-$(date +%s)-$$"
-NET_NAME="openclaw-net-e2e-$$"
-GW_NAME="openclaw-gateway-e2e-$$"
+NET_NAME="EasyHub-net-e2e-$$"
+GW_NAME="EasyHub-gateway-e2e-$$"
 
 cleanup() {
   docker rm -f "$GW_NAME" >/dev/null 2>&1 || true
@@ -25,11 +25,11 @@ echo "Starting gateway container..."
 	docker run --rm -d \
 	  --name "$GW_NAME" \
 	  --network "$NET_NAME" \
-	  -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
-	  -e "OPENCLAW_SKIP_CHANNELS=1" \
-	  -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
-	  -e "OPENCLAW_SKIP_CRON=1" \
-	  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
+	  -e "EASYHUB_GATEWAY_TOKEN=$TOKEN" \
+	  -e "EASYHUB_SKIP_CHANNELS=1" \
+	  -e "EASYHUB_SKIP_GMAIL_WATCHER=1" \
+	  -e "EASYHUB_SKIP_CRON=1" \
+	  -e "EASYHUB_SKIP_CANVAS_HOST=1" \
 	  "$IMAGE_NAME" \
   bash -lc "entry=dist/index.mjs; [ -f \"\$entry\" ] || entry=dist/index.js; node \"\$entry\" gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
 

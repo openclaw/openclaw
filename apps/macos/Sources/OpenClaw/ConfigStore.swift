@@ -1,4 +1,4 @@
-import OpenClawProtocol
+import EasyHubProtocol
 import Foundation
 
 enum ConfigStore {
@@ -44,7 +44,7 @@ enum ConfigStore {
         if let gateway = await self.loadFromGateway() {
             return gateway
         }
-        return OpenClawConfigFile.loadDict()
+        return EasyHubConfigFile.loadDict()
     }
 
     @MainActor
@@ -63,7 +63,7 @@ enum ConfigStore {
                 do {
                     try await self.saveToGateway(root)
                 } catch {
-                    OpenClawConfigFile.saveDict(root)
+                    EasyHubConfigFile.saveDict(root)
                 }
             }
         }

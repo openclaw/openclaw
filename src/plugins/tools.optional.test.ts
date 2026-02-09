@@ -11,7 +11,7 @@ const tempDirs: string[] = [];
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-plugin-tools-${randomUUID()}`);
+  const dir = path.join(os.tmpdir(), `EasyHub-plugin-tools-${randomUUID()}`);
   fs.mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   return dir;
@@ -22,7 +22,7 @@ function writePlugin(params: { id: string; body: string }): TempPlugin {
   const file = path.join(dir, `${params.id}.js`);
   fs.writeFileSync(file, params.body, "utf-8");
   fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
+    path.join(dir, "easyhub.plugin.json"),
     JSON.stringify(
       {
         id: params.id,

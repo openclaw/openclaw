@@ -1,5 +1,5 @@
 ---
-summary: "First-run onboarding flow for OpenClaw (macOS app)"
+summary: "First-run onboarding flow for EasyHub (macOS app)"
 read_when:
   - Designing the macOS onboarding assistant
   - Implementing auth or identity setup
@@ -50,7 +50,7 @@ Where does the **Gateway** run?
 </Tip>
 </Step>
 <Step title="Permissions">
-<Frame caption="Choose what permissions do you want to give OpenClaw">
+<Frame caption="Choose what permissions do you want to give EasyHub">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
 
@@ -68,7 +68,7 @@ Onboarding requests TCC permissions needed for:
 </Step>
 <Step title="CLI">
   <Info>This step is optional</Info>
-  The app can install the global `openclaw` CLI via npm/pnpm so terminal
+  The app can install the global `EasyHub` CLI via npm/pnpm so terminal
   workflows and launchd tasks work out of the box.
 </Step>
 <Step title="Onboarding Chat (dedicated session)">

@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-run-node-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-run-node-"));
   try {
     return await run(dir);
   } finally {
@@ -30,7 +30,7 @@ describe("run-node script", () => {
         await fs.writeFile(path.join(tmp, "src", "index.ts"), "export {};\n", "utf-8");
         await fs.writeFile(
           path.join(tmp, "package.json"),
-          JSON.stringify({ name: "openclaw" }),
+          JSON.stringify({ name: "EasyHub" }),
           "utf-8",
         );
         await fs.writeFile(
@@ -41,11 +41,11 @@ describe("run-node script", () => {
         await fs.writeFile(indexPath, "<html>sentinel</html>\n", "utf-8");
 
         await fs.writeFile(
-          path.join(tmp, "openclaw.mjs"),
+          path.join(tmp, "easyhub.mjs"),
           "#!/usr/bin/env node\nif (process.argv.includes('--version')) console.log('9.9.9-test');\n",
           "utf-8",
         );
-        await fs.chmod(path.join(tmp, "openclaw.mjs"), 0o755);
+        await fs.chmod(path.join(tmp, "easyhub.mjs"), 0o755);
 
         const fakePnpm = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -65,8 +65,8 @@ fs.writeFileSync(path.join(cwd, "dist", "entry.js"), "export {}\\n", "utf-8");
         const env = {
           ...process.env,
           PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-          OPENCLAW_FORCE_BUILD: "1",
-          OPENCLAW_RUNNER_LOG: "0",
+          EASYHUB_FORCE_BUILD: "1",
+          EASYHUB_RUNNER_LOG: "0",
         };
         const result = spawnSync(process.execPath, [runNodeScript, "--version"], {
           cwd: tmp,

@@ -1,6 +1,6 @@
 ---
 read_when: Browser control fails on Linux, especially with snap Chromium
-summary: 修复 Linux 上 OpenClaw 浏览器控制的 Chrome/Brave/Edge/Chromium CDP 启动问题
+summary: 修复 Linux 上 EasyHub 浏览器控制的 Chrome/Brave/Edge/Chromium CDP 启动问题
 title: 浏览器故障排除
 x-i18n:
   generated_at: "2026-02-03T07:55:07Z"
@@ -15,15 +15,15 @@ x-i18n:
 
 ## 问题："Failed to start Chrome CDP on port 18800"
 
-OpenClaw 的浏览器控制服务器无法启动 Chrome/Brave/Edge/Chromium，出现以下错误：
+EasyHub 的浏览器控制服务器无法启动 Chrome/Brave/Edge/Chromium，出现以下错误：
 
 ```
-{"error":"Error: Failed to start Chrome CDP on port 18800 for profile \"openclaw\"."}
+{"error":"Error: Failed to start Chrome CDP on port 18800 for profile \"EasyHub\"."}
 ```
 
 ### 根本原因
 
-在 Ubuntu（和许多 Linux 发行版）上，默认的 Chromium 安装是 **snap 包**。Snap 的 AppArmor 限制会干扰 OpenClaw 启动和监控浏览器进程的方式。
+在 Ubuntu（和许多 Linux 发行版）上，默认的 Chromium 安装是 **snap 包**。Snap 的 AppArmor 限制会干扰 EasyHub 启动和监控浏览器进程的方式。
 
 `apt install chromium` 命令安装的是一个重定向到 snap 的存根包：
 
@@ -44,7 +44,7 @@ sudo dpkg -i google-chrome-stable_current_amd64.deb
 sudo apt --fix-broken install -y  # if there are dependency errors
 ```
 
-然后更新你的 OpenClaw 配置（`~/.openclaw/openclaw.json`）：
+然后更新你的 EasyHub 配置（`~/.easyhub/easyhub.json`）：
 
 ```json
 {
@@ -59,7 +59,7 @@ sudo apt --fix-broken install -y  # if there are dependency errors
 
 ### 解决方案 2：使用 Snap Chromium 的仅附加模式
 
-如果你必须使用 snap Chromium，配置 OpenClaw 附加到手动启动的浏览器：
+如果你必须使用 snap Chromium，配置 EasyHub 附加到手动启动的浏览器：
 
 1. 更新配置：
 
@@ -79,20 +79,20 @@ sudo apt --fix-broken install -y  # if there are dependency errors
 ```bash
 chromium-browser --headless --no-sandbox --disable-gpu \
   --remote-debugging-port=18800 \
-  --user-data-dir=$HOME/.openclaw/browser/openclaw/user-data \
+  --user-data-dir=$HOME/.easyhub/browser/EasyHub/user-data \
   about:blank &
 ```
 
 3. 可选创建 systemd 用户服务以自动启动 Chrome：
 
 ```ini
-# ~/.config/systemd/user/openclaw-browser.service
+# ~/.config/systemd/user/EasyHub-browser.service
 [Unit]
-Description=OpenClaw Browser (Chrome CDP)
+Description=EasyHub Browser (Chrome CDP)
 After=network.target
 
 [Service]
-ExecStart=/snap/bin/chromium --headless --no-sandbox --disable-gpu --remote-debugging-port=18800 --user-data-dir=%h/.openclaw/browser/openclaw/user-data about:blank
+ExecStart=/snap/bin/chromium --headless --no-sandbox --disable-gpu --remote-debugging-port=18800 --user-data-dir=%h/.easyhub/browser/EasyHub/user-data about:blank
 Restart=on-failure
 RestartSec=5
 
@@ -100,7 +100,7 @@ RestartSec=5
 WantedBy=default.target
 ```
 
-启用：`systemctl --user enable --now openclaw-browser.service`
+启用：`systemctl --user enable --now EasyHub-browser.service`
 
 ### 验证浏览器是否工作
 
@@ -130,15 +130,15 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### 问题："Chrome extension relay is running, but no tab is connected"
 
-你正在使用 `chrome` 配置文件（扩展中继）。它期望 OpenClaw 浏览器扩展附加到一个活动标签页。
+你正在使用 `chrome` 配置文件（扩展中继）。它期望 EasyHub 浏览器扩展附加到一个活动标签页。
 
 修复选项：
 
-1. **使用托管浏览器：** `openclaw browser start --browser-profile openclaw`
-   （或设置 `browser.defaultProfile: "openclaw"`）。
-2. **使用扩展中继：** 安装扩展，打开一个标签页，然后点击 OpenClaw 扩展图标来附加它。
+1. **使用托管浏览器：** `EasyHub browser start --browser-profile EasyHub`
+   （或设置 `browser.defaultProfile: "EasyHub"`）。
+2. **使用扩展中继：** 安装扩展，打开一个标签页，然后点击 EasyHub 扩展图标来附加它。
 
 注意事项：
 
 - `chrome` 配置文件在可能时使用你的**系统默认 Chromium 浏览器**。
-- 本地 `openclaw` 配置文件自动分配 `cdpPort`/`cdpUrl`；仅为远程 CDP 设置这些。
+- 本地 `EasyHub` 配置文件自动分配 `cdpPort`/`cdpUrl`；仅为远程 CDP 设置这些。

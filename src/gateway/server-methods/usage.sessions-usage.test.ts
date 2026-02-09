@@ -107,7 +107,7 @@ describe("sessions.usage", () => {
 
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-usage-test-"));
     const sessionFile = path.join(tempDir, "s-opus.jsonl");
     fs.writeFileSync(sessionFile, "", "utf-8");
     const respond = vi.fn();

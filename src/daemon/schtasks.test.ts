@@ -7,7 +7,7 @@ import { parseSchtasksQuery, readScheduledTaskCommand, resolveTaskScriptPath } f
 describe("schtasks runtime parsing", () => {
   it("parses status and last run info", () => {
     const output = [
-      "TaskName: \\OpenClaw Gateway",
+      "TaskName: \\EasyHub Gateway",
       "Status: Ready",
       "Last Run Time: 1/8/2026 1:23:45 AM",
       "Last Run Result: 0x0",
@@ -21,7 +21,7 @@ describe("schtasks runtime parsing", () => {
 
   it("parses running status", () => {
     const output = [
-      "TaskName: \\OpenClaw Gateway",
+      "TaskName: \\EasyHub Gateway",
       "Status: Running",
       "Last Run Time: 1/8/2026 1:23:45 AM",
       "Last Run Result: 0x0",
@@ -35,68 +35,68 @@ describe("schtasks runtime parsing", () => {
 });
 
 describe("resolveTaskScriptPath", () => {
-  it("uses default path when OPENCLAW_PROFILE is default", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "default" };
+  it("uses default path when EASYHUB_PROFILE is default", () => {
+    const env = { USERPROFILE: "C:\\Users\\test", EASYHUB_PROFILE: "default" };
     expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
+      path.join("C:\\Users\\test", ".easyhub", "gateway.cmd"),
     );
   });
 
-  it("uses default path when OPENCLAW_PROFILE is unset", () => {
+  it("uses default path when EASYHUB_PROFILE is unset", () => {
     const env = { USERPROFILE: "C:\\Users\\test" };
     expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
+      path.join("C:\\Users\\test", ".easyhub", "gateway.cmd"),
     );
   });
 
-  it("uses profile-specific path when OPENCLAW_PROFILE is set to a custom value", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "jbphoenix" };
+  it("uses profile-specific path when EASYHUB_PROFILE is set to a custom value", () => {
+    const env = { USERPROFILE: "C:\\Users\\test", EASYHUB_PROFILE: "jbphoenix" };
     expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw-jbphoenix", "gateway.cmd"),
+      path.join("C:\\Users\\test", ".EasyHub-jbphoenix", "gateway.cmd"),
     );
   });
 
-  it("prefers OPENCLAW_STATE_DIR over profile-derived defaults", () => {
+  it("prefers EASYHUB_STATE_DIR over profile-derived defaults", () => {
     const env = {
       USERPROFILE: "C:\\Users\\test",
-      OPENCLAW_PROFILE: "rescue",
-      OPENCLAW_STATE_DIR: "C:\\State\\openclaw",
+      EASYHUB_PROFILE: "rescue",
+      EASYHUB_STATE_DIR: "C:\\State\\EasyHub",
     };
-    expect(resolveTaskScriptPath(env)).toBe(path.join("C:\\State\\openclaw", "gateway.cmd"));
+    expect(resolveTaskScriptPath(env)).toBe(path.join("C:\\State\\EasyHub", "gateway.cmd"));
   });
 
   it("handles case-insensitive 'Default' profile", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "Default" };
+    const env = { USERPROFILE: "C:\\Users\\test", EASYHUB_PROFILE: "Default" };
     expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
+      path.join("C:\\Users\\test", ".easyhub", "gateway.cmd"),
     );
   });
 
   it("handles case-insensitive 'DEFAULT' profile", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "DEFAULT" };
+    const env = { USERPROFILE: "C:\\Users\\test", EASYHUB_PROFILE: "DEFAULT" };
     expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
+      path.join("C:\\Users\\test", ".easyhub", "gateway.cmd"),
     );
   });
 
-  it("trims whitespace from OPENCLAW_PROFILE", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "  myprofile  " };
+  it("trims whitespace from EASYHUB_PROFILE", () => {
+    const env = { USERPROFILE: "C:\\Users\\test", EASYHUB_PROFILE: "  myprofile  " };
     expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw-myprofile", "gateway.cmd"),
+      path.join("C:\\Users\\test", ".EasyHub-myprofile", "gateway.cmd"),
     );
   });
 
   it("falls back to HOME when USERPROFILE is not set", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "default" };
-    expect(resolveTaskScriptPath(env)).toBe(path.join("/home/test", ".openclaw", "gateway.cmd"));
+    const env = { HOME: "/home/test", EASYHUB_PROFILE: "default" };
+    expect(resolveTaskScriptPath(env)).toBe(path.join("/home/test", ".easyhub", "gateway.cmd"));
   });
 });
 
 describe("readScheduledTaskCommand", () => {
   it("parses basic command script", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".easyhub", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(
         scriptPath,
@@ -104,7 +104,7 @@ describe("readScheduledTaskCommand", () => {
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, EASYHUB_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: ["node", "gateway.js", "--port", "18789"],
@@ -115,21 +115,21 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("parses script with working directory", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".easyhub", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(
         scriptPath,
-        ["@echo off", "cd /d C:\\Projects\\openclaw", "node gateway.js"].join("\r\n"),
+        ["@echo off", "cd /d C:\\Projects\\EasyHub", "node gateway.js"].join("\r\n"),
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, EASYHUB_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: ["node", "gateway.js"],
-        workingDirectory: "C:\\Projects\\openclaw",
+        workingDirectory: "C:\\Projects\\EasyHub",
       });
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -137,9 +137,9 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("parses script with environment variables", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".easyhub", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(
         scriptPath,
@@ -147,7 +147,7 @@ describe("readScheduledTaskCommand", () => {
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, EASYHUB_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: ["node", "gateway.js"],
@@ -162,9 +162,9 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("parses script with quoted arguments containing spaces", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".easyhub", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       // Use forward slashes which work in Windows cmd and avoid escape parsing issues
       await fs.writeFile(
@@ -173,7 +173,7 @@ describe("readScheduledTaskCommand", () => {
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, EASYHUB_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: ["C:/Program Files/Node/node.exe", "gateway.js"],
@@ -184,9 +184,9 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("returns null when script does not exist", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-schtasks-test-"));
     try {
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, EASYHUB_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toBeNull();
     } finally {
@@ -195,9 +195,9 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("returns null when script has no command", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".easyhub", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(
         scriptPath,
@@ -205,7 +205,7 @@ describe("readScheduledTaskCommand", () => {
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, EASYHUB_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toBeNull();
     } finally {
@@ -214,31 +214,31 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("parses full script with all components", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".easyhub", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(
         scriptPath,
         [
           "@echo off",
-          "rem OpenClaw Gateway",
-          "cd /d C:\\Projects\\openclaw",
+          "rem EasyHub Gateway",
+          "cd /d C:\\Projects\\EasyHub",
           "set NODE_ENV=production",
-          "set OPENCLAW_PORT=18789",
+          "set EASYHUB_PORT=18789",
           "node gateway.js --verbose",
         ].join("\r\n"),
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, EASYHUB_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: ["node", "gateway.js", "--verbose"],
-        workingDirectory: "C:\\Projects\\openclaw",
+        workingDirectory: "C:\\Projects\\EasyHub",
         environment: {
           NODE_ENV: "production",
-          OPENCLAW_PORT: "18789",
+          EASYHUB_PORT: "18789",
         },
       });
     } finally {

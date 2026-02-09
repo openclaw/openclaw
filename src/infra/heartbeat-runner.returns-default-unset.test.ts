@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
@@ -98,7 +98,7 @@ describe("resolveHeartbeatPrompt", () => {
   });
 
   it("uses a trimmed override when configured", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
     };
     expect(resolveHeartbeatPrompt(cfg)).toBe("ping");
@@ -107,7 +107,7 @@ describe("resolveHeartbeatPrompt", () => {
 
 describe("isHeartbeatEnabledForAgent", () => {
   it("enables only explicit heartbeat agents when configured", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
         list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
@@ -118,7 +118,7 @@ describe("isHeartbeatEnabledForAgent", () => {
   });
 
   it("falls back to default agent when no explicit heartbeat entries", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
         list: [{ id: "main" }, { id: "ops" }],
@@ -136,7 +136,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   };
 
   it("respects target none", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: { defaults: { heartbeat: { target: "none" } } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
@@ -149,7 +149,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("uses last route by default", () => {
-    const cfg: OpenClawConfig = {};
+    const cfg: EasyHubConfig = {};
     const entry = {
       ...baseEntry,
       lastChannel: "whatsapp" as const,
@@ -165,7 +165,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("normalizes explicit WhatsApp targets when allowFrom is '*'", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: {
           heartbeat: { target: "whatsapp", to: "whatsapp:(555) 123" },
@@ -183,7 +183,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("skips when last route is webchat", () => {
-    const cfg: OpenClawConfig = {};
+    const cfg: EasyHubConfig = {};
     const entry = {
       ...baseEntry,
       lastChannel: "webchat" as const,
@@ -199,7 +199,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("applies allowFrom fallback for WhatsApp targets", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: { defaults: { heartbeat: { target: "whatsapp", to: "+1999" } } },
       channels: { whatsapp: { allowFrom: ["+1555", "+1666"] } },
     };
@@ -219,7 +219,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("keeps WhatsApp group targets even with allowFrom set", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       channels: { whatsapp: { allowFrom: ["+1555"] } },
     };
     const entry = {
@@ -237,7 +237,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("normalizes prefixed WhatsApp group targets for heartbeat delivery", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       channels: { whatsapp: { allowFrom: ["+1555"] } },
     };
     const entry = {
@@ -255,7 +255,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("keeps explicit telegram targets", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
@@ -268,7 +268,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("uses explicit heartbeat accountId when provided", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: {
           heartbeat: { target: "telegram", to: "123", accountId: "work" },
@@ -286,7 +286,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("skips when explicit heartbeat accountId is unknown", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: {
           heartbeat: { target: "telegram", to: "123", accountId: "missing" },
@@ -304,7 +304,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("prefers per-agent heartbeat overrides when provided", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } },
     };
     const heartbeat = { target: "whatsapp", to: "+1555" } as const;
@@ -326,7 +326,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 
 describe("resolveHeartbeatSenderContext", () => {
   it("prefers delivery accountId for allowFrom resolution", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       channels: {
         telegram: {
           allowFrom: ["111"],
@@ -359,7 +359,7 @@ describe("resolveHeartbeatSenderContext", () => {
 
 describe("runHeartbeatOnce", () => {
   it("skips when agent heartbeat is not enabled", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
         list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
@@ -374,7 +374,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("skips outside active hours", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: {
         defaults: {
           userTimezone: "UTC",
@@ -398,11 +398,11 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("uses the last non-empty payload for delivery", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: EasyHubConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
@@ -456,11 +456,11 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("uses per-agent heartbeat overrides and session keys", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: EasyHubConfig = {
         agents: {
           defaults: {
             heartbeat: { every: "30m", prompt: "Default prompt" },
@@ -526,12 +526,12 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("runs heartbeats in the explicit session key when configured", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
       const groupId = "120363401234567890@g.us";
-      const cfg: OpenClawConfig = {
+      const cfg: EasyHubConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
@@ -609,11 +609,11 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("suppresses duplicate heartbeat payloads within 24h", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: EasyHubConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
@@ -665,11 +665,11 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("can include reasoning payloads when enabled", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: EasyHubConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
@@ -737,11 +737,11 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("delivers reasoning even when the main heartbeat reply is HEARTBEAT_OK", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: EasyHubConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
@@ -808,11 +808,11 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("loads the default agent session from templated stores", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-hb-"));
     const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: EasyHubConfig = {
         agents: {
           defaults: { workspace: tmpDir, heartbeat: { every: "5m" } },
           list: [{ id: "work", default: true }],
@@ -872,7 +872,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("skips heartbeat when HEARTBEAT.md is effectively empty (saves API calls)", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -886,7 +886,7 @@ describe("runHeartbeatOnce", () => {
         "utf-8",
       );
 
-      const cfg: OpenClawConfig = {
+      const cfg: EasyHubConfig = {
         agents: {
           defaults: {
             workspace: workspaceDir,
@@ -944,7 +944,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("runs heartbeat when HEARTBEAT.md has actionable content", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -958,7 +958,7 @@ describe("runHeartbeatOnce", () => {
         "utf-8",
       );
 
-      const cfg: OpenClawConfig = {
+      const cfg: EasyHubConfig = {
         agents: {
           defaults: {
             workspace: workspaceDir,
@@ -1014,7 +1014,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("runs heartbeat when HEARTBEAT.md does not exist (lets LLM decide)", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -1022,7 +1022,7 @@ describe("runHeartbeatOnce", () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       // Don't create HEARTBEAT.md - it doesn't exist
 
-      const cfg: OpenClawConfig = {
+      const cfg: EasyHubConfig = {
         agents: {
           defaults: {
             workspace: workspaceDir,

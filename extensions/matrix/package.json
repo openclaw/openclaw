@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/matrix",
+  "name": "@easyhub/matrix",
   "version": "2026.2.6-3",
-  "description": "OpenClaw Matrix channel plugin",
+  "description": "EasyHub Matrix channel plugin",
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
@@ -11,9 +11,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "EasyHub": "workspace:*"
   },
-  "openclaw": {
+  "EasyHub": {
     "extensions": [
       "./index.ts"
     ],
@@ -28,7 +28,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/matrix",
+      "npmSpec": "@easyhub/matrix",
       "localPath": "extensions/matrix",
       "defaultChoice": "npm"
     }

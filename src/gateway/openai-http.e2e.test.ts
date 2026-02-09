@@ -66,7 +66,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const server = await startServerWithDefaultConfig(port);
       try {
         const res = await postChatCompletions(port, {
-          model: "openclaw",
+          model: "EasyHub",
           messages: [{ role: "user", content: "hi" }],
         });
         expect(res.status).toBe(404);
@@ -82,7 +82,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
       try {
         const res = await postChatCompletions(port, {
-          model: "openclaw",
+          model: "EasyHub",
           messages: [{ role: "user", content: "hi" }],
         });
         expect(res.status).toBe(404);
@@ -123,8 +123,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(
           port,
-          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-          { "x-openclaw-agent-id": "beta" },
+          { model: "EasyHub", messages: [{ role: "user", content: "hi" }] },
+          { "x-EasyHub-agent-id": "beta" },
         );
         expect(res.status).toBe(200);
 
@@ -139,7 +139,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(port, {
-          model: "openclaw:beta",
+          model: "EasyHub:beta",
           messages: [{ role: "user", content: "hi" }],
         });
         expect(res.status).toBe(200);
@@ -157,10 +157,10 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const res = await postChatCompletions(
           port,
           {
-            model: "openclaw:beta",
+            model: "EasyHub:beta",
             messages: [{ role: "user", content: "hi" }],
           },
-          { "x-openclaw-agent-id": "alpha" },
+          { "x-EasyHub-agent-id": "alpha" },
         );
         expect(res.status).toBe(200);
 
@@ -176,10 +176,10 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(
           port,
-          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          { model: "EasyHub", messages: [{ role: "user", content: "hi" }] },
           {
-            "x-openclaw-agent-id": "beta",
-            "x-openclaw-session-key": "agent:beta:openai:custom",
+            "x-EasyHub-agent-id": "beta",
+            "x-EasyHub-session-key": "agent:beta:openai:custom",
           },
         );
         expect(res.status).toBe(200);
@@ -195,7 +195,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(port, {
           user: "alice",
-          model: "openclaw",
+          model: "EasyHub",
           messages: [{ role: "user", content: "hi" }],
         });
         expect(res.status).toBe(200);
@@ -210,7 +210,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(port, {
-          model: "openclaw",
+          model: "EasyHub",
           messages: [
             {
               role: "user",
@@ -231,7 +231,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         mockAgentOnce([{ text: "I am Claude" }]);
         const res = await postChatCompletions(port, {
-          model: "openclaw",
+          model: "EasyHub",
           messages: [
             { role: "system", content: "You are a helpful assistant." },
             { role: "user", content: "Hello, who are you?" },
@@ -254,7 +254,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(port, {
-          model: "openclaw",
+          model: "EasyHub",
           messages: [
             { role: "system", content: "You are a helpful assistant." },
             { role: "user", content: "Hello" },
@@ -273,7 +273,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(port, {
-          model: "openclaw",
+          model: "EasyHub",
           messages: [
             { role: "developer", content: "You are a helpful assistant." },
             { role: "user", content: "Hello" },
@@ -291,7 +291,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         mockAgentOnce([{ text: "ok" }]);
         const res = await postChatCompletions(port, {
-          model: "openclaw",
+          model: "EasyHub",
           messages: [
             { role: "system", content: "You are a helpful assistant." },
             { role: "user", content: "What's the weather?" },
@@ -315,7 +315,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(port, {
           stream: false,
-          model: "openclaw",
+          model: "EasyHub",
           messages: [{ role: "user", content: "hi" }],
         });
         expect(res.status).toBe(200);
@@ -330,7 +330,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         const res = await postChatCompletions(port, {
-          model: "openclaw",
+          model: "EasyHub",
           messages: [{ role: "system", content: "yo" }],
         });
         expect(res.status).toBe(400);
@@ -358,7 +358,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         const res = await postChatCompletions(port, {
           stream: true,
-          model: "openclaw",
+          model: "EasyHub",
           messages: [{ role: "user", content: "hi" }],
         });
         expect(res.status).toBe(200);
@@ -391,7 +391,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         const repeatedRes = await postChatCompletions(port, {
           stream: true,
-          model: "openclaw",
+          model: "EasyHub",
           messages: [{ role: "user", content: "hi" }],
         });
         expect(repeatedRes.status).toBe(200);
@@ -416,7 +416,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         const fallbackRes = await postChatCompletions(port, {
           stream: true,
-          model: "openclaw",
+          model: "EasyHub",
           messages: [{ role: "user", content: "hi" }],
         });
         expect(fallbackRes.status).toBe(200);

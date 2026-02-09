@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { EasyHubConfig } from "../../config/config.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import {
@@ -14,7 +14,7 @@ import { maskApiKey } from "./list.format.js";
 
 export function resolveProviderAuthOverview(params: {
   provider: string;
-  cfg: OpenClawConfig;
+  cfg: EasyHubConfig;
   store: AuthProfileStore;
   modelsPath: string;
 }): ProviderAuthOverview {

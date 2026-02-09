@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../src/auto-reply/templating.js";
-import type { OpenClawConfig } from "../src/config/config.js";
+import type { EasyHubConfig } from "../src/config/config.js";
 
 const makeTempDir = async (prefix: string) => await fs.mkdtemp(path.join(os.tmpdir(), prefix));
 
@@ -14,7 +14,7 @@ const writeExecutable = async (dir: string, name: string, content: string) => {
 };
 
 const makeTempMedia = async (ext: string) => {
-  const dir = await makeTempDir("openclaw-media-e2e-");
+  const dir = await makeTempDir("EasyHub-media-e2e-");
   const filePath = path.join(dir, `sample${ext}`);
   await fs.writeFile(filePath, "audio");
   return { dir, filePath };
@@ -50,8 +50,8 @@ describe("media understanding auto-detect (e2e)", () => {
   it("uses sherpa-onnx-offline when available", async () => {
     const snapshot = envSnapshot();
     try {
-      const binDir = await makeTempDir("openclaw-bin-sherpa-");
-      const modelDir = await makeTempDir("openclaw-sherpa-model-");
+      const binDir = await makeTempDir("EasyHub-bin-sherpa-");
+      const modelDir = await makeTempDir("EasyHub-sherpa-model-");
       tempPaths.push(binDir, modelDir);
 
       await fs.writeFile(path.join(modelDir, "tokens.txt"), "a");
@@ -77,7 +77,7 @@ describe("media understanding auto-detect (e2e)", () => {
         MediaPath: filePath,
         MediaType: "audio/wav",
       };
-      const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+      const cfg: EasyHubConfig = { tools: { media: { audio: {} } } };
 
       await applyMediaUnderstanding({ ctx, cfg });
 
@@ -90,8 +90,8 @@ describe("media understanding auto-detect (e2e)", () => {
   it("uses whisper-cli when sherpa is missing", async () => {
     const snapshot = envSnapshot();
     try {
-      const binDir = await makeTempDir("openclaw-bin-whispercpp-");
-      const modelDir = await makeTempDir("openclaw-whispercpp-model-");
+      const binDir = await makeTempDir("EasyHub-bin-whispercpp-");
+      const modelDir = await makeTempDir("EasyHub-whispercpp-model-");
       tempPaths.push(binDir, modelDir);
 
       const modelPath = path.join(modelDir, "tiny.bin");
@@ -122,7 +122,7 @@ describe("media understanding auto-detect (e2e)", () => {
         MediaPath: filePath,
         MediaType: "audio/wav",
       };
-      const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+      const cfg: EasyHubConfig = { tools: { media: { audio: {} } } };
 
       await applyMediaUnderstanding({ ctx, cfg });
 
@@ -135,7 +135,7 @@ describe("media understanding auto-detect (e2e)", () => {
   it("uses gemini CLI for images when available", async () => {
     const snapshot = envSnapshot();
     try {
-      const binDir = await makeTempDir("openclaw-bin-gemini-");
+      const binDir = await makeTempDir("EasyHub-bin-gemini-");
       tempPaths.push(binDir);
 
       await writeExecutable(
@@ -155,7 +155,7 @@ describe("media understanding auto-detect (e2e)", () => {
         MediaPath: filePath,
         MediaType: "image/png",
       };
-      const cfg: OpenClawConfig = { tools: { media: { image: {} } } };
+      const cfg: EasyHubConfig = { tools: { media: { image: {} } } };
 
       await applyMediaUnderstanding({ ctx, cfg });
 

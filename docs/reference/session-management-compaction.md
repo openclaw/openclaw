@@ -9,7 +9,7 @@ title: "Session Management Deep Dive"
 
 # Session Management & Compaction (Deep Dive)
 
-This document explains how OpenClaw manages sessions end-to-end:
+This document explains how EasyHub manages sessions end-to-end:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks
@@ -30,7 +30,7 @@ If you want a higher-level overview first, start with:
 
 ## Source of truth: the Gateway
 
-OpenClaw is designed around a single **Gateway process** that owns session state.
+EasyHub is designed around a single **Gateway process** that owns session state.
 
 - UIs (macOS app, web Control UI, TUI) should query the Gateway for session lists and token counts.
 - In remote mode, session files are on the remote host; “checking your local Mac files” won’t reflect what the Gateway is using.
@@ -39,7 +39,7 @@ OpenClaw is designed around a single **Gateway process** that owns session state
 
 ## Two persistence layers
 
-OpenClaw persists sessions in two layers:
+EasyHub persists sessions in two layers:
 
 1. **Session store (`sessions.json`)**
    - Key/value map: `sessionKey -> SessionEntry`
@@ -57,11 +57,11 @@ OpenClaw persists sessions in two layers:
 
 Per agent, on the Gateway host:
 
-- Store: `~/.openclaw/agents/<agentId>/sessions/sessions.json`
-- Transcripts: `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
+- Store: `~/.easyhub/agents/<agentId>/sessions/sessions.json`
+- Transcripts: `~/.easyhub/agents/<agentId>/sessions/<sessionId>.jsonl`
   - Telegram topic sessions: `.../<sessionId>-topic-<threadId>.jsonl`
 
-OpenClaw resolves these via `src/config/sessions.ts`.
+EasyHub resolves these via `src/config/sessions.ts`.
 
 ---
 
@@ -138,7 +138,7 @@ Notable entry types:
 - `compaction`: persisted compaction summary with `firstKeptEntryId` and `tokensBefore`
 - `branch_summary`: persisted summary when navigating a tree branch
 
-OpenClaw intentionally does **not** “fix up” transcripts; the Gateway uses `SessionManager` to read/write them.
+EasyHub intentionally does **not** “fix up” transcripts; the Gateway uses `SessionManager` to read/write them.
 
 ---
 
@@ -185,7 +185,7 @@ Where:
 - `contextWindow` is the model’s context window
 - `reserveTokens` is headroom reserved for prompts + the next model output
 
-These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides when to compact).
+These are Pi runtime semantics (EasyHub consumes the events, but Pi decides when to compact).
 
 ---
 
@@ -203,12 +203,12 @@ Pi’s compaction settings live in Pi settings:
 }
 ```
 
-OpenClaw also enforces a safety floor for embedded runs:
+EasyHub also enforces a safety floor for embedded runs:
 
-- If `compaction.reserveTokens < reserveTokensFloor`, OpenClaw bumps it.
+- If `compaction.reserveTokens < reserveTokensFloor`, EasyHub bumps it.
 - Default floor is `20000` tokens.
 - Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
-- If it’s already higher, OpenClaw leaves it alone.
+- If it’s already higher, EasyHub leaves it alone.
 
 Why: leave enough headroom for multi-turn “housekeeping” (like memory writes) before compaction becomes unavoidable.
 
@@ -222,22 +222,22 @@ Implementation: `ensurePiCompactionReserveTokens()` in `src/agents/pi-settings.t
 You can observe compaction and session state via:
 
 - `/status` (in any chat session)
-- `openclaw status` (CLI)
-- `openclaw sessions` / `sessions --json`
+- `EasyHub status` (CLI)
+- `EasyHub sessions` / `sessions --json`
 - Verbose mode: `🧹 Auto-compaction complete` + compaction count
 
 ---
 
 ## Silent housekeeping (`NO_REPLY`)
 
-OpenClaw supports “silent” turns for background tasks where the user should not see intermediate output.
+EasyHub supports “silent” turns for background tasks where the user should not see intermediate output.
 
 Convention:
 
 - The assistant starts its output with `NO_REPLY` to indicate “do not deliver a reply to the user”.
-- OpenClaw strips/suppresses this in the delivery layer.
+- EasyHub strips/suppresses this in the delivery layer.
 
-As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial output mid-turn.
+As of `2026.1.10`, EasyHub also suppresses **draft/typing streaming** when a partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial output mid-turn.
 
 ---
 
@@ -247,7 +247,7 @@ Goal: before auto-compaction happens, run a silent agentic turn that writes dura
 state to disk (e.g. `memory/YYYY-MM-DD.md` in the agent workspace) so compaction can’t
 erase critical context.
 
-OpenClaw uses the **pre-threshold flush** approach:
+EasyHub uses the **pre-threshold flush** approach:
 
 1. Monitor session context usage.
 2. When it crosses a “soft threshold” (below Pi’s compaction threshold), run a silent
@@ -269,7 +269,7 @@ Notes:
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
 - See [Memory](/concepts/memory) for the workspace file layout and write patterns.
 
-Pi also exposes a `session_before_compact` hook in the extension API, but OpenClaw’s
+Pi also exposes a `session_before_compact` hook in the extension API, but EasyHub’s
 flush logic lives on the Gateway side today.
 
 ---
@@ -277,7 +277,7 @@ flush logic lives on the Gateway side today.
 ## Troubleshooting checklist
 
 - Session key wrong? Start with [/concepts/session](/concepts/session) and confirm the `sessionKey` in `/status`.
-- Store vs transcript mismatch? Confirm the Gateway host and the store path from `openclaw status`.
+- Store vs transcript mismatch? Confirm the Gateway host and the store path from `EasyHub status`.
 - Compaction spam? Check:
   - model context window (too small)
   - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)

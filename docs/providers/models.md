@@ -1,5 +1,5 @@
 ---
-summary: "Model providers (LLMs) supported by OpenClaw"
+summary: "Model providers (LLMs) supported by EasyHub"
 read_when:
   - You want to choose a model provider
   - You want quick setup examples for LLM auth + model selection
@@ -8,7 +8,7 @@ title: "Model Provider Quickstart"
 
 # Model Providers
 
-OpenClaw can use many LLM providers. Pick one, authenticate, then set the default
+EasyHub can use many LLM providers. Pick one, authenticate, then set the default
 model as `provider/model`.
 
 ## Highlight: Venice (Venice AI)
@@ -22,7 +22,7 @@ See [Venice AI](/providers/venice).
 
 ## Quick start (two steps)
 
-1. Authenticate with the provider (usually via `openclaw onboard`).
+1. Authenticate with the provider (usually via `EasyHub onboard`).
 2. Set the default model:
 
 ```json5

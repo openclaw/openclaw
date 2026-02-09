@@ -55,7 +55,7 @@ x-i18n:
 ## 状态行文本（菜单）
 
 - 工作活跃时：`<会话角色> · <活动标签>`
-  - 示例：`Main · exec: pnpm test`、`Other · read: apps/macos/Sources/OpenClaw/AppState.swift`。
+  - 示例：`Main · exec: pnpm test`、`Other · read: apps/macos/Sources/EasyHub/AppState.swift`。
 - 空闲时：回退显示健康摘要。
 
 ## 事件接收

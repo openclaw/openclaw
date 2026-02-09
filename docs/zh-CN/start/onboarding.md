@@ -2,7 +2,7 @@
 read_when:
   - 设计 macOS 新手引导助手
   - 实现认证或身份设置
-summary: OpenClaw 的首次运行新手引导流程（macOS 应用）
+summary: EasyHub 的首次运行新手引导流程（macOS 应用）
 title: 新手引导
 x-i18n:
   generated_at: "2026-02-03T07:54:07Z"
@@ -52,7 +52,7 @@ macOS 应用支持 Anthropic OAuth（Claude Pro/Max）。流程：
 
 - 打开浏览器进行 OAuth（PKCE）
 - 要求用户粘贴 `code#state` 值
-- 将凭证写入 `~/.openclaw/credentials/oauth.json`
+- 将凭证写入 `~/.easyhub/credentials/oauth.json`
 
 其他提供商（OpenAI、自定义 API）目前通过环境变量或配置文件配置。
 
@@ -72,7 +72,7 @@ macOS 应用支持 Anthropic OAuth（Claude Pro/Max）。流程：
 
 ## 6) CLI（可选）
 
-应用可以通过 npm/pnpm 安装全局 `openclaw` CLI，以便终端工作流和 launchd 任务开箱即用。
+应用可以通过 npm/pnpm 安装全局 `EasyHub` CLI，以便终端工作流和 launchd 任务开箱即用。
 
 ## 7) 新手引导聊天（专用会话）
 
@@ -80,7 +80,7 @@ macOS 应用支持 Anthropic OAuth（Claude Pro/Max）。流程：
 
 ## 智能体引导仪式
 
-在首次智能体运行时，OpenClaw 会引导一个工作区（默认 `~/.openclaw/workspace`）：
+在首次智能体运行时，EasyHub 会引导一个工作区（默认 `~/.easyhub/workspace`）：
 
 - 初始化 `AGENTS.md`、`BOOTSTRAP.md`、`IDENTITY.md`、`USER.md`
 - 运行简短的问答仪式（一次一个问题）
@@ -92,7 +92,7 @@ macOS 应用支持 Anthropic OAuth（Claude Pro/Max）。流程：
 Gmail Pub/Sub 设置目前是手动步骤。使用：
 
 ```bash
-openclaw webhooks gmail setup --account you@gmail.com
+EasyHub webhooks gmail setup --account you@gmail.com
 ```
 
 参阅 [/automation/gmail-pubsub](/automation/gmail-pubsub) 了解详情。
@@ -101,5 +101,5 @@ openclaw webhooks gmail setup --account you@gmail.com
 
 当 Gateway 网关在另一台机器上运行时，凭证和工作区文件存储在**该主机上**。如果你需要在远程模式下使用 OAuth，请在 Gateway 网关主机上创建：
 
-- `~/.openclaw/credentials/oauth.json`
-- `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- `~/.easyhub/credentials/oauth.json`
+- `~/.easyhub/agents/<agentId>/agent/auth-profiles.json`

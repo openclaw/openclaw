@@ -14,7 +14,7 @@ x-i18n:
 
 # 沙箱 vs 工具策略 vs 提权
 
-OpenClaw 有三个相关（但不同）的控制：
+EasyHub 有三个相关（但不同）的控制：
 
 1. **沙箱**（`agents.defaults.sandbox.*` / `agents.list[].sandbox.*`）决定**工具在哪里运行**（Docker vs 主机）。
 2. **工具策略**（`tools.*`、`tools.sandbox.tools.*`、`agents.list[].tools.*`）决定**哪些工具可用/允许**。
@@ -22,13 +22,13 @@ OpenClaw 有三个相关（但不同）的控制：
 
 ## 快速调试
 
-使用检查器查看 OpenClaw *实际*在做什么：
+使用检查器查看 EasyHub *实际*在做什么：
 
 ```bash
-openclaw sandbox explain
-openclaw sandbox explain --session agent:main:main
-openclaw sandbox explain --agent work
-openclaw sandbox explain --json
+EasyHub sandbox explain
+EasyHub sandbox explain --session agent:main:main
+EasyHub sandbox explain --agent work
+EasyHub sandbox explain --json
 ```
 
 它会打印：
@@ -100,7 +100,7 @@ openclaw sandbox explain --json
 - `group:automation`：`cron`、`gateway`
 - `group:messaging`：`message`
 - `group:nodes`：`nodes`
-- `group:openclaw`：所有内置 OpenClaw 工具（不包括提供商插件）
+- `group:EasyHub`：所有内置 EasyHub 工具（不包括提供商插件）
 
 ## 提权：仅限 exec 的"在主机上运行"
 

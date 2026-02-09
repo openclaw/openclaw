@@ -23,7 +23,7 @@ actor GatewayEndpointStore {
         "custom",
     ]
     private static let remoteConnectingDetail = "Connecting to remote gateway…"
-    private static let staticLogger = Logger(subsystem: "ai.openclaw", category: "gateway-endpoint")
+    private static let staticLogger = Logger(subsystem: "ai.easyhub", category: "gateway-endpoint")
     private enum EnvOverrideWarningKind: Sendable {
         case token
         case password
@@ -43,7 +43,7 @@ actor GatewayEndpointStore {
         static let live = Deps(
             mode: { await MainActor.run { AppStateStore.shared.connectionMode } },
             token: {
-                let root = OpenClawConfigFile.loadDict()
+                let root = EasyHubConfigFile.loadDict()
                 let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
                 return GatewayEndpointStore.resolveGatewayToken(
                     isRemote: isRemote,
@@ -52,7 +52,7 @@ actor GatewayEndpointStore {
                     launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
             },
             password: {
-                let root = OpenClawConfigFile.loadDict()
+                let root = EasyHubConfigFile.loadDict()
                 let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
                 return GatewayEndpointStore.resolveGatewayPassword(
                     isRemote: isRemote,
@@ -62,7 +62,7 @@ actor GatewayEndpointStore {
             },
             localPort: { GatewayEnvironment.gatewayPort() },
             localHost: {
-                let root = OpenClawConfigFile.loadDict()
+                let root = EasyHubConfigFile.loadDict()
                 let bind = GatewayEndpointStore.resolveGatewayBindMode(
                     root: root,
                     env: ProcessInfo.processInfo.environment)
@@ -84,7 +84,7 @@ actor GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
     {
-        let raw = env["OPENCLAW_GATEWAY_PASSWORD"] ?? ""
+        let raw = env["EASYHUB_GATEWAY_PASSWORD"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             if let configPassword = self.resolveConfigPassword(isRemote: isRemote, root: root),
@@ -92,7 +92,7 @@ actor GatewayEndpointStore {
             {
                 self.warnEnvOverrideOnce(
                     kind: .password,
-                    envVar: "OPENCLAW_GATEWAY_PASSWORD",
+                    envVar: "EASYHUB_GATEWAY_PASSWORD",
                     configKey: isRemote ? "gateway.remote.password" : "gateway.auth.password")
             }
             return trimmed
@@ -152,7 +152,7 @@ actor GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
     {
-        let raw = env["OPENCLAW_GATEWAY_TOKEN"] ?? ""
+        let raw = env["EASYHUB_GATEWAY_TOKEN"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
@@ -161,7 +161,7 @@ actor GatewayEndpointStore {
             {
                 self.warnEnvOverrideOnce(
                     kind: .token,
-                    envVar: "OPENCLAW_GATEWAY_TOKEN",
+                    envVar: "EASYHUB_GATEWAY_TOKEN",
                     configKey: isRemote ? "gateway.remote.token" : "gateway.auth.token")
             }
             return trimmed
@@ -230,7 +230,7 @@ actor GatewayEndpointStore {
     }
 
     private let deps: Deps
-    private let logger = Logger(subsystem: "ai.openclaw", category: "gateway-endpoint")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "gateway-endpoint")
 
     private var state: GatewayEndpointState
     private var subscribers: [UUID: AsyncStream<GatewayEndpointState>.Continuation] = [:]
@@ -243,17 +243,17 @@ actor GatewayEndpointStore {
         if let modeRaw {
             initialMode = AppState.ConnectionMode(rawValue: modeRaw) ?? .local
         } else {
-            let seen = UserDefaults.standard.bool(forKey: "openclaw.onboardingSeen")
+            let seen = UserDefaults.standard.bool(forKey: "EasyHub.onboardingSeen")
             initialMode = seen ? .local : .unconfigured
         }
 
         let port = deps.localPort()
         let bind = GatewayEndpointStore.resolveGatewayBindMode(
-            root: OpenClawConfigFile.loadDict(),
+            root: EasyHubConfigFile.loadDict(),
             env: ProcessInfo.processInfo.environment)
-        let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: OpenClawConfigFile.loadDict())
+        let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: EasyHubConfigFile.loadDict())
         let scheme = GatewayEndpointStore.resolveGatewayScheme(
-            root: OpenClawConfigFile.loadDict(),
+            root: EasyHubConfigFile.loadDict(),
             env: ProcessInfo.processInfo.environment)
         let host = GatewayEndpointStore.resolveLocalGatewayHost(
             bindMode: bind,
@@ -303,7 +303,7 @@ actor GatewayEndpointStore {
             let port = self.deps.localPort()
             let host = await self.deps.localHost()
             let scheme = GatewayEndpointStore.resolveGatewayScheme(
-                root: OpenClawConfigFile.loadDict(),
+                root: EasyHubConfigFile.loadDict(),
                 env: ProcessInfo.processInfo.environment)
             self.setState(.ready(
                 mode: .local,
@@ -311,7 +311,7 @@ actor GatewayEndpointStore {
                 token: token,
                 password: password))
         case .remote:
-            let root = OpenClawConfigFile.loadDict()
+            let root = EasyHubConfigFile.loadDict()
             if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
                 guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
                     self.cancelRemoteEnsure()
@@ -332,7 +332,7 @@ actor GatewayEndpointStore {
             }
             self.cancelRemoteEnsure()
             let scheme = GatewayEndpointStore.resolveGatewayScheme(
-                root: OpenClawConfigFile.loadDict(),
+                root: EasyHubConfigFile.loadDict(),
                 env: ProcessInfo.processInfo.environment)
             self.setState(.ready(
                 mode: .remote,
@@ -354,7 +354,7 @@ actor GatewayEndpointStore {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
         }
-        let root = OpenClawConfigFile.loadDict()
+        let root = EasyHubConfigFile.loadDict()
         if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
             guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
                 throw NSError(
@@ -433,7 +433,7 @@ actor GatewayEndpointStore {
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
         }
 
-        let root = OpenClawConfigFile.loadDict()
+        let root = EasyHubConfigFile.loadDict()
         if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
             guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
                 throw NSError(
@@ -470,7 +470,7 @@ actor GatewayEndpointStore {
             let token = self.deps.token()
             let password = self.deps.password()
             let scheme = GatewayEndpointStore.resolveGatewayScheme(
-                root: OpenClawConfigFile.loadDict(),
+                root: EasyHubConfigFile.loadDict(),
                 env: ProcessInfo.processInfo.environment)
             let url = URL(string: "\(scheme)://127.0.0.1:\(Int(forwarded))")!
             self.setState(.ready(mode: .remote, url: url, token: token, password: password))
@@ -525,7 +525,7 @@ actor GatewayEndpointStore {
         let mode = await self.deps.mode()
         guard mode == .local else { return nil }
 
-        let root = OpenClawConfigFile.loadDict()
+        let root = EasyHubConfigFile.loadDict()
         let bind = GatewayEndpointStore.resolveGatewayBindMode(
             root: root,
             env: ProcessInfo.processInfo.environment)
@@ -555,7 +555,7 @@ actor GatewayEndpointStore {
         root: [String: Any],
         env: [String: String]) -> String?
     {
-        if let envBind = env["OPENCLAW_GATEWAY_BIND"] {
+        if let envBind = env["EASYHUB_GATEWAY_BIND"] {
             let trimmed = envBind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if self.supportedBindModes.contains(trimmed) {
                 return trimmed
@@ -586,7 +586,7 @@ actor GatewayEndpointStore {
         root: [String: Any],
         env: [String: String]) -> String
     {
-        if let envValue = env["OPENCLAW_GATEWAY_TLS"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let envValue = env["EASYHUB_GATEWAY_TLS"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !envValue.isEmpty
         {
             return (envValue == "1" || envValue.lowercased() == "true") ? "wss" : "ws"

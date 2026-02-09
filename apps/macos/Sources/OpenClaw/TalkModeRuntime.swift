@@ -1,6 +1,6 @@
 import AVFoundation
-import OpenClawChatUI
-import OpenClawKit
+import EasyHubChatUI
+import EasyHubKit
 import Foundation
 import OSLog
 import Speech
@@ -8,8 +8,8 @@ import Speech
 actor TalkModeRuntime {
     static let shared = TalkModeRuntime()
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
-    private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
+    private let logger = Logger(subsystem: "ai.easyhub", category: "talk.runtime")
+    private let ttsLogger = Logger(subsystem: "ai.easyhub", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
 
     private final class RMSMeter: @unchecked Sendable {
@@ -416,9 +416,9 @@ actor TalkModeRuntime {
         do {
             let history = try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
             let messages = history.messages ?? []
-            let decoded: [OpenClawChatMessage] = messages.compactMap { item in
+            let decoded: [EasyHubChatMessage] = messages.compactMap { item in
                 guard let data = try? JSONEncoder().encode(item) else { return nil }
-                return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+                return try? JSONDecoder().decode(EasyHubChatMessage.self, from: data)
             }
             let assistant = decoded.last { message in
                 guard message.role == "assistant" else { return false }

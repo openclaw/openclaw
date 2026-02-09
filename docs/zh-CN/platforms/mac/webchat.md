@@ -24,7 +24,7 @@ macOS 菜单栏应用将 WebChat UI 嵌入为原生 SwiftUI 视图。它连接�
 - 手动：Lobster 菜单 → "Open Chat"。
 - 测试时自动打开：
   ```bash
-  dist/OpenClaw.app/Contents/MacOS/OpenClaw --webchat
+  dist/EasyHub.app/Contents/MacOS/EasyHub --webchat
   ```
 - 日志：`./scripts/clawlog.sh`（子系统 `bot.molt`，类别 `WebChatSwiftUI`）。
 

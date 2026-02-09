@@ -1,7 +1,7 @@
 ---
 read_when:
   - 更改菜单栏图标行为
-summary: macOS 上 OpenClaw 菜单栏图标的状态和动画
+summary: macOS 上 EasyHub 菜单栏图标的状态和动画
 title: 菜单栏图标
 x-i18n:
   generated_at: "2026-02-01T21:32:49Z"

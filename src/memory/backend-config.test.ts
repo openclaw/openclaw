@@ -1,12 +1,12 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 
 describe("resolveMemoryBackendConfig", () => {
   it("defaults to builtin backend when config missing", () => {
-    const cfg = { agents: { defaults: { workspace: "/tmp/memory-test" } } } as OpenClawConfig;
+    const cfg = { agents: { defaults: { workspace: "/tmp/memory-test" } } } as EasyHubConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.backend).toBe("builtin");
     expect(resolved.citations).toBe("auto");
@@ -20,7 +20,7 @@ describe("resolveMemoryBackendConfig", () => {
         backend: "qmd",
         qmd: {},
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.backend).toBe("qmd");
     expect(resolved.qmd?.collections.length).toBeGreaterThanOrEqual(3);
@@ -41,7 +41,7 @@ describe("resolveMemoryBackendConfig", () => {
           command: '"/Applications/QMD Tools/qmd" --flag',
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.qmd?.command).toBe("/Applications/QMD Tools/qmd");
   });
@@ -64,7 +64,7 @@ describe("resolveMemoryBackendConfig", () => {
           ],
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     const custom = resolved.qmd?.collections.find((c) => c.name.startsWith("custom-notes"));
     expect(custom).toBeDefined();
@@ -86,7 +86,7 @@ describe("resolveMemoryBackendConfig", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as EasyHubConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.qmd?.update.waitForBootSync).toBe(true);
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(12_000);

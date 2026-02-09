@@ -1,5 +1,5 @@
-import OpenClawKit
-import OpenClawProtocol
+import EasyHubKit
+import EasyHubProtocol
 import Foundation
 #if canImport(Darwin)
 import Darwin
@@ -13,7 +13,7 @@ struct ConnectOptions {
     var timeoutMs: Int = 15000
     var json: Bool = false
     var probe: Bool = false
-    var clientId: String = "openclaw-macos"
+    var clientId: String = "EasyHub-macos"
     var clientMode: String = "ui"
     var displayName: String?
     var role: String = "operator"
@@ -101,10 +101,10 @@ func runConnect(_ args: [String]) async {
     let opts = ConnectOptions.parse(args)
     if opts.help {
         print("""
-        openclaw-mac connect
+        EasyHub-mac connect
 
         Usage:
-          openclaw-mac connect [--url <ws://host:port>] [--token <token>] [--password <password>]
+          EasyHub-mac connect [--url <ws://host:port>] [--token <token>] [--password <password>]
                                [--mode <local|remote>] [--timeout <ms>] [--probe] [--json]
                                [--client-id <id>] [--client-mode <mode>] [--display-name <name>]
                                [--role <role>] [--scopes <a,b,c>]
@@ -117,7 +117,7 @@ func runConnect(_ args: [String]) async {
           --timeout <ms>     Request timeout (default: 15000)
           --probe            Force a fresh health probe
           --json             Emit JSON
-          --client-id <id>   Override client id (default: openclaw-macos)
+          --client-id <id>   Override client id (default: EasyHub-macos)
           --client-mode <m>  Override client mode (default: ui)
           --display-name <n> Override display name
           --role <role>      Override role (default: operator)
@@ -130,7 +130,7 @@ func runConnect(_ args: [String]) async {
     let config = loadGatewayConfig()
     do {
         let endpoint = try resolveGatewayEndpoint(opts: opts, config: config)
-        let displayName = opts.displayName ?? Host.current().localizedName ?? "OpenClaw macOS Debug CLI"
+        let displayName = opts.displayName ?? Host.current().localizedName ?? "EasyHub macOS Debug CLI"
         let connectOptions = GatewayConnectOptions(
             role: opts.role,
             scopes: opts.scopes,
@@ -207,7 +207,7 @@ private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
         return
     }
 
-    print("OpenClaw macOS Gateway Connect")
+    print("EasyHub macOS Gateway Connect")
     print("Status: \(output.status)")
     print("URL: \(output.url)")
     print("Mode: \(output.mode)")

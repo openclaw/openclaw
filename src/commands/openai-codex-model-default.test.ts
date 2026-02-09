@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { EasyHubConfig } from "../config/config.js";
 import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,
@@ -8,7 +8,7 @@ import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
 describe("applyOpenAICodexModelDefault", () => {
   it("sets openai-codex default when model is unset", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: {} } };
+    const cfg: EasyHubConfig = { agents: { defaults: {} } };
     const applied = applyOpenAICodexModelDefault(cfg);
     expect(applied.changed).toBe(true);
     expect(applied.next.agents?.defaults?.model).toEqual({
@@ -17,7 +17,7 @@ describe("applyOpenAICodexModelDefault", () => {
   });
 
   it("sets openai-codex default when model is openai/*", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: { defaults: { model: OPENAI_DEFAULT_MODEL } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);
@@ -28,7 +28,7 @@ describe("applyOpenAICodexModelDefault", () => {
   });
 
   it("does not override openai-codex/*", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: { defaults: { model: OPENAI_CODEX_DEFAULT_MODEL } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);
@@ -37,7 +37,7 @@ describe("applyOpenAICodexModelDefault", () => {
   });
 
   it("does not override non-openai models", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: EasyHubConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);

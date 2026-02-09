@@ -1,6 +1,6 @@
 import Foundation
 
-enum OpenClawEnv {
+enum EasyHubEnv {
     static func path(_ key: String) -> String? {
         // Normalize env overrides once so UI + file IO stay consistent.
         guard let raw = getenv(key) else { return nil }
@@ -13,31 +13,31 @@ enum OpenClawEnv {
     }
 }
 
-enum OpenClawPaths {
-    private static let configPathEnv = ["OPENCLAW_CONFIG_PATH"]
-    private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
+enum EasyHubPaths {
+    private static let configPathEnv = ["EASYHUB_CONFIG_PATH"]
+    private static let stateDirEnv = ["EASYHUB_STATE_DIR"]
 
     static var stateDirURL: URL {
         for key in self.stateDirEnv {
-            if let override = OpenClawEnv.path(key) {
+            if let override = EasyHubEnv.path(key) {
                 return URL(fileURLWithPath: override, isDirectory: true)
             }
         }
         let home = FileManager().homeDirectoryForCurrentUser
-        let preferred = home.appendingPathComponent(".openclaw", isDirectory: true)
+        let preferred = home.appendingPathComponent(".easyhub", isDirectory: true)
         return preferred
     }
 
     private static func resolveConfigCandidate(in dir: URL) -> URL? {
         let candidates = [
-            dir.appendingPathComponent("openclaw.json"),
+            dir.appendingPathComponent("easyhub.json"),
         ]
         return candidates.first(where: { FileManager().fileExists(atPath: $0.path) })
     }
 
     static var configURL: URL {
         for key in self.configPathEnv {
-            if let override = OpenClawEnv.path(key) {
+            if let override = EasyHubEnv.path(key) {
                 return URL(fileURLWithPath: override)
             }
         }
@@ -45,7 +45,7 @@ enum OpenClawPaths {
         if let existing = self.resolveConfigCandidate(in: stateDir) {
             return existing
         }
-        return stateDir.appendingPathComponent("openclaw.json")
+        return stateDir.appendingPathComponent("easyhub.json")
     }
 
     static var workspaceURL: URL {

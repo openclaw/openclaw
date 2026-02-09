@@ -58,7 +58,7 @@ describe("gateway server chat", () => {
         const historyMaxBytes = 192 * 1024;
         __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
         await connectOk(ws);
-        const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+        const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "EasyHub-gw-"));
         tempDirs.push(sessionDir);
         testState.sessionStorePath = path.join(sessionDir, "sessions.json");
         const writeStore = async (

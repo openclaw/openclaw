@@ -1,5 +1,5 @@
 import Testing
-@testable import OpenClaw
+@testable import EasyHub
 
 @Suite struct GatewayAgentChannelTests {
     @Test func shouldDeliverBlocksWebChat() {

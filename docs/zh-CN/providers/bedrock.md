@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想在 OpenClaw 中使用 Amazon Bedrock 模型
+  - 你想在 EasyHub 中使用 Amazon Bedrock 模型
   - 你需要为模型调用配置 AWS 凭证/区域
-summary: 在 OpenClaw 中使用 Amazon Bedrock（Converse API）模型
+summary: 在 EasyHub 中使用 Amazon Bedrock（Converse API）模型
 title: Amazon Bedrock
 x-i18n:
   generated_at: "2026-02-03T10:04:01Z"
@@ -15,7 +15,7 @@ x-i18n:
 
 # Amazon Bedrock
 
-OpenClaw 可以通过 pi‑ai 的 **Bedrock Converse** 流式提供商使用 **Amazon Bedrock** 模型。Bedrock 认证使用 **AWS SDK 默认凭证链**，而非 API 密钥。
+EasyHub 可以通过 pi‑ai 的 **Bedrock Converse** 流式提供商使用 **Amazon Bedrock** 模型。Bedrock 认证使用 **AWS SDK 默认凭证链**，而非 API 密钥。
 
 ## pi‑ai 支持的功能
 
@@ -26,7 +26,7 @@ OpenClaw 可以通过 pi‑ai 的 **Bedrock Converse** 流式提供商使用 **A
 
 ## 自动模型发现
 
-如果检测到 AWS 凭证，OpenClaw 可以自动发现支持**流式传输**和**文本输出**的 Bedrock 模型。发现功能使用 `bedrock:ListFoundationModels`，并会被缓存（默认：1 小时）。
+如果检测到 AWS 凭证，EasyHub 可以自动发现支持**流式传输**和**文本输出**的 Bedrock 模型。发现功能使用 `bedrock:ListFoundationModels`，并会被缓存（默认：1 小时）。
 
 配置选项位于 `models.bedrockDiscovery` 下：
 
@@ -102,7 +102,7 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## EC2 实例角色
 
-当在附加了 IAM 角色的 EC2 实例上运行 OpenClaw 时，AWS SDK 会自动使用实例元数据服务（IMDS）进行认证。但是，OpenClaw 的凭证检测目前只检查环境变量，不检查 IMDS 凭证。
+当在附加了 IAM 角色的 EC2 实例上运行 EasyHub 时，AWS SDK 会自动使用实例元数据服务（IMDS）进行认证。但是，EasyHub 的凭证检测目前只检查环境变量，不检查 IMDS 凭证。
 
 **解决方法：** 设置 `AWS_PROFILE=default` 以表明 AWS 凭证可用。实际认证仍然通过 IMDS 使用实例角色。
 
@@ -148,8 +148,8 @@ aws ec2 associate-iam-instance-profile \
   --iam-instance-profile Name=EC2-Bedrock-Access
 
 # 3. 在 EC2 实例上启用发现功能
-openclaw config set models.bedrockDiscovery.enabled true
-openclaw config set models.bedrockDiscovery.region us-east-1
+EasyHub config set models.bedrockDiscovery.enabled true
+EasyHub config set models.bedrockDiscovery.region us-east-1
 
 # 4. 设置解决方法所需的环境变量
 echo 'export AWS_PROFILE=default' >> ~/.bashrc
@@ -157,7 +157,7 @@ echo 'export AWS_REGION=us-east-1' >> ~/.bashrc
 source ~/.bashrc
 
 # 5. 验证模型已被发现
-openclaw models list
+EasyHub models list
 ```
 
 ## 注意事项
@@ -165,6 +165,6 @@ openclaw models list
 - Bedrock 需要在你的 AWS 账户/区域中启用**模型访问**。
 - 自动发现需要 `bedrock:ListFoundationModels` 权限。
 - 如果你使用配置文件，请在 Gateway 网关主机上设置 `AWS_PROFILE`。
-- OpenClaw 按以下顺序获取凭证来源：`AWS_BEARER_TOKEN_BEDROCK`，然后是 `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`，然后是 `AWS_PROFILE`，最后是默认的 AWS SDK 链。
+- EasyHub 按以下顺序获取凭证来源：`AWS_BEARER_TOKEN_BEDROCK`，然后是 `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`，然后是 `AWS_PROFILE`，最后是默认的 AWS SDK 链。
 - 推理支持取决于模型；请查看 Bedrock 模型卡了解当前功能。
 - 如果你更喜欢托管密钥流程，也可以在 Bedrock 前面放置一个 OpenAI 兼容的代理，并将其配置为 OpenAI 提供商。

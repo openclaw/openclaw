@@ -15,7 +15,7 @@ describe("readFirstUserMessageFromTranscript", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
@@ -161,7 +161,7 @@ describe("readLastMessagePreviewFromTranscript", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
@@ -350,7 +350,7 @@ describe("readSessionMessages", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
@@ -381,13 +381,13 @@ describe("readSessionMessages", () => {
     const marker = out[1] as {
       role: string;
       content?: Array<{ text?: string }>;
-      __openclaw?: { kind?: string; id?: string };
+      __EasyHub?: { kind?: string; id?: string };
       timestamp?: number;
     };
     expect(marker.role).toBe("system");
     expect(marker.content?.[0]?.text).toBe("Compaction");
-    expect(marker.__openclaw?.kind).toBe("compaction");
-    expect(marker.__openclaw?.id).toBe("comp-1");
+    expect(marker.__EasyHub?.kind).toBe("compaction");
+    expect(marker.__EasyHub?.id).toBe("comp-1");
     expect(typeof marker.timestamp).toBe("number");
   });
 });
@@ -397,7 +397,7 @@ describe("readSessionPreviewItemsFromTranscript", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-preview-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "EasyHub-session-preview-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
@@ -496,14 +496,14 @@ describe("resolveSessionTranscriptCandidates", () => {
     vi.unstubAllEnvs();
   });
 
-  test("fallback candidate uses OPENCLAW_HOME instead of os.homedir()", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+  test("fallback candidate uses EASYHUB_HOME instead of os.homedir()", () => {
+    vi.stubEnv("EASYHUB_HOME", "/srv/EasyHub-home");
     vi.stubEnv("HOME", "/home/other");
 
     const candidates = resolveSessionTranscriptCandidates("sess-1", undefined);
     const fallback = candidates[candidates.length - 1];
     expect(fallback).toBe(
-      path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "sessions", "sess-1.jsonl"),
+      path.join(path.resolve("/srv/EasyHub-home"), ".easyhub", "sessions", "sess-1.jsonl"),
     );
   });
 });

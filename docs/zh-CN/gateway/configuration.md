@@ -1,7 +1,7 @@
 ---
 read_when:
   - 添加或修改配置字段时
-summary: ~/.openclaw/openclaw.json 的所有配置选项及示例
+summary: ~/.easyhub/easyhub.json 的所有配置选项及示例
 title: 配置
 x-i18n:
   generated_at: "2026-02-01T21:29:41Z"
@@ -14,9 +14,9 @@ x-i18n:
 
 # 配置 🔧
 
-OpenClaw 从 `~/.openclaw/openclaw.json` 读取可选的 **JSON5** 配置（支持注释和尾逗号）。
+EasyHub 从 `~/.easyhub/easyhub.json` 读取可选的 **JSON5** 配置（支持注释和尾逗号）。
 
-如果文件不存在，OpenClaw 使用安全的默认值（内置 Pi 智能体 + 按发送者分会话 + 工作区 `~/.openclaw/workspace`）。通常只在以下情况需要配置：
+如果文件不存在，EasyHub 使用安全的默认值（内置 Pi 智能体 + 按发送者分会话 + 工作区 `~/.easyhub/workspace`）。通常只在以下情况需要配置：
 
 - 限制谁可以触发机器人（`channels.whatsapp.allowFrom`、`channels.telegram.allowFrom` 等）
 - 控制群组白名单 + 提及行为（`channels.whatsapp.groups`、`channels.telegram.groups`、`channels.discord.guilds`、`agents.list[].groupChat`）
@@ -29,15 +29,15 @@ OpenClaw 从 `~/.openclaw/openclaw.json` 读取可选的 **JSON5** 配置（支�
 
 ## 严格配置验证
 
-OpenClaw 只接受完全匹配 schema 的配置。
+EasyHub 只接受完全匹配 schema 的配置。
 未知键、类型错误或无效值会导致 Gateway 网关 **拒绝启动**以确保安全。
 
 验证失败时：
 
 - Gateway 网关不会启动。
-- 只允许诊断命令（例如：`openclaw doctor`、`openclaw logs`、`openclaw health`、`openclaw status`、`openclaw service`、`openclaw help`）。
-- 运行 `openclaw doctor` 查看具体问题。
-- 运行 `openclaw doctor --fix`（或 `--yes`）应用迁移/修复。
+- 只允许诊断命令（例如：`EasyHub doctor`、`EasyHub logs`、`EasyHub health`、`EasyHub status`、`EasyHub service`、`EasyHub help`）。
+- 运行 `EasyHub doctor` 查看具体问题。
+- 运行 `EasyHub doctor --fix`（或 `--yes`）应用迁移/修复。
 
 Doctor 不会写入任何更改，除非你明确选择了 `--fix`/`--yes`。
 
@@ -57,7 +57,7 @@ Gateway 网关通过 `config.schema` 暴露配置的 JSON Schema 表示，供 UI
 它会写入重启哨兵文件，并在 Gateway 网关恢复后 ping 最后活跃的会话。
 
 警告：`config.apply` 会替换**整个配置**。如果你只想更改部分键，
-请使用 `config.patch` 或 `openclaw config set`。请备份 `~/.openclaw/openclaw.json`。
+请使用 `config.patch` 或 `EasyHub config set`。请备份 `~/.easyhub/easyhub.json`。
 
 参数：
 
@@ -70,9 +70,9 @@ Gateway 网关通过 `config.schema` 暴露配置的 JSON Schema 表示，供 UI
 示例（通过 `gateway call`）：
 
 ```bash
-openclaw gateway call config.get --params '{}' # capture payload.hash
-openclaw gateway call config.apply --params '{
-  "raw": "{\\n  agents: { defaults: { workspace: \\"~/.openclaw/workspace\\" } }\\n}\\n",
+EasyHub gateway call config.get --params '{}' # capture payload.hash
+EasyHub gateway call config.apply --params '{
+  "raw": "{\\n  agents: { defaults: { workspace: \\"~/.easyhub/workspace\\" } }\\n}\\n",
   "baseHash": "<hash-from-config.get>",
   "sessionKey": "agent:main:whatsapp:dm:+15555550123",
   "restartDelayMs": 1000
@@ -101,8 +101,8 @@ openclaw gateway call config.apply --params '{
 示例：
 
 ```bash
-openclaw gateway call config.get --params '{}' # capture payload.hash
-openclaw gateway call config.patch --params '{
+EasyHub gateway call config.get --params '{}' # capture payload.hash
+EasyHub gateway call config.patch --params '{
   "raw": "{\\n  channels: { telegram: { groups: { \\"*\\": { requireMention: false } } } }\\n}\\n",
   "baseHash": "<hash-from-config.get>",
   "sessionKey": "agent:main:whatsapp:dm:+15555550123",
@@ -114,7 +114,7 @@ openclaw gateway call config.patch --params '{
 
 ```json5
 {
-  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
+  agents: { defaults: { workspace: "~/.easyhub/workspace" } },
   channels: { whatsapp: { allowFrom: ["+15555550123"] } },
 }
 ```
@@ -132,11 +132,11 @@ scripts/sandbox-setup.sh
 ```json5
 {
   agents: {
-    defaults: { workspace: "~/.openclaw/workspace" },
+    defaults: { workspace: "~/.easyhub/workspace" },
     list: [
       {
         id: "main",
-        groupChat: { mentionPatterns: ["@openclaw", "reisponde"] },
+        groupChat: { mentionPatterns: ["@EasyHub", "reisponde"] },
       },
     ],
   },
@@ -161,7 +161,7 @@ scripts/sandbox-setup.sh
 ### 基本用法
 
 ```json5
-// ~/.openclaw/openclaw.json
+// ~/.easyhub/easyhub.json
 {
   gateway: { port: 18789 },
 
@@ -176,10 +176,10 @@ scripts/sandbox-setup.sh
 ```
 
 ```json5
-// ~/.openclaw/agents.json5
+// ~/.easyhub/agents.json5
 {
   defaults: { sandbox: { mode: "all", scope: "session" } },
-  list: [{ id: "main", workspace: "~/.openclaw/workspace" }],
+  list: [{ id: "main", workspace: "~/.easyhub/workspace" }],
 }
 ```
 
@@ -218,7 +218,7 @@ scripts/sandbox-setup.sh
 
 ```json5
 { "$include": "./sub/config.json5" }      // 相对路径
-{ "$include": "/etc/openclaw/base.json5" } // 绝对路径
+{ "$include": "/etc/EasyHub/base.json5" } // 绝对路径
 { "$include": "../shared/common.json5" }   // 父目录
 ```
 
@@ -231,7 +231,7 @@ scripts/sandbox-setup.sh
 ### 示例：多客户法律事务设置
 
 ```json5
-// ~/.openclaw/openclaw.json
+// ~/.easyhub/easyhub.json
 {
   gateway: { port: 18789, auth: { token: "secret" } },
 
@@ -254,7 +254,7 @@ scripts/sandbox-setup.sh
 ```
 
 ```json5
-// ~/.openclaw/clients/mueller/agents.json5
+// ~/.easyhub/clients/mueller/agents.json5
 [
   { id: "mueller-transcribe", workspace: "~/clients/mueller/transcribe" },
   { id: "mueller-docs", workspace: "~/clients/mueller/docs" },
@@ -262,7 +262,7 @@ scripts/sandbox-setup.sh
 ```
 
 ```json5
-// ~/.openclaw/clients/mueller/broadcast.json5
+// ~/.easyhub/clients/mueller/broadcast.json5
 {
   "120363403215116621@g.us": ["mueller-transcribe", "mueller-docs"],
 }
@@ -272,12 +272,12 @@ scripts/sandbox-setup.sh
 
 ### 环境变量 + `.env`
 
-OpenClaw 从父进程（shell、launchd/systemd、CI 等）读取环境变量。
+EasyHub 从父进程（shell、launchd/systemd、CI 等）读取环境变量。
 
 此外，它还会加载：
 
 - 当前工作目录中的 `.env`（如果存在）
-- `~/.openclaw/.env`（即 `$OPENCLAW_STATE_DIR/.env`）作为全局回退 `.env`
+- `~/.easyhub/.env`（即 `$EASYHUB_STATE_DIR/.env`）作为全局回退 `.env`
 
 两个 `.env` 文件都不会覆盖已有的环境变量。
 
@@ -298,7 +298,7 @@ OpenClaw 从父进程（shell、launchd/systemd、CI 等）读取环境变量。
 
 ### `env.shellEnv`（可选）
 
-可选便利功能：如果启用且预期键均未设置，OpenClaw 会运行你的登录 shell 并仅导入缺失的预期键（不会覆盖）。
+可选便利功能：如果启用且预期键均未设置，EasyHub 会运行你的登录 shell 并仅导入缺失的预期键（不会覆盖）。
 这实际上会 source 你的 shell 配置文件。
 
 ```json5
@@ -314,8 +314,8 @@ OpenClaw 从父进程（shell、launchd/systemd、CI 等）读取环境变量。
 
 等效环境变量：
 
-- `OPENCLAW_LOAD_SHELL_ENV=1`
-- `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
+- `EASYHUB_LOAD_SHELL_ENV=1`
+- `EASYHUB_SHELL_ENV_TIMEOUT_MS=15000`
 
 ### 配置中的环境变量替换
 
@@ -332,7 +332,7 @@ OpenClaw 从父进程（shell、launchd/systemd、CI 等）读取环境变量。
   },
   gateway: {
     auth: {
-      token: "${OPENCLAW_GATEWAY_TOKEN}",
+      token: "${EASYHUB_GATEWAY_TOKEN}",
     },
   },
 }
@@ -361,15 +361,15 @@ OpenClaw 从父进程（shell、launchd/systemd、CI 等）读取环境变量。
 
 ### 认证存储（OAuth + API 密钥）
 
-OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth + API 密钥）：
+EasyHub 在以下位置存储**每个智能体的**认证配置文件（OAuth + API 密钥）：
 
-- `<agentDir>/auth-profiles.json`（默认：`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`）
+- `<agentDir>/auth-profiles.json`（默认：`~/.easyhub/agents/<agentId>/agent/auth-profiles.json`）
 
 另请参阅：[/concepts/oauth](/concepts/oauth)
 
 旧版 OAuth 导入：
 
-- `~/.openclaw/credentials/oauth.json`（或 `$OPENCLAW_STATE_DIR/credentials/oauth.json`）
+- `~/.easyhub/credentials/oauth.json`（或 `$EASYHUB_STATE_DIR/credentials/oauth.json`）
 
 内置 Pi 智能体在以下位置维护运行时缓存：
 
@@ -377,14 +377,14 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 旧版智能体目录（多智能体之前）：
 
-- `~/.openclaw/agent/*`（由 `openclaw doctor` 迁移到 `~/.openclaw/agents/<defaultAgentId>/agent/*`）
+- `~/.easyhub/agent/*`（由 `EasyHub doctor` 迁移到 `~/.easyhub/agents/<defaultAgentId>/agent/*`）
 
 覆盖：
 
-- OAuth 目录（仅旧版导入）：`OPENCLAW_OAUTH_DIR`
-- 智能体目录（默认智能体根目录覆盖）：`OPENCLAW_AGENT_DIR`（推荐）、`PI_CODING_AGENT_DIR`（旧版）
+- OAuth 目录（仅旧版导入）：`EASYHUB_OAUTH_DIR`
+- 智能体目录（默认智能体根目录覆盖）：`EASYHUB_AGENT_DIR`（推荐）、`PI_CODING_AGENT_DIR`（旧版）
 
-首次使用时，OpenClaw 会将 `oauth.json` 条目导入到 `auth-profiles.json` 中。
+首次使用时，EasyHub 会将 `oauth.json` 条目导入到 `auth-profiles.json` 中。
 
 ### `auth`
 
@@ -408,7 +408,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 用于默认值和用户体验的可选每智能体身份标识。由 macOS 新手引导助手写入。
 
-如果设置了，OpenClaw 会推导默认值（仅在你未明确设置时）：
+如果设置了，EasyHub 会推导默认值（仅在你未明确设置时）：
 
 - `messages.ackReaction` 来自**活跃智能体**的 `identity.emoji`（回退到 👀）
 - `agents.list[].groupChat.mentionPatterns` 来自智能体的 `identity.name`/`identity.emoji`（因此 "@Samantha" 在 Telegram/Slack/Discord/Google Chat/iMessage/WhatsApp 的群组中均可使用）
@@ -456,8 +456,8 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 ### `logging`
 
-- 默认日志文件：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`
-- 如需稳定路径，将 `logging.file` 设为 `/tmp/openclaw/openclaw.log`。
+- 默认日志文件：`/tmp/EasyHub/EasyHub-YYYY-MM-DD.log`
+- 如需稳定路径，将 `logging.file` 设为 `/tmp/EasyHub/easyhub.log`。
 - 控制台输出可通过以下方式单独调整：
   - `logging.consoleLevel`（默认 `info`，使用 `--verbose` 时提升为 `debug`）
   - `logging.consoleStyle`（`pretty` | `compact` | `json`）
@@ -469,7 +469,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 {
   logging: {
     level: "info",
-    file: "/tmp/openclaw/openclaw.log",
+    file: "/tmp/EasyHub/easyhub.log",
     consoleLevel: "info",
     consoleStyle: "pretty",
     redactSensitive: "tools",
@@ -495,8 +495,8 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 配对批准：
 
-- `openclaw pairing list whatsapp`
-- `openclaw pairing approve whatsapp <code>`
+- `EasyHub pairing list whatsapp`
+- `EasyHub pairing approve whatsapp <code>`
 
 ### `channels.whatsapp.allowFrom`
 
@@ -546,8 +546,8 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
         default: {}, // 可选；保持默认 id 稳定
         personal: {},
         biz: {
-          // 可选覆盖。默认：~/.openclaw/credentials/whatsapp/biz
-          // authDir: "~/.openclaw/credentials/whatsapp/biz",
+          // 可选覆盖。默认：~/.easyhub/credentials/whatsapp/biz
+          // authDir: "~/.easyhub/credentials/whatsapp/biz",
         },
       },
     },
@@ -558,7 +558,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 说明：
 
 - 出站命令默认使用 `default` 账号（如果存在）；否则使用第一个配置的账号 id（排序后）。
-- 旧版单账号 Baileys 认证目录由 `openclaw doctor` 迁移到 `whatsapp/default`。
+- 旧版单账号 Baileys 认证目录由 `EasyHub doctor` 迁移到 `whatsapp/default`。
 
 ### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.googlechat.accounts` / `channels.slack.accounts` / `channels.mattermost.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
 
@@ -606,7 +606,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
     groupChat: { historyLimit: 50 },
   },
   agents: {
-    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
+    list: [{ id: "main", groupChat: { mentionPatterns: ["@EasyHub", "EasyHub"] } }],
   },
 }
 ```
@@ -670,7 +670,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
         id: "main",
         groupChat: {
           // 仅这些文本模式会触发响应
-          mentionPatterns: ["reisponde", "@openclaw"],
+          mentionPatterns: ["reisponde", "@EasyHub"],
         },
       },
     ],
@@ -742,8 +742,8 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
   - `default`：可选；当设置多个时，第一个获胜并记录警告。
     如果未设置，列表中的**第一个条目**为默认智能体。
   - `name`：智能体的显示名称。
-  - `workspace`：默认 `~/.openclaw/workspace-<agentId>`（对于 `main`，回退到 `agents.defaults.workspace`）。
-  - `agentDir`：默认 `~/.openclaw/agents/<agentId>/agent`。
+  - `workspace`：默认 `~/.easyhub/workspace-<agentId>`（对于 `main`，回退到 `agents.defaults.workspace`）。
+  - `agentDir`：默认 `~/.easyhub/agents/<agentId>/agent`。
   - `model`：每智能体默认模型，覆盖该智能体的 `agents.defaults.model`。
     - 字符串形式：`"provider/model"`，仅覆盖 `agents.defaults.model.primary`
     - 对象形式：`{ primary, fallbacks }`（fallbacks 覆盖 `agents.defaults.model.fallbacks`；`[]` 为该智能体禁用全局回退）
@@ -799,7 +799,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
     list: [
       {
         id: "personal",
-        workspace: "~/.openclaw/workspace-personal",
+        workspace: "~/.easyhub/workspace-personal",
         sandbox: { mode: "off" },
       },
     ],
@@ -815,7 +815,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
     list: [
       {
         id: "family",
-        workspace: "~/.openclaw/workspace-family",
+        workspace: "~/.easyhub/workspace-family",
         sandbox: {
           mode: "all",
           scope: "agent",
@@ -846,7 +846,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
     list: [
       {
         id: "public",
-        workspace: "~/.openclaw/workspace-public",
+        workspace: "~/.easyhub/workspace-public",
         sandbox: {
           mode: "all",
           scope: "agent",
@@ -892,8 +892,8 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 {
   agents: {
     list: [
-      { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-      { id: "work", workspace: "~/.openclaw/workspace-work" },
+      { id: "home", default: true, workspace: "~/.easyhub/workspace-home" },
+      { id: "work", workspace: "~/.easyhub/workspace-work" },
     ],
   },
   bindings: [
@@ -1002,7 +1002,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 - `channels.telegram.customCommands` 添加额外的 Telegram 机器人菜单项。名称会被规范化；与原生命令冲突的会被忽略。
 - `commands.bash: true` 启用 `! <cmd>` 运行主机 shell 命令（`/bash <cmd>` 也可作为别名）。需要 `tools.elevated.enabled` 并在 `tools.elevated.allowFrom.<channel>` 中添加发送者白名单。
 - `commands.bashForegroundMs` 控制 bash 在后台运行前等待的时间。当 bash 任务正在运行时，新的 `! <cmd>` 请求会被拒绝（一次一个）。
-- `commands.config: true` 启用 `/config`（读写 `openclaw.json`）。
+- `commands.config: true` 启用 `/config`（读写 `easyhub.json`）。
 - `channels.<provider>.configWrites` 控制由该渠道发起的配置变更（默认：true）。适用于 `/config set|unset` 以及提供商特定的自动迁移（Telegram 超级群组 ID 变更、Slack 频道 ID 变更）。
 - `commands.debug: true` 启用 `/debug`（仅运行时覆盖）。
 - `commands.restart: true` 启用 `/restart` 和 gateway 工具重启动作。
@@ -1032,7 +1032,7 @@ WhatsApp 通过 Gateway 网关的 Web 渠道（Baileys Web）运行。当存在�
 
 ### `channels.telegram`（机器人传输）
 
-OpenClaw 仅在存在 `channels.telegram` 配置段时启动 Telegram。机器人 token 从 `channels.telegram.botToken`（或 `channels.telegram.tokenFile`）解析，`TELEGRAM_BOT_TOKEN` 作为默认账号的回退。
+EasyHub 仅在存在 `channels.telegram` 配置段时启动 Telegram。机器人 token 从 `channels.telegram.botToken`（或 `channels.telegram.tokenFile`）解析，`TELEGRAM_BOT_TOKEN` 作为默认账号的回退。
 设置 `channels.telegram.enabled: false` 禁用自动启动。
 多账号支持在 `channels.telegram.accounts` 下（参见上方多账号部分）。环境变量 token 仅适用于默认账号。
 设置 `channels.telegram.configWrites: false` 阻止 Telegram 发起的配置写入（包括超级群组 ID 迁移和 `/config set|unset`）。
@@ -1140,12 +1140,12 @@ OpenClaw 仅在存在 `channels.telegram` 配置段时启动 Telegram。机器�
         policy: "pairing", // pairing | allowlist | open | disabled
         allowFrom: ["1234567890", "steipete"], // 可选私聊白名单（"open" 需要 ["*"]）
         groupEnabled: false, // 启用群组私聊
-        groupChannels: ["openclaw-dm"], // 可选群组私聊白名单
+        groupChannels: ["EasyHub-dm"], // 可选群组私聊白名单
       },
       guilds: {
         "123456789012345678": {
           // 服务器 id（推荐）或 slug
-          slug: "friends-of-openclaw",
+          slug: "friends-of-EasyHub",
           requireMention: false, // 每服务器默认值
           reactionNotifications: "own", // off | own | all | allowlist
           users: ["987654321098765432"], // 可选的每服务器用户白名单
@@ -1177,7 +1177,7 @@ OpenClaw 仅在存在 `channels.telegram` 配置段时启动 Telegram。机器�
 }
 ```
 
-OpenClaw 仅在存在 `channels.discord` 配置段时启动 Discord。token 从 `channels.discord.token` 解析，`DISCORD_BOT_TOKEN` 作为默认账号的回退（除非 `channels.discord.enabled` 为 `false`）。在为 cron/CLI 命令指定投递目标时，使用 `user:<id>`（私聊）或 `channel:<id>`（服务器频道）；裸数字 ID 有歧义会被拒绝。
+EasyHub 仅在存在 `channels.discord` 配置段时启动 Discord。token 从 `channels.discord.token` 解析，`DISCORD_BOT_TOKEN` 作为默认账号的回退（除非 `channels.discord.enabled` 为 `false`）。在为 cron/CLI 命令指定投递目标时，使用 `user:<id>`（私聊）或 `channel:<id>`（服务器频道）；裸数字 ID 有歧义会被拒绝。
 服务器 slug 为小写，空格替换为 `-`；频道键使用 slug 化的频道名称（无前导 `#`）。建议使用服务器 id 作为键以避免重命名歧义。
 机器人发送的消息默认被忽略。通过 `channels.discord.allowBots` 启用（自身消息仍会被过滤以防止自回复循环）。
 反应通知模式：
@@ -1275,7 +1275,7 @@ Slack 以 Socket Mode 运行，需要机器人 token 和应用 token：
       },
       slashCommand: {
         enabled: true,
-        name: "openclaw",
+        name: "EasyHub",
         sessionPrefix: "slack:slash",
         ephemeral: true,
       },
@@ -1289,7 +1289,7 @@ Slack 以 Socket Mode 运行，需要机器人 token 和应用 token：
 
 多账号支持在 `channels.slack.accounts` 下（参见上方多账号部分）。环境变量 token 仅适用于默认账号。
 
-OpenClaw 在提供商启用且两个 token 都已设置时启动 Slack（通过配置或 `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`）。在为 cron/CLI 命令指定投递目标时使用 `user:<id>`（私聊）或 `channel:<id>`。
+EasyHub 在提供商启用且两个 token 都已设置时启动 Slack（通过配置或 `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`）。在为 cron/CLI 命令指定投递目标时使用 `user:<id>`（私聊）或 `channel:<id>`。
 设置 `channels.slack.configWrites: false` 阻止 Slack 发起的配置写入（包括频道 ID 迁移和 `/config set|unset`）。
 
 机器人发送的消息默认被忽略。通过 `channels.slack.allowBots` 或 `channels.slack.channels.<id>.allowBots` 启用。
@@ -1318,7 +1318,7 @@ Slack 动作组（控制 `slack` 工具动作）：
 ### `channels.mattermost`（机器人 token）
 
 Mattermost 作为插件提供，不包含在核心安装中。
-请先安装：`openclaw plugins install @openclaw/mattermost`（或从 git checkout 使用 `./extensions/mattermost`）。
+请先安装：`EasyHub plugins install @easyhub/mattermost`（或从 git checkout 使用 `./extensions/mattermost`）。
 
 Mattermost 需要机器人 token 加上服务器的基础 URL：
 
@@ -1339,7 +1339,7 @@ Mattermost 需要机器人 token 加上服务器的基础 URL：
 }
 ```
 
-OpenClaw 在账号已配置（机器人 token + 基础 URL）且已启用时启动 Mattermost。token + 基础 URL 从 `channels.mattermost.botToken` + `channels.mattermost.baseUrl` 或默认账号的 `MATTERMOST_BOT_TOKEN` + `MATTERMOST_URL` 解析（除非 `channels.mattermost.enabled` 为 `false`）。
+EasyHub 在账号已配置（机器人 token + 基础 URL）且已启用时启动 Mattermost。token + 基础 URL 从 `channels.mattermost.botToken` + `channels.mattermost.baseUrl` 或默认账号的 `MATTERMOST_BOT_TOKEN` + `MATTERMOST_URL` 解析（除非 `channels.mattermost.enabled` 为 `false`）。
 
 聊天模式：
 
@@ -1381,7 +1381,7 @@ Signal 反应可以发出系统事件（共享反应工具）：
 
 ### `channels.imessage`（imsg CLI）
 
-OpenClaw 会生成 `imsg rpc`（通过 stdio 的 JSON-RPC）。无需守护进程或端口。
+EasyHub 会生成 `imsg rpc`（通过 stdio 的 JSON-RPC）。无需守护进程或端口。
 
 ```json5
 {
@@ -1424,11 +1424,11 @@ exec ssh -T gateway-host imsg "$@"
 
 设置智能体用于文件操作的**单一全局工作区目录**。
 
-默认：`~/.openclaw/workspace`。
+默认：`~/.easyhub/workspace`。
 
 ```json5
 {
-  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
+  agents: { defaults: { workspace: "~/.easyhub/workspace" } },
 }
 ```
 
@@ -1436,11 +1436,11 @@ exec ssh -T gateway-host imsg "$@"
 
 ### `agents.defaults.repoRoot`
 
-在系统提示的 Runtime 行中显示的可选仓库根目录。如果未设置，OpenClaw 会从工作区（和当前工作目录）向上查找 `.git` 目录进行检测。路径必须存在才能使用。
+在系统提示的 Runtime 行中显示的可选仓库根目录。如果未设置，EasyHub 会从工作区（和当前工作目录）向上查找 `.git` 目录进行检测。路径必须存在才能使用。
 
 ```json5
 {
-  agents: { defaults: { repoRoot: "~/Projects/openclaw" } },
+  agents: { defaults: { repoRoot: "~/Projects/EasyHub" } },
 }
 ```
 
@@ -1460,7 +1460,7 @@ exec ssh -T gateway-host imsg "$@"
 
 注入系统提示前每个工作区引导文件截断前的最大字符数。默认：`20000`。
 
-当文件超过此限制时，OpenClaw 会记录警告并注入带标记的头尾截断内容。
+当文件超过此限制时，EasyHub 会记录警告并注入带标记的头尾截断内容。
 
 ```json5
 {
@@ -1470,7 +1470,7 @@ exec ssh -T gateway-host imsg "$@"
 
 ### `agents.defaults.userTimezone`
 
-设置用户时区用于**系统提示上下文**（不用于消息信封中的时间戳）。如果未设置，OpenClaw 在运行时使用主机时区。
+设置用户时区用于**系统提示上下文**（不用于消息信封中的时间戳）。如果未设置，EasyHub 在运行时使用主机时区。
 
 ```json5
 {
@@ -1507,7 +1507,7 @@ exec ssh -T gateway-host imsg "$@"
 
 `responsePrefix` 应用于跨渠道的**所有出站回复**（工具摘要、分块流式传输、最终回复），除非已存在。
 
-如果未设置 `messages.responsePrefix`，默认不应用前缀。WhatsApp 自聊天回复是例外：它们在设置时默认为 `[{identity.name}]`，否则为 `[openclaw]`，以保持同一手机上的对话可读性。
+如果未设置 `messages.responsePrefix`，默认不应用前缀。WhatsApp 自聊天回复是例外：它们在设置时默认为 `[{identity.name}]`，否则为 `[EasyHub]`，以保持同一手机上的对话可读性。
 设为 `"auto"` 可为路由的智能体推导 `[{identity.name}]`（当设置时）。
 
 #### 模板变量
@@ -1535,7 +1535,7 @@ exec ssh -T gateway-host imsg "$@"
 
 输出示例：`[claude-opus-4-5 | think:high] Here's my response...`
 
-WhatsApp 入站前缀通过 `channels.whatsapp.messagePrefix` 配置（已弃用：`messages.messagePrefix`）。默认保持**不变**：当 `channels.whatsapp.allowFrom` 为空时为 `"[openclaw]"`，否则为 `""`（无前缀）。使用 `"[openclaw]"` 时，如果路由的智能体设置了 `identity.name`，OpenClaw 会改用 `[{identity.name}]`。
+WhatsApp 入站前缀通过 `channels.whatsapp.messagePrefix` 配置（已弃用：`messages.messagePrefix`）。默认保持**不变**：当 `channels.whatsapp.allowFrom` 为空时为 `"[EasyHub]"`，否则为 `""`（无前缀）。使用 `"[EasyHub]"` 时，如果路由的智能体设置了 `identity.name`，EasyHub 会改用 `[{identity.name}]`。
 
 `ackReaction` 在支持反应的渠道（Slack/Discord/Telegram/Google Chat）上发送尽力而为的表情反应来确认入站消息。设置时默认为活跃智能体的 `identity.emoji`，否则为 `"👀"`。设为 `""` 禁用。
 
@@ -1550,7 +1550,7 @@ WhatsApp 入站前缀通过 `channels.whatsapp.messagePrefix` 配置（已弃用
 
 #### `messages.tts`
 
-为出站回复启用文字转语音。开启后，OpenClaw 使用 ElevenLabs 或 OpenAI 生成音频并附加到回复中。Telegram 使用 Opus 语音消息；其他渠道发送 MP3 音频。
+为出站回复启用文字转语音。开启后，EasyHub 使用 ElevenLabs 或 OpenAI 生成音频并附加到回复中。Telegram 使用 Opus 语音消息；其他渠道发送 MP3 音频。
 
 ```json5
 {
@@ -1565,7 +1565,7 @@ WhatsApp 入站前缀通过 `channels.whatsapp.messagePrefix` 配置（已弃用
       },
       maxTextLength: 4000,
       timeoutMs: 30000,
-      prefsPath: "~/.openclaw/settings/tts.json",
+      prefsPath: "~/.easyhub/settings/tts.json",
       elevenlabs: {
         apiKey: "elevenlabs_api_key",
         baseUrl: "https://api.elevenlabs.io",
@@ -1667,7 +1667,7 @@ Z.AI GLM-4.x 模型会自动启用思考模式，除非你：
 - 设置 `--thinking off`，或
 - 自行定义 `agents.defaults.models["zai/<model>"].params.thinking`。
 
-OpenClaw 还内置了一些别名快捷方式。默认值仅在模型已存在于 `agents.defaults.models` 中时才应用：
+EasyHub 还内置了一些别名快捷方式。默认值仅在模型已存在于 `agents.defaults.models` 中时才应用：
 
 - `opus` -> `anthropic/claude-opus-4-5`
 - `sonnet` -> `anthropic/claude-sonnet-4-5`
@@ -1962,7 +1962,7 @@ MiniMax 认证：设置 `MINIMAX_API_KEY`（环境变量）或配置 `models.pro
 
 `agents.defaults.model.primary` 应设为 `provider/model`（例如 `anthropic/claude-opus-4-5`）。
 别名来自 `agents.defaults.models.*.alias`（例如 `Opus`）。
-如果省略提供商，OpenClaw 目前假定 `anthropic` 作为临时弃用回退。
+如果省略提供商，EasyHub 目前假定 `anthropic` 作为临时弃用回退。
 Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环境中设置
 `ZAI_API_KEY`（或旧版 `Z_AI_API_KEY`）。
 
@@ -2000,7 +2000,7 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
 `tools.web` 配置 Web 搜索 + 获取工具：
 
 - `tools.web.search.enabled`（默认：有密钥时为 true）
-- `tools.web.search.apiKey`（推荐：通过 `openclaw configure --section web` 设置，或使用 `BRAVE_API_KEY` 环境变量）
+- `tools.web.search.apiKey`（推荐：通过 `EasyHub configure --section web` 设置，或使用 `BRAVE_API_KEY` 环境变量）
 - `tools.web.search.maxResults`（1–10，默认 5）
 - `tools.web.search.timeoutSeconds`（默认 30）
 - `tools.web.search.cacheTtlMinutes`（默认 15）
@@ -2168,7 +2168,7 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
 - `group:automation`：`cron`、`gateway`
 - `group:messaging`：`message`
 - `group:nodes`：`nodes`
-- `group:openclaw`：所有内置 OpenClaw 工具（不包含提供商插件）
+- `group:EasyHub`：所有内置 EasyHub 工具（不包含提供商插件）
 
 `tools.elevated` 控制提升（主机）执行访问：
 
@@ -2234,7 +2234,7 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
 - scope：`"agent"`（每个智能体一个容器 + 工作区）
 - 基于 Debian bookworm-slim 的镜像
 - 智能体工作区访问：`workspaceAccess: "none"`（默认）
-  - `"none"`：在 `~/.openclaw/sandboxes` 下使用每范围的沙箱工作区
+  - `"none"`：在 `~/.easyhub/sandboxes` 下使用每范围的沙箱工作区
 - `"ro"`：将沙箱工作区保持在 `/workspace`，智能体工作区以只读方式挂载到 `/agent`（禁用 `write`/`edit`/`apply_patch`）
   - `"rw"`：将智能体工作区以读写方式挂载到 `/workspace`
 - 自动清理：空闲超过 24h 或存在超过 7d
@@ -2259,10 +2259,10 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
         mode: "non-main", // off | non-main | all
         scope: "agent", // session | agent | shared（agent 为默认）
         workspaceAccess: "none", // none | ro | rw
-        workspaceRoot: "~/.openclaw/sandboxes",
+        workspaceRoot: "~/.easyhub/sandboxes",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
-          containerPrefix: "openclaw-sbx-",
+          image: "EasyHub-sandbox:bookworm-slim",
+          containerPrefix: "EasyHub-sbx-",
           workdir: "/workspace",
           readOnlyRoot: true,
           tmpfs: ["/tmp", "/var/tmp", "/run"],
@@ -2281,15 +2281,15 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
             nproc: 256,
           },
           seccompProfile: "/path/to/seccomp.json",
-          apparmorProfile: "openclaw-sandbox",
+          apparmorProfile: "EasyHub-sandbox",
           dns: ["1.1.1.1", "8.8.8.8"],
           extraHosts: ["internal.service:10.0.0.5"],
           binds: ["/var/run/docker.sock:/var/run/docker.sock", "/home/user/source:/source:rw"],
         },
         browser: {
           enabled: false,
-          image: "openclaw-sandbox-browser:bookworm-slim",
-          containerPrefix: "openclaw-sbx-browser-",
+          image: "EasyHub-sandbox-browser:bookworm-slim",
+          containerPrefix: "EasyHub-sbx-browser-",
           cdpPort: 9222,
           vncPort: 5900,
           noVncPort: 6080,
@@ -2368,12 +2368,12 @@ noVNC URL 会注入系统提示中，以便智能体可以引用它。
 
 ### `models`（自定义提供商 + 基础 URL）
 
-OpenClaw 使用 **pi-coding-agent** 模型目录。你可以通过编写
-`~/.openclaw/agents/<agentId>/agent/models.json` 或在 OpenClaw 配置中的 `models.providers` 下定义相同的 schema 来添加自定义提供商（LiteLLM、本地 OpenAI 兼容服务器、Anthropic 代理等）。
+EasyHub 使用 **pi-coding-agent** 模型目录。你可以通过编写
+`~/.easyhub/agents/<agentId>/agent/models.json` 或在 EasyHub 配置中的 `models.providers` 下定义相同的 schema 来添加自定义提供商（LiteLLM、本地 OpenAI 兼容服务器、Anthropic 代理等）。
 按提供商的概述 + 示例：[/concepts/model-providers](/concepts/model-providers)。
 
-当存在 `models.providers` 时，OpenClaw 在启动时将 `models.json` 写入/合并到
-`~/.openclaw/agents/<agentId>/agent/`：
+当存在 `models.providers` 时，EasyHub 在启动时将 `models.json` 写入/合并到
+`~/.easyhub/agents/<agentId>/agent/`：
 
 - 默认行为：**合并**（保留现有提供商，按名称覆盖）
 - 设为 `models.mode: "replace"` 覆盖文件内容
@@ -2416,7 +2416,7 @@ OpenClaw 使用 **pi-coding-agent** 模型目录。你可以通过编写
 
 ### OpenCode Zen（多模型代理）
 
-OpenCode Zen 是一个具有每模型端点的多模型网关。OpenClaw 使用
+OpenCode Zen 是一个具有每模型端点的多模型网关。EasyHub 使用
 pi-ai 内置的 `opencode` 提供商；从 https://opencode.ai/auth 设置 `OPENCODE_API_KEY`（或
 `OPENCODE_ZEN_API_KEY`）。
 
@@ -2424,7 +2424,7 @@ pi-ai 内置的 `opencode` 提供商；从 https://opencode.ai/auth 设置 `OPEN
 
 - 模型引用使用 `opencode/<modelId>`（示例：`opencode/claude-opus-4-5`）。
 - 如果你通过 `agents.defaults.models` 启用白名单，请添加你计划使用的每个模型。
-- 快捷方式：`openclaw onboard --auth-choice opencode-zen`。
+- 快捷方式：`EasyHub onboard --auth-choice opencode-zen`。
 
 ```json5
 {
@@ -2442,7 +2442,7 @@ pi-ai 内置的 `opencode` 提供商；从 https://opencode.ai/auth 设置 `OPEN
 Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_KEY`
 并通过 provider/model 引用模型。
 
-快捷方式：`openclaw onboard --auth-choice zai-api-key`。
+快捷方式：`EasyHub onboard --auth-choice zai-api-key`。
 
 ```json5
 {
@@ -2506,7 +2506,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 
 说明：
 
-- 在环境中设置 `MOONSHOT_API_KEY` 或使用 `openclaw onboard --auth-choice moonshot-api-key`。
+- 在环境中设置 `MOONSHOT_API_KEY` 或使用 `EasyHub onboard --auth-choice moonshot-api-key`。
 - 模型引用：`moonshot/kimi-k2.5`。
 - 如需中国端点，使用 `https://api.moonshot.cn/v1`。
 
@@ -2528,7 +2528,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 
 说明：
 
-- 在环境中设置 `KIMI_API_KEY` 或使用 `openclaw onboard --auth-choice kimi-code-api-key`。
+- 在环境中设置 `KIMI_API_KEY` 或使用 `EasyHub onboard --auth-choice kimi-code-api-key`。
 - 模型引用：`kimi-coding/k2p5`。
 
 ### Synthetic（Anthropic 兼容）
@@ -2570,7 +2570,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 
 说明：
 
-- 设置 `SYNTHETIC_API_KEY` 或使用 `openclaw onboard --auth-choice synthetic-api-key`。
+- 设置 `SYNTHETIC_API_KEY` 或使用 `EasyHub onboard --auth-choice synthetic-api-key`。
 - 模型引用：`synthetic/hf:MiniMaxAI/MiniMax-M2.1`。
 - 基础 URL 应省略 `/v1`，因为 Anthropic 客户端会自动附加。
 
@@ -2618,7 +2618,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 
 说明：
 
-- 设置 `MINIMAX_API_KEY` 环境变量或使用 `openclaw onboard --auth-choice minimax-api`。
+- 设置 `MINIMAX_API_KEY` 环境变量或使用 `EasyHub onboard --auth-choice minimax-api`。
 - 可用模型：`MiniMax-M2.1`（默认）。
 - 如需精确费用跟踪，请在 `models.json` 中更新定价。
 
@@ -2668,7 +2668,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 - 支持的 API：`openai-completions`、`openai-responses`、`anthropic-messages`、
   `google-generative-ai`
 - 对于自定义认证需求使用 `authHeader: true` + `headers`。
-- 如果你希望 `models.json` 存储在其他位置，请使用 `OPENCLAW_AGENT_DIR`（或 `PI_CODING_AGENT_DIR`）覆盖智能体配置根目录（默认：`~/.openclaw/agents/main/agent`）。
+- 如果你希望 `models.json` 存储在其他位置，请使用 `EASYHUB_AGENT_DIR`（或 `PI_CODING_AGENT_DIR`）覆盖智能体配置根目录（默认：`~/.easyhub/agents/main/agent`）。
 
 ### `session`
 
@@ -2693,9 +2693,9 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
       group: { mode: "idle", idleMinutes: 120 },
     },
     resetTriggers: ["/new", "/reset"],
-    // 默认已按智能体存储在 ~/.openclaw/agents/<agentId>/sessions/sessions.json
+    // 默认已按智能体存储在 ~/.easyhub/agents/<agentId>/sessions/sessions.json
     // 你可以使用 {agentId} 模板进行覆盖：
-    store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+    store: "~/.easyhub/agents/{agentId}/sessions/sessions.json",
     // 私聊折叠到 agent:<agentId>:<mainKey>（默认："main"）。
     mainKey: "main",
     agentToAgent: {
@@ -2726,7 +2726,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
   - `atHour`：本地小时（0-23）作为每日重置边界。
   - `idleMinutes`：滑动空闲窗口（分钟）。当 daily + idle 都配置时，先到期的获胜。
 - `resetByType`：`dm`、`group` 和 `thread` 的每会话覆盖。
-  - 如果你只设置了旧版 `session.idleMinutes` 而没有任何 `reset`/`resetByType`，OpenClaw 保持仅空闲模式以向后兼容。
+  - 如果你只设置了旧版 `session.idleMinutes` 而没有任何 `reset`/`resetByType`，EasyHub 保持仅空闲模式以向后兼容。
 - `heartbeatIdleMinutes`：可选的心跳检查空闲覆盖（启用时每日重置仍然适用）。
 - `agentToAgent.maxPingPongTurns`：请求者/目标之间的最大回复轮次（0–5，默认 5）。
 - `sendPolicy.default`：无规则匹配时的 `allow` 或 `deny` 回退。
@@ -2734,7 +2734,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 
 ### `skills`（Skills 配置）
 
-控制内置白名单、安装偏好、额外 Skills 文件夹和每 Skills 覆盖。适用于**内置**Skills 和 `~/.openclaw/skills`（工作区 Skills 在名称冲突时仍然优先）。
+控制内置白名单、安装偏好、额外 Skills 文件夹和每 Skills 覆盖。适用于**内置**Skills 和 `~/.easyhub/skills`（工作区 Skills 在名称冲突时仍然优先）。
 
 字段：
 
@@ -2779,7 +2779,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 
 ### `plugins`（扩展）
 
-控制插件发现、允许/拒绝和每插件配置。插件从 `~/.openclaw/extensions`、`<workspace>/.openclaw/extensions` 以及任何 `plugins.load.paths` 条目加载。**配置更改需要重启 Gateway 网关。**
+控制插件发现、允许/拒绝和每插件配置。插件从 `~/.easyhub/extensions`、`<workspace>/.easyhub/extensions` 以及任何 `plugins.load.paths` 条目加载。**配置更改需要重启 Gateway 网关。**
 参见 [/plugin](/tools/plugin) 了解详情。
 
 字段：
@@ -2814,9 +2814,9 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 }
 ```
 
-### `browser`（OpenClaw 管理的浏览器）
+### `browser`（EasyHub 管理的浏览器）
 
-OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge/Chromium 实例并暴露一个小型 local loopback 控制服务。
+EasyHub 可以为 EasyHub 启动一个**专用、隔离的** Chrome/Brave/Edge/Chromium 实例并暴露一个小型 local loopback 控制服务。
 配置文件可以通过 `profiles.<name>.cdpUrl` 指向**远程** Chromium 浏览器。远程配置文件为仅附加模式（start/stop/reset 被禁用）。
 
 `browser.cdpUrl` 保留用于旧版单配置文件配置，以及作为仅设置 `cdpPort` 的配置文件的基础 scheme/host。
@@ -2828,7 +2828,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 - 控制服务：仅 local loopback（端口从 `gateway.port` 派生，默认 `18791`）
 - CDP URL：`http://127.0.0.1:18792`（控制服务 + 1，旧版单配置文件）
 - 配置文件颜色：`#FF4500`（龙虾橙）
-- 注意：控制服务器由运行中的 Gateway 网关（OpenClaw.app 菜单栏或 `openclaw gateway`）启动。
+- 注意：控制服务器由运行中的 Gateway 网关（EasyHub.app 菜单栏或 `EasyHub gateway`）启动。
 - 自动检测顺序：如果为 Chromium 内核则使用默认浏览器；否则 Chrome → Brave → Edge → Chromium → Chrome Canary。
 
 ```json5
@@ -2839,7 +2839,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
     // cdpUrl: "http://127.0.0.1:18792", // 旧版单配置文件覆盖
     defaultProfile: "chrome",
     profiles: {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      EasyHub: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
@@ -2866,7 +2866,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
     // 可选：控制台 UI 助手身份覆盖。
     // 如果未设置，控制台 UI 使用活跃智能体的身份（配置或 IDENTITY.md）。
     assistant: {
-      name: "OpenClaw",
+      name: "EasyHub",
       avatar: "CB", // 表情、短文本，或图片 URL/data URI
     },
   },
@@ -2889,7 +2889,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
     mode: "local", // 或 "remote"
     port: 18789, // WS + HTTP 多路复用
     bind: "loopback",
-    // controlUi: { enabled: true, basePath: "/openclaw" }
+    // controlUi: { enabled: true, basePath: "/EasyHub" }
     // auth: { mode: "token", token: "your-token" } // token 控制 WS + 控制台 UI 访问
     // tailscale: { mode: "off" | "serve" | "funnel" }
   },
@@ -2899,7 +2899,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 控制台 UI 基础路径：
 
 - `gateway.controlUi.basePath` 设置控制台 UI 提供服务的 URL 前缀。
-- 示例：`"/ui"`、`"/openclaw"`、`"/apps/openclaw"`。
+- 示例：`"/ui"`、`"/EasyHub"`、`"/apps/EasyHub"`。
 - 默认：根路径（`/`）（不变）。
 - `gateway.controlUi.root` 设置控制台 UI 资产的文件系统根目录（默认：`dist/control-ui`）。
 - `gateway.controlUi.allowInsecureAuth` 允许在省略设备身份时对控制台 UI 进行仅 token 认证（通常通过 HTTP）。默认：`false`。建议使用 HTTPS（Tailscale Serve）或 `127.0.0.1`。
@@ -2915,15 +2915,15 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 信任的代理：
 
 - `gateway.trustedProxies`：在 Gateway 网关前面终止 TLS 的反向代理 IP 列表。
-- 当连接来自这些 IP 之一时，OpenClaw 使用 `x-forwarded-for`（或 `x-real-ip`）来确定客户端 IP，用于本地配对检查和 HTTP 认证/本地检查。
+- 当连接来自这些 IP 之一时，EasyHub 使用 `x-forwarded-for`（或 `x-real-ip`）来确定客户端 IP，用于本地配对检查和 HTTP 认证/本地检查。
 - 仅列出你完全控制的代理，并确保它们**覆盖**传入的 `x-forwarded-for`。
 
 说明：
 
-- `openclaw gateway` 拒绝启动，除非 `gateway.mode` 设为 `local`（或你传递了覆盖标志）。
+- `EasyHub gateway` 拒绝启动，除非 `gateway.mode` 设为 `local`（或你传递了覆盖标志）。
 - `gateway.port` 控制用于 WebSocket + HTTP（控制台 UI、hooks、A2UI）的单一多路复用端口。
 - OpenAI Chat Completions 端点：**默认禁用**；通过 `gateway.http.endpoints.chatCompletions.enabled: true` 启用。
-- 优先级：`--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > 默认 `18789`。
+- 优先级：`--port` > `EASYHUB_GATEWAY_PORT` > `gateway.port` > 默认 `18789`。
 - 默认需要 Gateway 网关认证（token/密码或 Tailscale Serve 身份）。非 local loopback 绑定需要共享 token/密码。
 - 新手引导向导默认生成 gateway token（即使在 local loopback 上）。
 - `gateway.remote.token` **仅**用于远程 CLI 调用；它不启用本地 gateway 认证。`gateway.token` 被忽略。
@@ -2933,10 +2933,10 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 - `gateway.auth.mode` 设置握手要求（`token` 或 `password`）。未设置时，假定 token 认证。
 - `gateway.auth.token` 存储 token 认证的共享 token（同一机器上的 CLI 使用）。
 - 当设置了 `gateway.auth.mode` 时，仅接受该方法（加上可选的 Tailscale 头部）。
-- `gateway.auth.password` 可在此设置，或通过 `OPENCLAW_GATEWAY_PASSWORD`（推荐）。
+- `gateway.auth.password` 可在此设置，或通过 `EASYHUB_GATEWAY_PASSWORD`（推荐）。
 - `gateway.auth.allowTailscale` 允许 Tailscale Serve 身份头部
   （`tailscale-user-login`）在请求通过 local loopback 到达且带有 `x-forwarded-for`、
-  `x-forwarded-proto` 和 `x-forwarded-host` 时满足认证。OpenClaw 在接受之前
+  `x-forwarded-proto` 和 `x-forwarded-host` 时满足认证。EasyHub 在接受之前
   通过 `tailscale whois` 解析 `x-forwarded-for` 地址来验证身份。为 `true` 时，
   Serve 请求不需要 token/密码；设为 `false` 要求显式凭据。当
   `tailscale.mode = "serve"` 且认证模式不是 `password` 时默认为 `true`。
@@ -2953,7 +2953,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 
 macOS 应用行为：
 
-- OpenClaw.app 监视 `~/.openclaw/openclaw.json`，当 `gateway.mode` 或 `gateway.remote.url` 变更时实时切换模式。
+- EasyHub.app 监视 `~/.easyhub/easyhub.json`，当 `gateway.mode` 或 `gateway.remote.url` 变更时实时切换模式。
 - 如果 `gateway.mode` 未设置但 `gateway.remote.url` 已设置，macOS 应用将其视为远程模式。
 - 当你在 macOS 应用中更改连接模式时，它会将 `gateway.mode`（以及远程模式下的 `gateway.remote.url` + `gateway.remote.transport`）写回配置文件。
 
@@ -2987,7 +2987,7 @@ macOS 应用行为：
 
 ### `gateway.reload`（配置热重载）
 
-Gateway 网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）并自动应用更改。
+Gateway 网关监视 `~/.easyhub/easyhub.json`（或 `EASYHUB_CONFIG_PATH`）并自动应用更改。
 
 模式：
 
@@ -3011,7 +3011,7 @@ Gateway 网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）
 
 监视的文件：
 
-- `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）
+- `~/.easyhub/easyhub.json`（或 `EASYHUB_CONFIG_PATH`）
 
 热应用（无需完全重启 Gateway 网关）：
 
@@ -3036,15 +3036,15 @@ Gateway 网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）
 
 要在一台主机上运行多个 Gateway 网关（用于冗余或救援机器人），请隔离每个实例的状态 + 配置并使用唯一端口：
 
-- `OPENCLAW_CONFIG_PATH`（每实例配置）
-- `OPENCLAW_STATE_DIR`（会话/凭据）
+- `EASYHUB_CONFIG_PATH`（每实例配置）
+- `EASYHUB_STATE_DIR`（会话/凭据）
 - `agents.defaults.workspace`（记忆）
 - `gateway.port`（每实例唯一）
 
 便利标志（CLI）：
 
-- `openclaw --dev …` → 使用 `~/.openclaw-dev` + 端口从基础 `19001` 偏移
-- `openclaw --profile <name> …` → 使用 `~/.openclaw-<name>`（端口通过配置/环境变量/标志）
+- `EasyHub --dev …` → 使用 `~/.easyhub-dev` + 端口从基础 `19001` 偏移
+- `EasyHub --profile <name> …` → 使用 `~/.EasyHub-<name>`（端口通过配置/环境变量/标志）
 
 参见 [Gateway 网关运维手册](/gateway) 了解派生的端口映射（gateway/browser/canvas）。
 参见[多 Gateway 网关](/gateway/multiple-gateways) 了解浏览器/CDP 端口隔离细节。
@@ -3052,9 +3052,9 @@ Gateway 网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）
 示例：
 
 ```bash
-OPENCLAW_CONFIG_PATH=~/.openclaw/a.json \
-OPENCLAW_STATE_DIR=~/.openclaw-a \
-openclaw gateway --port 19001
+EASYHUB_CONFIG_PATH=~/.easyhub/a.json \
+EASYHUB_STATE_DIR=~/.EasyHub-a \
+EasyHub gateway --port 19001
 ```
 
 ### `hooks`（Gateway 网关 webhook）
@@ -3074,7 +3074,7 @@ openclaw gateway --port 19001
     token: "shared-secret",
     path: "/hooks",
     presets: ["gmail"],
-    transformsDir: "~/.openclaw/hooks",
+    transformsDir: "~/.easyhub/hooks",
     mappings: [
       {
         match: { path: "gmail" },
@@ -3095,7 +3095,7 @@ openclaw gateway --port 19001
 请求必须包含 hook token：
 
 - `Authorization: Bearer <token>` **或**
-- `x-openclaw-token: <token>` **或**
+- `x-EasyHub-token: <token>` **或**
 - `?token=<token>`
 
 端点：
@@ -3116,13 +3116,13 @@ openclaw gateway --port 19001
 - 如果没有先前的投递路由，请显式设置 `channel` + `to`（Telegram/Discord/Google Chat/Slack/Signal/iMessage/MS Teams 必需）。
 - `model` 覆盖此 hook 运行的 LLM（`provider/model` 或别名；如果设置了 `agents.defaults.models` 则必须被允许）。
 
-Gmail 辅助配置（由 `openclaw webhooks gmail setup` / `run` 使用）：
+Gmail 辅助配置（由 `EasyHub webhooks gmail setup` / `run` 使用）：
 
 ```json5
 {
   hooks: {
     gmail: {
-      account: "openclaw@gmail.com",
+      account: "EasyHub@gmail.com",
       topic: "projects/<project-id>/topics/gog-gmail-watch",
       subscription: "gog-gmail-watch-push",
       pushToken: "shared-push-token",
@@ -3156,11 +3156,11 @@ Gateway 网关自动启动：
 
 - 如果 `hooks.enabled=true` 且 `hooks.gmail.account` 已设置，Gateway 网关在启动时
   启动 `gog gmail watch serve` 并自动续期监视。
-- 设置 `OPENCLAW_SKIP_GMAIL_WATCHER=1` 禁用自动启动（用于手动运行）。
+- 设置 `EASYHUB_SKIP_GMAIL_WATCHER=1` 禁用自动启动（用于手动运行）。
 - 避免在 Gateway 网关旁边单独运行 `gog gmail watch serve`；它会
   因 `listen tcp 127.0.0.1:8788: bind: address already in use` 而失败。
 
-注意：当 `tailscale.mode` 开启时，OpenClaw 将 `serve.path` 默认为 `/`，以便
+注意：当 `tailscale.mode` 开启时，EasyHub 将 `serve.path` 默认为 `/`，以便
 Tailscale 可以正确代理 `/gmail-pubsub`（它会去除设置的路径前缀）。
 如果你需要后端接收带前缀的路径，请将
 `hooks.gmail.tailscale.target` 设为完整 URL（并对齐 `serve.path`）。
@@ -3169,17 +3169,17 @@ Tailscale 可以正确代理 `/gmail-pubsub`（它会去除设置的路径前缀
 
 Gateway 网关通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android 节点可以简单地 `canvas.navigate` 到它。
 
-默认根目录：`~/.openclaw/workspace/canvas`
-默认端口：`18793`（选择此端口以避免 OpenClaw 浏览器 CDP 端口 `18792`）
+默认根目录：`~/.easyhub/workspace/canvas`
+默认端口：`18793`（选择此端口以避免 EasyHub 浏览器 CDP 端口 `18792`）
 服务器监听 **Gateway 网关绑定主机**（LAN 或 Tailnet），以便节点可以访问。
 
 服务器：
 
 - 提供 `canvasHost.root` 下的文件
 - 向提供的 HTML 注入微型实时重载客户端
-- 监视目录并通过 `/__openclaw__/ws` 的 WebSocket 端点广播重载
+- 监视目录并通过 `/__EASYHUB__/ws` 的 WebSocket 端点广播重载
 - 目录为空时自动创建起始 `index.html`（以便你立即看到内容）
-- 同时在 `/__openclaw__/a2ui/` 提供 A2UI，并作为 `canvasHostUrl` 通告给节点
+- 同时在 `/__EASYHUB__/a2ui/` 提供 A2UI，并作为 `canvasHostUrl` 通告给节点
   （节点始终使用它来访问 Canvas/A2UI）
 
 如果目录很大或遇到 `EMFILE`，请禁用实时重载（和文件监视）：
@@ -3189,7 +3189,7 @@ Gateway 网关通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android �
 ```json5
 {
   canvasHost: {
-    root: "~/.openclaw/workspace/canvas",
+    root: "~/.easyhub/workspace/canvas",
     port: 18793,
     liveReload: true,
   },
@@ -3201,7 +3201,7 @@ Gateway 网关通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android �
 禁用方式：
 
 - 配置：`canvasHost: { enabled: false }`
-- 环境变量：`OPENCLAW_SKIP_CANVAS_HOST=1`
+- 环境变量：`EASYHUB_SKIP_CANVAS_HOST=1`
 
 ### `bridge`（旧版 TCP 桥接，已移除）
 
@@ -3243,9 +3243,9 @@ TLS：
     bind: "tailnet",
     tls: {
       enabled: true,
-      // 省略时使用 ~/.openclaw/bridge/tls/bridge-{cert,key}.pem。
-      // certPath: "~/.openclaw/bridge/tls/bridge-cert.pem",
-      // keyPath: "~/.openclaw/bridge/tls/bridge-key.pem"
+      // 省略时使用 ~/.easyhub/bridge/tls/bridge-{cert,key}.pem。
+      // certPath: "~/.easyhub/bridge/tls/bridge-cert.pem",
+      // keyPath: "~/.easyhub/bridge/tls/bridge-key.pem"
     },
   },
 }
@@ -3253,12 +3253,12 @@ TLS：
 
 ### `discovery.mdns`（Bonjour / mDNS 广播模式）
 
-控制 LAN mDNS 发现广播（`_openclaw-gw._tcp`）。
+控制 LAN mDNS 发现广播（`_EasyHub-gw._tcp`）。
 
 - `minimal`（默认）：从 TXT 记录中省略 `cliPath` + `sshPort`
 - `full`：在 TXT 记录中包含 `cliPath` + `sshPort`
 - `off`：完全禁用 mDNS 广播
-- 主机名：默认为 `openclaw`（通告 `openclaw.local`）。通过 `OPENCLAW_MDNS_HOSTNAME` 覆盖。
+- 主机名：默认为 `EasyHub`（通告 `EasyHub.local`）。通过 `EASYHUB_MDNS_HOSTNAME` 覆盖。
 
 ```json5
 {
@@ -3268,7 +3268,7 @@ TLS：
 
 ### `discovery.wideArea`（广域 Bonjour / 单播 DNS‑SD）
 
-启用后，Gateway 网关在 `~/.openclaw/dns/` 下使用配置的发现域（示例：`openclaw.internal.`）为 `_openclaw-gw._tcp` 写入单播 DNS-SD 区域。
+启用后，Gateway 网关在 `~/.easyhub/dns/` 下使用配置的发现域（示例：`EasyHub.internal.`）为 `_EasyHub-gw._tcp` 写入单播 DNS-SD 区域。
 
 要使 iOS/Android 跨网络发现（跨地域访问），请配合以下使用：
 
@@ -3278,7 +3278,7 @@ TLS：
 一次性设置助手（Gateway 网关主机）：
 
 ```bash
-openclaw dns setup --apply
+EasyHub dns setup --apply
 ```
 
 ```json5
