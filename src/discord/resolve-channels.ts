@@ -175,12 +175,11 @@ export async function resolveDiscordChannelAllowlist(params: {
   for (const input of params.entries) {
     const parsed = parseDiscordChannelInput(input);
     if (parsed.guildOnly) {
+      const guildById = parsed.guildId
+        ? guilds.find((entry) => entry.id === parsed.guildId)
+        : undefined;
       const guild =
-        parsed.guildId && guilds.find((entry) => entry.id === parsed.guildId)
-          ? guilds.find((entry) => entry.id === parsed.guildId)
-          : parsed.guild
-            ? resolveGuildByName(guilds, parsed.guild)
-            : undefined;
+        guildById ?? (parsed.guild ? resolveGuildByName(guilds, parsed.guild) : undefined);
       if (guild) {
         results.push({
           input,
@@ -210,36 +209,57 @@ export async function resolveDiscordChannelAllowlist(params: {
             channelId: parsed.channelId,
             note: `channel belongs to a different guild`,
           });
-        } else {
-          const guild = guilds.find((entry) => entry.id === channel.guildId);
-          results.push({
-            input,
-            resolved: true,
-            guildId: channel.guildId,
-            guildName: guild?.name,
-            channelId: channel.id,
-            channelName: channel.name,
-            archived: channel.archived,
-          });
+          continue;
         }
-      } else {
+        const guild = guilds.find((entry) => entry.id === channel.guildId);
         results.push({
           input,
-          resolved: false,
-          guildId: parsed.guildId,
-          channelId: parsed.channelId,
+          resolved: true,
+          guildId: channel.guildId,
+          guildName: guild?.name,
+          channelId: channel.id,
+          channelName: channel.name,
+          archived: channel.archived,
         });
+        continue;
       }
+      if (parsed.guildId) {
+        const guild = guilds.find((entry) => entry.id === parsed.guildId);
+        if (guild) {
+          const channels = await getChannels(guild.id);
+          const matches = channels.filter(
+            (ch) => normalizeDiscordSlug(ch.name) === normalizeDiscordSlug(parsed.channelId!),
+          );
+          const match = preferActiveMatch(matches);
+          if (match) {
+            results.push({
+              input,
+              resolved: true,
+              guildId: guild.id,
+              guildName: guild.name,
+              channelId: match.id,
+              channelName: match.name,
+              archived: match.archived,
+            });
+            continue;
+          }
+        }
+      }
+      results.push({
+        input,
+        resolved: false,
+        guildId: parsed.guildId,
+        channelId: parsed.channelId,
+      });
       continue;
     }
 
     if (parsed.guildId || parsed.guild) {
+      const guildById = parsed.guildId
+        ? guilds.find((entry) => entry.id === parsed.guildId)
+        : undefined;
       const guild =
-        parsed.guildId && guilds.find((entry) => entry.id === parsed.guildId)
-          ? guilds.find((entry) => entry.id === parsed.guildId)
-          : parsed.guild
-            ? resolveGuildByName(guilds, parsed.guild)
-            : undefined;
+        guildById ?? (parsed.guild ? resolveGuildByName(guilds, parsed.guild) : undefined);
       const channelQuery = parsed.channel?.trim();
       if (!guild || !channelQuery) {
         results.push({
