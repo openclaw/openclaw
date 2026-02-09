@@ -120,7 +120,7 @@ type FusedCandidate = {
  *
  * Reference: Cormack et al. (2009), extended with confidence weighting.
  */
-function fuseWithConfidenceRRF(
+export function fuseWithConfidenceRRF(
   signals: SearchSignalResult[][],
   k: number,
   weights: number[],
@@ -249,9 +249,12 @@ export async function hybridSearch(
   // 4. Fuse with confidence-weighted RRF
   const fused = fuseWithConfidenceRRF([vectorResults, bm25Results, graphResults], rrfK, weights);
 
-  // 5. Return top results, normalized to 0-100% display scores
-  const maxRrf = fused.length > 0 ? fused[0].rrfScore : 1;
-  const normalizer = maxRrf > 0 ? 1 / maxRrf : 1;
+  // 5. Return top results, normalized to 0-100% display scores.
+  // Only normalize when maxRrf is above a minimum threshold to avoid
+  // inflating weak matches (e.g., a single low-score result becoming 1.0).
+  const maxRrf = fused.length > 0 ? fused[0].rrfScore : 0;
+  const MIN_RRF_FOR_NORMALIZATION = 0.01;
+  const normalizer = maxRrf >= MIN_RRF_FOR_NORMALIZATION ? 1 / maxRrf : 1;
 
   const results = fused.slice(0, limit).map((r) => ({
     id: r.id,

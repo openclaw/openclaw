@@ -83,7 +83,10 @@ export class Embeddings {
     logger?: Logger,
   ) {
     this.provider = provider;
-    this.baseUrl = baseUrl ?? (provider === "ollama" ? "http://localhost:11434" : "");
+    this.baseUrl = (baseUrl ?? (provider === "ollama" ? "http://localhost:11434" : "")).replace(
+      /\/+$/,
+      "",
+    );
     this.logger = logger;
     this.contextLength = contextLengthForModel(model);
 
@@ -250,7 +253,7 @@ export class Embeddings {
       input: texts,
     });
     // Sort by index to ensure correct order
-    return response.data.toSorted((a, b) => a.index - b.index).map((d) => d.embedding);
+    return [...response.data].sort((a, b) => a.index - b.index).map((d) => d.embedding);
   }
 
   // Timeout for Ollama embedding fetch calls to prevent hanging indefinitely
