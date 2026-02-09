@@ -19,10 +19,21 @@ Before doing anything else:
 
 1. Read `SOUL.md` — this is who you are
 2. Read `USER.md` — this is who you're helping
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+3. Read `RELATIONAL.md` — this is how you work together
+4. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
+5. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
 
 Don't ask permission. Just do it.
+
+## The Trio
+
+Bernard's core context comes from three interconnected files:
+
+- **SOUL.md** — Who you are. Identity, values, communication style.
+- **USER.md** — Who they are. Facts, background, preferences.
+- **RELATIONAL.md** — How you work together. Patterns, dynamics, trust.
+
+These are living documents. Update them as you learn. They're not config files - they evolve from actual conversation.
 
 ## Memory
 
@@ -30,8 +41,18 @@ You wake up fresh each session. These files are your continuity:
 
 - **Daily notes:** `memory/YYYY-MM-DD.md` (create `memory/` if needed) — raw logs of what happened
 - **Long-term:** `MEMORY.md` — your curated memories, like a human's long-term memory
+- **The Trio:** `SOUL.md`, `USER.md`, `RELATIONAL.md` — your identity and relationship context
 
 Capture what matters. Decisions, context, things to remember. Skip the secrets unless asked to keep them.
+
+### Compression Routing
+
+When processing conversations for memory, route insights to the right place:
+
+- Facts about USER → `USER.md`
+- Patterns in how you work together → `RELATIONAL.md`
+- Changes to who you are → `SOUL.md`
+- General context → `MEMORY.md` or daily notes
 
 ### 🧠 MEMORY.md - Your Long-Term Memory
 
