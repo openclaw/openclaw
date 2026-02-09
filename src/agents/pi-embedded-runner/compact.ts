@@ -579,7 +579,7 @@ export async function compactEmbeddedPiSessionDirect(
       });
 
       const { session } = await createAgentSession({
-        cwd: resolvedWorkspace,
+        cwd: effectiveWorkspace,
         agentDir,
         authStorage,
         modelRegistry,
