@@ -248,6 +248,8 @@ Triggered when agent commands are issued:
 - **`session:compact:before`**: Right before compaction summarizes history
 - **`session:compact:after`**: After compaction completes with summary metadata
 
+Internal hook payloads emit these as `type: "session"` with `action: "compact:before"` / `action: "compact:after"`; listeners subscribe with the combined keys above.
+
 ### Agent Events
 
 - **`agent:bootstrap`**: Before workspace bootstrap files are injected (hooks may mutate `context.bootstrapFiles`)
