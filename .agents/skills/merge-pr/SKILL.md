@@ -104,6 +104,8 @@ Stop if any are true:
 - Required checks are failing.
 - Branch is behind main.
 
+If `.local/prep.md` contains `Docs-only change detected with high confidence; skipping pnpm test.`, that local test skip is allowed. CI checks still must be green.
+
 ```sh
 # Checks
 gh pr checks <PR>

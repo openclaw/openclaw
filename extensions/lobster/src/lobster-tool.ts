@@ -232,6 +232,7 @@ function parseEnvelope(stdout: string): LobsterEnvelope {
 export function createLobsterTool(api: OpenClawPluginApi) {
   return {
     name: "lobster",
+    label: "Lobster Workflow",
     description:
       "Run Lobster pipelines as a local-first workflow runtime (typed JSON envelope + resumable approvals).",
     parameters: Type.Object({
