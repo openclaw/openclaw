@@ -733,11 +733,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `21213e1 feat: switch TTS to edge-tts female voice (vi-VN-HoaiMyNeural) (02-09)`
 - `ce556d0 docs: update I036 with R2 public access setup and E2E test results (02-09)`
 - `2ea5be1 feat: add R2 upload to video worker pipeline (I036) (02-09)`
 - `a13de35 fix: resolve 3 E2E issues - encoding, UCP stats, register security (02-08)`
 - `0a1b7b4 test: add comprehensive test suite (753 tests) + fix SQLite/PostgreSQL compat (02-08)`
-- `438741a docs: I037 A013 code quality improvements record (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-09*
