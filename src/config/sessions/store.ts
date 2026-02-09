@@ -86,6 +86,15 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   };
 }
 
+function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
+  if (!context || context.threadId == null) {
+    return context;
+  }
+  const next: DeliveryContext = { ...context };
+  delete next.threadId;
+  return next;
+}
+
 function normalizeSessionStore(store: Record<string, SessionEntry>): void {
   for (const [key, entry] of Object.entries(store)) {
     if (!entry) {
@@ -430,7 +439,15 @@ export async function updateLastRoute(params: {
       threadId,
     });
     const mergedInput = mergeDeliveryContext(explicitContext, inlineContext);
-    const merged = mergeDeliveryContext(mergedInput, deliveryContextFromSession(existing));
+    const explicitDeliveryContext = params.deliveryContext;
+    const clearThreadFromFallback =
+      explicitDeliveryContext != null &&
+      Object.prototype.hasOwnProperty.call(explicitDeliveryContext, "threadId") &&
+      explicitDeliveryContext.threadId == null;
+    const fallbackContext = clearThreadFromFallback
+      ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
+      : deliveryContextFromSession(existing);
+    const merged = mergeDeliveryContext(mergedInput, fallbackContext);
     const normalized = normalizeSessionDeliveryFields({
       deliveryContext: {
         channel: merged?.channel,
