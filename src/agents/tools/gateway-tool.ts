@@ -13,6 +13,25 @@ import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 
+const SENSITIVE_KEY_RE = /(key|token|secret|password)/i;
+
+function redactSensitive(value: unknown, parentKey?: string): unknown {
+  if (parentKey && SENSITIVE_KEY_RE.test(parentKey)) {
+    return "***";
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactSensitive(entry, parentKey));
+  }
+  if (value && typeof value === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      output[key] = redactSensitive(entry, key);
+    }
+    return output;
+  }
+  return value;
+}
+
 function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   if (!snapshot || typeof snapshot !== "object") {
     return undefined;
@@ -165,7 +184,14 @@ export function createGatewayTool(opts?: {
 
       if (action === "config.get") {
         const result = await callGatewayTool("config.get", gatewayOpts, {});
-        return jsonResult({ ok: true, result });
+        const redacted =
+          result && typeof result === "object"
+            ? (redactSensitive(result) as Record<string, unknown>)
+            : result;
+        if (redacted && typeof redacted === "object" && "raw" in redacted) {
+          redacted.raw = null;
+        }
+        return jsonResult({ ok: true, result: redacted });
       }
       if (action === "config.schema") {
         const result = await callGatewayTool("config.schema", gatewayOpts, {});

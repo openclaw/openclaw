@@ -108,5 +108,14 @@ export function resolveModel(
       modelRegistry,
     };
   }
+  const providerCfg = cfg?.models?.providers?.[provider];
+  const overrideBaseUrl = providerCfg?.baseUrl?.trim();
+  if (overrideBaseUrl && model.baseUrl !== overrideBaseUrl) {
+    return {
+      model: normalizeModelCompat({ ...model, baseUrl: overrideBaseUrl }),
+      authStorage,
+      modelRegistry,
+    };
+  }
   return { model: normalizeModelCompat(model), authStorage, modelRegistry };
 }

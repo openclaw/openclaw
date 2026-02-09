@@ -369,6 +369,7 @@ export async function runCronIsolatedAgentTurn(params: {
           lane: params.lane ?? "cron",
           provider: providerOverride,
           model: modelOverride,
+          disableModelRouter: providerOverride !== provider || modelOverride !== model,
           thinkLevel,
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,

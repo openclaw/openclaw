@@ -9,26 +9,11 @@ import {
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
+import { isLocalProviderUrl } from "../../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelRow } from "./list.types.js";
 import { modelKey } from "./shared.js";
-
-const isLocalBaseUrl = (baseUrl: string) => {
-  try {
-    const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host.endsWith(".local")
-    );
-  } catch {
-    return false;
-  }
-};
 
 const hasAuthForProvider = (provider: string, cfg: OpenClawConfig, authStore: AuthProfileStore) => {
   if (listProfilesForProvider(authStore, provider).length > 0) {
@@ -81,7 +66,7 @@ export function toModelRow(params: {
   }
 
   const input = model.input.join("+") || "text";
-  const local = isLocalBaseUrl(model.baseUrl);
+  const local = isLocalProviderUrl(model.baseUrl);
   const available =
     cfg && authStore
       ? hasAuthForProvider(model.provider, cfg, authStore)

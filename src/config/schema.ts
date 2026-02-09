@@ -509,7 +509,8 @@ const FIELD_HELP: Record<string, string> = {
     "Extra paths to include in memory search (directories or .md files; relative paths resolved from workspace).",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Enable experimental session transcript indexing for memory search (default: false).",
-  "agents.defaults.memorySearch.provider": 'Embedding provider ("openai", "gemini", or "local").',
+  "agents.defaults.memorySearch.provider":
+    'Embedding provider ("openai", "gemini", "local", or "auto").',
   "agents.defaults.memorySearch.remote.baseUrl":
     "Custom base URL for remote embeddings (OpenAI-compatible proxies or Gemini overrides).",
   "agents.defaults.memorySearch.remote.apiKey": "Custom API key for the remote embedding provider.",
@@ -531,7 +532,8 @@ const FIELD_HELP: Record<string, string> = {
     'Fallback provider when embeddings fail ("openai", "gemini", "local", or "none").',
   "agents.defaults.memorySearch.store.path":
     "SQLite index path (default: ~/.openclaw/memory/{agentId}.sqlite).",
-  "agents.defaults.memorySearch.store.driver": 'Memory search store driver ("sqlite" or "qdrant").',
+  "agents.defaults.memorySearch.store.driver":
+    'Memory search store driver ("sqlite", "qdrant", or "auto").',
   "agents.defaults.memorySearch.store.qdrant.url":
     "Qdrant base URL (default: http://127.0.0.1:6333).",
   "agents.defaults.memorySearch.store.qdrant.collection":

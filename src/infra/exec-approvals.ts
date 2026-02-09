@@ -460,12 +460,14 @@ export function resolveCommandResolutionFromArgv(
   return { rawExecutable, resolvedPath, executableName };
 }
 
+const MATCH_CASE_INSENSITIVE = process.platform === "win32";
+
 function normalizeMatchTarget(value: string): string {
   if (process.platform === "win32") {
     const stripped = value.replace(/^\\\\[?.]\\/, "");
     return stripped.replace(/\\/g, "/").toLowerCase();
   }
-  return value.replace(/\\\\/g, "/").toLowerCase();
+  return value.replace(/\\\\/g, "/");
 }
 
 function tryRealpath(value: string): string | null {
@@ -501,7 +503,7 @@ function globToRegExp(pattern: string): RegExp {
     i += 1;
   }
   regex += "$";
-  return new RegExp(regex, "i");
+  return new RegExp(regex, MATCH_CASE_INSENSITIVE ? "i" : "");
 }
 
 function matchesPattern(pattern: string, target: string): boolean {
@@ -546,6 +548,37 @@ function resolveAllowlistCandidatePath(
   }
   const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
   return path.resolve(base, expanded);
+}
+
+function normalizeFsPath(value: string): string {
+  const resolved = path.resolve(value);
+  return MATCH_CASE_INSENSITIVE ? resolved.toLowerCase() : resolved;
+}
+
+function isPathWithinRoots(targetPath: string, roots: Set<string>): boolean {
+  const normalizedTarget = normalizeFsPath(targetPath);
+  for (const root of roots) {
+    if (!root) {
+      continue;
+    }
+    const normalizedRoot = normalizeFsPath(root);
+    if (
+      normalizedTarget === normalizedRoot ||
+      normalizedTarget.startsWith(normalizedRoot + path.sep)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function resolveTrustedPathEntries(env?: NodeJS.ProcessEnv): Set<string> {
+  const raw = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
+  const entries = raw
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return new Set(entries.map((entry) => normalizeFsPath(entry)));
 }
 
 export function matchAllowlist(
@@ -905,6 +938,7 @@ export function isSafeBinUsage(params: {
   argv: string[];
   resolution: CommandResolution | null;
   safeBins: Set<string>;
+  trustedPaths?: Set<string>;
   cwd?: string;
   fileExists?: (filePath: string) => boolean;
 }): boolean {
@@ -924,6 +958,14 @@ export function isSafeBinUsage(params: {
   }
   if (!resolution?.resolvedPath) {
     return false;
+  }
+  if (params.trustedPaths) {
+    if (params.trustedPaths.size === 0) {
+      return false;
+    }
+    if (!isPathWithinRoots(resolution.resolvedPath, params.trustedPaths)) {
+      return false;
+    }
   }
   const cwd = params.cwd ?? process.cwd();
   const exists = params.fileExists ?? defaultFileExists;
@@ -966,6 +1008,7 @@ function evaluateSegments(
   params: {
     allowlist: ExecAllowlistEntry[];
     safeBins: Set<string>;
+    trustedPaths?: Set<string>;
     cwd?: string;
     skillBins?: Set<string>;
     autoAllowSkills?: boolean;
@@ -988,6 +1031,7 @@ function evaluateSegments(
       argv: segment.argv,
       resolution: segment.resolution,
       safeBins: params.safeBins,
+      trustedPaths: params.trustedPaths,
       cwd: params.cwd,
     });
     const skillAllow =
@@ -1004,6 +1048,7 @@ export function evaluateExecAllowlist(params: {
   analysis: ExecCommandAnalysis;
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;
+  trustedPaths?: Set<string>;
   cwd?: string;
   skillBins?: Set<string>;
   autoAllowSkills?: boolean;
@@ -1019,6 +1064,7 @@ export function evaluateExecAllowlist(params: {
       const result = evaluateSegments(chainSegments, {
         allowlist: params.allowlist,
         safeBins: params.safeBins,
+        trustedPaths: params.trustedPaths,
         cwd: params.cwd,
         skillBins: params.skillBins,
         autoAllowSkills: params.autoAllowSkills,
@@ -1035,6 +1081,7 @@ export function evaluateExecAllowlist(params: {
   const result = evaluateSegments(params.analysis.segments, {
     allowlist: params.allowlist,
     safeBins: params.safeBins,
+    trustedPaths: params.trustedPaths,
     cwd: params.cwd,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
@@ -1154,6 +1201,7 @@ export function evaluateShellAllowlist(params: {
   command: string;
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;
+  trustedPaths?: Set<string>;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   skillBins?: Set<string>;
@@ -1178,6 +1226,7 @@ export function evaluateShellAllowlist(params: {
       analysis,
       allowlist: params.allowlist,
       safeBins: params.safeBins,
+      trustedPaths: params.trustedPaths,
       cwd: params.cwd,
       skillBins: params.skillBins,
       autoAllowSkills: params.autoAllowSkills,
@@ -1213,6 +1262,7 @@ export function evaluateShellAllowlist(params: {
       analysis,
       allowlist: params.allowlist,
       safeBins: params.safeBins,
+      trustedPaths: params.trustedPaths,
       cwd: params.cwd,
       skillBins: params.skillBins,
       autoAllowSkills: params.autoAllowSkills,

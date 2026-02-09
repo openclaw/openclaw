@@ -161,6 +161,7 @@ export function createFollowupRunner(params: {
               enforceFinalTag: queued.run.enforceFinalTag,
               provider,
               model,
+              disableModelRouter: provider !== queued.run.provider || model !== queued.run.model,
               authProfileId,
               authProfileIdSource: authProfileId ? queued.run.authProfileIdSource : undefined,
               thinkLevel: queued.run.thinkLevel,

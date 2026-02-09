@@ -463,4 +463,52 @@ describe("getApiKeyForModel", () => {
       }
     }
   });
+
+  it("allows local ollama provider without API key", async () => {
+    vi.resetModules();
+    const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+    const resolved = await resolveApiKeyForProvider({
+      provider: "ollama",
+      store: { version: 1, profiles: {} },
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(resolved.apiKey).toBe("openclaw-local-provider");
+    expect(resolved.source).toBe("local provider (no auth)");
+  });
+
+  it("allows loopback custom provider without API key", async () => {
+    vi.resetModules();
+    const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+    const resolved = await resolveApiKeyForProvider({
+      provider: "custom-openai",
+      store: { version: 1, profiles: {} },
+      cfg: {
+        models: {
+          providers: {
+            "custom-openai": {
+              baseUrl: "http://localhost:9999/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(resolved.apiKey).toBe("openclaw-local-provider");
+    expect(resolved.source).toBe("local provider (no auth)");
+  });
 });

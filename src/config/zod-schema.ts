@@ -570,12 +570,44 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             installPath: z.string().optional(),
+            host: z.string().optional(),
             port: z.number().int().positive().optional(),
+            wsPort: z.number().int().positive().optional(),
+            wsPath: z.string().optional(),
             useSsl: z.boolean().optional(),
+            transport: z
+              .union([z.literal("auto"), z.literal("offline"), z.literal("server")])
+              .optional(),
+            endpoints: z
+              .array(
+                z
+                  .object({
+                    host: z.string().optional(),
+                    port: z.number().int().positive().optional(),
+                    wsPort: z.number().int().positive().optional(),
+                    wsPath: z.string().optional(),
+                    useSsl: z.boolean().optional(),
+                    transport: z
+                      .union([z.literal("auto"), z.literal("offline"), z.literal("server")])
+                      .optional(),
+                    priority: z.number().int().optional(),
+                    healthPath: z.string().optional(),
+                    healthTimeoutMs: z.number().int().positive().optional(),
+                    healthCacheTtlMs: z.number().int().positive().optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+            useLocalAssets: z.boolean().optional(),
             hfToken: z.string().optional(),
             useGpu: z.boolean().optional(),
+            device: z.string().optional(),
+            dtype: z.union([z.literal("fp16"), z.literal("bf16"), z.literal("fp32")]).optional(),
+            context: z.number().int().positive().optional(),
             cpuOffload: z.boolean().optional(),
+            singleMimi: z.boolean().optional(),
             timeoutMs: z.number().int().positive().optional(),
+            idleTimeoutMs: z.number().int().positive().optional(),
             autoStart: z.boolean().optional(),
             voicePrompt: z.string().optional(),
             textPrompt: z.string().optional(),

@@ -65,6 +65,38 @@ function resolveProviderAuthOverride(
   return undefined;
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "[::1]" ||
+    normalized === "127.0.0.1" ||
+    normalized.startsWith("127.")
+  );
+}
+
+function isLikelyLocalProvider(cfg: OpenClawConfig | undefined, provider: string): boolean {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "ollama") {
+    return true;
+  }
+  const entry = resolveProviderConfig(cfg, provider);
+  const baseUrl = entry?.baseUrl?.trim();
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    const parsed = new URL(baseUrl);
+    return isLoopbackHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function resolveEnvSourceLabel(params: {
   applied: Set<string>;
   envVars: string[];
@@ -203,6 +235,16 @@ export async function resolveApiKeyForProvider(params: {
   const customKey = getCustomProviderApiKey(cfg, provider);
   if (customKey) {
     return { apiKey: customKey, source: "models.json", mode: "api-key" };
+  }
+
+  if (authOverride === undefined && isLikelyLocalProvider(cfg, provider)) {
+    // Local providers often run without auth and ignore any Authorization header.
+    // Return a stable placeholder token so the downstream model runner can proceed.
+    return {
+      apiKey: "openclaw-local-provider",
+      source: "local provider (no auth)",
+      mode: "api-key",
+    };
   }
 
   const normalized = normalizeProviderId(provider);

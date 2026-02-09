@@ -60,10 +60,42 @@ export type PersonaPlexConfig = {
   enabled?: boolean;
   /** Path to PersonaPlex installation. */
   installPath?: string;
-  /** Server port (default: 8765). */
+  /** Hostname for PersonaPlex server (default: localhost). */
+  host?: string;
+  /** Server port (default: 8998). */
   port?: number;
+  /**
+   * WebSocket port for realtime/full-duplex PersonaPlex (moshi.server).
+   * Defaults to `port` when running locally, or `port + 1` when configured for remote server + HTTP wrapper.
+   *
+   * Spark convention:
+   * - HTTP wrapper: :8998 (/health, /s2s)
+   * - moshi.server: :8999 (/api/chat)
+   */
+  wsPort?: number;
+  /** WebSocket path for realtime PersonaPlex (default: "/api/chat"). */
+  wsPath?: string;
   /** Serve PersonaPlex over HTTPS with self-signed certs (recommended). */
   useSsl?: boolean;
+  /** Transport selection: auto, offline (local), or server (HTTP). */
+  transport?: "auto" | "offline" | "server";
+  /** Optional endpoint list for PersonaPlex failover. */
+  endpoints?: Array<{
+    host?: string;
+    port?: number;
+    wsPort?: number;
+    wsPath?: string;
+    useSsl?: boolean;
+    transport?: "auto" | "offline" | "server";
+    /** Lower numbers are higher priority (default: 0). */
+    priority?: number;
+    /** Optional health path (default: "/"). */
+    healthPath?: string;
+    /** Optional health timeout in ms. */
+    healthTimeoutMs?: number;
+    /** Cache TTL for health checks in ms (default: 10000). */
+    healthCacheTtlMs?: number;
+  }>;
 
   /**
    * Prefer using local on-disk model assets (weights, tokenizer, voices, UI dist)
@@ -102,6 +134,8 @@ export type PersonaPlexConfig = {
 
   /** Timeout for S2S conversion (ms). */
   timeoutMs?: number;
+  /** Stop preloaded PersonaPlex server after this idle period in ms (0 disables idle shutdown). */
+  idleTimeoutMs?: number;
   /** Auto-start server on gateway start. */
   autoStart?: boolean;
   /** Optional voice prompt embedding (e.g., NATF2.pt). */

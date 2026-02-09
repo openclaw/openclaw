@@ -154,10 +154,22 @@ export async function runAgentTurnWithFallback(params: {
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
+          const thinkLevel = params.followupRun.run.thinkLevel;
           params.opts?.onModelSelected?.({
             provider,
             model,
-            thinkLevel: params.followupRun.run.thinkLevel,
+            thinkLevel,
+          });
+          // Broadcast selection details to gateway clients (Control UI uses this for attribution).
+          emitAgentEvent({
+            runId,
+            stream: "model",
+            data: {
+              phase: "selected",
+              provider,
+              model,
+              thinkLevel,
+            },
           });
 
           if (isCliProvider(provider, params.followupRun.run.config)) {
@@ -261,6 +273,9 @@ export async function runAgentTurnWithFallback(params: {
             enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
             provider,
             model,
+            disableModelRouter:
+              provider !== params.followupRun.run.provider ||
+              model !== params.followupRun.run.model,
             authProfileId,
             authProfileIdSource: authProfileId
               ? params.followupRun.run.authProfileIdSource

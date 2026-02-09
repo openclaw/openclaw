@@ -234,7 +234,7 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local";
+  provider?: "openai" | "gemini" | "local" | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -265,13 +265,30 @@ export type MemorySearchConfig = {
   };
   /** Index storage configuration. */
   store?: {
-    driver?: "sqlite" | "qdrant";
+    driver?: "sqlite" | "qdrant" | "auto";
     /** SQLite index path (ignored when driver is qdrant). */
     path?: string;
     /** Qdrant settings (used when driver is qdrant). */
     qdrant?: {
       /** Base URL for Qdrant (default: http://127.0.0.1:6333). */
       url?: string;
+      /** Optional endpoint list for Qdrant failover. */
+      endpoints?: Array<{
+        /** Base URL for the endpoint. */
+        url: string;
+        /** Optional API key override for this endpoint. */
+        apiKey?: string;
+        /** Optional timeout override in ms. */
+        timeoutMs?: number;
+        /** Lower numbers are higher priority (default: 0). */
+        priority?: number;
+        /** Optional health check URL for endpoint selection. */
+        healthUrl?: string;
+        /** Optional health check timeout in ms. */
+        healthTimeoutMs?: number;
+        /** Cache TTL for health checks in ms (default: 10000). */
+        healthCacheTtlMs?: number;
+      }>;
       /** Collection name (default: jarvis_memory_chunks). */
       collection?: string;
       /** Optional Qdrant API key (sent as api-key header). */

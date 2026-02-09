@@ -15,6 +15,40 @@ export type ModelCompatConfig = {
 
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
 
+export type ModelProviderEndpointHealthConfig = {
+  /** Optional health check URL for endpoint selection. */
+  url?: string;
+  /** HTTP method for health checks (default: GET). */
+  method?: "GET" | "HEAD" | "POST";
+  /** Optional request body for health checks (POST only). */
+  body?: string;
+  /** Timeout in milliseconds (default: 1500). */
+  timeoutMs?: number;
+  /** Acceptable HTTP status codes (default: [200]). */
+  successStatus?: number[];
+  /** Cache TTL in milliseconds (default: 10000). */
+  cacheTtlMs?: number;
+};
+
+export type ModelProviderEndpointConfig = {
+  /** Optional endpoint identifier for logs. */
+  id?: string;
+  /** Base URL for this endpoint. */
+  baseUrl: string;
+  /** Optional API key override for this endpoint. */
+  apiKey?: string;
+  /** Optional auth mode override for this endpoint. */
+  auth?: ModelProviderAuthMode;
+  /** Optional headers override for this endpoint. */
+  headers?: Record<string, string>;
+  /** Optional authHeader override for this endpoint. */
+  authHeader?: boolean;
+  /** Lower numbers are higher priority (default: 0). */
+  priority?: number;
+  /** Optional health check configuration. */
+  health?: ModelProviderEndpointHealthConfig;
+};
+
 export type ModelDefinitionConfig = {
   id: string;
   name: string;
@@ -41,6 +75,10 @@ export type ModelProviderConfig = {
   headers?: Record<string, string>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  /** Optional endpoint list for automatic failover. */
+  endpoints?: ModelProviderEndpointConfig[];
+  /** Endpoint selection strategy (default: "health"). */
+  endpointStrategy?: "ordered" | "health";
 };
 
 export type BedrockDiscoveryConfig = {

@@ -23,6 +23,33 @@ export const ModelCompatSchema = z
   .strict()
   .optional();
 
+export const ModelProviderEndpointHealthSchema = z
+  .object({
+    url: z.string().optional(),
+    method: z.union([z.literal("GET"), z.literal("HEAD"), z.literal("POST")]).optional(),
+    body: z.string().optional(),
+    timeoutMs: z.number().int().positive().optional(),
+    successStatus: z.array(z.number().int()).optional(),
+    cacheTtlMs: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
+export const ModelProviderEndpointSchema = z
+  .object({
+    id: z.string().optional(),
+    baseUrl: z.string().min(1),
+    apiKey: z.string().optional(),
+    auth: z
+      .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
+      .optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    authHeader: z.boolean().optional(),
+    priority: z.number().int().optional(),
+    health: ModelProviderEndpointHealthSchema,
+  })
+  .strict();
+
 export const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -57,6 +84,8 @@ export const ModelProviderSchema = z
     headers: z.record(z.string(), z.string()).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
+    endpoints: z.array(ModelProviderEndpointSchema).optional(),
+    endpointStrategy: z.union([z.literal("ordered"), z.literal("health")]).optional(),
   })
   .strict();
 

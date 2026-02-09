@@ -256,4 +256,58 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.sources).toContain("sessions");
   });
+
+  it("preserves qdrant endpoint failover settings with auto driver", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            store: {
+              driver: "auto",
+              qdrant: {
+                url: "http://127.0.0.1:6333",
+                collection: "jarvis_memory_chunks",
+                endpoints: [
+                  {
+                    url: "http://spark.lan:6333",
+                    priority: 0,
+                    healthUrl: "http://spark.lan:6333/collections",
+                  },
+                  {
+                    url: "http://127.0.0.1:6333",
+                    priority: 10,
+                    healthUrl: "http://127.0.0.1:6333/collections",
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.store.driver).toBe("auto");
+    expect(resolved?.store.qdrant.url).toBe("http://127.0.0.1:6333");
+    expect(resolved?.store.qdrant.endpoints).toHaveLength(2);
+    expect(resolved?.store.qdrant.endpoints?.[0]?.url).toBe("http://spark.lan:6333");
+  });
+
+  it("defaults to qdrant store and default collection", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            provider: "local",
+          },
+        },
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.store.driver).toBe("qdrant");
+    expect(resolved?.store.qdrant.collection).toBe("jarvis_memory_chunks");
+    expect(resolved?.chunking.tokens).toBe(800);
+    expect(resolved?.chunking.overlap).toBe(100);
+  });
 });

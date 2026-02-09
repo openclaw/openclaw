@@ -33,10 +33,19 @@ export type ResolvedMemorySearchConfig = {
     modelCacheDir?: string;
   };
   store: {
-    driver: "sqlite" | "qdrant";
+    driver: "sqlite" | "qdrant" | "auto";
     path: string;
     qdrant: {
       url: string;
+      endpoints?: Array<{
+        url: string;
+        apiKey?: string;
+        timeoutMs?: number;
+        priority?: number;
+        healthUrl?: string;
+        healthTimeoutMs?: number;
+        healthCacheTtlMs?: number;
+      }>;
       collection: string;
       apiKey?: string;
       timeoutMs: number;
@@ -79,8 +88,8 @@ export type ResolvedMemorySearchConfig = {
 
 const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
 const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
-const DEFAULT_CHUNK_TOKENS = 400;
-const DEFAULT_CHUNK_OVERLAP = 80;
+const DEFAULT_CHUNK_TOKENS = 800;
+const DEFAULT_CHUNK_OVERLAP = 100;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
 const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 const DEFAULT_SESSION_DELTA_MESSAGES = 50;
@@ -181,7 +190,7 @@ function mergeConfig(
     .map((value) => value.trim())
     .filter(Boolean);
   const extraPaths = Array.from(new Set(rawPaths));
-  const storeDriver = overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite";
+  const storeDriver = overrides?.store?.driver ?? defaults?.store?.driver ?? "qdrant";
   const vector = {
     enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
     extensionPath:
@@ -189,6 +198,8 @@ function mergeConfig(
   };
   const qdrant = {
     url: overrides?.store?.qdrant?.url ?? defaults?.store?.qdrant?.url ?? "http://127.0.0.1:6333",
+    endpoints:
+      overrides?.store?.qdrant?.endpoints ?? defaults?.store?.qdrant?.endpoints ?? undefined,
     collection:
       overrides?.store?.qdrant?.collection ??
       defaults?.store?.qdrant?.collection ??

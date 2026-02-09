@@ -317,7 +317,9 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    provider: z.union([z.literal("openai"), z.literal("local"), z.literal("gemini")]).optional(),
+    provider: z
+      .union([z.literal("openai"), z.literal("local"), z.literal("gemini"), z.literal("auto")])
+      .optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
@@ -349,11 +351,26 @@ export const MemorySearchSchema = z
       .optional(),
     store: z
       .object({
-        driver: z.union([z.literal("sqlite"), z.literal("qdrant")]).optional(),
+        driver: z.union([z.literal("sqlite"), z.literal("qdrant"), z.literal("auto")]).optional(),
         path: z.string().optional(),
         qdrant: z
           .object({
             url: z.string().optional(),
+            endpoints: z
+              .array(
+                z
+                  .object({
+                    url: z.string(),
+                    apiKey: z.string().optional(),
+                    timeoutMs: z.number().int().positive().optional(),
+                    priority: z.number().int().optional(),
+                    healthUrl: z.string().optional(),
+                    healthTimeoutMs: z.number().int().positive().optional(),
+                    healthCacheTtlMs: z.number().int().positive().optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
             collection: z.string().optional(),
             apiKey: z.string().optional(),
             timeoutMs: z.number().int().positive().optional(),

@@ -138,6 +138,8 @@ export async function runMemoryFlushIfNeeded(params: {
           enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
           provider,
           model,
+          disableModelRouter:
+            provider !== params.followupRun.run.provider || model !== params.followupRun.run.model,
           authProfileId,
           authProfileIdSource: authProfileId
             ? params.followupRun.run.authProfileIdSource
