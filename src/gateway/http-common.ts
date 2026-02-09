@@ -96,7 +96,11 @@ export async function readJsonBodyOrError(
 }
 
 export function writeDone(res: ServerResponse) {
+  if (res.writableEnded || res.destroyed) {
+    return;
+  }
   res.write("data: [DONE]\n\n");
+  (res as unknown as { flush?: () => void }).flush?.();
 }
 
 export function setSseHeaders(res: ServerResponse) {
@@ -104,5 +108,7 @@ export function setSseHeaders(res: ServerResponse) {
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.socket?.setNoDelay?.(true);
   res.flushHeaders?.();
 }

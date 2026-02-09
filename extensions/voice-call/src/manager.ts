@@ -315,4 +315,131 @@ export class CallManager {
   async getCallHistory(limit = 50): Promise<CallRecord[]> {
     return getCallHistoryFromStore(this.storePath, limit);
   }
+
+  // States that can cycle during multi-turn conversations
+  private static readonly ConversationStates = new Set<CallState>(["speaking", "listening"]);
+
+  // Non-terminal state order for monotonic transitions
+  private static readonly StateOrder: readonly CallState[] = [
+    "initiated",
+    "ringing",
+    "answered",
+    "active",
+    "speaking",
+    "listening",
+  ];
+
+  /**
+   * Transition call state with monotonic enforcement.
+   */
+  private transitionState(call: CallRecord, newState: CallState): void {
+    // No-op for same state or already terminal
+    if (call.state === newState || TerminalStates.has(call.state)) {
+      return;
+    }
+
+    // Terminal states can always be reached from non-terminal
+    if (TerminalStates.has(newState)) {
+      call.state = newState;
+      return;
+    }
+
+    // Allow cycling between speaking and listening (multi-turn conversations)
+    if (
+      CallManager.ConversationStates.has(call.state) &&
+      CallManager.ConversationStates.has(newState)
+    ) {
+      call.state = newState;
+      return;
+    }
+
+    // Only allow forward transitions in state order
+    const currentIndex = CallManager.StateOrder.indexOf(call.state);
+    const newIndex = CallManager.StateOrder.indexOf(newState);
+
+    if (newIndex > currentIndex) {
+      call.state = newState;
+    }
+  }
+
+  /**
+   * Add an entry to the call transcript.
+   */
+  private addTranscriptEntry(call: CallRecord, speaker: "bot" | "user", text: string): void {
+    const entry: TranscriptEntry = {
+      timestamp: Date.now(),
+      speaker,
+      text,
+      isFinal: true,
+    };
+    call.transcript.push(entry);
+  }
+
+  /**
+   * Persist a call record to disk (fire-and-forget async).
+   */
+  private persistCallRecord(call: CallRecord): void {
+    const logPath = path.join(this.storePath, "calls.jsonl");
+    const line = `${JSON.stringify(call)}\n`;
+    // Fire-and-forget async write to avoid blocking event loop
+    fsp.appendFile(logPath, line).catch((err) => {
+      console.error("[voice-call] Failed to persist call record:", err);
+    });
+  }
+
+  /**
+   * Load active calls from persistence (for crash recovery).
+   * Uses streaming to handle large log files efficiently.
+   */
+  private loadActiveCalls(): void {
+    const logPath = path.join(this.storePath, "calls.jsonl");
+    if (!fs.existsSync(logPath)) {
+      return;
+    }
+
+    // Read file synchronously and parse lines
+    const content = fs.readFileSync(logPath, "utf-8");
+    const lines = content.split("\n");
+
+    // Build map of latest state per call
+    const callMap = new Map<CallId, CallRecord>();
+
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const call = CallRecordSchema.parse(JSON.parse(line));
+        callMap.set(call.callId, call);
+      } catch {
+        // Skip invalid lines
+      }
+    }
+
+    // Only keep non-terminal calls
+    for (const [callId, call] of callMap) {
+      if (!TerminalStates.has(call.state)) {
+        this.activeCalls.set(callId, call);
+        // Populate providerCallId mapping for lookups
+        if (call.providerCallId) {
+          this.providerCallIdMap.set(call.providerCallId, callId);
+        }
+        // Populate processed event IDs
+        for (const eventId of call.processedEventIds) {
+          this.processedEventIds.add(eventId);
+        }
+      }
+    }
+  }
+
+  /**
+   * Generate TwiML for notify mode (speak message and hang up).
+   */
+  private generateNotifyTwiml(message: string, voice: string): string {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${escapeXml(voice)}">${escapeXml(message)}</Say>
+  <Hangup/>
+</Response>`;
+  }
 }

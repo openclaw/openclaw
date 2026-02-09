@@ -174,6 +174,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
 
       setTimeout(() => {
         if (!this.connected) {
+          this.ws?.close();
           reject(new Error("Realtime STT connection timeout"));
         }
       }, 10000);

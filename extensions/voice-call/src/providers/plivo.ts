@@ -271,6 +271,23 @@ export class PlivoProvider implements VoiceCallProvider {
       callStatus === "no-answer" ||
       callStatus === "failed"
     ) {
+      // Clean up internal maps on terminal state
+      if (callUuid) {
+        this.callUuidToWebhookUrl.delete(callUuid);
+        // Also clean up the reverse mapping
+        for (const [reqId, cUuid] of this.requestUuidToCallUuid) {
+          if (cUuid === callUuid) {
+            this.requestUuidToCallUuid.delete(reqId);
+            break;
+          }
+        }
+      }
+      if (callIdOverride) {
+        this.callIdToWebhookUrl.delete(callIdOverride);
+        this.pendingSpeakByCallId.delete(callIdOverride);
+        this.pendingListenByCallId.delete(callIdOverride);
+      }
+
       return {
         ...baseEvent,
         type: "call.ended",

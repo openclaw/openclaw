@@ -137,12 +137,24 @@ export class TelnyxProvider implements VoiceCallProvider {
       callId = data.payload?.call_control_id || "";
     }
 
+    const direction =
+      data.payload?.direction === "incoming"
+        ? ("inbound" as const)
+        : data.payload?.direction === "outgoing"
+          ? ("outbound" as const)
+          : undefined;
+    const from = typeof data.payload?.from === "string" ? data.payload.from : undefined;
+    const to = typeof data.payload?.to === "string" ? data.payload.to : undefined;
+
     const baseEvent = {
       id: data.id || crypto.randomUUID(),
       dedupeKey,
       callId,
       providerCallId: data.payload?.call_control_id,
       timestamp: Date.now(),
+      ...(direction && { direction }),
+      ...(from && { from }),
+      ...(to && { to }),
     };
 
     switch (data.event_type) {
