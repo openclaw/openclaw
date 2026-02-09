@@ -12,8 +12,10 @@ import {
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
 import { getReplyFromConfig } from "../reply.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
@@ -69,6 +71,36 @@ const resolveSessionTtsAuto = (
     const store = loadSessionStore(storePath);
     const entry = store[sessionKey.toLowerCase()] ?? store[sessionKey];
     return normalizeTtsAutoMode(entry?.ttsAuto);
+  } catch {
+    return undefined;
+  }
+};
+
+const resolveSessionVerbose = (
+  ctx: FinalizedMsgContext,
+  cfg: OpenClawConfig,
+): "off" | "on" | "full" | undefined => {
+  const targetSessionKey =
+    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+  const sessionKey = (targetSessionKey ?? ctx.SessionKey)?.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  try {
+    const store = loadSessionStore(storePath);
+    const entry = store[sessionKey.toLowerCase()] ?? store[sessionKey];
+    const direct = normalizeVerboseLevel(String(entry?.verboseLevel ?? ""));
+    if (direct) {
+      return direct;
+    }
+    const parentKey = resolveThreadParentSessionKey(sessionKey);
+    if (!parentKey) {
+      return undefined;
+    }
+    const parent = store[parentKey.toLowerCase()] ?? store[parentKey];
+    return normalizeVerboseLevel(String(parent?.verboseLevel ?? ""));
   } catch {
     return undefined;
   }
@@ -292,7 +324,16 @@ export async function dispatchReplyFromConfig(params: {
     let accumulatedBlockText = "";
     let blockCount = 0;
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+    const isGroupLikeChat =
+      String(ctx.ChatType ?? "")
+        .trim()
+        .toLowerCase() === "group" ||
+      String(ctx.ChatType ?? "")
+        .trim()
+        .toLowerCase() === "channel";
+    const sessionVerbose = isGroupLikeChat ? resolveSessionVerbose(ctx, cfg) : undefined;
+    const shouldSendToolSummaries =
+      ctx.CommandSource !== "native" && (!isGroupLikeChat || sessionVerbose !== "off");
 
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,

@@ -2,6 +2,7 @@ import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import { isAudioFileName } from "../../media/mime.js";
+import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import { scheduleFollowupDrain } from "./queue.js";
 
@@ -16,21 +17,49 @@ export const createShouldEmitToolResult = (params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): (() => boolean) => {
+  const isGroupSession = /:(group|channel):/.test(params.sessionKey ?? "");
   // Normalize verbose values from session store/config so false/"false" still means off.
   const fallbackVerbose = normalizeVerboseLevel(String(params.resolvedVerboseLevel ?? "")) ?? "off";
   return () => {
-    if (!params.sessionKey || !params.storePath) {
-      return fallbackVerbose !== "off";
-    }
-    try {
-      const store = loadSessionStore(params.storePath);
-      const entry = store[params.sessionKey];
-      const current = normalizeVerboseLevel(String(entry?.verboseLevel ?? ""));
+    const readCurrentVerbose = (): VerboseLevel | undefined => {
+      if (!params.sessionKey || !params.storePath) {
+        return undefined;
+      }
+      try {
+        const store = loadSessionStore(params.storePath);
+        const sessionKey = params.sessionKey;
+        const entry = store[sessionKey];
+        const current = normalizeVerboseLevel(String(entry?.verboseLevel ?? ""));
+        if (current) {
+          return current;
+        }
+        // For topic/thread sessions, inherit verbose setting from parent group session when present.
+        const parentKey = resolveThreadParentSessionKey(sessionKey);
+        if (parentKey) {
+          const parent = store[parentKey];
+          const parentVerbose = normalizeVerboseLevel(String(parent?.verboseLevel ?? ""));
+          if (parentVerbose) {
+            return parentVerbose;
+          }
+        }
+      } catch {
+        // ignore store read failures
+      }
+      return undefined;
+    };
+
+    // Group chats default to tool summaries on, but explicit `/v off` must disable them.
+    if (isGroupSession) {
+      const current = readCurrentVerbose();
       if (current) {
         return current !== "off";
       }
-    } catch {
-      // ignore store read failures
+      return true;
+    }
+
+    const current = readCurrentVerbose();
+    if (current) {
+      return current !== "off";
     }
     return fallbackVerbose !== "off";
   };

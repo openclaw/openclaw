@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
@@ -164,7 +167,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("does not provide onToolResult in group sessions", async () => {
+  it("provides onToolResult in group sessions", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({
       handled: false,
       aborted: false,
@@ -181,12 +184,83 @@ describe("dispatchReplyFromConfig", () => {
       opts: GetReplyOptions | undefined,
       _cfg: OpenClawConfig,
     ) => {
+      expect(opts?.onToolResult).toBeDefined();
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses onToolResult in group sessions when verbose is off", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-group-verbose-off-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-100123";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [sessionKey]: { verboseLevel: "off", updatedAt: Date.now() } }),
+      "utf-8",
+    );
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "group",
+      SessionKey: sessionKey,
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts: GetReplyOptions | undefined,
+      _cfg: OpenClawConfig,
+    ) => {
       expect(opts?.onToolResult).toBeUndefined();
       return { text: "hi" } satisfies ReplyPayload;
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("suppresses onToolResult in topic sessions when parent group verbose is off", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-group-topic-verbose-off-"));
+    const storePath = path.join(dir, "sessions.json");
+    const parentKey = "agent:main:telegram:group:-100123";
+    const sessionKey = "agent:main:telegram:group:-100123:topic:777";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [parentKey]: { verboseLevel: "off", updatedAt: Date.now() } }),
+      "utf-8",
+    );
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "group",
+      SessionKey: sessionKey,
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts: GetReplyOptions | undefined,
+      _cfg: OpenClawConfig,
+    ) => {
+      expect(opts?.onToolResult).toBeUndefined();
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("sends tool results via dispatcher in DM sessions", async () => {
