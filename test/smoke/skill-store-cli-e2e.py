@@ -9,12 +9,14 @@ Gateway restarts to keep total runtime reasonable.
 """
 import json, os, sys, subprocess, hashlib, shutil, time
 
-STORE_CLI = "/home/seclab/.cursor/worktrees/openclaw-dev__SSH__ssh_seclab_192.168.53.96_/pdj/skills/skill-store/store-cli.py"
-TRIGGER_SCRIPT = "/home/seclab/.cursor/worktrees/openclaw-dev__SSH__ssh_seclab_192.168.53.96_/pdj/test/smoke/trigger-skills-status.cjs"
-ATD_DIR = "/home/seclab/.cursor/worktrees/openclaw-dev__SSH__ssh_seclab_192.168.53.96_/atd"
-MANAGED_DIR = os.path.expanduser("~/.openclaw-dev/skills")
-MANIFEST_CACHE = os.path.expanduser("~/.openclaw-dev/security/skill-guard/manifest-cache.json")
-AUDIT_LOG = os.path.expanduser("~/.openclaw-dev/security/skill-guard/audit.jsonl")
+STORE_CLI = "/home/seclab/openclaw-dev/skills/skill-store/store-cli.py"
+TRIGGER_SCRIPT = "/home/seclab/openclaw-dev/test/smoke/trigger-skills-status.cjs"
+PROJECT_DIR = "/home/seclab/openclaw-dev"
+MANAGED_DIR = os.path.expanduser("~/.openclaw/skills")
+MANIFEST_CACHE = os.path.expanduser("~/.openclaw/security/skill-guard/manifest-cache.json")
+AUDIT_LOG = os.path.expanduser("~/.openclaw/security/skill-guard/audit.jsonl")
+GATEWAY_PORT = "18789"
+GATEWAY_TOKEN = "dev-test-token-please-change-in-production"
 
 passed = 0
 failed = 0
@@ -36,12 +38,14 @@ def test(name, condition, detail=""):
 
 def run_cli(*args):
     cmd = ["python3", STORE_CLI] + list(args)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    env = os.environ.copy()
+    env["OPENCLAW_CONFIG_PATH"] = os.path.expanduser("~/.openclaw/openclaw.json")
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
     return r.returncode, r.stdout, r.stderr
 
 def run_openclaw(*args):
-    cmd = ["node", "scripts/run-node.mjs", "--dev"] + list(args)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=ATD_DIR)
+    cmd = ["node", "scripts/run-node.mjs"] + list(args)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=PROJECT_DIR)
     return r.returncode, r.stdout, r.stderr
 
 def kill_gateway():
@@ -52,7 +56,7 @@ def kill_gateway():
     time.sleep(2)
 
 def start_gateway():
-    os.system(f"cd {ATD_DIR} && NODE_TLS_REJECT_UNAUTHORIZED=0 nohup node scripts/run-node.mjs --dev gateway > /tmp/gw-cli-e2e.log 2>&1 &")
+    os.system(f"cd {PROJECT_DIR} && NODE_TLS_REJECT_UNAUTHORIZED=0 nohup node scripts/run-node.mjs gateway > /tmp/gw-cli-e2e.log 2>&1 &")
     # Wait for Gateway to be listening
     for i in range(30):
         time.sleep(1)
@@ -60,9 +64,9 @@ def start_gateway():
             import socket
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(1)
-            s.connect(('127.0.0.1', 19001))
+            s.connect(('127.0.0.1', int(GATEWAY_PORT)))
             s.close()
-            p(f"    Gateway 就绪 (port 19001, {i+1}s)")
+            p(f"    Gateway 就绪 (port {GATEWAY_PORT}, {i+1}s)")
             return True
         except (ConnectionRefusedError, OSError):
             pass
@@ -83,10 +87,10 @@ def trigger_skills_status():
     """Trigger Gateway skills.status via WebSocket to force Guard evaluation."""
     p("    (触发 skills.status 强制 Guard 评估...)")
     env = os.environ.copy()
-    env["NODE_PATH"] = os.path.join(ATD_DIR, "node_modules")
+    env["NODE_PATH"] = os.path.join(PROJECT_DIR, "node_modules")
     r = subprocess.run(
-        ["node", TRIGGER_SCRIPT, "dev", "19001"],
-        capture_output=True, text=True, timeout=30, cwd=ATD_DIR, env=env
+        ["node", TRIGGER_SCRIPT, f"token:{GATEWAY_TOKEN}", GATEWAY_PORT],
+        capture_output=True, text=True, timeout=30, cwd=PROJECT_DIR, env=env
     )
     if r.returncode == 0 and r.stdout.strip():
         try:

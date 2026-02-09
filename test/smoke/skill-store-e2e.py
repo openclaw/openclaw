@@ -5,11 +5,11 @@ Cloud store: http://115.190.153.145:9650
 """
 import json, os, sys, subprocess, hashlib, shutil, time
 
-STORE_CLI = "/home/seclab/.cursor/worktrees/openclaw-dev__SSH__ssh_seclab_192.168.53.96_/pdj/skills/skill-store/store-cli.py"
-MANAGED_DIR = os.path.expanduser("~/.openclaw-dev/skills")
-MANIFEST_CACHE = os.path.expanduser("~/.openclaw-dev/security/skill-guard/manifest-cache.json")
-AUDIT_LOG = os.path.expanduser("~/.openclaw-dev/security/skill-guard/audit.jsonl")
-ATD_DIR = "/home/seclab/.cursor/worktrees/openclaw-dev__SSH__ssh_seclab_192.168.53.96_/atd"
+STORE_CLI = "/home/seclab/openclaw-dev/skills/skill-store/store-cli.py"
+MANAGED_DIR = os.path.expanduser("~/.openclaw/skills")
+MANIFEST_CACHE = os.path.expanduser("~/.openclaw/security/skill-guard/manifest-cache.json")
+AUDIT_LOG = os.path.expanduser("~/.openclaw/security/skill-guard/audit.jsonl")
+PROJECT_DIR = "/home/seclab/openclaw-dev"
 
 passed = 0
 failed = 0
@@ -27,14 +27,16 @@ def test(name, condition, detail=""):
 
 def run_cli(*args):
     cmd = ["python3", STORE_CLI] + list(args)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    env = os.environ.copy()
+    env["OPENCLAW_CONFIG_PATH"] = os.path.expanduser("~/.openclaw/openclaw.json")
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
     return r.returncode, r.stdout, r.stderr
 
 def restart_gateway():
     """Kill and restart Gateway, wait for audit log."""
     os.system("pkill -f 'openclaw-gateway' 2>/dev/null")
     time.sleep(3)
-    os.system(f"cd {ATD_DIR} && NODE_TLS_REJECT_UNAUTHORIZED=0 nohup node scripts/run-node.mjs --dev gateway > /tmp/gw-e2e.log 2>&1 &")
+    os.system(f"cd {PROJECT_DIR} && NODE_TLS_REJECT_UNAUTHORIZED=0 nohup node scripts/run-node.mjs gateway > /tmp/gw-e2e.log 2>&1 &")
     for i in range(20):
         time.sleep(2)
         if os.path.isfile(AUDIT_LOG) and os.path.getsize(AUDIT_LOG) > 50:
@@ -193,14 +195,16 @@ events = load_audit()
 blocked_events = [e for e in events if e["event"] == "blocked"]
 blocked_names = set(e.get("skill") for e in blocked_events)
 sideload_pass = set(e.get("skill") for e in events if e["event"] == "sideload_pass")
+load_pass = set(e.get("skill") for e in events if e["event"] == "load_pass")
+all_passed = sideload_pass | load_pass
 
 test("8.2 evil-skill blocked by Guard", "evil-skill" in blocked_names, f"blocked: {blocked_names}")
 test("8.3 test-dangerous-code blocked", "test-dangerous-code" in blocked_names, f"blocked: {blocked_names}")
 test("8.4 test-clean-skill passed sideload", "test-clean-skill" in sideload_pass)
 test("8.5 skill-store still visible", "skill-store" in sideload_pass)
 test("8.6 Installed architecture visible",
-     "store.architecture" in sideload_pass or "architecture" in sideload_pass,
-     f"sideload: {[s for s in sideload_pass if 'arch' in str(s)]}")
+     "store.architecture" in all_passed or "architecture" in all_passed,
+     f"sideload: {[s for s in sideload_pass if 'arch' in str(s)]}, load_pass: {[s for s in load_pass if 'arch' in str(s)]}")
 
 # Check block reasons
 for b in blocked_events:

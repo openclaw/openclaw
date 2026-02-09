@@ -39,7 +39,13 @@ INSTALL_PREFIX = "store."
 # ── Configuration discovery ──────────────────────────────────────
 
 def find_config_path():
-    """Find the openclaw config file."""
+    """Find the openclaw config file.
+    
+    Priority: OPENCLAW_CONFIG_PATH env var > ~/.openclaw-dev > ~/.openclaw
+    """
+    env_path = os.environ.get("OPENCLAW_CONFIG_PATH")
+    if env_path and os.path.isfile(env_path):
+        return env_path
     candidates = [
         os.path.expanduser("~/.openclaw-dev/openclaw.json"),
         os.path.expanduser("~/.openclaw/openclaw.json"),
@@ -94,13 +100,20 @@ def load_config():
 
 
 def resolve_paths():
-    """Resolve standard paths."""
+    """Resolve standard paths.
+    
+    Uses dirname of OPENCLAW_CONFIG_PATH if set, otherwise ~/.openclaw-dev or ~/.openclaw.
+    """
     config_dir = None
-    for d in ["~/.openclaw-dev", "~/.openclaw"]:
-        expanded = os.path.expanduser(d)
-        if os.path.isdir(expanded):
-            config_dir = expanded
-            break
+    env_path = os.environ.get("OPENCLAW_CONFIG_PATH")
+    if env_path and os.path.isfile(env_path):
+        config_dir = os.path.dirname(env_path)
+    else:
+        for d in ["~/.openclaw-dev", "~/.openclaw"]:
+            expanded = os.path.expanduser(d)
+            if os.path.isdir(expanded):
+                config_dir = expanded
+                break
     if not config_dir:
         config_dir = os.path.expanduser("~/.openclaw-dev")
 

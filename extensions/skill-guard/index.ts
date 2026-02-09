@@ -21,7 +21,10 @@ import { VerifyEngine, listAllFiles } from "./src/verify-engine.js";
 /** Built-in default config — mirrors src/config/security-defaults.ts values. */
 const BUILTIN_DEFAULTS = {
   trustedStores: [
-    { name: "OpenClaw Official Store", url: "http://115.190.153.145:9650/api/v1/skill-guard" },
+    {
+      name: "OpenClaw Official Store",
+      url: "https://privacy.lenovo.com.cn/skills/api/v1/skill-guard",
+    },
   ],
   sideloadPolicy: "block-critical" as const,
   syncIntervalSeconds: 300,
