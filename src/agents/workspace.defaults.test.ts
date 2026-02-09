@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(() => {
@@ -13,6 +14,8 @@ describe("DEFAULT_AGENT_WORKSPACE_DIR", () => {
     vi.resetModules();
 
     const mod = await import("./workspace.js");
-    expect(mod.DEFAULT_AGENT_WORKSPACE_DIR).toBe("/srv/openclaw-home/.openclaw/workspace");
+    expect(mod.DEFAULT_AGENT_WORKSPACE_DIR).toBe(
+      path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"),
+    );
   });
 });

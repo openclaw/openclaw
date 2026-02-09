@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - Config: clamp `maxTokens` to `contextWindow` to prevent invalid model configs. (#5516) Thanks @lailoo.
 - Docs: fix language switcher ordering and Japanese locale flag in Mintlify nav. (#12023) Thanks @joshp123.
 - Paths: make internal path resolution respect `HOME`/`USERPROFILE` before `os.homedir()` across config, agents, sessions, pairing, cron, and CLI profiles. (#12091) Thanks @sebslight.
+- Paths: structurally resolve `OPENCLAW_HOME`-derived home paths and fix Windows drive-letter handling in tool meta shortening. (#12125) Thanks @mcaxtr.
 - Thinking: allow xhigh for `github-copilot/gpt-5.2-codex` and `github-copilot/gpt-5.2`. (#11646) Thanks @seans-openclawbot.
 - Discord: support forum/media `thread create` starter messages, wire `message thread create --message`, and harden thread-create routing. (#10062) Thanks @jarvis89757.
 - Gateway: stabilize chat routing by canonicalizing node session keys for node-originated chat methods. (#11755) Thanks @mbelinky.

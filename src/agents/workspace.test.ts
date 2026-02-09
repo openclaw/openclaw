@@ -15,7 +15,7 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
       HOME: "/home/other",
     } as NodeJS.ProcessEnv);
 
-    expect(dir).toBe(path.join("/srv/openclaw-home", ".openclaw", "workspace"));
+    expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
   });
 });
 
