@@ -11,6 +11,7 @@ import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-tok
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyChutesConfigWithModel,
   applyCloudflareAiGatewayConfig,
   applyQianfanConfig,
   applyKimiCodeConfig,
@@ -27,6 +28,7 @@ import {
   applyXiaomiConfig,
   applyZaiConfig,
   setAnthropicApiKey,
+  setChutesApiKey,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
@@ -488,6 +490,43 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyVeniceConfig(nextConfig);
   }
 
+  if (authChoice === "chutes-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "chutes",
+      cfg: baseConfig,
+      flagValue: opts.chutesApiKey,
+      flagName: "--chutes-api-key",
+      envVar: "CHUTES_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setChutesApiKey(resolved.key);
+    }
+    // Chutes requires a model ID since IDs are assigned at deployment
+    const modelId = opts.chutesModelId?.trim();
+    if (!modelId) {
+      runtime.error(
+        [
+          "Chutes requires a model ID (--chutes-model-id).",
+          "Model IDs are assigned when models are deployed on Bittensor.",
+          "Check https://chutes.ai for available models.",
+        ].join("\n"),
+      );
+      runtime.exit(1);
+      return null;
+    }
+    const chutesModelRef = `chutes/${modelId}`;
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "chutes:default",
+      provider: "chutes",
+      mode: "api_key",
+    });
+    return applyChutesConfigWithModel(nextConfig, chutesModelRef);
+  }
+
   if (
     authChoice === "minimax-cloud" ||
     authChoice === "minimax-api" ||
@@ -546,7 +585,6 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   if (
     authChoice === "oauth" ||
-    authChoice === "chutes" ||
     authChoice === "openai-codex" ||
     authChoice === "qwen-portal" ||
     authChoice === "minimax-portal"

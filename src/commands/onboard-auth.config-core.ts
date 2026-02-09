@@ -23,6 +23,7 @@ import {
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import {
+  CHUTES_DEFAULT_MODEL_REF,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
@@ -659,6 +660,181 @@ export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
               }
             : undefined),
           primary: XAI_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+// Chutes base URL and default model for decentralized inference on Bittensor
+const CHUTES_BASE_URL = "https://llm.chutes.ai/v1";
+
+/**
+ * Apply Chutes provider configuration without changing the default model.
+ * Registers Chutes as an OpenAI-compatible provider with minimal model config.
+ * Models on Chutes are dynamic (miner-dependent), so we only set a default.
+ */
+export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[CHUTES_DEFAULT_MODEL_REF] = {
+    ...models[CHUTES_DEFAULT_MODEL_REF],
+    alias: models[CHUTES_DEFAULT_MODEL_REF]?.alias ?? "Qwen 2.5 72B",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.chutes;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  // Minimal default model - users can add more based on miner availability
+  const defaultModel = {
+    id: "Qwen/Qwen2.5-72B-Instruct",
+    name: "Qwen 2.5 72B Instruct",
+    reasoning: false,
+    input: ["text"] as Array<"text" | "image">,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 131072,
+    maxTokens: 8192,
+  };
+  const hasDefaultModel = existingModels.some((model) => model.id === "Qwen/Qwen2.5-72B-Instruct");
+  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.chutes = {
+    ...existingProviderRest,
+    baseUrl: CHUTES_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Chutes provider configuration AND set Chutes as the default model.
+ * Use this when Chutes is the primary provider choice during onboarding.
+ */
+export function applyChutesConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyChutesProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: CHUTES_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Apply Chutes provider configuration with a user-specified model.
+ * Used during onboarding when user enters their preferred Chutes model ID.
+ */
+export function applyChutesProviderConfigWithModel(
+  cfg: OpenClawConfig,
+  modelRef: string,
+): OpenClawConfig {
+  // Extract model ID from ref (e.g., "chutes/llama-70b" -> "llama-70b")
+  const modelId = modelRef.startsWith("chutes/") ? modelRef.slice(7) : modelRef;
+
+  const models = { ...cfg.agents?.defaults?.models };
+  models[modelRef] = {
+    ...models[modelRef],
+    alias: models[modelRef]?.alias ?? modelId,
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.chutes;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+
+  const userModel = {
+    id: modelId,
+    name: modelId,
+    reasoning: false,
+    input: ["text"] as Array<"text" | "image">,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 131072,
+    maxTokens: 8192,
+  };
+  const hasModel = existingModels.some((model) => model.id === modelId);
+  const mergedModels = hasModel ? existingModels : [...existingModels, userModel];
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+
+  providers.chutes = {
+    ...existingProviderRest,
+    baseUrl: CHUTES_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [userModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Chutes provider configuration with a user-specified model AND set it as default.
+ */
+export function applyChutesConfigWithModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
+  const next = applyChutesProviderConfigWithModel(cfg, modelRef);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: modelRef,
         },
       },
     },
