@@ -121,10 +121,11 @@ describe("state + config path candidates", () => {
 
   it("includes legacy filenames when openclaw.json does not exist", () => {
     const home = "/nonexistent/home";
+    const resolvedHome = path.resolve(home);
     const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home);
     // Since the dirs don't exist on disk, fs.existsSync returns false → legacy included
-    expect(candidates).toContain(path.join(home, ".openclaw", "clawdbot.json"));
-    expect(candidates).toContain(path.join(home, ".clawdbot", "clawdbot.json"));
+    expect(candidates).toContain(path.join(resolvedHome, ".openclaw", "clawdbot.json"));
+    expect(candidates).toContain(path.join(resolvedHome, ".clawdbot", "clawdbot.json"));
   });
 
   it("skips legacy filenames in OPENCLAW_STATE_DIR when openclaw.json exists there", async () => {
