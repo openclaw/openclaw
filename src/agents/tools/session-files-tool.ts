@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { CsvQueryFilter } from "../../sessions/files/types.js";
 import type { AnyAgentTool } from "./common.js";
 import { queryCsv } from "../../sessions/files/csv-query.js";
+import { searchText } from "../../sessions/files/pdf-search.js";
 import { listFiles, getFile, getParsedCsv } from "../../sessions/files/storage.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { jsonResult, readStringParam, readNumberParam } from "./common.js";
@@ -37,6 +38,13 @@ const SessionFilesQueryCsvSchema = Type.Object({
   selectColumns: Type.Optional(
     Type.Array(Type.String(), { description: "Columns to include in results" }),
   ),
+});
+
+const SessionFilesSearchSchema = Type.Object({
+  sessionId: Type.String({ description: "Session ID to search files in" }),
+  fileId: Type.String({ description: "File ID to search" }),
+  query: Type.String({ description: "Search query (space-separated tokens)" }),
+  maxResults: Type.Optional(Type.Number({ description: "Maximum number of matches to return" })),
 });
 
 export function createSessionFilesListTool(options: {
@@ -156,6 +164,49 @@ export function createSessionFilesQueryCsvTool(options: {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult({ rows: [], total: 0, columns: [], error: message });
+      }
+    },
+  };
+}
+
+export function createSessionFilesSearchTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const cfg = options.config;
+  if (!cfg) {
+    return null;
+  }
+  const agentId = resolveSessionAgentId({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+  });
+  return {
+    label: "Session Files Search",
+    name: "session_files_search",
+    description:
+      "Search text content in PDF or text files. Returns matching lines with context. Query uses space-separated tokens (all must match).",
+    parameters: SessionFilesSearchSchema,
+    execute: async (_toolCallId, params) => {
+      const sessionId = readStringParam(params, "sessionId", { required: true });
+      const fileId = readStringParam(params, "fileId", { required: true });
+      const query = readStringParam(params, "query", { required: true });
+      const maxResults = readNumberParam(params, "maxResults");
+
+      try {
+        const { buffer, metadata } = await getFile({ sessionId, agentId, fileId });
+        if (metadata.type !== "pdf" && metadata.type !== "text") {
+          return jsonResult({
+            matches: [],
+            error: `File type ${metadata.type} is not searchable. Use session_files_query_csv for CSV files.`,
+          });
+        }
+        const content = buffer.toString("utf-8");
+        const matches = searchText(content, query, { maxResults });
+        return jsonResult({ matches, fileId, filename: metadata.filename });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonResult({ matches: [], error: message });
       }
     },
   };
