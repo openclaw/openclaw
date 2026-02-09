@@ -171,9 +171,9 @@ describe("ensureSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshot).toHaveBeenCalled();
   });
 
-  it("does not rebuild when session has no prior snapshot and version is zero", async () => {
+  it("builds a fresh snapshot when session has no prior snapshot and version is zero", async () => {
     // Brand new session with no snapshot yet, version is 0.
-    // The function should still build a snapshot (fallback path for no existing snapshot).
+    // The function should build a snapshot via the fallback path (no existing snapshot to reuse).
     vi.mocked(getSkillsSnapshotVersion).mockReturnValue(0);
 
     const sessionStore: Record<string, SessionEntry> = {};
