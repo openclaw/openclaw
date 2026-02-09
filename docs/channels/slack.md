@@ -49,6 +49,16 @@ Use the manifest below so scopes and events stay in sync.
 
 Multi-account support: use `channels.slack.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
+### Official intake via bot mention
+
+If you want the Slack channel intake to be explicit, use bot mentions as the official entrypoint:
+
+1. Keep `requireMention: true` on the channel (default for Slack).
+2. Invite the bot to the channel.
+3. Start tasks by mentioning the bot (for example, `@OpenClaw ...`).
+
+This keeps the channel clean and makes task intake explicit. Slash commands remain optional.
+
 ### OpenClaw config (minimal)
 
 Set tokens via env vars (recommended):
@@ -464,6 +474,13 @@ For fine-grained control, use these tags in agent responses:
 
 - `[[reply_to_current]]` — reply to the triggering message (start/continue thread).
 - `[[reply_to:<id>]]` — reply to a specific message id.
+
+### Task threading policy (recommended)
+
+- For channel tasks, start the first reply in a thread using `[[reply_to_current]]`.
+- Keep subsequent task updates in the same thread.
+- For non-task discussion, reply in-channel without reply tags.
+- When a task completes, post a short thread summary with a ✅ marker.
 
 ## Sessions + routing
 

@@ -301,6 +301,13 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       allowTagsWhenOff: true,
       buildToolContext: (params) => buildSlackThreadingToolContext(params),
     },
+    agentPrompt: {
+      messageToolHints: () => [
+        "- Slack tasks: when a channel message becomes a task, start the reply in a thread with `[[reply_to_current]]` and keep task updates in that thread.",
+        "- Slack chats: if it is not a task, reply in-channel without reply tags.",
+        "- When finishing a task, post a short thread summary with a ✅ marker.",
+      ],
+    },
   },
   signal: {
     id: "signal",
