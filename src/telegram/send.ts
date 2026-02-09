@@ -251,8 +251,14 @@ export async function sendMessageTelegram(
 
   // Build optional params for forum topics and reply threading.
   // Only include these if actually provided to keep API calls clean.
-  const messageThreadId =
+  // Private DM chats (positive chat IDs) never support message_thread_id —
+  // Telegram rejects it with "message thread not found" (400). Skip it
+  // entirely for DMs instead of relying on the retry fallback (#12929).
+  const rawMessageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
+  const numericChatId = typeof chatId === "string" ? Number(chatId) : chatId;
+  const isDmChat = Number.isFinite(numericChatId) && numericChatId > 0;
+  const messageThreadId = isDmChat ? undefined : rawMessageThreadId;
   const threadSpec =
     messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
@@ -827,8 +833,12 @@ export async function sendStickerTelegram(
   const client = resolveTelegramClientOptions(account);
   const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
 
-  const messageThreadId =
+  // Skip message_thread_id for DM chats (positive chat IDs) — Telegram rejects it (#12929).
+  const rawStickerThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
+  const numericStickerChatId = typeof chatId === "string" ? Number(chatId) : chatId;
+  const isStickerDmChat = Number.isFinite(numericStickerChatId) && numericStickerChatId > 0;
+  const messageThreadId = isStickerDmChat ? undefined : rawStickerThreadId;
   const threadSpec =
     messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);

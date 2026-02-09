@@ -626,8 +626,10 @@ export const buildTelegramMessageContext = async ({
     Sticker: allMedia[0]?.stickerMetadata,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
-    // For groups: use resolved forum topic id; for DMs: use raw messageThreadId
-    MessageThreadId: threadSpec.id,
+    // Only propagate forum topic thread IDs into the message context.
+    // DM "thread IDs" are ephemeral reply threads and must NOT be stored as
+    // lastThreadId — Telegram rejects message_thread_id on private chats (#12929).
+    MessageThreadId: threadSpec.scope === "forum" ? threadSpec.id : undefined,
     IsForum: isForum,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,

@@ -479,7 +479,9 @@ describe("sendMessageTelegram", () => {
   });
 
   it("retries without message_thread_id when Telegram reports missing thread", async () => {
-    const chatId = "123";
+    // Use a negative chat ID (group/supergroup) so message_thread_id is included.
+    // DM chats (positive IDs) skip message_thread_id entirely (#12929).
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendMessage = vi
       .fn()
@@ -523,6 +525,29 @@ describe("sendMessageTelegram", () => {
       }),
     ).rejects.toThrow("message thread not found");
     expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits message_thread_id for DM chats (positive chat IDs)", async () => {
+    // Positive chat IDs are private DMs — Telegram rejects message_thread_id (#12929)
+    const chatId = "123456789";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 60,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "hello dm", {
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    // Should NOT include message_thread_id
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello dm", {
+      parse_mode: "HTML",
+    });
   });
 
   it("sets disable_notification when silent is true", async () => {
@@ -615,7 +640,8 @@ describe("sendMessageTelegram", () => {
   });
 
   it("retries media sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123";
+    // Use a negative chat ID (group/supergroup) so message_thread_id is included.
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendPhoto = vi
       .fn()
@@ -713,7 +739,8 @@ describe("sendStickerTelegram", () => {
   });
 
   it("retries sticker sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123";
+    // Use a negative chat ID (group/supergroup) so message_thread_id is included.
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendSticker = vi
       .fn()
