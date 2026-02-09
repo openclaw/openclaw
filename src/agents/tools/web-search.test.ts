@@ -81,8 +81,18 @@ describe("web_search grok config resolution", () => {
   });
 
   it("returns undefined when no apiKey is available", () => {
-    expect(resolveGrokApiKey({})).toBeUndefined();
-    expect(resolveGrokApiKey(undefined)).toBeUndefined();
+    const previous = process.env.XAI_API_KEY;
+    try {
+      delete process.env.XAI_API_KEY;
+      expect(resolveGrokApiKey({})).toBeUndefined();
+      expect(resolveGrokApiKey(undefined)).toBeUndefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = previous;
+      }
+    }
   });
 
   it("uses default model when not specified", () => {
