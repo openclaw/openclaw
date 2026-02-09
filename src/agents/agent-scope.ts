@@ -188,5 +188,5 @@ export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
     return resolveUserPath(configured);
   }
   const root = resolveStateDir(process.env);
-  return path.join(root, "agents", id);
+  return path.join(root, "agents", id, "agent");
 }
