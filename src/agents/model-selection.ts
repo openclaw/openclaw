@@ -44,6 +44,7 @@ function normalizeAnthropicModelId(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) return trimmed;
   const lower = trimmed.toLowerCase();
+  if (lower === "opus-4.6") return "claude-opus-4-6";
   if (lower === "opus-4.5") return "claude-opus-4-5";
   if (lower === "sonnet-4.5") return "claude-sonnet-4-5";
   return trimmed;

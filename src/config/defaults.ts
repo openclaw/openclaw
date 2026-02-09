@@ -13,7 +13,7 @@ type AnthropicAuthDefaultsMode = "api_key" | "oauth";
 
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-5",
+  opus: "anthropic/claude-opus-4-6",
   sonnet: "anthropic/claude-sonnet-4-5",
 
   // OpenAI
@@ -32,7 +32,7 @@ const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
   cacheWrite: 0,
 };
 const DEFAULT_MODEL_INPUT: ModelDefinitionConfig["input"] = ["text"];
-const DEFAULT_MODEL_MAX_TOKENS = 8192;
+const DEFAULT_MODEL_MAX_TOKENS = 16_384;
 
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
