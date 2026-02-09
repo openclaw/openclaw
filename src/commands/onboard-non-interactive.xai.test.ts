@@ -46,7 +46,7 @@ describe("onboard (non-interactive): xAI", () => {
         {
           nonInteractive: true,
           authChoice: "xai-api-key",
-          xaiApiKey: "xai-test-key",
+          xaiApiKey: "xai-test-\r\nkey",
           skipHealth: true,
           skipChannels: true,
           skipSkills: true,

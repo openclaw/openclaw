@@ -28,7 +28,7 @@ Perform a thorough review-only PR assessment and return a structured recommendat
 
 ## Known Failure Modes
 
-- If you see "fatal: not a git repository", you are in the wrong directory. Use `~/openclaw`.
+- If you see "fatal: not a git repository", you are in the wrong directory. Use `~/dev/openclaw` if available; otherwise ask user.
 - Do not stop after printing the checklist. That is not completion.
 
 ## Writing Style for Output
@@ -51,7 +51,7 @@ Create a checklist of all review steps, print it, then continue and execute the 
 Use an isolated worktree for all review work.
 
 ```sh
-cd ~/Development/openclaw
+cd ~/dev/openclaw
 # Sanity: confirm you are in the repo
 git rev-parse --show-toplevel
 

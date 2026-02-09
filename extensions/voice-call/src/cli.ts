@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { sleep } from "openclaw/plugin-sdk";
 import type { VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveUserPath } from "./utils.js";
@@ -38,10 +39,6 @@ function resolveDefaultStorePath(config: VoiceCallConfig): string {
     }) ?? resolvedPreferred;
   const base = config.store?.trim() ? resolveUserPath(config.store) : existing;
   return path.join(base, "calls.jsonl");
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function registerVoiceCallCli(params: {

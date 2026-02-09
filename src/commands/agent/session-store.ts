@@ -3,7 +3,7 @@ import { setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { hasNonzeroUsage } from "../../agents/usage.js";
+import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 
 type RunResult = Awaited<
@@ -37,6 +37,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } = params;
 
   const usage = result.meta.agentMeta?.usage;
+  const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const contextTokens =
@@ -64,10 +65,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (hasNonzeroUsage(usage)) {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
-    const promptTokens = input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     next.inputTokens = input;
     next.outputTokens = output;
-    next.totalTokens = promptTokens > 0 ? promptTokens : (usage.total ?? input);
+    next.totalTokens =
+      deriveSessionTotalTokens({
+        usage,
+        contextTokens,
+      }) ?? input;
+  }
+  if (compactionsThisRun > 0) {
+    next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
   sessionStore[sessionKey] = next;
   await updateSessionStore(storePath, (store) => {
