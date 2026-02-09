@@ -94,8 +94,8 @@ These run inside the agent loop or gateway pipeline:
 
 Plugins can register these via either:
 
-- `api.on("<hook_name>", handler, { priority, timeoutMs, mode, condition })`
-- `api.lifecycle.on("<phase>", handler, { priority, timeoutMs, mode, condition })`
+- `api.on("<hook_name>", handler, { priority, timeoutMs, mode, onTimeout, retry, maxConcurrency, scope, condition })`
+- `api.lifecycle.on("<phase>", handler, { priority, timeoutMs, mode, onTimeout, retry, maxConcurrency, scope, condition })`
 
 Lifecycle phase aliases exposed by `api.lifecycle.on(...)`:
 
@@ -107,8 +107,13 @@ Lifecycle phase aliases exposed by `api.lifecycle.on(...)`:
 - `tool.post` -> `after_tool_call`
 - `agent.pre` -> `before_agent_start`
 - `agent.post` -> `agent_end`
+- `request.pre` -> `message_received`
+- `request.post` -> `request_post`
 - `recall.pre` -> `before_recall`
+- `recall.post` -> `after_recall`
 - `error` -> `agent_error`
+- `response.error` -> `response_error`
+- `tool.error` -> `tool_error`
 - `memory.compaction.pre` -> `before_compaction`
 - `memory.compaction.post` -> `after_compaction`
 - `shutdown.pre` -> `gateway_pre_stop`
@@ -116,8 +121,15 @@ Lifecycle phase aliases exposed by `api.lifecycle.on(...)`:
 
 Proposal-style aliases exposed by `api.lifecycle.on(...)`:
 
-- `preRequest` -> `message.pre`
+- `preBoot` -> `boot.pre`
+- `postBoot` -> `boot.post`
+- `preShutdown` -> `shutdown.pre`
+- `postShutdown` -> `shutdown.post`
+- `preAgent` -> `agent.pre`
+- `preRequest` -> `request.pre`
+- `postRequestIngress` -> `request.post`
 - `preRecall` -> `recall.pre`
+- `postRecall` -> `recall.post`
 - `preResponse` -> `message.pre`
 - `preToolExecution` -> `tool.pre`
 - `preCompaction` -> `memory.compaction.pre`
@@ -125,6 +137,8 @@ Proposal-style aliases exposed by `api.lifecycle.on(...)`:
 - `postResponse` -> `message.post`
 - `postToolExecution` -> `tool.post`
 - `postCompaction` -> `memory.compaction.post`
+- `onResponseError` -> `response.error`
+- `onToolError` -> `tool.error`
 - `onError` -> `error` (only runs when `success === false`)
 
 See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration details.
