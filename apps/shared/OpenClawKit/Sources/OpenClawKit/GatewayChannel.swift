@@ -72,6 +72,7 @@ public struct GatewayConnectOptions: Sendable {
     public var clientId: String
     public var clientMode: String
     public var clientDisplayName: String?
+    public var skipDeviceAuth: Bool
 
     public init(
         role: String,
@@ -81,7 +82,8 @@ public struct GatewayConnectOptions: Sendable {
         permissions: [String: Bool],
         clientId: String,
         clientMode: String,
-        clientDisplayName: String?)
+        clientDisplayName: String?,
+        skipDeviceAuth: Bool = false)
     {
         self.role = role
         self.scopes = scopes
@@ -91,6 +93,7 @@ public struct GatewayConnectOptions: Sendable {
         self.clientId = clientId
         self.clientMode = clientMode
         self.clientDisplayName = clientDisplayName
+        self.skipDeviceAuth = skipDeviceAuth
     }
 }
 
@@ -307,8 +310,9 @@ public actor GatewayChannelActor {
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
+        let skipDevice = options.skipDeviceAuth
         let identity = DeviceIdentityStore.loadOrCreate()
-        let storedToken = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role)?.token
+        let storedToken = skipDevice ? nil : DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role)?.token
         let authToken = storedToken ?? self.token
         let authSource: GatewayAuthSource
         if storedToken != nil {
@@ -321,42 +325,44 @@ public actor GatewayChannelActor {
             authSource = .none
         }
         self.lastAuthSource = authSource
-        self.logger.info("gateway connect auth=\(authSource.rawValue, privacy: .public)")
+        self.logger.info("gateway connect auth=\(authSource.rawValue, privacy: .public) skipDevice=\(skipDevice, privacy: .public)")
         let canFallbackToShared = storedToken != nil && self.token != nil
         if let authToken {
             params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(authToken)])
         } else if let password = self.password {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
-        let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        let connectNonce = try await self.waitForConnectChallenge()
-        let scopesValue = scopes.joined(separator: ",")
-        var payloadParts = [
-            connectNonce == nil ? "v1" : "v2",
-            identity.deviceId,
-            clientId,
-            clientMode,
-            role,
-            scopesValue,
-            String(signedAtMs),
-            authToken ?? "",
-        ]
-        if let connectNonce {
-            payloadParts.append(connectNonce)
-        }
-        let payload = payloadParts.joined(separator: "|")
-        if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
-           let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
-            var device: [String: ProtoAnyCodable] = [
-                "id": ProtoAnyCodable(identity.deviceId),
-                "publicKey": ProtoAnyCodable(publicKey),
-                "signature": ProtoAnyCodable(signature),
-                "signedAt": ProtoAnyCodable(signedAtMs),
+        if !skipDevice {
+            let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
+            let connectNonce = try await self.waitForConnectChallenge()
+            let scopesValue = scopes.joined(separator: ",")
+            var payloadParts = [
+                connectNonce == nil ? "v1" : "v2",
+                identity.deviceId,
+                clientId,
+                clientMode,
+                role,
+                scopesValue,
+                String(signedAtMs),
+                authToken ?? "",
             ]
             if let connectNonce {
-                device["nonce"] = ProtoAnyCodable(connectNonce)
+                payloadParts.append(connectNonce)
             }
-            params["device"] = ProtoAnyCodable(device)
+            let payload = payloadParts.joined(separator: "|")
+            if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
+               let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
+                var device: [String: ProtoAnyCodable] = [
+                    "id": ProtoAnyCodable(identity.deviceId),
+                    "publicKey": ProtoAnyCodable(publicKey),
+                    "signature": ProtoAnyCodable(signature),
+                    "signedAt": ProtoAnyCodable(signedAtMs),
+                ]
+                if let connectNonce {
+                    device["nonce"] = ProtoAnyCodable(connectNonce)
+                }
+                params["device"] = ProtoAnyCodable(device)
+            }
         }
 
         let frame = RequestFrame(

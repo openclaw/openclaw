@@ -19,6 +19,7 @@ final class NodeAppModel {
     let camera = CameraController()
     private let screenRecorder = ScreenRecordService()
     var gatewayStatusText: String = "Offline"
+    var operatorGatewayStatusText: String = "Offline"
     var gatewayServerName: String?
     var gatewayRemoteAddress: String?
     var connectedGatewayID: String?
@@ -26,7 +27,9 @@ final class NodeAppModel {
     var mainSessionKey: String = "main"
 
     private let gateway = GatewayNodeSession()
+    private let operatorGateway = GatewayNodeSession()
     private var gatewayTask: Task<Void, Never>?
+    private var operatorGatewayTask: Task<Void, Never>?
     private var voiceWakeSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     let voiceWake = VoiceWakeManager()
@@ -36,6 +39,7 @@ final class NodeAppModel {
 
     private var gatewayConnected = false
     var gatewaySession: GatewayNodeSession { self.gateway }
+    var operatorGatewaySession: GatewayNodeSession { self.operatorGateway }
 
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
@@ -55,7 +59,7 @@ final class NodeAppModel {
 
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
         self.voiceWake.setEnabled(enabled)
-        self.talkMode.attachGateway(self.gateway)
+        self.talkMode.attachGateway(self.operatorGateway, supportsChatSubscribe: false)
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         self.talkMode.setEnabled(talkEnabled)
 
@@ -209,9 +213,13 @@ final class NodeAppModel {
         tls: GatewayTLSParams?,
         token: String?,
         password: String?,
-        connectOptions: GatewayConnectOptions)
+        nodeConnectOptions: GatewayConnectOptions,
+        operatorConnectOptions: GatewayConnectOptions)
     {
         self.gatewayTask?.cancel()
+        self.gatewayTask = nil
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
         self.gatewayServerName = nil
         self.gatewayRemoteAddress = nil
         let id = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -219,7 +227,54 @@ final class NodeAppModel {
         self.gatewayConnected = false
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
-        let sessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        let nodeSessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        let operatorSessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+
+        // Start operator gateway connection for chat
+        self.operatorGatewayTask = Task {
+            var attempt = 0
+            while !Task.isCancelled {
+                await MainActor.run {
+                    self.operatorGatewayStatusText = attempt == 0 ? "Connecting…" : "Reconnecting…"
+                }
+                do {
+                    try await self.operatorGateway.connect(
+                        url: url,
+                        token: token,
+                        password: password,
+                        connectOptions: operatorConnectOptions,
+                        sessionBox: operatorSessionBox,
+                        onConnected: { [weak self] in
+                            guard let self else { return }
+                            await MainActor.run { self.operatorGatewayStatusText = "Connected" }
+                        },
+                        onDisconnected: { [weak self] reason in
+                            guard let self else { return }
+                            await MainActor.run { self.operatorGatewayStatusText = "Disconnected: \(reason)" }
+                        },
+                        onInvoke: { req in
+                            return BridgeInvokeResponse(
+                                id: req.id,
+                                ok: false,
+                                error: OpenClawNodeError(
+                                    code: .unavailable,
+                                    message: "UNAVAILABLE: operator connection does not handle invokes"))
+                        })
+                    if Task.isCancelled { break }
+                    attempt = 0
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                } catch {
+                    if Task.isCancelled { break }
+                    attempt += 1
+                    await MainActor.run { self.operatorGatewayStatusText = "Error: \(error.localizedDescription)" }
+                    let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
+                    try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+                }
+            }
+            await MainActor.run { self.operatorGatewayStatusText = "Offline" }
+        }
+
+        let sessionBox = nodeSessionBox
 
         self.gatewayTask = Task {
             var attempt = 0
@@ -239,7 +294,7 @@ final class NodeAppModel {
                         url: url,
                         token: token,
                         password: password,
-                        connectOptions: connectOptions,
+                        connectOptions: nodeConnectOptions,
                         sessionBox: sessionBox,
                         onConnected: { [weak self] in
                             guard let self else { return }
@@ -316,9 +371,12 @@ final class NodeAppModel {
     func disconnectGateway() {
         self.gatewayTask?.cancel()
         self.gatewayTask = nil
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
         Task { await self.gateway.disconnect() }
+        Task { await self.operatorGateway.disconnect() }
         self.gatewayStatusText = "Offline"
         self.gatewayServerName = nil
         self.gatewayRemoteAddress = nil
