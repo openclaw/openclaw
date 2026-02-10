@@ -112,16 +112,16 @@ openclaw models list | grep venice
 
 ## Which Model Should I Use?
 
-| Use Case                     | Recommended Model                | Why                                      |
-| ---------------------------- | -------------------------------- | ---------------------------------------- |
-| **General chat (default)**   | `kimi-k2-5`                      | Strong reasoning + vision, fully private |
-| **Best overall quality**     | `claude-opus-4-6`                | Opus 4.6 is the strongest for hard tasks |
-| **Privacy + Claude quality** | `claude-opus-45`                 | Best reasoning via anonymized proxy      |
-| **Coding**                   | `qwen3-coder-480b-a35b-instruct` | Code-optimized, 256k context             |
-| **Vision tasks**             | `kimi-k2-5`                      | Reasoning + vision, private              |
-| **Uncensored**               | `venice-uncensored`              | No content restrictions                  |
-| **Fast + cheap**             | `qwen3-4b`                       | Lightweight, still capable               |
-| **Complex reasoning**        | `deepseek-v3.2`                  | Strong reasoning, private                |
+| Use Case                    | Recommended Model                | Why                                      |
+| --------------------------- | -------------------------------- | ---------------------------------------- |
+| **General chat (default)**  | `kimi-k2-5`                      | Strong reasoning + vision, fully private |
+| **Best overall quality**    | `claude-opus-4-6`                | Opus 4.6 is the strongest for hard tasks |
+| **Claude via Venice proxy** | `claude-opus-45`                 | Anonymized proxy, metadata stripped      |
+| **Coding**                  | `qwen3-coder-480b-a35b-instruct` | Code-optimized, 256k context             |
+| **Vision tasks**            | `kimi-k2-5`                      | Reasoning + vision, private              |
+| **Uncensored**              | `venice-uncensored`              | No content restrictions                  |
+| **Fast + cheap**            | `qwen3-4b`                       | Lightweight, still capable               |
+| **Complex reasoning**       | `deepseek-v3.2`                  | Strong reasoning, private                |
 
 ## Available Models (28 Total)
 
