@@ -1,5 +1,14 @@
+networks:
+  openclaw-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
 services:
   openclaw-gateway:
+    networks:
+      - openclaw-net
     build:
       context: .
       dockerfile: Dockerfile
@@ -96,6 +105,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.sandbox-browser
+    networks:
+      openclaw-net:
+        ipv4_address: 172.20.0.10
     environment:
       OPENCLAW_BROWSER_HEADLESS: "1"
       OPENCLAW_BROWSER_CDP_PORT: "9222"

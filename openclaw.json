@@ -58,7 +58,7 @@
     "defaultProfile": "docker",
     "profiles": {
       "docker": {
-        "cdpUrl": "http://host.docker.internal:9222",
+        "cdpUrl": "http://172.20.0.10:9222",
         "color": "#00AA00"
       }
     }
