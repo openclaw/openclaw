@@ -58,11 +58,13 @@ export type ReplyDispatcherOptions = {
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
   onReplyStart?: () => Promise<void> | void;
   onIdle?: () => void;
+  /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
+  onCleanup?: () => void;
 };
 
 type ReplyDispatcherWithTypingResult = {
   dispatcher: ReplyDispatcher;
-  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController">;
+  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup">;
   markDispatchIdle: () => void;
 };
 
@@ -164,7 +166,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
-  const { onReplyStart, onIdle, ...dispatcherOptions } = options;
+  const { onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
   let typingController: TypingController | undefined;
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
@@ -178,6 +180,7 @@ export function createReplyDispatcherWithTyping(
     dispatcher,
     replyOptions: {
       onReplyStart,
+      onTypingCleanup: onCleanup,
       onTypingController: (typing) => {
         typingController = typing;
       },

@@ -31,6 +31,7 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
+import { setupOnboardingShellCompletion } from "./onboarding.completion.js";
 
 type FinalizeOnboardingOptions = {
   flow: WizardFlow;
@@ -249,11 +250,10 @@ export async function finalizeOnboardingWizard(
     customBindHost: settings.customBindHost,
     basePath: controlUiBasePath,
   });
-  const tokenParam =
+  const authedUrl =
     settings.authMode === "token" && settings.gatewayToken
-      ? `?token=${encodeURIComponent(settings.gatewayToken)}`
-      : "";
-  const authedUrl = `${links.httpUrl}${tokenParam}`;
+      ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
+      : links.httpUrl;
   const gatewayProbe = await probeGatewayReachable({
     url: links.wsUrl,
     token: settings.authMode === "token" ? settings.gatewayToken : undefined,
@@ -274,7 +274,9 @@ export async function finalizeOnboardingWizard(
   await prompter.note(
     [
       `Web UI: ${links.httpUrl}`,
-      tokenParam ? `Web UI (with token): ${authedUrl}` : undefined,
+      settings.authMode === "token" && settings.gatewayToken
+        ? `Web UI (with token): ${authedUrl}`
+        : undefined,
       `Gateway WS: ${links.wsUrl}`,
       gatewayStatusLine,
       "Docs: https://docs.openclaw.ai/web/control-ui",
@@ -307,8 +309,11 @@ export async function finalizeOnboardingWizard(
       [
         "Gateway token: shared auth for the Gateway + Control UI.",
         "Stored in: ~/.openclaw/openclaw.json (gateway.auth.token) or OPENCLAW_GATEWAY_TOKEN.",
+        `View token: ${formatCliCommand("openclaw config get gateway.auth.token")}`,
+        `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
         "Web UI stores a copy in this browser's localStorage (openclaw.control.settings.v1).",
-        `Get the tokenized link anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
+        `Open the dashboard anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
+        "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
       ].join("\n"),
       "Token",
     );
@@ -342,14 +347,14 @@ export async function finalizeOnboardingWizard(
           controlUiOpenHint = formatControlUiSshHint({
             port: settings.port,
             basePath: controlUiBasePath,
-            token: settings.gatewayToken,
+            token: settings.authMode === "token" ? settings.gatewayToken : undefined,
           });
         }
       } else {
         controlUiOpenHint = formatControlUiSshHint({
           port: settings.port,
           basePath: controlUiBasePath,
-          token: settings.gatewayToken,
+          token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         });
       }
       await prompter.note(
@@ -386,6 +391,8 @@ export async function finalizeOnboardingWizard(
     "Running agents on your computer is risky — harden your setup: https://docs.openclaw.ai/security",
     "Security",
   );
+
+  await setupOnboardingShellCompletion({ flow, prompter });
 
   const shouldOpenControlUi =
     !opts.skipUi &&
@@ -460,10 +467,10 @@ export async function finalizeOnboardingWizard(
 
   await prompter.outro(
     controlUiOpened
-      ? "Onboarding complete. Dashboard opened with your token; keep that tab to control OpenClaw."
+      ? "Onboarding complete. Dashboard opened; keep that tab to control OpenClaw."
       : seededInBackground
-        ? "Onboarding complete. Web UI seeded in the background; open it anytime with the tokenized link above."
-        : "Onboarding complete. Use the tokenized dashboard link above to control OpenClaw.",
+        ? "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above."
+        : "Onboarding complete. Use the dashboard link above to control OpenClaw.",
   );
 
   return { launchedTui };

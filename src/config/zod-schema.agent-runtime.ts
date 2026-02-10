@@ -24,6 +24,7 @@ export const HeartbeatSchema = z
     includeReasoning: z.boolean().optional(),
     target: z.string().optional(),
     to: z.string().optional(),
+    accountId: z.string().optional(),
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
   })
@@ -170,7 +171,7 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
 export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    provider: z.union([z.literal("brave"), z.literal("perplexity")]).optional(),
+    provider: z.union([z.literal("brave"), z.literal("perplexity"), z.literal("grok")]).optional(),
     apiKey: z.string().optional(),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
@@ -183,6 +184,14 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    grok: z
+      .object({
+        apiKey: z.string().optional(),
+        model: z.string().optional(),
+        inlineCitations: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -191,6 +200,7 @@ export const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
     maxChars: z.number().int().positive().optional(),
+    maxCharsCap: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
@@ -316,7 +326,9 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    provider: z.union([z.literal("openai"), z.literal("local"), z.literal("gemini")]).optional(),
+    provider: z
+      .union([z.literal("openai"), z.literal("local"), z.literal("gemini"), z.literal("voyage")])
+      .optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
@@ -336,7 +348,13 @@ export const MemorySearchSchema = z
       .strict()
       .optional(),
     fallback: z
-      .union([z.literal("openai"), z.literal("gemini"), z.literal("local"), z.literal("none")])
+      .union([
+        z.literal("openai"),
+        z.literal("gemini"),
+        z.literal("local"),
+        z.literal("voyage"),
+        z.literal("none"),
+      ])
       .optional(),
     model: z.string().optional(),
     local: z

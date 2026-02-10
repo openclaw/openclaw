@@ -564,27 +564,51 @@
 
 /* Compaction indicator */
 .compaction-indicator {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
-  padding: 10px 12px;
+  line-height: 1.2;
+  padding: 6px 14px;
   margin-bottom: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+  color: var(--text);
+  white-space: nowrap;
+  user-select: none;
   animation: fade-in 0.2s var(--ease-out);
+}
+
+.compaction-indicator svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
 }
 
 .compaction-indicator--active {
-  animation: compaction-pulse 1.5s ease-in-out infinite;
+  color: var(--info);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.compaction-indicator--active svg {
+  animation: compaction-spin 1s linear infinite;
 }
 
 .compaction-indicator--complete {
-  animation: fade-in 0.2s var(--ease-out);
+  color: var(--ok);
+  border-color: rgba(34, 197, 94, 0.35);
 }
 
-@keyframes compaction-pulse {
-  0%,
-  100% {
-    opacity: 0.7;
-  }
-  50% {
-    opacity: 1;
+@keyframes compaction-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -681,6 +705,138 @@
   width: 100%;
 }
 
+/* Cron jobs: allow long payload/state text and keep action buttons inside the card. */
+.cron-job-payload,
+.cron-job-agent,
+.cron-job-state {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.cron-job .list-title {
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.015em;
+}
+
+.cron-job {
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+  grid-template-areas:
+    "main meta"
+    "footer footer";
+  row-gap: 10px;
+}
+
+.cron-job .list-main {
+  grid-area: main;
+}
+
+.cron-job .list-meta {
+  grid-area: meta;
+  min-width: 240px;
+  gap: 8px;
+}
+
+.cron-job-footer {
+  grid-area: footer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.cron-job-chips {
+  flex: 1 1 auto;
+}
+
+.cron-job-detail {
+  display: grid;
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.cron-job-detail-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.cron-job-detail-value {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.cron-job-state {
+  display: grid;
+  gap: 4px;
+}
+
+.cron-job-state-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.cron-job-state-key {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.cron-job-state-value {
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cron-job-status-pill {
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  text-transform: lowercase;
+}
+
+.cron-job-status-ok {
+  color: var(--ok);
+  border-color: rgba(34, 197, 94, 0.35);
+  background: var(--ok-subtle);
+}
+
+.cron-job-status-error {
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.35);
+  background: var(--danger-subtle);
+}
+
+.cron-job-status-skipped {
+  color: var(--warn);
+  border-color: rgba(245, 158, 11, 0.35);
+  background: var(--warn-subtle);
+}
+
+.cron-job-status-na {
+  color: var(--muted);
+}
+
+.cron-job-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-top: 0;
+}
+
+.cron-job-actions .btn {
+  flex: 0 0 auto;
+}
+
 @container (max-width: 560px) {
   .list-item {
     grid-template-columns: 1fr;
@@ -689,6 +845,23 @@
   .list-meta {
     min-width: 0;
     text-align: left;
+  }
+
+  .cron-job-actions {
+    justify-content: flex-start;
+  }
+
+  .cron-job {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "main"
+      "meta"
+      "footer";
+  }
+
+  .cron-job-footer {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 
@@ -737,6 +910,12 @@
   background: var(--warn-subtle);
 }
 
+.chip-danger {
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.3);
+  background: var(--danger-subtle);
+}
+
 /* ===========================================
    Tables
    =========================================== */
@@ -781,6 +960,22 @@
 
 .session-link:hover {
   text-decoration: underline;
+}
+
+.session-key-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.session-key-cell .session-link,
+.session-key-display-name {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.session-key-display-name {
+  font-size: 11px;
 }
 
 /* ===========================================
@@ -997,6 +1192,16 @@
 .chat-queue__remove {
   align-self: start;
   padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* New messages indicator */
+.chat-new-messages {
+  align-self: center;
+  margin: 8px auto 0;
+  border-radius: 999px;
+  padding: 6px 12px;
   font-size: 12px;
   line-height: 1;
 }
@@ -1649,6 +1854,13 @@
 .agent-kv {
   display: grid;
   gap: 6px;
+  min-width: 0;
+}
+
+.agent-kv > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .agent-kv-sub {

@@ -16,6 +16,7 @@ const zaloAccountSchema = z.object({
   allowFrom: z.array(allowFromEntry).optional(),
   mediaMaxMb: z.number().optional(),
   proxy: z.string().optional(),
+  responsePrefix: z.string().optional(),
 });
 
 export const ZaloConfigSchema = zaloAccountSchema.extend({

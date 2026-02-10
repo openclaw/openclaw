@@ -1,6 +1,7 @@
+import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+export type { DmPolicy, GroupPolicy };
+
 export type ReplyToMode = "off" | "first" | "all";
-export type GroupPolicy = "open" | "disabled" | "allowlist";
-export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
 export type MatrixDmConfig = {
   /** If false, ignore all incoming Matrix DMs. Default: true. */
@@ -71,6 +72,8 @@ export type MatrixConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
   /** Auto-join invites (always|allowlist|off). Default: always. */
@@ -90,6 +93,19 @@ export type MatrixConfig = {
 export type CoreConfig = {
   channels?: {
     matrix?: MatrixConfig;
+    defaults?: {
+      groupPolicy?: "open" | "allowlist" | "disabled";
+    };
+  };
+  commands?: {
+    useAccessGroups?: boolean;
+  };
+  session?: {
+    store?: string;
+  };
+  messages?: {
+    ackReaction?: string;
+    ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
   };
   [key: string]: unknown;
 };

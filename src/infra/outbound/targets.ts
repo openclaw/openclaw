@@ -8,6 +8,7 @@ import type {
 } from "../../utils/message-channel.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -207,11 +208,37 @@ export function resolveHeartbeatDeliveryTarget(params: {
     mode: "heartbeat",
   });
 
+  const heartbeatAccountId = heartbeat?.accountId?.trim();
+  // Use explicit accountId from heartbeat config if provided, otherwise fall back to session
+  let effectiveAccountId = heartbeatAccountId || resolvedTarget.accountId;
+
+  if (heartbeatAccountId && resolvedTarget.channel) {
+    const plugin = getChannelPlugin(resolvedTarget.channel);
+    const listAccountIds = plugin?.config.listAccountIds;
+    const accountIds = listAccountIds ? listAccountIds(cfg) : [];
+    if (accountIds.length > 0) {
+      const normalizedAccountId = normalizeAccountId(heartbeatAccountId);
+      const normalizedAccountIds = new Set(
+        accountIds.map((accountId) => normalizeAccountId(accountId)),
+      );
+      if (!normalizedAccountIds.has(normalizedAccountId)) {
+        return {
+          channel: "none",
+          reason: "unknown-account",
+          accountId: normalizedAccountId,
+          lastChannel: resolvedTarget.lastChannel,
+          lastAccountId: resolvedTarget.lastAccountId,
+        };
+      }
+      effectiveAccountId = normalizedAccountId;
+    }
+  }
+
   if (!resolvedTarget.channel || !resolvedTarget.to) {
     return {
       channel: "none",
       reason: "no-target",
-      accountId: resolvedTarget.accountId,
+      accountId: effectiveAccountId,
       lastChannel: resolvedTarget.lastChannel,
       lastAccountId: resolvedTarget.lastAccountId,
     };
@@ -221,14 +248,14 @@ export function resolveHeartbeatDeliveryTarget(params: {
     channel: resolvedTarget.channel,
     to: resolvedTarget.to,
     cfg,
-    accountId: resolvedTarget.accountId,
+    accountId: effectiveAccountId,
     mode: "heartbeat",
   });
   if (!resolved.ok) {
     return {
       channel: "none",
       reason: "no-target",
-      accountId: resolvedTarget.accountId,
+      accountId: effectiveAccountId,
       lastChannel: resolvedTarget.lastChannel,
       lastAccountId: resolvedTarget.lastAccountId,
     };
@@ -241,7 +268,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
       channel: resolvedTarget.channel,
       to: resolvedTarget.to,
       cfg,
-      accountId: resolvedTarget.accountId,
+      accountId: effectiveAccountId,
       mode: "explicit",
     });
     if (explicit.ok && explicit.to !== resolved.to) {
@@ -253,7 +280,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     channel: resolvedTarget.channel,
     to: resolved.to,
     reason,
-    accountId: resolvedTarget.accountId,
+    accountId: effectiveAccountId,
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
   };
@@ -301,11 +328,13 @@ export function resolveHeartbeatSenderContext(params: {
 }): HeartbeatSenderContext {
   const provider =
     params.delivery.channel !== "none" ? params.delivery.channel : params.delivery.lastChannel;
+  const accountId =
+    params.delivery.accountId ??
+    (provider === params.delivery.lastChannel ? params.delivery.lastAccountId : undefined);
   const allowFrom = provider
     ? (getChannelPlugin(provider)?.config.resolveAllowFrom?.({
         cfg: params.cfg,
-        accountId:
-          provider === params.delivery.lastChannel ? params.delivery.lastAccountId : undefined,
+        accountId,
       }) ?? [])
     : [];
 

@@ -9,7 +9,10 @@ import type {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import {
+  resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
+} from "../agents/model-selection.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -26,6 +29,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import {
   readFirstUserMessageFromTranscript,
@@ -522,12 +526,15 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
 export function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?: SessionEntry,
+  agentId?: string,
 ): { provider: string; model: string } {
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+  const resolved = agentId
+    ? resolveDefaultModelForAgent({ cfg, agentId })
+    : resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
   let provider = resolved.provider;
   let model = resolved.model;
   const storedModelOverride = entry?.modelOverride?.trim();
@@ -562,6 +569,9 @@ export function listSessionsFromStore(params: {
 
   let sessions = Object.entries(store)
     .filter(([key]) => {
+      if (isCronRunSessionKey(key)) {
+        return false;
+      }
       if (!includeGlobal && key === "global") {
         return false;
       }
@@ -623,6 +633,11 @@ export function listSessionsFromStore(params: {
         entry?.label ??
         originLabel;
       const deliveryFields = normalizeSessionDeliveryFields(entry);
+      const parsedAgent = parseAgentSessionKey(key);
+      const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
+      const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+      const modelProvider = resolvedModel.provider ?? DEFAULT_PROVIDER;
+      const model = resolvedModel.model ?? DEFAULT_MODEL;
       return {
         key,
         entry,
@@ -648,8 +663,8 @@ export function listSessionsFromStore(params: {
         outputTokens: entry?.outputTokens,
         totalTokens: total,
         responseUsage: entry?.responseUsage,
-        modelProvider: entry?.modelProvider,
-        model: entry?.model,
+        modelProvider,
+        model,
         contextTokens: entry?.contextTokens,
         deliveryContext: deliveryFields.deliveryContext,
         lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,

@@ -7,7 +7,6 @@ import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
 import {
   formatInboundEnvelope,
-  formatThreadStarterEnvelope,
   resolveEnvelopeFormatOptions,
 } from "../../../auto-reply/envelope.js";
 import {
@@ -36,6 +35,7 @@ import { buildPairingReply } from "../../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+import { buildUntrustedChannelMetadata } from "../../../security/channel-metadata.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
@@ -187,7 +187,7 @@ export async function prepareSlackMessage(params: {
     accountId: account.accountId,
     teamId: ctx.teamId || undefined,
     peer: {
-      kind: isDirectMessage ? "dm" : isRoom ? "channel" : "group",
+      kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
       id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
     },
   });
@@ -440,15 +440,16 @@ export async function prepareSlackMessage(params: {
 
   const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
 
-  const channelDescription = [channelInfo?.topic, channelInfo?.purpose]
-    .map((entry) => entry?.trim())
-    .filter((entry): entry is string => Boolean(entry))
-    .filter((entry, index, list) => list.indexOf(entry) === index)
-    .join("\n");
-  const systemPromptParts = [
-    channelDescription ? `Channel description: ${channelDescription}` : null,
-    channelConfig?.systemPrompt?.trim() || null,
-  ].filter((entry): entry is string => Boolean(entry));
+  const untrustedChannelMetadata = isRoomish
+    ? buildUntrustedChannelMetadata({
+        source: "slack",
+        label: "Slack channel description",
+        entries: [channelInfo?.topic, channelInfo?.purpose],
+      })
+    : undefined;
+  const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
+    (entry): entry is string => Boolean(entry),
+  );
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
 
@@ -462,16 +463,8 @@ export async function prepareSlackMessage(params: {
       client: ctx.app.client,
     });
     if (starter?.text) {
-      const starterUser = starter.userId ? await ctx.resolveUserName(starter.userId) : null;
-      const starterName = starterUser?.name ?? starter.userId ?? "Unknown";
-      const starterWithId = `${starter.text}\n[slack message id: ${starter.ts ?? threadTs} channel: ${message.channel}]`;
-      threadStarterBody = formatThreadStarterEnvelope({
-        channel: "Slack",
-        author: starterName,
-        timestamp: starter.ts ? Math.round(Number(starter.ts) * 1000) : undefined,
-        body: starterWithId,
-        envelope: envelopeOptions,
-      });
+      // Keep thread starter as raw text; metadata is provided out-of-band in the system prompt.
+      threadStarterBody = starter.text;
       const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
       threadLabel = `Slack thread ${roomLabel}${snippet ? `: ${snippet}` : ""}`;
       // If current message has no files but thread starter does, fetch starter's files
@@ -495,8 +488,19 @@ export async function prepareSlackMessage(params: {
   // Use thread starter media if current message has none
   const effectiveMedia = media ?? threadStarterMedia;
 
+  const inboundHistory =
+    isRoomish && ctx.historyLimit > 0
+      ? (ctx.channelHistories.get(historyKey) ?? []).map((entry) => ({
+          sender: entry.sender,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }))
+      : undefined;
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
+    BodyForAgent: rawBody,
+    InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: slackFrom,
@@ -507,6 +511,7 @@ export async function prepareSlackMessage(params: {
     ConversationLabel: envelopeFrom,
     GroupSubject: isRoomish ? roomLabel : undefined,
     GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
+    UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
     SenderName: senderName,
     SenderId: senderId,
     Provider: "slack" as const,

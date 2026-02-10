@@ -38,6 +38,8 @@ export type DiscordGuildChannelConfig = {
   users?: Array<string | number>;
   /** Optional system prompt snippet for this channel. */
   systemPrompt?: string;
+  /** If false, omit thread starter context for this channel (default: true). */
+  includeThreadStarter?: boolean;
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -73,6 +75,8 @@ export type DiscordActionConfig = {
   emojiUploads?: boolean;
   stickerUploads?: boolean;
   channels?: boolean;
+  /** Enable bot presence/activity changes (default: false). */
+  presence?: boolean;
 };
 
 export type DiscordIntentsConfig = {
@@ -91,6 +95,13 @@ export type DiscordExecApprovalConfig = {
   agentFilter?: string[];
   /** Only forward approvals matching these session key patterns (substring or regex). */
   sessionFilter?: string[];
+  /** Delete approval DMs after approval, denial, or timeout. Default: false. */
+  cleanupAfterResolve?: boolean;
+};
+
+export type DiscordAgentComponentsConfig = {
+  /** Enable agent-controlled interactive components (buttons, select menus). Default: true. */
+  enabled?: boolean;
 };
 
 export type DiscordAccountConfig = {
@@ -149,10 +160,14 @@ export type DiscordAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
+  /** Agent-controlled interactive components (buttons, select menus). */
+  agentComponents?: DiscordAgentComponentsConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** PluralKit identity resolution for proxied messages. */
   pluralkit?: DiscordPluralKitConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };
 
 export type DiscordConfig = {

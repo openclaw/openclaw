@@ -306,12 +306,18 @@ export function registerBrowserAgentActRoutes(
             return jsonError(res, 400, "fn is required");
           }
           const ref = toStringOrEmpty(body.ref) || undefined;
-          const result = await pw.evaluateViaPlaywright({
+          const evalTimeoutMs = toNumber(body.timeoutMs);
+          const evalRequest: Parameters<typeof pw.evaluateViaPlaywright>[0] = {
             cdpUrl,
             targetId: tab.targetId,
             fn,
             ref,
-          });
+            signal: req.signal,
+          };
+          if (evalTimeoutMs !== undefined) {
+            evalRequest.timeoutMs = evalTimeoutMs;
+          }
+          const result = await pw.evaluateViaPlaywright(evalRequest);
           return res.json({
             ok: true,
             targetId: tab.targetId,

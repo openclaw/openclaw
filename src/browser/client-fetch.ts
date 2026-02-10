@@ -23,10 +23,10 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     msgLower.includes("aborterror");
   if (looksLikeTimeout) {
     return new Error(
-      `Can't reach the openclaw browser control service (timed out after ${timeoutMs}ms). ${hint}`,
+      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${hint}`,
     );
   }
-  return new Error(`Can't reach the openclaw browser control service. ${hint} (${msg})`);
+  return new Error(`Can't reach the OpenClaw browser control service. ${hint} (${msg})`);
 }
 
 async function fetchHttpJson<T>(
@@ -35,7 +35,18 @@ async function fetchHttpJson<T>(
 ): Promise<T> {
   const timeoutMs = init.timeoutMs ?? 5000;
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const upstreamSignal = init.signal;
+  let upstreamAbortListener: (() => void) | undefined;
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) {
+      ctrl.abort(upstreamSignal.reason);
+    } else {
+      upstreamAbortListener = () => ctrl.abort(upstreamSignal.reason);
+      upstreamSignal.addEventListener("abort", upstreamAbortListener, { once: true });
+    }
+  }
+
+  const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
   try {
     const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
@@ -45,6 +56,9 @@ async function fetchHttpJson<T>(
     return (await res.json()) as T;
   } finally {
     clearTimeout(t);
+    if (upstreamSignal && upstreamAbortListener) {
+      upstreamSignal.removeEventListener("abort", upstreamAbortListener);
+    }
   }
 }
 
@@ -75,6 +89,32 @@ export async function fetchBrowserJson<T>(
         // keep as string
       }
     }
+
+    const abortCtrl = new AbortController();
+    const upstreamSignal = init?.signal;
+    let upstreamAbortListener: (() => void) | undefined;
+    if (upstreamSignal) {
+      if (upstreamSignal.aborted) {
+        abortCtrl.abort(upstreamSignal.reason);
+      } else {
+        upstreamAbortListener = () => abortCtrl.abort(upstreamSignal.reason);
+        upstreamSignal.addEventListener("abort", upstreamAbortListener, { once: true });
+      }
+    }
+
+    let abortListener: (() => void) | undefined;
+    const abortPromise: Promise<never> = abortCtrl.signal.aborted
+      ? Promise.reject(abortCtrl.signal.reason ?? new Error("aborted"))
+      : new Promise((_, reject) => {
+          abortListener = () => reject(abortCtrl.signal.reason ?? new Error("aborted"));
+          abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
+        });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (timeoutMs) {
+      timer = setTimeout(() => abortCtrl.abort(new Error("timed out")), timeoutMs);
+    }
+
     const dispatchPromise = dispatcher.dispatch({
       method:
         init?.method?.toUpperCase() === "DELETE"
@@ -85,16 +125,20 @@ export async function fetchBrowserJson<T>(
       path: parsed.pathname,
       query,
       body,
+      signal: abortCtrl.signal,
     });
 
-    const result = await (timeoutMs
-      ? Promise.race([
-          dispatchPromise,
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("timed out")), timeoutMs),
-          ),
-        ])
-      : dispatchPromise);
+    const result = await Promise.race([dispatchPromise, abortPromise]).finally(() => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (abortListener) {
+        abortCtrl.signal.removeEventListener("abort", abortListener);
+      }
+      if (upstreamSignal && upstreamAbortListener) {
+        upstreamSignal.removeEventListener("abort", upstreamAbortListener);
+      }
+    });
 
     if (result.status >= 400) {
       const message =

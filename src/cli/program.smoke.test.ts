@@ -10,6 +10,9 @@ const callGateway = vi.fn();
 const runChannelLogin = vi.fn();
 const runChannelLogout = vi.fn();
 const runTui = vi.fn();
+const loadAndMaybeMigrateDoctorConfig = vi.fn();
+const ensureConfigReady = vi.fn();
+const ensurePluginRegistryLoaded = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -18,6 +21,10 @@ const runtime = {
     throw new Error("exit");
   }),
 };
+
+vi.mock("./plugin-registry.js", () => ({
+  ensurePluginRegistryLoaded: () => undefined,
+}));
 
 vi.mock("../commands/message.js", () => ({ messageCommand }));
 vi.mock("../commands/status.js", () => ({ statusCommand }));
@@ -37,9 +44,14 @@ vi.mock("../commands/configure.js", () => ({
 }));
 vi.mock("../commands/setup.js", () => ({ setupCommand }));
 vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
+vi.mock("../commands/doctor-config-flow.js", () => ({
+  loadAndMaybeMigrateDoctorConfig,
+}));
 vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
 vi.mock("./channel-auth.js", () => ({ runChannelLogin, runChannelLogout }));
 vi.mock("../tui/tui.js", () => ({ runTui }));
+vi.mock("./plugin-registry.js", () => ({ ensurePluginRegistryLoaded }));
+vi.mock("./program/config-guard.js", () => ({ ensureConfigReady }));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
   randomIdempotencyKey: () => "idem-test",
@@ -50,6 +62,7 @@ vi.mock("../gateway/call.js", () => ({
   }),
 }));
 vi.mock("./deps.js", () => ({ createDefaultDeps: () => ({}) }));
+vi.mock("./preaction.js", () => ({ registerPreActionHooks: () => {} }));
 
 const { buildProgram } = await import("./program.js");
 
@@ -57,6 +70,7 @@ describe("cli program (smoke)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
+    ensureConfigReady.mockResolvedValue(undefined);
   });
 
   it("runs message with required options", async () => {
@@ -162,6 +176,18 @@ describe("cli program (smoke)", () => {
         authChoice: "moonshot-api-key",
         flag: "--moonshot-api-key",
         key: "sk-moonshot-test",
+        field: "moonshotApiKey",
+      },
+      {
+        authChoice: "together-api-key",
+        flag: "--together-api-key",
+        key: "sk-together-test",
+        field: "togetherApiKey",
+      },
+      {
+        authChoice: "moonshot-api-key-cn",
+        flag: "--moonshot-api-key",
+        key: "sk-moonshot-cn-test",
         field: "moonshotApiKey",
       },
       {

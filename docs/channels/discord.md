@@ -100,7 +100,7 @@ In **Bot** → **Privileged Gateway Intents**, enable:
 - **Message Content Intent** (required to read message text in most guilds; without it you’ll see “Used disallowed intents” or the bot will connect but not react to messages)
 - **Server Members Intent** (recommended; required for some member/user lookups and allowlist matching in guilds)
 
-You usually do **not** need **Presence Intent**.
+You usually do **not** need **Presence Intent**. Setting the bot's own presence (`setPresence` action) uses gateway OP3 and does not require this intent; it is only needed if you want to receive presence updates about other guild members.
 
 ### 3) Generate an invite URL (OAuth2 URL Generator)
 
@@ -196,6 +196,7 @@ Notes:
 - If `channels` is present, any channel not listed is denied by default.
 - Use a `"*"` channel entry to apply defaults across all channels; explicit channel entries override the wildcard.
 - Threads inherit parent channel config (allowlist, `requireMention`, skills, prompts, etc.) unless you add the thread channel id explicitly.
+- Owner hint: when a per-guild or per-channel `users` allowlist matches the sender, OpenClaw treats that sender as the owner in the system prompt. For a global owner across channels, set `commands.ownerAllowFrom`.
 - Bot-authored messages are ignored by default; set `channels.discord.allowBots=true` to allow them (own messages remain filtered).
 - Warning: If you allow replies to other bots (`channels.discord.allowBots=true`), prevent bot-to-bot reply loops with `requireMention`, `channels.discord.guilds.*.channels.<id>.users` allowlists, and/or clear guardrails in `AGENTS.md` and `SOUL.md`.
 
@@ -278,6 +279,7 @@ Outbound Discord API calls retry on rate limits (429) using Discord `retry_after
         voiceStatus: true,
         events: true,
         moderation: false,
+        presence: false,
       },
       replyToMode: "off",
       dm: {
@@ -333,7 +335,7 @@ ack reaction after the bot replies.
 - `guilds.<id>.channels.<channel>.toolsBySender`: optional per-sender tool policy overrides within the channel (`"*"` wildcard supported).
 - `guilds.<id>.channels.<channel>.users`: optional per-channel user allowlist.
 - `guilds.<id>.channels.<channel>.skills`: skill filter (omit = all skills, empty = none).
-- `guilds.<id>.channels.<channel>.systemPrompt`: extra system prompt for the channel (combined with channel topic).
+- `guilds.<id>.channels.<channel>.systemPrompt`: extra system prompt for the channel. Discord channel topics are injected as **untrusted** context (not system prompt).
 - `guilds.<id>.channels.<channel>.enabled`: set `false` to disable the channel.
 - `guilds.<id>.channels`: channel rules (keys are channel slugs or ids).
 - `guilds.<id>.requireMention`: per-guild mention requirement (overridable per channel).
@@ -353,7 +355,8 @@ ack reaction after the bot replies.
   - `channels` (create/edit/delete channels + categories + permissions)
   - `roles` (role add/remove, default `false`)
   - `moderation` (timeout/kick/ban, default `false`)
-- `execApprovals`: Discord-only exec approval DMs (button UI). Supports `enabled`, `approvers`, `agentFilter`, `sessionFilter`.
+  - `presence` (bot status/activity, default `false`)
+- `execApprovals`: Discord-only exec approval DMs (button UI). Supports `enabled`, `approvers`, `agentFilter`, `sessionFilter`, `cleanupAfterResolve`.
 
 Reaction notifications use `guilds.<id>.reactionNotifications`:
 
@@ -412,6 +415,7 @@ Allowlist notes (PK-enabled):
 | events         | enabled  | List/create scheduled events       |
 | roles          | disabled | Role add/remove                    |
 | moderation     | disabled | Timeout/kick/ban                   |
+| presence       | disabled | Bot status/activity (setPresence)  |
 
 - `replyToMode`: `off` (default), `first`, or `all`. Applies only when the model includes a reply tag.
 
@@ -460,6 +464,7 @@ The agent can call `discord` with actions like:
 - `searchMessages`, `memberInfo`, `roleInfo`, `roleAdd`, `roleRemove`, `emojiList`
 - `channelInfo`, `channelList`, `voiceStatus`, `eventList`, `eventCreate`
 - `timeout`, `kick`, `ban`
+- `setPresence` (bot activity and online status)
 
 Discord message ids are surfaced in the injected context (`[discord message id: …]` and history lines) so the agent can target them.
 Emoji can be unicode (e.g., `✅`) or custom emoji syntax like `<:party_blob:1234567890>`.

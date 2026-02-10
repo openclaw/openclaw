@@ -17,6 +17,7 @@ import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
+import { loadConfig } from "../../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -218,13 +219,14 @@ export async function preflightDiscordMessage(
     earlyThreadParentType = parentInfo.type;
   }
 
+  // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const route = resolveAgentRoute({
-    cfg: params.cfg,
+    cfg: loadConfig(),
     channel: "discord",
     accountId: params.accountId,
     guildId: params.data.guild_id ?? undefined,
     peer: {
-      kind: isDirectMessage ? "dm" : isGroupDm ? "group" : "channel",
+      kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
       id: isDirectMessage ? author.id : message.channelId,
     },
     // Pass parent peer for thread binding inheritance

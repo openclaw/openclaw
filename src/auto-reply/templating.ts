@@ -18,6 +18,15 @@ export type MsgContext = {
    */
   BodyForAgent?: string;
   /**
+   * Recent chat history for context (untrusted user content). Prefer passing this
+   * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
+   */
+  InboundHistory?: Array<{
+    sender: string;
+    body: string;
+    timestamp?: number;
+  }>;
+  /**
    * Raw message body without structural context (history, sender labels).
    * Legacy alias for CommandBody. Falls back to Body if not set.
    */
@@ -56,6 +65,8 @@ export type MsgContext = {
   ForwardedFromUsername?: string;
   ForwardedFromTitle?: string;
   ForwardedFromSignature?: string;
+  ForwardedFromChatType?: string;
+  ForwardedFromMessageId?: number;
   ForwardedDate?: number;
   ThreadStarterBody?: string;
   ThreadLabel?: string;
@@ -87,6 +98,10 @@ export type MsgContext = {
   GroupSpace?: string;
   GroupMembers?: string;
   GroupSystemPrompt?: string;
+  /** Untrusted metadata that must not be treated as system instructions. */
+  UntrustedContext?: string[];
+  /** Explicit owner allowlist overrides (trusted, configuration-derived). */
+  OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
   SenderUsername?: string;
@@ -101,6 +116,8 @@ export type MsgContext = {
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
+  /** Gateway client scopes when the message originates from the gateway. */
+  GatewayClientScopes?: string[];
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
   /** Telegram forum supergroup marker. */

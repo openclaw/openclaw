@@ -18,7 +18,7 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 - OpenClaw talks to it through its REST API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
 - Incoming messages arrive via webhooks; outgoing replies, typing indicators, read receipts, and tapbacks are REST calls.
 - Attachments and stickers are ingested as inbound media (and surfaced to the agent when possible).
-- Pairing/allowlist works the same way as other channels (`/start/pairing` etc) with `channels.bluebubbles.allowFrom` + pairing codes.
+- Pairing/allowlist works the same way as other channels (`/channels/pairing` etc) with `channels.bluebubbles.allowFrom` + pairing codes.
 - Reactions are surfaced as system events just like Slack/Telegram so agents can "mention" them before replying.
 - Advanced features: edit, unsend, reply threading, message effects, group management.
 
@@ -27,6 +27,7 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 1. Install the BlueBubbles server on your Mac (follow the instructions at [bluebubbles.app/install](https://bluebubbles.app/install)).
 2. In the BlueBubbles config, enable the web API and set a password.
 3. Run `openclaw onboard` and select BlueBubbles, or configure manually:
+
    ```json5
    {
      channels: {
@@ -39,8 +40,83 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
      },
    }
    ```
+
 4. Point BlueBubbles webhooks to your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
 5. Start the gateway; it will register the webhook handler and start pairing.
+
+## Keeping Messages.app alive (VM / headless setups)
+
+Some macOS VM / always-on setups can end up with Messages.app going “idle” (incoming events stop until the app is opened/foregrounded). A simple workaround is to **poke Messages every 5 minutes** using an AppleScript + LaunchAgent.
+
+### 1) Save the AppleScript
+
+Save this as:
+
+- `~/Scripts/poke-messages.scpt`
+
+Example script (non-interactive; does not steal focus):
+
+```applescript
+try
+  tell application "Messages"
+    if not running then
+      launch
+    end if
+
+    -- Touch the scripting interface to keep the process responsive.
+    set _chatCount to (count of chats)
+  end tell
+on error
+  -- Ignore transient failures (first-run prompts, locked session, etc).
+end try
+```
+
+### 2) Install a LaunchAgent
+
+Save this as:
+
+- `~/Library/LaunchAgents/com.user.poke-messages.plist`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.user.poke-messages</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>-lc</string>
+      <string>/usr/bin/osascript &quot;$HOME/Scripts/poke-messages.scpt&quot;</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/poke-messages.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/poke-messages.err</string>
+  </dict>
+</plist>
+```
+
+Notes:
+
+- This runs **every 300 seconds** and **on login**.
+- The first run may trigger macOS **Automation** prompts (`osascript` → Messages). Approve them in the same user session that runs the LaunchAgent.
+
+Load it:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.user.poke-messages.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
+```
 
 ## Onboarding
 
@@ -73,7 +149,7 @@ DMs:
 - Approve via:
   - `openclaw pairing list bluebubbles`
   - `openclaw pairing approve bluebubbles <CODE>`
-- Pairing is the default token exchange. Details: [Pairing](/start/pairing)
+- Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 
 Groups:
 
@@ -261,4 +337,4 @@ Prefer `chat_guid` for stable routing:
 - OpenClaw auto-hides known-broken actions based on the BlueBubbles server's macOS version. If edit still appears on macOS 26 (Tahoe), disable it manually with `channels.bluebubbles.actions.edit=false`.
 - For status/health info: `openclaw status --all` or `openclaw status --deep`.
 
-For general channel workflow reference, see [Channels](/channels) and the [Plugins](/plugins) guide.
+For general channel workflow reference, see [Channels](/channels) and the [Plugins](/tools/plugin) guide.

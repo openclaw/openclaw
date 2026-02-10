@@ -55,7 +55,7 @@ export function buildCronSchedule(form: CronFormState) {
     if (!Number.isFinite(ms)) {
       throw new Error("Invalid run time.");
     }
-    return { kind: "at" as const, atMs: ms };
+    return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
     const amount = toNumber(form.everyAmount, 0);
@@ -88,20 +88,8 @@ export function buildCronPayload(form: CronFormState) {
   const payload: {
     kind: "agentTurn";
     message: string;
-    deliver?: boolean;
-    channel?: string;
-    to?: string;
     timeoutSeconds?: number;
   } = { kind: "agentTurn", message };
-  if (form.deliver) {
-    payload.deliver = true;
-  }
-  if (form.channel) {
-    payload.channel = form.channel;
-  }
-  if (form.to.trim()) {
-    payload.to = form.to.trim();
-  }
   const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
   if (timeoutSeconds > 0) {
     payload.timeoutSeconds = timeoutSeconds;
@@ -118,6 +106,16 @@ export async function addCronJob(state: CronState) {
   try {
     const schedule = buildCronSchedule(state.cronForm);
     const payload = buildCronPayload(state.cronForm);
+    const delivery =
+      state.cronForm.sessionTarget === "isolated" &&
+      state.cronForm.payloadKind === "agentTurn" &&
+      state.cronForm.deliveryMode
+        ? {
+            mode: state.cronForm.deliveryMode === "announce" ? "announce" : "none",
+            channel: state.cronForm.deliveryChannel.trim() || "last",
+            to: state.cronForm.deliveryTo.trim() || undefined,
+          }
+        : undefined;
     const agentId = state.cronForm.agentId.trim();
     const job = {
       name: state.cronForm.name.trim(),
@@ -128,10 +126,7 @@ export async function addCronJob(state: CronState) {
       sessionTarget: state.cronForm.sessionTarget,
       wakeMode: state.cronForm.wakeMode,
       payload,
-      isolation:
-        state.cronForm.postToMainPrefix.trim() && state.cronForm.sessionTarget === "isolated"
-          ? { postToMainPrefix: state.cronForm.postToMainPrefix.trim() }
-          : undefined,
+      delivery,
     };
     if (!job.name) {
       throw new Error("Name required.");

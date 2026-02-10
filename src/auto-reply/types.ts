@@ -23,6 +23,8 @@ export type GetReplyOptions = {
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
   onReplyStart?: () => Promise<void> | void;
+  /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
+  onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
   isHeartbeat?: boolean;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;

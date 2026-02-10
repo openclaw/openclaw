@@ -6,6 +6,7 @@
  */
 
 import type { ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
@@ -68,6 +69,7 @@ async function processTwitchMessage(params: {
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: `twitch:user:${message.userId}`,
@@ -103,11 +105,18 @@ async function processTwitchMessage(params: {
     channel: "twitch",
     accountId,
   });
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    cfg,
+    agentId: route.agentId,
+    channel: "twitch",
+    accountId,
+  });
 
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
+      ...prefixOptions,
       deliver: async (payload) => {
         await deliverTwitchReply({
           payload,
@@ -120,6 +129,9 @@ async function processTwitchMessage(params: {
           statusSink,
         });
       },
+    },
+    replyOptions: {
+      onModelSelected,
     },
   });
 }

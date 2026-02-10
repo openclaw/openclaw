@@ -127,7 +127,9 @@ export async function runAgentTurnWithFallback(params: {
         if (!text) {
           return { skip: true };
         }
-        const sanitized = sanitizeUserFacingText(text);
+        const sanitized = sanitizeUserFacingText(text, {
+          errorContext: Boolean(payload.isError),
+        });
         if (!sanitized.trim()) {
           return { skip: true };
         }
@@ -178,6 +180,7 @@ export async function runAgentTurnWithFallback(params: {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
+                  agentId: params.followupRun.run.agentId,
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: params.followupRun.run.config,
@@ -255,6 +258,7 @@ export async function runAgentTurnWithFallback(params: {
           return runEmbeddedPiAgent({
             sessionId: params.followupRun.run.sessionId,
             sessionKey: params.sessionKey,
+            agentId: params.followupRun.run.agentId,
             messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
             agentAccountId: params.sessionCtx.AccountId,
             messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,

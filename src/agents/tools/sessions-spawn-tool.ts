@@ -214,6 +214,26 @@ export function createSessionsSpawnTool(opts?: {
           modelWarning = messageText;
         }
       }
+      if (thinkingOverride !== undefined) {
+        try {
+          await callGateway({
+            method: "sessions.patch",
+            params: {
+              key: childSessionKey,
+              thinkingLevel: thinkingOverride === "off" ? null : thinkingOverride,
+            },
+            timeoutMs: 10_000,
+          });
+        } catch (err) {
+          const messageText =
+            err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+          return jsonResult({
+            status: "error",
+            error: messageText,
+            childSessionKey,
+          });
+        }
+      }
       const childSystemPrompt = buildSubagentSystemPrompt({
         requesterSessionKey,
         requesterOrigin,
@@ -231,6 +251,10 @@ export function createSessionsSpawnTool(opts?: {
             message: task,
             sessionKey: childSessionKey,
             channel: requesterOrigin?.channel,
+            to: requesterOrigin?.to ?? undefined,
+            accountId: requesterOrigin?.accountId ?? undefined,
+            threadId:
+              requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
             idempotencyKey: childIdem,
             deliver: false,
             lane: AGENT_LANE_SUBAGENT,
