@@ -102,14 +102,15 @@ export function scrubPIIInMessages<T>(messages: T[]): T[] {
         return msg;
       }
 
-      const next = { ...(msg as any) };
+      const next = { ...(msg as Record<string, unknown>) };
       if (typeof next.content === "string") {
         next.content = scrubPII(next.content, patterns);
       } else if (Array.isArray(next.content)) {
-        next.content = next.content.map((block: any) => {
+        next.content = next.content.map((block: unknown) => {
           if (block && typeof block === "object") {
-            if (block.type === "text" && typeof block.text === "string") {
-              return { ...block, text: scrubPII(block.text, patterns) };
+            const b = block as Record<string, unknown>;
+            if (b.type === "text" && typeof b.text === "string") {
+              return { ...b, text: scrubPII(b.text, patterns) };
             }
           }
           return block;
