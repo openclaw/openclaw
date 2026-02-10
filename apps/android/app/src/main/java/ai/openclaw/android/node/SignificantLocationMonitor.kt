@@ -12,15 +12,15 @@ import kotlinx.serialization.json.buildJsonObject
  * `location.update` events to the gateway so the severance hook can
  * determine whether the user is at their configured work location.
  */
-class SignificantLocationMonitor(
-  private val scope: CoroutineScope,
-  private val location: LocationCaptureManager,
-  private val locationMode: StateFlow<LocationMode>,
-  private val hasFineLocationPermission: () -> Boolean,
-  private val hasCoarseLocationPermission: () -> Boolean,
-  private val sendNodeEvent: suspend (event: String, payloadJson: String) -> Unit,
-) {
-  fun start() {
+object SignificantLocationMonitor {
+  fun startIfNeeded(
+    scope: CoroutineScope,
+    location: LocationCaptureManager,
+    locationMode: StateFlow<LocationMode>,
+    hasFineLocationPermission: () -> Boolean,
+    hasCoarseLocationPermission: () -> Boolean,
+    sendNodeEvent: suspend (event: String, payloadJson: String) -> Unit,
+  ) {
     if (locationMode.value == LocationMode.Off) return
     if (!hasFineLocationPermission() && !hasCoarseLocationPermission()) return
     location.startMonitoringSignificantChanges { lat, lon, accuracyMeters ->

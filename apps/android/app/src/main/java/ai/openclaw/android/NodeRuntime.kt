@@ -571,47 +571,19 @@ class NodeRuntime(context: Context) {
     nodeSession.connect(endpoint, token, password, buildNodeConnectOptions(), tls)
   }
 
-  private fun hasRecordAudioPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
-        PackageManager.PERMISSION_GRANTED
-      )
-  }
+  private fun hasPermission(permission: String): Boolean =
+    ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
 
-  private fun hasFineLocationPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-      )
-  }
-
-  private fun hasCoarseLocationPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-      )
-  }
-
-  private fun hasBackgroundLocationPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-      )
-  }
-
-  private val significantLocationMonitor by lazy {
-    SignificantLocationMonitor(
-      scope = scope,
-      location = location,
-      locationMode = locationMode,
-      hasFineLocationPermission = ::hasFineLocationPermission,
-      hasCoarseLocationPermission = ::hasCoarseLocationPermission,
-      sendNodeEvent = { event, payloadJson -> nodeSession.sendNodeEvent(event, payloadJson) },
-    )
-  }
+  private fun hasRecordAudioPermission() = hasPermission(Manifest.permission.RECORD_AUDIO)
+  private fun hasFineLocationPermission() = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+  private fun hasCoarseLocationPermission() = hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+  private fun hasBackgroundLocationPermission() = hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
 
   private fun startSignificantLocationMonitoring() {
-    significantLocationMonitor.start()
+    SignificantLocationMonitor.startIfNeeded(
+      scope, location, locationMode,
+      ::hasFineLocationPermission, ::hasCoarseLocationPermission,
+    ) { event, payloadJson -> nodeSession.sendNodeEvent(event, payloadJson) }
   }
 
   fun connectManual() {

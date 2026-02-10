@@ -6,28 +6,16 @@ import OpenClawKit
 /// events to the gateway so the severance hook can determine whether
 /// the user is at their configured work location.
 @MainActor
-final class SignificantLocationMonitor {
-    private let locationService: any LocationServicing
-    private let locationMode: () -> OpenClawLocationMode
-    private let sendEvent: @Sendable (String, String) async -> Void
-
-    init(
+enum SignificantLocationMonitor {
+    static func startIfNeeded(
         locationService: any LocationServicing,
-        locationMode: @escaping () -> OpenClawLocationMode,
-        sendEvent: @escaping @Sendable (String, String) async -> Void
+        locationMode: OpenClawLocationMode,
+        gateway: GatewayNodeSession
     ) {
-        self.locationService = locationService
-        self.locationMode = locationMode
-        self.sendEvent = sendEvent
-    }
-
-    func start() {
-        let mode = self.locationMode()
-        guard mode == .always else { return }
-        let status = self.locationService.authorizationStatus()
+        guard locationMode == .always else { return }
+        let status = locationService.authorizationStatus()
         guard status == .authorizedAlways else { return }
-        self.locationService.startMonitoringSignificantLocationChanges { [weak self] location in
-            guard self != nil else { return }
+        locationService.startMonitoringSignificantLocationChanges { location in
             struct Payload: Codable {
                 var lat: Double
                 var lon: Double
@@ -43,7 +31,7 @@ final class SignificantLocationMonitor {
                   let json = String(data: data, encoding: .utf8)
             else { return }
             Task { @MainActor in
-                await self?.sendEvent("location.update", json)
+                await gateway.sendEvent(event: "location.update", payloadJSON: json)
             }
         }
     }
