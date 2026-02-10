@@ -18,6 +18,7 @@ import {
   applyMinimaxConfig,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
+  applyNovitaConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
@@ -36,6 +37,7 @@ import {
   setLitellmApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
+  setNovitaApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
@@ -631,6 +633,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyTogetherConfig(nextConfig);
+  }
+
+  if (authChoice === "novita-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "novita",
+      cfg: baseConfig,
+      flagValue: opts.novitaApiKey,
+      flagName: "--novita-api-key",
+      envVar: "NOVITA_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setNovitaApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "novita:default",
+      provider: "novita",
+      mode: "api_key",
+    });
+    return applyNovitaConfig(nextConfig);
   }
 
   if (authChoice === "custom-api-key") {

@@ -11,6 +11,7 @@ import {
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
+import { discoverNovitaModels, NOVITA_BASE_URL } from "./novita-models.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -185,6 +186,10 @@ function resolveEnvApiKeyVarName(provider: string): string | undefined {
   }
   const match = /^(?:env: |shell env: )([A-Z0-9_]+)$/.exec(resolved.source);
   return match ? match[1] : undefined;
+}
+
+function resolveEnvApiKeyValue(provider: string): string | undefined {
+  return resolveEnvApiKey(provider)?.apiKey?.trim() || undefined;
 }
 
 function resolveAwsSdkApiKeyVarName(): string {
@@ -481,6 +486,15 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
+async function buildNovitaProvider(apiKey: string): Promise<ProviderConfig> {
+  const models = await discoverNovitaModels({ apiKey });
+  return {
+    baseUrl: NOVITA_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -614,6 +628,19 @@ export async function resolveImplicitProviders(params: {
     providers.together = {
       ...buildTogetherProvider(),
       apiKey: togetherKey,
+    };
+  }
+
+  const novitaKey =
+    resolveEnvApiKeyVarName("novita") ??
+    resolveApiKeyFromProfiles({ provider: "novita", store: authStore });
+  const novitaDiscoveryKey =
+    resolveEnvApiKeyValue("novita") ??
+    resolveApiKeyFromProfiles({ provider: "novita", store: authStore });
+  if (novitaKey && novitaDiscoveryKey) {
+    providers.novita = {
+      ...(await buildNovitaProvider(novitaDiscoveryKey)),
+      apiKey: novitaKey,
     };
   }
 

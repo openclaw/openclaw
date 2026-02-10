@@ -164,6 +164,33 @@ Kimi K2 model IDs:
 }
 ```
 
+### Novita AI
+
+Novita uses an OpenAI-compatible endpoint and is configured as provider `novita`.
+
+- Provider: `novita`
+- Auth: `NOVITA_API_KEY`
+- Example model: `novita/moonshotai/kimi-k2.5`
+- CLI: `openclaw onboard --auth-choice novita-api-key`
+- Popular examples:
+  - `novita/moonshotai/kimi-k2.5`
+  - `novita/zai-org/glm-4.7`
+  - `novita/qwen/qwen3-coder-next`
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "novita/moonshotai/kimi-k2.5" } },
+  },
+}
+```
+
+OpenClaw discovers Novita models dynamically from
+`https://api.novita.ai/openai/v1/models` when auth is configured. If discovery
+fails, OpenClaw falls back to a built-in catalog.
+
+See [/providers/novita](/providers/novita) for setup details.
+
 ### Kimi Coding
 
 Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:

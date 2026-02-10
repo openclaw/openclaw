@@ -95,6 +95,16 @@ describe("buildAuthChoiceOptions", () => {
     expect(options.some((opt) => opt.value === "together-api-key")).toBe(true);
   });
 
+  it("includes Novita AI auth choice", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+    });
+
+    expect(options.some((opt) => opt.value === "novita-api-key")).toBe(true);
+  });
+
   it("includes Synthetic auth choice", () => {
     const store: AuthProfileStore = { version: 1, profiles: {} };
     const options = buildAuthChoiceOptions({
