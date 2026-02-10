@@ -253,4 +253,22 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     // When no skills config, skillFilter should be undefined (no filtering applied)
     expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1].skillFilter).toBeUndefined();
   });
+
+  it("passes empty skillFilter when agent explicitly disables all skills", async () => {
+    resolveAgentSkillsFilterMock.mockReturnValue([]);
+
+    const { runCronIsolatedAgentTurn } = await import("./run.js");
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: { agents: { list: [{ id: "silent", skills: [] }] } },
+        agentId: "silent",
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+    // Explicit empty skills list should forward [] to filter out all skills
+    expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1]).toHaveProperty("skillFilter", []);
+  });
 });
