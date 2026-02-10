@@ -396,9 +396,9 @@
 :root[data-theme="light"] .chat-controls .btn--icon.active,
 :root[data-theme="light"] .chat-controls .btn--icon[aria-pressed="true"] {
   color: var(--accent);
-  border-color: rgba(220, 38, 38, 0.4);
-  background: rgba(220, 38, 38, 0.1);
-  box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.12);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-subtle);
+  box-shadow: 0 0 0 1px var(--accent-subtle);
 }
 
 .btn--icon svg {
