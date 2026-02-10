@@ -789,6 +789,46 @@ describe("createTelegramBot", () => {
     expect(setMessageReactionSpy).toHaveBeenCalledWith(7, 123, [{ type: "emoji", emoji: "👀" }]);
   });
 
+  it("reacts with a randomized ackReaction list", async () => {
+    onSpy.mockReset();
+    setMessageReactionSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+
+    loadConfig.mockReturnValue({
+      messages: {
+        ackReaction: [" 👀 ", "✅"],
+        ackReactionScope: "group-mentions",
+        groupChat: { mentionPatterns: ["\\bbert\\b"] },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "bert hello",
+        date: 1736380800,
+        message_id: 123,
+        from: { id: 9, first_name: "Ada" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(setMessageReactionSpy).toHaveBeenCalledWith(7, 123, [{ type: "emoji", emoji: "👀" }]);
+    randomSpy.mockRestore();
+  });
+
   it("clears native commands when disabled", () => {
     loadConfig.mockReturnValue({
       commands: { native: false },

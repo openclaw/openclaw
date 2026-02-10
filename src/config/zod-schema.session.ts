@@ -3,6 +3,7 @@ import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
 import {
+  AckReactionEmojiSchema,
   GroupChatSchema,
   InboundDebounceSchema,
   NativeCommandsSettingSchema,
@@ -139,7 +140,7 @@ export const MessagesSchema = z
     groupChat: GroupChatSchema,
     queue: QueueSchema,
     inbound: InboundDebounceSchema,
-    ackReaction: z.string().optional(),
+    ackReaction: AckReactionEmojiSchema.optional(),
     ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
     removeAckAfterReply: z.boolean().optional(),
     tts: TtsConfigSchema,

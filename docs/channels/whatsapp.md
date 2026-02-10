@@ -261,7 +261,7 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 
 **Options:**
 
-- `emoji` (string): Emoji to use for acknowledgment (e.g., "👀", "✅", "📨"). Empty or omitted = feature disabled.
+- `emoji` (string | string[]): Emoji(s) to use for acknowledgment (e.g., `"👀"`, `"✅"`, `"📨"`). When a list is provided, one emoji is chosen at random per message. Empty or omitted = feature disabled.
 - `direct` (boolean, default: `true`): Send reactions in direct/DM chats.
 - `group` (string, default: `"mentions"`): Group chat behavior:
   - `"always"`: React to all group messages (even without @mention)

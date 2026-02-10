@@ -2,6 +2,23 @@ export type AckReactionScope = "all" | "direct" | "group-all" | "group-mentions"
 
 export type WhatsAppAckReactionMode = "always" | "mentions" | "never";
 
+export function resolveAckReactionChoice(value: string | string[] | undefined): {
+  configured: boolean;
+  value: string;
+} {
+  if (value === undefined) {
+    return { configured: false, value: "" };
+  }
+  const candidates = (Array.isArray(value) ? value : [value])
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (candidates.length === 0) {
+    return { configured: true, value: "" };
+  }
+  const choice = candidates[Math.floor(Math.random() * candidates.length)] ?? "";
+  return { configured: true, value: choice };
+}
+
 export type AckReactionGateParams = {
   scope: AckReactionScope | undefined;
   isDirect: boolean;

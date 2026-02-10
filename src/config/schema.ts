@@ -317,7 +317,7 @@ const FIELD_LABELS: Record<string, string> = {
   "browser.remoteCdpHandshakeTimeoutMs": "Remote CDP Handshake Timeout (ms)",
   "session.dmScope": "DM Session Scope",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
-  "messages.ackReaction": "Ack Reaction Emoji",
+  "messages.ackReaction": "Ack Reaction Emoji(s)",
   "messages.ackReactionScope": "Ack Reaction Scope",
   "messages.inbound.debounceMs": "Inbound Message Debounce (ms)",
   "talk.apiKey": "Talk API Key",
@@ -711,7 +711,8 @@ const FIELD_HELP: Record<string, string> = {
     "Max reply-back turns between requester and target (0–5).",
   "channels.telegram.customCommands":
     "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
-  "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
+  "messages.ackReaction":
+    "Emoji reaction(s) used to acknowledge inbound messages (empty disables; lists pick randomly).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
   "messages.inbound.debounceMs":

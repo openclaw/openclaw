@@ -1584,7 +1584,9 @@ agent has `identity.name` set.
 
 `ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
 on channels that support reactions (Slack/Discord/Telegram/Google Chat). Defaults to the
-active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` to disable.
+active agent’s `identity.emoji` when set, otherwise `"👀"`. You can provide a string or
+an array of emojis—when an array is used, OpenClaw picks one at random per message.
+Set it to `""` or `[]` to disable.
 
 `ackReactionScope` controls when reactions fire:
 

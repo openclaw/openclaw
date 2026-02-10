@@ -1,6 +1,9 @@
 import type { loadConfig } from "../../../config/config.js";
 import type { WebInboundMsg } from "../types.js";
-import { shouldAckReactionForWhatsApp } from "../../../channels/ack-reactions.js";
+import {
+  resolveAckReactionChoice,
+  shouldAckReactionForWhatsApp,
+} from "../../../channels/ack-reactions.js";
 import { logVerbose } from "../../../globals.js";
 import { sendReactionWhatsApp } from "../../outbound.js";
 import { formatError } from "../../session.js";
@@ -22,7 +25,7 @@ export function maybeSendAckReaction(params: {
   }
 
   const ackConfig = params.cfg.channels?.whatsapp?.ackReaction;
-  const emoji = (ackConfig?.emoji ?? "").trim();
+  const { value: emoji } = resolveAckReactionChoice(ackConfig?.emoji);
   const directEnabled = ackConfig?.direct ?? true;
   const groupMode = ackConfig?.group ?? "mentions";
   const conversationIdForCheck = params.msg.conversationId ?? params.msg.from;

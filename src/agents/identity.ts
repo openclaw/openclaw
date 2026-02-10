@@ -1,4 +1,5 @@
 import type { OpenClawConfig, HumanDelayConfig, IdentityConfig } from "../config/config.js";
+import { resolveAckReactionChoice } from "../channels/ack-reactions.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 const DEFAULT_ACK_REACTION = "👀";
@@ -11,9 +12,9 @@ export function resolveAgentIdentity(
 }
 
 export function resolveAckReaction(cfg: OpenClawConfig, agentId: string): string {
-  const configured = cfg.messages?.ackReaction;
-  if (configured !== undefined) {
-    return configured.trim();
+  const choice = resolveAckReactionChoice(cfg.messages?.ackReaction);
+  if (choice.configured) {
+    return choice.value;
   }
   const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
   return emoji || DEFAULT_ACK_REACTION;

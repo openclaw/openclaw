@@ -6,9 +6,21 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
   const changes: string[] = [];
   let next: OpenClawConfig = cfg;
 
-  const legacyAckReaction = cfg.messages?.ackReaction?.trim();
+  const legacyAckReaction = cfg.messages?.ackReaction;
+  const legacyAckCandidates =
+    legacyAckReaction === undefined
+      ? null
+      : (Array.isArray(legacyAckReaction) ? legacyAckReaction : [legacyAckReaction])
+          .map((item) => item.trim())
+          .filter(Boolean);
+  const legacyAckReactionValue =
+    legacyAckCandidates && legacyAckCandidates.length > 0
+      ? legacyAckCandidates.length === 1
+        ? legacyAckCandidates[0]
+        : legacyAckCandidates
+      : null;
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;
-  if (legacyAckReaction && hasWhatsAppConfig) {
+  if (legacyAckReactionValue && hasWhatsAppConfig) {
     const hasWhatsAppAck = cfg.channels?.whatsapp?.ackReaction !== undefined;
     if (!hasWhatsAppAck) {
       const legacyScope = cfg.messages?.ackReactionScope ?? "group-mentions";
@@ -33,7 +45,7 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
           ...next.channels,
           whatsapp: {
             ...next.channels?.whatsapp,
-            ackReaction: { emoji: legacyAckReaction, direct, group },
+            ackReaction: { emoji: legacyAckReactionValue, direct, group },
           },
         },
       };
