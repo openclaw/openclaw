@@ -102,8 +102,8 @@ final class ExecApprovalsGatewayPrompter {
         let activeSession = WebChatManager.shared.activeSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         let requestSession = request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // Check exec-approvals.json settings (use per-agent resolved config)
-        let approvals = ExecApprovalsStore.resolve(agentId: request.request.agentId)
+        // Read-only resolve to avoid disk writes on the MainActor
+        let approvals = ExecApprovalsStore.resolveReadOnly(agentId: request.request.agentId)
         let security = approvals.agent.security
         let ask = approvals.agent.ask
         
