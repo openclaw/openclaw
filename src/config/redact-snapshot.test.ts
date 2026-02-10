@@ -109,6 +109,22 @@ describe("redactConfigSnapshot", () => {
     expect(result.config).toEqual(snapshot.config);
   });
 
+  it("does not redact numeric token config fields like maxTokens", () => {
+    const snapshot = makeSnapshot({
+      agents: {
+        defaults: { maxTokens: 4096, contextTokens: 128000 },
+      },
+      channels: { telegram: { botToken: "real-secret-telegram-bot-token" } },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const agents = result.config.agents as Record<string, Record<string, unknown>>;
+    expect(agents.defaults.maxTokens).toBe(4096);
+    expect(agents.defaults.contextTokens).toBe(128000);
+    // Actual secret token IS still redacted
+    const channels = result.config.channels as Record<string, Record<string, string>>;
+    expect(channels.telegram.botToken).toBe(REDACTED_SENTINEL);
+  });
+
   it("preserves hash unchanged", () => {
     const snapshot = makeSnapshot({ gateway: { auth: { token: "secret-token-value-here" } } });
     const result = redactConfigSnapshot(snapshot);

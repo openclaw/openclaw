@@ -778,7 +778,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };
 
-const SENSITIVE_PATTERNS = [/token/i, /password/i, /secret/i, /api.?key/i];
+const SENSITIVE_PATTERNS = [/token$/i, /password/i, /secret/i, /api.?key/i];
 
 function isSensitivePath(path: string): boolean {
   return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
