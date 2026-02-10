@@ -457,13 +457,16 @@ export async function preflightDiscordMessage(
   }
 
   const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
+  // Role-based routing should satisfy the mention gate — the user explicitly
+  // mentioned an agent role, which is equivalent to mentioning the bot.
+  const roleRouted = route.matchedBy === "binding.role";
   const mentionGate = resolveMentionGatingWithBypass({
     isGroup: isGuildMessage,
     requireMention: Boolean(shouldRequireMention),
     canDetectMention,
-    wasMentioned,
+    wasMentioned: wasMentioned || roleRouted,
     implicitMention,
-    hasAnyMention,
+    hasAnyMention: hasAnyMention || roleRouted,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
     commandAuthorized,
