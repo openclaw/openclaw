@@ -1,5 +1,6 @@
 import type { TelegramGroupConfig } from "../config/types.js";
 import { isRecord } from "../utils.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { makeProxyFetch } from "./proxy.js";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -24,20 +25,6 @@ export type TelegramGroupMembershipAudit = {
 
 type TelegramApiOk<T> = { ok: true; result: T };
 type TelegramApiErr = { ok: false; description?: string };
-
-async function fetchWithTimeout(
-  url: string,
-  timeoutMs: number,
-  fetcher: typeof fetch,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetcher(url, { signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 export function collectTelegramUnmentionedGroupIds(
   groups: Record<string, TelegramGroupConfig> | undefined,
@@ -107,7 +94,7 @@ export async function auditTelegramGroupMembership(params: {
   for (const chatId of params.groupIds) {
     try {
       const url = `${base}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(String(params.botId))}`;
-      const res = await fetchWithTimeout(url, params.timeoutMs, fetcher);
+      const res = await fetchWithTimeout(url, {}, params.timeoutMs, fetcher);
       const json = (await res.json()) as TelegramApiOk<{ status?: string }> | TelegramApiErr;
       if (!res.ok || !isRecord(json) || !json.ok) {
         const desc =
