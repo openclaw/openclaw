@@ -32,6 +32,8 @@ services:
       - ${OPENCLAW_CONFIG_DIR}/ssh:/home/node/.ssh:ro
     # group_add:
     #   - "${DOCKER_GID:-999}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
