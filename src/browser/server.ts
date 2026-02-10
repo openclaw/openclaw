@@ -24,6 +24,19 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   }
 
   const app = express();
+  app.use((req, res, next) => {
+    const ctrl = new AbortController();
+    const abort = () => ctrl.abort(new Error("request aborted"));
+    req.once("aborted", abort);
+    res.once("close", () => {
+      if (!res.writableEnded) {
+        abort();
+      }
+    });
+    // Make the signal available to browser route handlers (best-effort).
+    (req as unknown as { signal?: AbortSignal }).signal = ctrl.signal;
+    next();
+  });
   app.use(express.json({ limit: "1mb" }));
 
   const ctx = createBrowserRouteContext({
