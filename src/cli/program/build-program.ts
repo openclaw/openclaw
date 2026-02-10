@@ -1,18 +1,8 @@
-import { Command } from "commander";
+import { buildProgramShell } from "./build-program-shell.js";
 import { registerProgramCommands } from "./command-registry.js";
-import { createProgramContext } from "./context.js";
-import { configureProgramHelp } from "./help.js";
-import { registerPreActionHooks } from "./preaction.js";
 
 export function buildProgram() {
-  const program = new Command();
-  const ctx = createProgramContext();
-  const argv = process.argv;
-
-  configureProgramHelp(program, ctx);
-  registerPreActionHooks(program, ctx.programVersion);
-
-  registerProgramCommands(program, ctx, argv);
-
+  const { program, ctx } = buildProgramShell();
+  registerProgramCommands(program, ctx, process.argv);
   return program;
 }
