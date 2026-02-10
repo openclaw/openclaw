@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   resolveControlUiDistIndexHealth,
@@ -108,6 +109,45 @@ describe("control UI assets helpers", () => {
       expect(await resolveControlUiDistIndexPath(path.join(tmp, "openclaw.mjs"))).toBe(
         path.join(tmp, "dist", "control-ui", "index.html"),
       );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves dist control-ui index path from moduleUrl when argv1 is a shim", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "openclaw" }));
+      await fs.mkdir(path.join(tmp, "dist", "control-ui"), { recursive: true });
+      await fs.writeFile(path.join(tmp, "dist", "entry.js"), "export {};\n");
+      await fs.writeFile(path.join(tmp, "dist", "control-ui", "index.html"), "<html></html>\n");
+
+      const moduleUrl = pathToFileURL(path.join(tmp, "dist", "entry.js")).href;
+      expect(
+        await resolveControlUiDistIndexPath({
+          argv1: "/usr/local/bin/openclaw",
+          moduleUrl,
+        }),
+      ).toBe(path.join(tmp, "dist", "control-ui", "index.html"));
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves dist control-ui index path from moduleUrl when argv1 is missing", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "openclaw" }));
+      await fs.mkdir(path.join(tmp, "dist", "control-ui"), { recursive: true });
+      await fs.writeFile(path.join(tmp, "dist", "entry.js"), "export {};\n");
+      await fs.writeFile(path.join(tmp, "dist", "control-ui", "index.html"), "<html></html>\n");
+
+      const moduleUrl = pathToFileURL(path.join(tmp, "dist", "entry.js")).href;
+      expect(
+        await resolveControlUiDistIndexPath({
+          moduleUrl,
+        }),
+      ).toBe(path.join(tmp, "dist", "control-ui", "index.html"));
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
