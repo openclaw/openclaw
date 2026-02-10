@@ -529,6 +529,28 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/wecom:
+    dependencies:
+      fast-xml-parser:
+        specifier: 5.3.4
+        version: 5.3.4
+      undici:
+        specifier: ^7.20.0
+        version: 7.21.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^25.2.0
+        version: 25.2.2
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   extensions/whatsapp:
     devDependencies:
       openclaw:
