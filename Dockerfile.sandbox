@@ -10,8 +10,11 @@ RUN apt-get update \
     git \
     jq \
     python3 \
+    python3-pip \
+    python3-venv \
     ripgrep \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && rm -f /usr/lib/python*/EXTERNALLY-MANAGED
 
 RUN useradd --create-home --shell /bin/bash sandbox
 USER sandbox
