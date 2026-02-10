@@ -99,6 +99,11 @@ export type SessionConfig = {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
   };
+  files?: {
+    enabled?: boolean;
+    autoPersist?: boolean;
+    retentionDays?: number;
+  };
 };
 
 export type LoggingConfig = {
