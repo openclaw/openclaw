@@ -117,16 +117,22 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
           `sdk init: model=${msg.model} tools=${msg.tools.length} mcp=${msg.mcp_servers.map((s: { name: string; status: string }) => `${s.name}:${s.status}`).join(",")}`,
         );
       } else if (msg.type === "system" && "subtype" in msg && msg.subtype === "hook_started") {
-        log.debug(`sdk hook: ${msg.hook_event} started`);
+        log.info(`sdk hook: ${msg.hook_event} started`);
       } else if (msg.type === "system" && "subtype" in msg && msg.subtype === "hook_response") {
         log.info(`sdk hook: ${msg.hook_event} ${msg.outcome} (exit=${msg.exit_code})`);
       }
 
       if (msg.type === "tool_progress") {
-        log.debug(`sdk tool: ${msg.tool_name} (${msg.elapsed_time_seconds}s)`);
+        log.info(`sdk tool: ${msg.tool_name} (${msg.elapsed_time_seconds}s)`);
       }
 
       if (msg.type === "assistant") {
+        const toolUses = msg.message?.content?.filter(
+          (b: { type: string }) => b.type === "tool_use",
+        ) as Array<{ name: string }> | undefined;
+        if (toolUses?.length) {
+          log.info(`sdk tool_use: ${toolUses.map((t) => t.name).join(", ")}`);
+        }
         if (msg.error) {
           log.warn(`sdk assistant error: ${msg.error}`);
 

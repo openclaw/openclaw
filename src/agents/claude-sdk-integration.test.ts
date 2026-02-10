@@ -601,7 +601,50 @@ describe("runSDKAgent", () => {
 
     await runSDKAgent({ prompt: "test", cwd: "/tmp" });
 
-    expect(logMock.debug).toHaveBeenCalledWith("sdk tool: Bash (5s)");
+    expect(logMock.info).toHaveBeenCalledWith("sdk tool: Bash (5s)");
+  });
+
+  it("logs tool_use from assistant messages", async () => {
+    queryMock.mockReturnValueOnce(
+      makeAsyncIterable([
+        {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "tool_use", id: "tu-1", name: "Bash", input: { command: "git status" } },
+              { type: "tool_use", id: "tu-2", name: "Read", input: { file_path: "/tmp/test" } },
+            ],
+          },
+          session_id: "s",
+          uuid: "u",
+          parent_tool_use_id: null,
+        },
+        {
+          type: "result",
+          subtype: "success",
+          result: "ok",
+          session_id: "s",
+          duration_ms: 100,
+          duration_api_ms: 80,
+          is_error: false,
+          num_turns: 1,
+          total_cost_usd: 0.01,
+          usage: {
+            input_tokens: 10,
+            output_tokens: 20,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          modelUsage: {},
+          permission_denials: [],
+          uuid: "u2",
+        },
+      ]),
+    );
+
+    await runSDKAgent({ prompt: "test", cwd: "/tmp" });
+
+    expect(logMock.info).toHaveBeenCalledWith("sdk tool_use: Bash, Read");
   });
 
   it("logs hook started and response events", async () => {
@@ -655,7 +698,7 @@ describe("runSDKAgent", () => {
 
     await runSDKAgent({ prompt: "test", cwd: "/tmp" });
 
-    expect(logMock.debug).toHaveBeenCalledWith("sdk hook: PreToolUse started");
+    expect(logMock.info).toHaveBeenCalledWith("sdk hook: PreToolUse started");
     expect(logMock.info).toHaveBeenCalledWith("sdk hook: PreToolUse success (exit=0)");
   });
 });
