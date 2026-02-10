@@ -14,6 +14,8 @@ import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeCompactionEvent,
+  PluginHookBeforeModelSelectEvent,
+  PluginHookBeforeModelSelectResult,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookGatewayContext,
@@ -43,6 +45,8 @@ export type {
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookAfterCompactionEvent,
+  PluginHookBeforeModelSelectEvent,
+  PluginHookBeforeModelSelectResult,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -228,6 +232,21 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookAgentContext,
   ): Promise<void> {
     return runVoidHook("after_compaction", event, ctx);
+  }
+
+  async function runBeforeModelSelect(
+    event: PluginHookBeforeModelSelectEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeModelSelectResult | undefined> {
+    return runModifyingHook<"before_model_select", PluginHookBeforeModelSelectResult>(
+      "before_model_select",
+      event,
+      ctx,
+      (acc, next) => ({
+        provider: next.provider ?? acc?.provider,
+        model: next.model ?? acc?.model,
+      }),
+    );
   }
 
   // =========================================================================
@@ -447,6 +466,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runAgentEnd,
     runBeforeCompaction,
     runAfterCompaction,
+    runBeforeModelSelect,
     // Message hooks
     runMessageReceived,
     runMessageSending,
