@@ -28,7 +28,7 @@ export async function maybeCreateDynamicAgent(params: {
   const hasBinding = existingBindings.some(
     (b) =>
       b.match?.channel === "feishu" &&
-      b.match?.peer?.kind === "dm" &&
+      b.match?.peer?.kind === "direct" &&
       b.match?.peer?.id === senderOpenId,
   );
 
@@ -66,7 +66,7 @@ export async function maybeCreateDynamicAgent(params: {
           agentId,
           match: {
             channel: "feishu",
-            peer: { kind: "dm", id: senderOpenId },
+            peer: { kind: "direct", id: senderOpenId },
           },
         },
       ],
@@ -108,7 +108,7 @@ export async function maybeCreateDynamicAgent(params: {
         agentId,
         match: {
           channel: "feishu",
-          peer: { kind: "dm", id: senderOpenId },
+          peer: { kind: "direct", id: senderOpenId },
         },
       },
     ],
