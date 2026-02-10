@@ -31,6 +31,7 @@ describe("startTelegramWebhook", () => {
     const cfg = { bindings: [] };
     const { server } = await startTelegramWebhook({
       token: "tok",
+      secret: "secret",
       accountId: "opie",
       config: cfg,
       port: 0, // random free port
@@ -62,6 +63,7 @@ describe("startTelegramWebhook", () => {
     const cfg = { bindings: [] };
     const { server } = await startTelegramWebhook({
       token: "tok",
+      secret: "secret",
       accountId: "opie",
       config: cfg,
       port: 0,
@@ -81,5 +83,13 @@ describe("startTelegramWebhook", () => {
     await fetch(`http://127.0.0.1:${addr.port}/hook`, { method: "POST" });
     expect(handlerSpy).toHaveBeenCalled();
     abort.abort();
+  });
+
+  it("rejects startup when webhook secret is missing", async () => {
+    await expect(
+      startTelegramWebhook({
+        token: "tok",
+      }),
+    ).rejects.toThrow(/requires a non-empty secret token/i);
   });
 });
