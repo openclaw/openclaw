@@ -338,30 +338,6 @@ export function buildAgentSystemPrompt(params: {
   const heartbeatPromptLine = heartbeatPrompt
     ? `Heartbeat prompt: ${heartbeatPrompt}`
     : "Heartbeat prompt: (configured)";
-
-  // Session Files Storage Format section
-  lines.push(""); // Empty line before new section
-  lines.push("## Session Files Storage Format", "");
-  lines.push(
-    "All session files (CSV, JSON, PDF, text) are stored as Markdown (.md) format for better LLM understanding and readability.",
-    "",
-  );
-  lines.push("When describing file storage format to users:", "");
-  lines.push("- Always state that files are stored as Markdown");
-  lines.push(
-    "- The `type` field in metadata indicates the original content type (csv, json, pdf, text)",
-  );
-  lines.push('- The `storageFormat` field indicates the actual storage format (always "markdown")');
-  lines.push(
-    '- Example: "File adalah CSV yang disimpan dalam format Markdown untuk kemudahan LLM"',
-    "",
-  );
-  lines.push("When users ask about file format:", "");
-  lines.push('- Answer: "File disimpan sebagai Markdown (.md)"');
-  lines.push(
-    '- If they ask about original type, mention: "Konten aslinya adalah [type], tapi disimpan sebagai Markdown"',
-    "",
-  );
   const runtimeInfo = params.runtimeInfo;
   const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
   const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
