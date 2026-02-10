@@ -297,7 +297,10 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
         if (atAllMatch) {
           atOptions = { atAll: true };
         } else if (atMatch) {
-          const atUserIds = atMatch[1].split(",").map((s) => s.trim()).filter(Boolean);
+          const atUserIds = atMatch[1]
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
           if (atUserIds.length > 0) {
             atOptions = { atUserIds };
           }

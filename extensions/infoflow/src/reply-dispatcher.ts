@@ -1,9 +1,9 @@
 import { createReplyPrefixOptions, type OpenClawConfig } from "openclaw/plugin-sdk";
+import type { InfoflowAtOptions } from "./types.js";
 import { resolveInfoflowAccount } from "./channel.js";
 import { recordSentMessageId } from "./infoflow_req_parse.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { sendInfoflowPrivateMessage, sendInfoflowGroupMessage } from "./send.js";
-import type { InfoflowAtOptions } from "./types.js";
 
 export type CreateInfoflowReplyDispatcherParams = {
   cfg: OpenClawConfig;

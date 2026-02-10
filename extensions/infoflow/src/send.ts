@@ -200,7 +200,15 @@ export async function sendInfoflowGroupMessage(params: {
   atOptions?: InfoflowAtOptions;
   timeoutMs?: number;
 }): Promise<{ ok: boolean; error?: string; messageid?: string }> {
-  const { apiHost, appKey, appSecret, groupId, content, atOptions, timeoutMs = DEFAULT_TIMEOUT_MS } = params;
+  const {
+    apiHost,
+    appKey,
+    appSecret,
+    groupId,
+    content,
+    atOptions,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  } = params;
 
   // Get token first
   const tokenResult = await getAppAccessToken({ apiHost, appKey, appSecret, timeoutMs });

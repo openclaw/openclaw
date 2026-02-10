@@ -260,7 +260,9 @@ export async function parseAndDispatchInfoflowRequest(
   const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
 
   if (verbose) {
-    console.log(`[infoflow] parseAndDispatch: contentType=${contentType}, bodyLen=${rawBody.length}`);
+    console.log(
+      `[infoflow] parseAndDispatch: contentType=${contentType}, bodyLen=${rawBody.length}`,
+    );
   }
 
   // --- 2. form-urlencoded: echostr verification + private chat ---
