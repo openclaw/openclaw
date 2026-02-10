@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+const isWindows = platform() === "win32";
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 
 type DockerSetupSandbox = {
@@ -85,7 +86,9 @@ function resolveBashForCompatCheck(): string | null {
 }
 
 describe("docker-setup.sh", () => {
-  it("handles env defaults, home-volume mounts, and apt build args", async () => {
+  it("handles unset optional env vars under strict mode", async () => {
+describe.skipIf(isWindows)("docker-setup.sh", () => {
+  it("handles unset optional env vars under strict mode", async () => {
     const sandbox = await createDockerSetupSandbox();
 
     const defaultsResult = spawnSync("bash", [sandbox.scriptPath], {
