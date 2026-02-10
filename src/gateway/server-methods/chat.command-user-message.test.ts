@@ -91,7 +91,7 @@ describe("chat.send command transcript – user message persistence", () => {
       resolveChatRunExpiresAtMs: () => Date.now() + 60_000,
     }));
     vi.doMock("../chat-attachments.js", () => ({
-      parseMessageWithAttachments: async () => ({ message: "", images: [] }),
+      parseMessageWithAttachments: async (msg: string) => ({ message: msg, images: [] }),
     }));
 
     const { chatHandlers } = await import("./chat.js");
