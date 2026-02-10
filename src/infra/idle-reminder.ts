@@ -42,20 +42,46 @@ const log = createSubsystemLogger("idle-reminder");
 const DEFAULT_IDLE_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
 const MAX_REMIND_COUNT = 1;
 
-const MAX_STORED_REPLIES = 3;
+const MAX_STORED_MESSAGES = 6;
 
-/** Build the idle reminder prompt, embedding the agent's last N replies for context. */
-function buildIdleReminderPrompt(lastReplyTexts: string[]): string {
-  const nonEmpty = lastReplyTexts.filter((t) => t.trim());
-  if (nonEmpty.length === 0) {
+type StoredMessage = {
+  role: "user" | "agent";
+  text: string;
+  /** Unix timestamp (ms) when the message was recorded. */
+  timestamp: number;
+};
+
+/** Format a timestamp as a short time string (HH:MM). */
+function formatMessageTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+}
+
+/**
+ * Build the idle reminder prompt, embedding the last N messages (both user and agent)
+ * for context. Each message is attributed with role and timestamp.
+ *
+ * Output includes up to the last 3 complete "reply" entries (user or agent),
+ * formatted as:
+ *   AGENT (21:30)
+ *   <text>
+ *
+ *   USER (21:32)
+ *   <text>
+ */
+function buildIdleReminderPrompt(messages: StoredMessage[]): string {
+  // Take up to the last 3 messages (any combination of user/agent)
+  const recent = messages.filter((m) => m.text.trim()).slice(-3);
+  if (recent.length === 0) {
     return "Check if there's anything you should follow up on with the user. Say it, then DO it — words without action = nothing happened. If nothing to follow up, reply HEARTBEAT_OK.";
   }
-  const count = nonEmpty.length;
-  const replyLines = nonEmpty.map((t, i) => {
-    const label = i === nonEmpty.length - 1 ? `reply${i + 1}(latest)` : `reply${i + 1}`;
-    return `${label}\n${t.trim()}`;
+  const count = recent.length;
+  const lines = recent.map((m) => {
+    const roleLabel = m.role === "user" ? "USER" : "AGENT";
+    const time = formatMessageTime(m.timestamp);
+    return `${roleLabel} (${time})\n${m.text.trim()}`;
   });
-  const replyBlock = `Here is your previous last ${count} reply:\n"""\n${replyLines.join("\n")}\n\n"""\n\n`;
+  const replyBlock = `Here are the previous last ${count} messages:\n"""\n${lines.join("\n\n")}\n\n"""\n\n`;
   return `${replyBlock}Check if there's anything you should follow up on with the user. Say it, then DO it — words without action = nothing happened. If nothing to follow up, reply HEARTBEAT_OK.`;
 }
 
@@ -68,8 +94,8 @@ type IdleReminderState = {
   count: number;
   /** Byte offset of transcript file when timer started / last checked. */
   lastTranscriptSize: number;
-  /** Rolling buffer of the agent's last N reply texts (newest last). */
-  lastReplyTexts: string[];
+  /** Rolling buffer of the last N messages (user + agent, newest last). */
+  lastMessages: StoredMessage[];
 };
 
 // Track active idle reminders per session
@@ -78,7 +104,7 @@ const activeReminders = new Map<string, IdleReminderState>();
 /**
  * Start or reset the idle reminder timer for a session.
  * Called after every non-heartbeat agent run completes (regardless of reply content).
- * Maintains a rolling buffer of the last 3 reply texts for follow-up context.
+ * Maintains a rolling buffer of the last N messages (user + agent) for follow-up context.
  */
 export function startIdleReminder(params: {
   sessionKey: string;
@@ -88,22 +114,34 @@ export function startIdleReminder(params: {
   timeoutMs?: number;
   /** The agent's last reply text — included in the idle reminder prompt. */
   lastReplyText?: string;
+  /** The user's message text that triggered this agent run. */
+  lastUserText?: string;
 }): void {
   const { sessionKey, timeoutMs = DEFAULT_IDLE_TIMEOUT_MS } = params;
   const storePath = params.storePath ?? resolveStorePath(undefined, {});
 
-  // Clear existing timer if any; carry over previous reply texts
+  // Clear existing timer if any; carry over previous messages
   const existing = activeReminders.get(sessionKey);
   if (existing?.timer) {
     clearTimeout(existing.timer);
   }
 
-  // Build rolling buffer: carry over previous replies, append new one, keep max N
-  const previousTexts = existing?.lastReplyTexts ?? [];
-  const newReplyText = (params.lastReplyText ?? "").trim();
-  const updatedTexts = newReplyText
-    ? [...previousTexts, newReplyText].slice(-MAX_STORED_REPLIES)
-    : previousTexts;
+  // Build rolling buffer: carry over previous messages, append user + agent, keep max N
+  const previousMessages = existing?.lastMessages ?? [];
+  const now = Date.now();
+  const newMessages: StoredMessage[] = [];
+  const userText = (params.lastUserText ?? "").trim();
+  if (userText) {
+    newMessages.push({ role: "user", text: userText, timestamp: now });
+  }
+  const agentText = (params.lastReplyText ?? "").trim();
+  if (agentText) {
+    newMessages.push({ role: "agent", text: agentText, timestamp: now });
+  }
+  const updatedMessages =
+    newMessages.length > 0
+      ? [...previousMessages, ...newMessages].slice(-MAX_STORED_MESSAGES)
+      : previousMessages;
 
   // Snapshot transcript size so we can detect new content later
   const lastTranscriptSize = resolveTranscriptSize(sessionKey, storePath);
@@ -115,7 +153,7 @@ export function startIdleReminder(params: {
     timeoutMs,
     count: 0,
     lastTranscriptSize,
-    lastReplyTexts: updatedTexts,
+    lastMessages: updatedMessages,
   };
 
   state.timer = setTimeout(() => {
@@ -286,7 +324,7 @@ async function checkAndMaybeRemind(sessionKey: string): Promise<void> {
   });
 
   try {
-    await sendSimulatedHeartbeat(sessionKey, state.storePath, state.lastReplyTexts);
+    await sendSimulatedHeartbeat(sessionKey, state.storePath, state.lastMessages);
   } catch (err) {
     log.error("simulated heartbeat failed", { sessionKey, error: String(err) });
   }
@@ -312,7 +350,7 @@ async function checkAndMaybeRemind(sessionKey: string): Promise<void> {
 async function sendSimulatedHeartbeat(
   sessionKey: string,
   storePath: string,
-  lastReplyTexts: string[],
+  lastMessages: StoredMessage[],
 ): Promise<void> {
   const cfg: OpenClawConfig = loadConfig();
   const store = loadSessionStore(storePath);
@@ -331,8 +369,8 @@ async function sendSimulatedHeartbeat(
 
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
 
-  // Build idle reminder prompt with agent's last N replies for context
-  const prompt = buildIdleReminderPrompt(lastReplyTexts);
+  // Build idle reminder prompt with last N messages (user + agent) for context
+  const prompt = buildIdleReminderPrompt(lastMessages);
   const ctx = {
     Body: prompt,
     From: sender,

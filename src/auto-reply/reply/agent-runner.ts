@@ -502,7 +502,12 @@ export async function runReplyAgent(params: {
     if (payloadArray.length === 0) {
       // Start idle reminder even when no payloads (e.g. NO_REPLY / empty)
       if (!isHeartbeat && sessionKey && storePath) {
-        startIdleReminder({ sessionKey, storePath, lastReplyText: rawReplyText });
+        startIdleReminder({
+          sessionKey,
+          storePath,
+          lastReplyText: rawReplyText,
+          lastUserText: commandBody,
+        });
       }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
@@ -530,7 +535,12 @@ export async function runReplyAgent(params: {
     if (replyPayloads.length === 0) {
       // Start idle reminder even when payloads are filtered out (e.g. NO_REPLY)
       if (!isHeartbeat && sessionKey && storePath) {
-        startIdleReminder({ sessionKey, storePath, lastReplyText: rawReplyText });
+        startIdleReminder({
+          sessionKey,
+          storePath,
+          lastReplyText: rawReplyText,
+          lastUserText: commandBody,
+        });
       }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
@@ -735,14 +745,14 @@ export async function runReplyAgent(params: {
     }
 
     // Start idle reminder for all non-heartbeat runs (even if reply was NO_REPLY/empty).
-    // The idle reminder tracks the last N replies for follow-up context.
+    // The idle reminder tracks the last N messages (user + agent) for follow-up context.
     if (!isHeartbeat && sessionKey && storePath) {
       const lastReplyText =
         finalPayloads
           .map((p) => p.text ?? "")
           .filter(Boolean)
           .join("\n") || rawReplyText;
-      startIdleReminder({ sessionKey, storePath, lastReplyText });
+      startIdleReminder({ sessionKey, storePath, lastReplyText, lastUserText: commandBody });
     }
 
     return finalizeWithFollowup(
