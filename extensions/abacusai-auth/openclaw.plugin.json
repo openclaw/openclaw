@@ -1,0 +1,9 @@
+{
+  "id": "abacusai-auth",
+  "providers": ["abacusai"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

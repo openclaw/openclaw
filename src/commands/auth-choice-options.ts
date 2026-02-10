@@ -25,7 +25,8 @@ export type AuthChoiceGroupId =
   | "qwen"
   | "together"
   | "qianfan"
-  | "xai";
+  | "xai"
+  | "abacusai";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -148,6 +149,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     hint: "Account ID + Gateway ID + API key",
     choices: ["cloudflare-ai-gateway-api-key"],
   },
+  {
+    value: "abacusai",
+    label: "AbacusAI",
+    hint: "API key + Code Mode auto-detect",
+    choices: ["abacusai"],
+  },
 ];
 
 export function buildAuthChoiceOptions(params: {
@@ -251,6 +258,11 @@ export function buildAuthChoiceOptions(params: {
     value: "minimax-api-lightning",
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
+  });
+  options.push({
+    value: "abacusai",
+    label: "AbacusAI (Code Mode)",
+    hint: "API key or auto-detect from AbacusAI Code Mode",
   });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
