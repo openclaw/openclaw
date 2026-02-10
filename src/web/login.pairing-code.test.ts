@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginWeb, normalizePhoneNumber, type LoginWebOptions } from "./login.js";
 
 const mockRequestPairingCode = vi.fn().mockResolvedValue("12345678");
+const mockWaitForConnectionUpdate = vi.fn().mockResolvedValue(undefined);
 const mockWsClose = vi.fn();
 
 vi.mock("./session.js", () => ({
   createWaSocket: vi.fn().mockResolvedValue({
     requestPairingCode: (...args: unknown[]) => mockRequestPairingCode(...args),
+    waitForConnectionUpdate: (...args: unknown[]) => mockWaitForConnectionUpdate(...args),
     ws: { close: () => mockWsClose() },
     ev: {
       on: vi.fn(),
@@ -108,14 +110,31 @@ describe("loginWeb with pairing code", () => {
 
     const loginPromise = loginWeb(false, undefined, mockRuntime as never, undefined, opts);
 
-    // Advance timers for the initial delay
-    await vi.advanceTimersByTimeAsync(1500);
     // Advance timers for the final socket close delay
     await vi.advanceTimersByTimeAsync(500);
 
     await loginPromise;
 
     expect(mockRequestPairingCode).toHaveBeenCalledWith("1234567890");
+  });
+
+  it("waits for socket initialization before requesting pairing code", async () => {
+    const opts: LoginWebOptions = {
+      useCode: true,
+      phoneNumber: "+1234567890",
+    };
+
+    const loginPromise = loginWeb(false, undefined, mockRuntime as never, undefined, opts);
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    await loginPromise;
+
+    // Verify waitForConnectionUpdate was called to wait for socket readiness
+    expect(mockWaitForConnectionUpdate).toHaveBeenCalledWith(
+      expect.any(Function),
+      10_000, // PAIRING_CODE_INIT_TIMEOUT_MS
+    );
   });
 
   it("normalizes phone number by removing + prefix", async () => {
@@ -126,7 +145,6 @@ describe("loginWeb with pairing code", () => {
 
     const loginPromise = loginWeb(false, undefined, mockRuntime as never, undefined, opts);
 
-    await vi.advanceTimersByTimeAsync(1500);
     await vi.advanceTimersByTimeAsync(500);
 
     await loginPromise;
@@ -142,7 +160,6 @@ describe("loginWeb with pairing code", () => {
 
     const loginPromise = loginWeb(false, undefined, mockRuntime as never, undefined, opts);
 
-    await vi.advanceTimersByTimeAsync(1500);
     await vi.advanceTimersByTimeAsync(500);
 
     await loginPromise;
@@ -158,7 +175,6 @@ describe("loginWeb with pairing code", () => {
 
     const loginPromise = loginWeb(false, undefined, mockRuntime as never, undefined, opts);
 
-    await vi.advanceTimersByTimeAsync(1500);
     await vi.advanceTimersByTimeAsync(500);
 
     await loginPromise;
@@ -174,7 +190,6 @@ describe("loginWeb with pairing code", () => {
 
     const loginPromise = loginWeb(false, undefined, mockRuntime as never, undefined, opts);
 
-    await vi.advanceTimersByTimeAsync(1500);
     await vi.advanceTimersByTimeAsync(500);
 
     await loginPromise;
@@ -221,7 +236,6 @@ describe("loginWeb with pairing code", () => {
 
     const loginPromise = loginWeb(false, undefined, mockRuntime as never, undefined, opts);
 
-    await vi.advanceTimersByTimeAsync(1500);
     await vi.advanceTimersByTimeAsync(500);
 
     await loginPromise;
