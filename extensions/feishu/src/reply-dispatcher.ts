@@ -18,6 +18,8 @@ import {
   sendCardByCardIdFeishu,
   updateCardElementContentFeishu,
   updateCardSummaryFeishu,
+  closeStreamingModeFeishu,
+  deleteMessageFeishu,
 } from "./send.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -51,6 +53,7 @@ function firstSentence(text: string): string {
 
 const STREAM_THROTTLE_MS = 500;
 const STREAM_UPDATE_MAX_RETRIES = 3;
+const STREAM_SEQUENCE_MAX_RETRIES = 8;
 
 function isRetryableStreamError(err: unknown): boolean {
   const msg = String(err).toLowerCase();
@@ -190,25 +193,120 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamFlushCount = 0;
   let streamUpdateCount = 0;
   let streamEverUpdated = false;
+  let streamClosing = false;
+  let streamClosed = false;
+  let streamClosePromise: Promise<void> | null = null;
+  let cardKitOpQueue: Promise<void> = Promise.resolve();
+
+  const isSequenceCompareFailedError = (err: unknown): boolean =>
+    /sequence\s+number\s+compare\s+failed/i.test(String(err));
+
+  const enqueueCardKitOp = <T>(op: () => Promise<T>): Promise<T> => {
+    const run = cardKitOpQueue.then(op, op);
+    cardKitOpQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
+
+  const runCardKitMutation = async (
+    label: string,
+    mutation: (sequence: number) => Promise<void>,
+    options?: { markClosed?: boolean; maxRetries?: number },
+  ): Promise<void> => {
+    await enqueueCardKitOp(async () => {
+      if (streamBackend !== "cardkit" || !streamCardKitId) {
+        return;
+      }
+      if (streamClosed && !options?.markClosed) {
+        return;
+      }
+
+      const maxRetries = options?.maxRetries ?? STREAM_SEQUENCE_MAX_RETRIES;
+      let lastError: unknown;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+        const nextSequence = streamSequence + 1;
+        try {
+          await mutation(nextSequence);
+          streamSequence = nextSequence;
+          if (options?.markClosed) {
+            streamClosed = true;
+          }
+          return;
+        } catch (err) {
+          lastError = err;
+          const sequenceError = isSequenceCompareFailedError(err);
+          const retryable = sequenceError || isRetryableStreamError(err);
+          params.runtime.log?.(
+            `feishu[${account.accountId}] ${label} failed (cardId=${streamCardKitId}, sequence=${nextSequence}, attempt=${attempt}, retryable=${retryable}, sequenceError=${sequenceError}): ${String(err)}`,
+          );
+          if (!retryable || attempt >= maxRetries) {
+            throw err;
+          }
+          if (sequenceError) {
+            streamSequence = nextSequence;
+          }
+          await sleep(100 * attempt);
+        }
+      }
+
+      throw lastError ?? new Error(`${label} failed without details`);
+    });
+  };
 
   const clearPendingThinkingCard = async (): Promise<void> => {
     if (!streamCardKitId || streamEverUpdated) {
       return;
     }
+    const cardId = streamCardKitId;
     params.runtime.log?.(
       `feishu[${account.accountId}] cleaning up orphan thinking card: cardId=${streamCardKitId}`,
     );
+
     try {
-      await updateCardElementContentFeishu({
-        cfg,
-        cardId: streamCardKitId,
-        content: " ",
-        sequence: streamSequence + 1,
-        accountId,
-      });
-    } catch (err) {
+      await runCardKitMutation(
+        "orphan thinking card clear",
+        async (sequence) => {
+          await updateCardElementContentFeishu({
+            cfg,
+            cardId,
+            content: " ",
+            sequence,
+            accountId,
+          });
+        },
+        { maxRetries: 5 },
+      );
+      params.runtime.log?.(`feishu[${account.accountId}] orphan thinking card cleared`);
+      return;
+    } catch {
+      // Recall below if all retries fail.
+    }
+
+    // All sequence attempts failed — recall the message entirely
+    if (streamMessageId) {
       params.runtime.log?.(
-        `feishu[${account.accountId}] orphan thinking cleanup skipped: ${String(err)}`,
+        `feishu[${account.accountId}] orphan thinking card update failed, recalling message: msgId=${streamMessageId}`,
+      );
+      try {
+        await deleteMessageFeishu({
+          cfg,
+          messageId: streamMessageId,
+          accountId,
+        });
+        params.runtime.log?.(
+          `feishu[${account.accountId}] orphan thinking card message recalled successfully`,
+        );
+      } catch (recallErr) {
+        params.runtime.log?.(
+          `feishu[${account.accountId}] orphan thinking card recall failed: ${String(recallErr)}`,
+        );
+      }
+    } else {
+      params.runtime.log?.(
+        `feishu[${account.accountId}] orphan thinking cleanup failed: no messageId for recall`,
       );
     }
   };
@@ -262,36 +360,31 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const updateCardElementWithRetry = async (updateParams: {
     cardId: string;
     content: string;
-    sequence: number;
   }): Promise<void> => {
-    const { cardId, content, sequence } = updateParams;
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= STREAM_UPDATE_MAX_RETRIES; attempt += 1) {
-      try {
-        await updateCardElementContentFeishu({
-          cfg,
-          cardId,
-          content,
-          sequence,
-          accountId,
-        });
-        return;
-      } catch (err) {
-        lastError = err;
-        const retryable = isRetryableStreamError(err);
-        const shouldRetry = retryable && attempt < STREAM_UPDATE_MAX_RETRIES;
-        params.runtime.log?.(
-          `feishu[${account.accountId}] stream update failed (cardId=${cardId}, sequence=${sequence}, attempt=${attempt}, retryable=${retryable}): ${String(err)}`,
-        );
-        if (!shouldRetry) {
-          throw err;
+    const { cardId, content } = updateParams;
+    await runCardKitMutation("stream element update", async (sequence) => {
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= STREAM_UPDATE_MAX_RETRIES; attempt += 1) {
+        try {
+          await updateCardElementContentFeishu({
+            cfg,
+            cardId,
+            content,
+            sequence,
+            accountId,
+          });
+          return;
+        } catch (err) {
+          lastError = err;
+          const retryable = isRetryableStreamError(err) && !isSequenceCompareFailedError(err);
+          if (!retryable || attempt >= STREAM_UPDATE_MAX_RETRIES) {
+            throw err;
+          }
+          await sleep(250 * attempt);
         }
-        await sleep(250 * attempt);
       }
-    }
-
-    throw lastError ?? new Error("Feishu stream update failed without details");
+      throw lastError ?? new Error("Feishu stream update failed without details");
+    });
   };
 
   /**
@@ -307,16 +400,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
     try {
       if (streamRenderMode === "card") {
+        if (streamClosing || streamClosed) {
+          return true;
+        }
         if (streamBackend === "cardkit" && streamCardKitId) {
-          // CardKit streaming update — sequence must be strictly increasing
-          const nextSequence = streamSequence + 1;
           await updateCardElementWithRetry({
             cardId: streamCardKitId,
             content: applyMentions(text),
-            sequence: nextSequence,
           });
-          // Only commit sequence after successful update
-          streamSequence = nextSequence;
           streamUpdateCount += 1;
           streamEverUpdated = true;
         } else if (streamBackend === "none") {
@@ -424,7 +515,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const queueStreamUpdate = (text: string) => {
-    if (streamBackend === "stopped") {
+    if (streamBackend === "stopped" || streamClosing || streamClosed) {
       return;
     }
     streamPendingText = text;
@@ -448,6 +539,57 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
+  const closeStreamingIfNeeded = async (): Promise<void> => {
+    if (streamBackend !== "cardkit" || !streamCardKitId) {
+      return;
+    }
+    if (streamClosed) {
+      return;
+    }
+    if (streamClosePromise) {
+      await streamClosePromise;
+      return;
+    }
+
+    streamClosing = true;
+    const cardId = streamCardKitId;
+    streamClosePromise = (async () => {
+      await waitForStreamIdle();
+      await runCardKitMutation(
+        "close streaming mode",
+        async (sequence) => {
+          await closeStreamingModeFeishu({
+            cfg,
+            cardId,
+            sequence,
+            accountId,
+          });
+        },
+        { markClosed: true },
+      );
+    })();
+
+    try {
+      await streamClosePromise;
+    } catch (err) {
+      params.runtime.log?.(
+        `feishu[${account.accountId}] close streaming mode failed: ${String(err)}`,
+      );
+    } finally {
+      if (!streamClosed) {
+        streamClosing = false;
+      }
+      streamClosePromise = null;
+    }
+  };
+
+  const notifyMessageSent = (content: string, messageId?: string) => {
+    emitMessageSent(
+      { to: chatId, content, success: true, messageId },
+      { channelId: "feishu", accountId: account.accountId, conversationId: chatId },
+    );
+  };
+
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
@@ -469,18 +611,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             );
             const streamSuccess = await sendOrUpdateStreamMessage(text);
             if (streamSuccess && streamRenderMode === "card" && streamCardKitId) {
+              const cardId = streamCardKitId;
               const summary = firstSentence(text);
-              const nextSequence = streamSequence + 1;
               try {
-                await updateCardSummaryFeishu({
-                  cfg,
-                  cardId: streamCardKitId,
-                  summaryText: summary,
-                  content: applyMentions(text),
-                  sequence: nextSequence,
-                  accountId,
+                await runCardKitMutation("summary update", async (sequence) => {
+                  await updateCardSummaryFeishu({
+                    cfg,
+                    cardId,
+                    summaryText: summary,
+                    content: applyMentions(text),
+                    sequence,
+                    accountId,
+                  });
                 });
-                streamSequence = nextSequence;
               } catch (err) {
                 params.runtime.log?.(
                   `feishu[${account.accountId}] summary update skipped: ${String(err)}`,
@@ -488,6 +631,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               }
             }
             if (streamSuccess) {
+              await closeStreamingIfNeeded();
               params.runtime.log?.(
                 `feishu[${account.accountId}] streaming status: used=${streamEverUpdated}, backend=${streamBackend}, partials=${streamPartialCount}, flushes=${streamFlushCount}, updates=${streamUpdateCount}`,
               );
@@ -522,13 +666,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (streamBackend === "cardkit" && streamCardKitId) {
               // CardKit path — unlimited updates
               try {
-                const nextSequence = streamSequence + 1;
                 await updateCardElementWithRetry({
                   cardId: streamCardKitId,
                   content: accumulatedCardText,
-                  sequence: nextSequence,
                 });
-                streamSequence = nextSequence;
               } catch (err) {
                 params.runtime.log?.(
                   `feishu[${account.accountId}] deliver: CardKit update failed: ${String(err)}`,
@@ -629,6 +770,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onCleanup: () => {
         typingCallbacks.onCleanup?.();
         void clearPendingThinkingCard();
+        void closeStreamingIfNeeded();
       },
     });
 

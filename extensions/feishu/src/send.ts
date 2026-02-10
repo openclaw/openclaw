@@ -686,6 +686,52 @@ export async function sendCardByCardIdFeishu(params: {
   }
 }
 
+/**
+ * Disable streaming mode on a card entity.
+ * Must be called after the final content update so users can
+ * quote-reply, forward, and interact with the card normally.
+ *
+ * Uses PATCH /cardkit/v1/cards/:card_id/settings.
+ * @param sequence Strictly increasing — must be higher than any previous operation on this card.
+ */
+export async function closeStreamingModeFeishu(params: {
+  cfg: OpenClawConfig;
+  cardId: string;
+  sequence: number;
+  accountId?: string;
+}): Promise<void> {
+  const { cfg, cardId, sequence, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+  const cardApi = asRecord(getNested(client, ["cardkit", "v1", "card"]));
+  const settings = cardApi?.settings;
+  if (typeof settings !== "function") {
+    throw new Error("Feishu CardKit card.settings API unavailable");
+  }
+
+  const response = (await (settings as (payload: unknown) => Promise<unknown>)({
+    path: { card_id: cardId },
+    data: {
+      settings: JSON.stringify({ config: { streaming_mode: false } }),
+      sequence,
+    },
+  })) as { code?: number; msg?: string };
+
+  if (response.code !== 0) {
+    throw new Error(
+      `Feishu CardKit close streaming failed: ${response.msg || `code ${response.code}`}`,
+    );
+  }
+
+  console.info(
+    `feishu[${account.accountId}] streaming mode closed: cardId=${cardId}, sequence=${sequence}`,
+  );
+}
+
 /** @param sequence Strictly increasing per card (1, 2, 3, …). */
 export async function updateCardElementContentFeishu(params: {
   cfg: OpenClawConfig;
@@ -712,5 +758,31 @@ export async function updateCardElementContentFeishu(params: {
     throw new Error(
       `Feishu CardKit element update failed: ${response.msg || `code ${response.code}`}`,
     );
+  }
+}
+
+/**
+ * Delete (recall) a message by its ID.
+ * Used to clean up orphan thinking cards that can't be updated.
+ */
+export async function deleteMessageFeishu(params: {
+  cfg: OpenClawConfig;
+  messageId: string;
+  accountId?: string;
+}): Promise<void> {
+  const { cfg, messageId, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+
+  const response = (await client.im.message.delete({
+    path: { message_id: messageId },
+  })) as { code?: number; msg?: string };
+
+  if (response.code !== 0) {
+    throw new Error(`Feishu message delete failed: ${response.msg || `code ${response.code}`}`);
   }
 }
