@@ -28,6 +28,7 @@ import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
+import { DiscordGatewayWrapper } from "./gateway-wrapper.js";
 import {
   DiscordMessageListener,
   DiscordPresenceListener,
@@ -592,6 +593,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
 
   const gateway = client.getPlugin<GatewayPlugin>("gateway");
+  // Wrap gateway with circuit breaker to prevent resume loops
+  const gatewayWrapper = gateway
+    ? new DiscordGatewayWrapper(gateway, {
+        maxConsecutiveResumeFailures: 5,
+        resetWindowMs: 60000, // 1 minute
+      })
+    : null;
+
   if (gateway) {
     registerGateway(account.accountId, gateway);
   }

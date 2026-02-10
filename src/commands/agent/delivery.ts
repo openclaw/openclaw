@@ -134,7 +134,7 @@ export async function deliverAgentCommandResult(params: {
     }
   }
 
-  const normalizedPayloads = normalizeOutboundPayloadsForJson(payloads ?? []);
+  const normalizedPayloads = normalizeOutboundPayloadsForJson(payloads ?? [], params.runtime.cwd);
   if (opts.json) {
     runtime.log(
       JSON.stringify(

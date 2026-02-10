@@ -1,5 +1,7 @@
 // Shared helpers for parsing MEDIA tokens from command/stdout text.
 
+import fs from "node:fs";
+import path from "node:path";
 import { parseFenceSpans } from "../markdown/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
@@ -28,8 +30,18 @@ function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
     return true;
   }
 
-  // Local paths: only allow safe relative paths starting with ./ that do not traverse upwards.
-  return candidate.startsWith("./") && !candidate.includes("..");
+  // Local paths: allow safe relative paths starting with ./ that do not traverse upwards.
+  // Also allow absolute paths (which would be the result of path resolution).
+  if (candidate.startsWith("./") && !candidate.includes("..")) {
+    return true;
+  }
+
+  // Allow absolute paths (result of workspace resolution)
+  if (path.isAbsolute(candidate)) {
+    return true;
+  }
+
+  return false;
 }
 
 function unwrapQuoted(value: string): string | undefined {
@@ -53,7 +65,10 @@ function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
 
-export function splitMediaFromOutput(raw: string): {
+export function splitMediaFromOutput(
+  raw: string,
+  workspaceDir?: string,
+): {
   text: string;
   mediaUrls?: string[];
   mediaUrl?: string; // legacy first item for backward compatibility
@@ -115,7 +130,17 @@ export function splitMediaFromOutput(raw: string): {
       const invalidParts: string[] = [];
       let hasValidMedia = false;
       for (const part of parts) {
-        const candidate = normalizeMediaSource(cleanCandidate(part));
+        let candidate = normalizeMediaSource(cleanCandidate(part));
+
+        // Resolve relative paths against workspace directory if provided
+        if (workspaceDir && candidate.startsWith("./")) {
+          const absolutePath = path.resolve(workspaceDir, candidate);
+          // Verify the file exists at the resolved path
+          if (fs.existsSync(absolutePath)) {
+            candidate = absolutePath;
+          }
+        }
+
         if (isValidMedia(candidate, unwrapped ? { allowSpaces: true } : undefined)) {
           media.push(candidate);
           hasValidMedia = true;
@@ -140,7 +165,16 @@ export function splitMediaFromOutput(raw: string): {
         /\s/.test(payloadValue) &&
         looksLikeLocalPath
       ) {
-        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        let fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+
+        // Resolve relative paths against workspace directory if provided
+        if (workspaceDir && fallback.startsWith("./")) {
+          const absolutePath = path.resolve(workspaceDir, fallback);
+          if (fs.existsSync(absolutePath)) {
+            fallback = absolutePath;
+          }
+        }
+
         if (isValidMedia(fallback, { allowSpaces: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
           hasValidMedia = true;
@@ -151,7 +185,16 @@ export function splitMediaFromOutput(raw: string): {
       }
 
       if (!hasValidMedia) {
-        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        let fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+
+        // Resolve relative paths against workspace directory if provided
+        if (workspaceDir && fallback.startsWith("./")) {
+          const absolutePath = path.resolve(workspaceDir, fallback);
+          if (fs.existsSync(absolutePath)) {
+            fallback = absolutePath;
+          }
+        }
+
         if (isValidMedia(fallback, { allowSpaces: true })) {
           media.push(fallback);
           hasValidMedia = true;

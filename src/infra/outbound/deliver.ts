@@ -185,6 +185,7 @@ export async function deliverOutboundPayloads(params: {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  workspaceDir?: string;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -312,7 +313,7 @@ export async function deliverOutboundPayloads(params: {
       })),
     };
   };
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads);
+  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads, params.workspaceDir);
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",

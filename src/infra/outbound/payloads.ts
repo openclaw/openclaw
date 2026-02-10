@@ -37,9 +37,12 @@ function mergeMediaUrls(...lists: Array<Array<string | undefined> | undefined>):
   return merged;
 }
 
-export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): ReplyPayload[] {
+export function normalizeReplyPayloadsForDelivery(
+  payloads: ReplyPayload[],
+  workspaceDir?: string,
+): ReplyPayload[] {
   return payloads.flatMap((payload) => {
-    const parsed = parseReplyDirectives(payload.text ?? "");
+    const parsed = parseReplyDirectives(payload.text ?? "", { workspaceDir });
     const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
     const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
     const mergedMedia = mergeMediaUrls(
@@ -68,8 +71,11 @@ export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): Rep
   });
 }
 
-export function normalizeOutboundPayloads(payloads: ReplyPayload[]): NormalizedOutboundPayload[] {
-  return normalizeReplyPayloadsForDelivery(payloads)
+export function normalizeOutboundPayloads(
+  payloads: ReplyPayload[],
+  workspaceDir?: string,
+): NormalizedOutboundPayload[] {
+  return normalizeReplyPayloadsForDelivery(payloads, workspaceDir)
     .map((payload) => {
       const channelData = payload.channelData;
       const normalized: NormalizedOutboundPayload = {
@@ -89,8 +95,11 @@ export function normalizeOutboundPayloads(payloads: ReplyPayload[]): NormalizedO
     );
 }
 
-export function normalizeOutboundPayloadsForJson(payloads: ReplyPayload[]): OutboundPayloadJson[] {
-  return normalizeReplyPayloadsForDelivery(payloads).map((payload) => ({
+export function normalizeOutboundPayloadsForJson(
+  payloads: ReplyPayload[],
+  workspaceDir?: string,
+): OutboundPayloadJson[] {
+  return normalizeReplyPayloadsForDelivery(payloads, workspaceDir).map((payload) => ({
     text: payload.text ?? "",
     mediaUrl: payload.mediaUrl ?? null,
     mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
