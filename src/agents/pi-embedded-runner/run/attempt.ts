@@ -737,8 +737,14 @@ export async function runEmbeddedAttempt(
                 messageProvider: params.messageProvider ?? undefined,
               },
             );
+            if (hookResult?.systemPrompt) {
+              effectivePrompt = hookResult.systemPrompt;
+              log.debug(
+                `hooks: replaced system prompt via before_agent_start (${hookResult.systemPrompt.length} chars)`,
+              );
+            }
             if (hookResult?.prependContext) {
-              effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+              effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
               log.debug(
                 `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
               );
