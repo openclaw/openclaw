@@ -54,6 +54,8 @@ vi.mock("@opentelemetry/api", () => ({
     CONSUMER: 4,
   },
   SpanStatusCode: {
+    UNSET: 0,
+    OK: 1,
     ERROR: 2,
   },
 }));
@@ -1006,6 +1008,117 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.tracer.startSpan).toHaveBeenCalledTimes(1);
     expect(telemetryState.tracer.startSpan.mock.calls[0][0]).toBe("execute_tool web_search");
     expect(telemetryState.tracer.startSpan.mock.calls[0][2]).toBeUndefined();
+
+    await service.stop?.();
+  });
+
+  test("agent.turn spans are nested under openclaw.message root span", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    emitDiagnosticEvent({
+      type: "message.queued",
+      channel: "telegram",
+      source: "telegram",
+      sessionKey: "telegram:agent:123",
+      queueDepth: 1,
+    });
+
+    emitDiagnosticEvent({
+      type: "run.started",
+      runId: "run-nested-1",
+      sessionId: "sess-nested-1",
+      sessionKey: "telegram:agent:123",
+    });
+
+    const calls = telemetryState.tracer.startSpan.mock.calls;
+    expect(calls[0]?.[0]).toBe("openclaw.message");
+    expect(calls[1]?.[0]).toBe("openclaw.agent.turn");
+    // agent.turn should have a parent context pointing to the root span
+    expect(calls[1]?.[2]).toEqual(expect.objectContaining({ _type: "with-parent" }));
+
+    await service.stop?.();
+  });
+
+  test("message.processed ends the root span and sets attributes", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    emitDiagnosticEvent({
+      type: "message.queued",
+      channel: "telegram",
+      source: "telegram",
+      sessionKey: "telegram:agent:456",
+      queueDepth: 1,
+    });
+
+    const rootSpan = telemetryState.tracer.startSpan.mock.results[0]?.value;
+    expect(rootSpan).toBeDefined();
+
+    emitDiagnosticEvent({
+      type: "message.processed",
+      channel: "telegram",
+      sessionKey: "telegram:agent:456",
+      outcome: "completed",
+      durationMs: 250,
+      messageId: "msg-001",
+    });
+
+    expect(rootSpan.setAttribute).toHaveBeenCalledWith("openclaw.outcome", "completed");
+    expect(rootSpan.setAttribute).toHaveBeenCalledWith("openclaw.durationMs", 250);
+    expect(rootSpan.setAttribute).toHaveBeenCalledWith("openclaw.messageId", "msg-001");
+    expect(rootSpan.setStatus).toHaveBeenCalledWith({ code: 1 }); // SpanStatusCode.OK
+    expect(rootSpan.end).toHaveBeenCalled();
+
+    await service.stop?.();
+  });
+
+  test("message.processed sets ERROR status on error outcome", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    emitDiagnosticEvent({
+      type: "message.queued",
+      channel: "telegram",
+      source: "telegram",
+      sessionKey: "telegram:agent:789",
+      queueDepth: 1,
+    });
+
+    const rootSpan = telemetryState.tracer.startSpan.mock.results[0]?.value;
+
+    emitDiagnosticEvent({
+      type: "message.processed",
+      channel: "telegram",
+      sessionKey: "telegram:agent:789",
+      outcome: "error",
+      error: "Model timeout",
+    });
+
+    expect(rootSpan.setStatus).toHaveBeenCalledWith({
+      code: 2, // SpanStatusCode.ERROR
+      message: "Model timeout",
+    });
+    expect(rootSpan.end).toHaveBeenCalled();
+
+    await service.stop?.();
+  });
+
+  test("message.processed without matching message.queued does not crash", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    // No message.queued emitted — should not throw
+    emitDiagnosticEvent({
+      type: "message.processed",
+      channel: "telegram",
+      sessionKey: "telegram:agent:unknown",
+      outcome: "completed",
+    });
+
+    // Only metrics should be recorded, no span created
+    expect(telemetryState.counters.get("openclaw.message.processed")?.add).toHaveBeenCalled();
+    expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
 
     await service.stop?.();
   });

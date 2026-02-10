@@ -174,8 +174,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let unsubscribe: (() => void) | null = null;
   let bufferCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Active root traces for nested span hierarchy (message.queued → agent.turn → tools → message.processed)
+  // Active root traces keyed by sessionKey. Covers the full message lifecycle;
+  // child spans (agent.turn, LLM calls, tool executions) are nested under it.
   const activeTraces = new Map<string, ActiveTrace>();
+  const ACTIVE_TRACE_TTL_MS = 10 * 60 * 1000;
 
   return {
     id: "diagnostics-otel",
@@ -670,6 +672,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             activeInferenceSpanByRunId.delete(runId);
           }
         }
+        for (const [key, entry] of activeTraces) {
+          if (now - entry.startedAt > ACTIVE_TRACE_TTL_MS) {
+            try {
+              entry.span.setStatus({ code: SpanStatusCode.ERROR, message: "TTL expired" });
+              entry.span.end();
+            } catch {
+              // ignore
+            }
+            activeTraces.delete(key);
+          }
+        }
       }, 60_000);
       bufferCleanupTimer.unref?.();
 
@@ -1121,8 +1134,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
 
         // Create root span for nested trace hierarchy.
-        // The message lifecycle is: message.queued → run.started → model.inference → tools → run.completed → message.processed
-        // This root span covers the entire lifecycle; child spans (agent.turn, LLM calls, tool executions) are nested under it.
+        // The message lifecycle is: message.queued → run.started → model.inference → tools → run.completed → message.processed.
+        // This root span covers the entire lifecycle; agent.turn, LLM calls, and tool executions are nested as children.
+        // message.processed ends this span (it does not create a new child).
         if (tracesEnabled && evt.sessionKey) {
           const rootSpan = tracer.startSpan("openclaw.message", {
             kind: SpanKind.SERVER,
@@ -1163,8 +1177,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
         // End root trace span created by message.queued.
         // No standalone span here — the root span covers the full message lifecycle.
-        const activeTrace = evt.sessionKey ? activeTraces.get(evt.sessionKey) : null;
+        const sessionKey = evt.sessionKey;
+        const activeTrace = sessionKey ? activeTraces.get(sessionKey) : null;
         if (activeTrace) {
+          activeTrace.span.setAttribute("openclaw.outcome", evt.outcome ?? "unknown");
+          if (typeof evt.durationMs === "number") {
+            activeTrace.span.setAttribute("openclaw.durationMs", evt.durationMs);
+          }
+          if (evt.messageId != null) {
+            activeTrace.span.setAttribute("openclaw.messageId", String(evt.messageId));
+          }
           if (evt.outcome === "error" && evt.error) {
             activeTrace.span.setStatus({
               code: SpanStatusCode.ERROR,
@@ -1174,10 +1196,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             activeTrace.span.setStatus({ code: SpanStatusCode.OK });
           }
           activeTrace.span.end();
-          activeTraces.delete(evt.sessionKey!);
+          activeTraces.delete(sessionKey);
           if (debugExports) {
-            ctx.logger.info(`diagnostics-otel: ended root span for session=${evt.sessionKey}`);
+            ctx.logger.info(`diagnostics-otel: ended root span for session=${sessionKey}`);
           }
+        } else if (debugExports) {
+          ctx.logger.info(
+            `diagnostics-otel: no active root trace for message.processed sessionKey=${sessionKey ?? "undefined"}`,
+          );
         }
       };
 
