@@ -10,6 +10,7 @@ export type NodeSubscriptionManager = {
   subscribe: (nodeId: string, sessionKey: string) => void;
   unsubscribe: (nodeId: string, sessionKey: string) => void;
   unsubscribeAll: (nodeId: string) => void;
+  getSessionKeysForNode: (nodeId: string) => string[];
   sendToSession: (
     sessionKey: string,
     event: string,
@@ -30,7 +31,14 @@ export type NodeSubscriptionManager = {
   clear: () => void;
 };
 
-export function createNodeSubscriptionManager(): NodeSubscriptionManager {
+export type NodeSubscriptionManagerOptions = {
+  onSubscribe?: (nodeId: string, sessionKey: string) => void;
+};
+
+export function createNodeSubscriptionManager(
+  opts?: NodeSubscriptionManagerOptions,
+): NodeSubscriptionManager {
+  const { onSubscribe } = opts ?? {};
   const nodeSubscriptions = new Map<string, Set<string>>();
   const sessionSubscribers = new Map<string, Set<string>>();
 
@@ -54,11 +62,15 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     nodeSet.add(normalizedSessionKey);
 
     let sessionSet = sessionSubscribers.get(normalizedSessionKey);
+    const wasEmpty = !sessionSet || sessionSet.size === 0;
     if (!sessionSet) {
       sessionSet = new Set<string>();
       sessionSubscribers.set(normalizedSessionKey, sessionSet);
     }
     sessionSet.add(normalizedNodeId);
+    if (wasEmpty) {
+      onSubscribe?.(normalizedNodeId, normalizedSessionKey);
+    }
   };
 
   const unsubscribe = (nodeId: string, sessionKey: string) => {
@@ -79,6 +91,11 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     if (sessionSet?.size === 0) {
       sessionSubscribers.delete(normalizedSessionKey);
     }
+  };
+
+  const getSessionKeysForNode = (nodeId: string): string[] => {
+    const nodeSet = nodeSubscriptions.get(nodeId.trim());
+    return nodeSet ? [...nodeSet] : [];
   };
 
   const unsubscribeAll = (nodeId: string) => {
@@ -156,6 +173,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     subscribe,
     unsubscribe,
     unsubscribeAll,
+    getSessionKeysForNode,
     sendToSession,
     sendToAllSubscribed,
     sendToAllConnected,

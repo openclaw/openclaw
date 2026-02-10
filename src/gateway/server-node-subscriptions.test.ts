@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 
 describe("node subscription manager", () => {
@@ -34,5 +34,55 @@ describe("node subscription manager", () => {
     manager.sendToSession("secondary", "tick", {}, sendEvent);
 
     expect(sent).toEqual([]);
+  });
+
+  test("getSessionKeysForNode returns subscribed session keys", () => {
+    const manager = createNodeSubscriptionManager();
+    manager.subscribe("node-a", "agent:main:discord:channel:123");
+    manager.subscribe("node-a", "agent:main:slack:channel:456");
+
+    const keys = manager.getSessionKeysForNode("node-a");
+
+    expect(keys).toHaveLength(2);
+    expect(keys).toContain("agent:main:discord:channel:123");
+    expect(keys).toContain("agent:main:slack:channel:456");
+  });
+
+  test("getSessionKeysForNode returns empty for unknown node", () => {
+    const manager = createNodeSubscriptionManager();
+    expect(manager.getSessionKeysForNode("unknown")).toEqual([]);
+  });
+
+  test("onSubscribe is called when first subscriber is added", () => {
+    const onSubscribe = vi.fn();
+    const manager = createNodeSubscriptionManager({ onSubscribe });
+
+    manager.subscribe("node-a", "session-1");
+
+    expect(onSubscribe).toHaveBeenCalledWith("node-a", "session-1");
+  });
+
+  test("onSubscribe is not called when adding second subscriber to same session", () => {
+    const onSubscribe = vi.fn();
+    const manager = createNodeSubscriptionManager({ onSubscribe });
+
+    manager.subscribe("node-a", "session-1");
+    manager.subscribe("node-b", "session-1");
+
+    expect(onSubscribe).toHaveBeenCalledTimes(1);
+    expect(onSubscribe).toHaveBeenCalledWith("node-a", "session-1");
+  });
+
+  test("onSubscribe is called when re-subscribing after unsubscribeAll", () => {
+    const onSubscribe = vi.fn();
+    const manager = createNodeSubscriptionManager({ onSubscribe });
+
+    manager.subscribe("node-a", "session-1");
+    manager.unsubscribeAll("node-a");
+    manager.subscribe("node-a", "session-1");
+
+    expect(onSubscribe).toHaveBeenCalledTimes(2);
+    expect(onSubscribe).toHaveBeenNthCalledWith(1, "node-a", "session-1");
+    expect(onSubscribe).toHaveBeenNthCalledWith(2, "node-a", "session-1");
   });
 });

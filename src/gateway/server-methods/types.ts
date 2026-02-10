@@ -57,6 +57,8 @@ export type GatewayRequestContext = {
   nodeSubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
+  markZombieSessionsForNode?: (nodeId: string) => void;
+  getSessionKeysForNode?: (nodeId: string) => string[];
   hasConnectedMobileNode: () => boolean;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;

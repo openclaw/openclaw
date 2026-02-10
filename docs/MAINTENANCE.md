@@ -179,6 +179,10 @@ With this set:
 
 You can adjust the list over time without code changes; just update the env var and restart the gateway.
 
+## Discord WebSocket recovery (transient disconnects)
+
+If the Discord gateway WebSocket disconnects briefly (e.g. 1006) during long-running tools, this fork queues outbound replies instead of dropping them. When the connection recovers, queued replies flush automatically. Logs show `discord: reconnected — flushed N queued repl[ies]` when this happens. No action needed. See [Discord troubleshooting](/channels/discord#troubleshooting). Implementation details are in FORK-CHANGES.md (repo root).
+
 ## Protection Mechanisms
 
 ### Backup your service file

@@ -5,6 +5,12 @@ import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import {
+  clearRecovering,
+  isRecovering,
+  queueDelivery,
+  setFlushHandler,
+} from "../recovery-state.js";
 import { sendMessageDiscord } from "../send.js";
 
 export async function deliverDiscordReply(params: {
@@ -20,6 +26,16 @@ export async function deliverDiscordReply(params: {
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
 }) {
+  const accountId = params.accountId ?? "default";
+  if (isRecovering(accountId)) {
+    const queued = queueDelivery(accountId, {
+      ...params,
+      accountId,
+    });
+    if (queued) {
+      return;
+    }
+  }
   const chunkLimit = Math.min(params.textLimit, 2000);
   for (const payload of params.replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
@@ -78,4 +94,17 @@ export async function deliverDiscordReply(params: {
       });
     }
   }
+}
+
+/** Register flush handler for recovery (used by provider on reconnect). */
+export function registerDiscordRecoveryFlush(accountId: string): void {
+  setFlushHandler(accountId, async (queued) => {
+    for (const q of queued) {
+      try {
+        await deliverDiscordReply(q);
+      } catch (err) {
+        q.runtime.error?.(`discord recovery flush failed: ${String(err)}`);
+      }
+    }
+  });
 }

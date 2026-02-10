@@ -196,9 +196,15 @@ export function attachGatewayWsConnectionHandler(params: {
       }
       if (client?.connect?.role === "node") {
         const context = buildRequestContext();
-        const nodeId = context.nodeRegistry.unregister(connId);
-        if (nodeId) {
-          context.nodeUnsubscribeAll(nodeId);
+        const nodeId = (client.connect.device?.id ?? client.connect.client?.id) as
+          | string
+          | undefined;
+        if (nodeId && (code === 1006 || code === 1001)) {
+          context.markZombieSessionsForNode?.(nodeId);
+        }
+        const unregNodeId = context.nodeRegistry.unregister(connId);
+        if (unregNodeId) {
+          context.nodeUnsubscribeAll(unregNodeId);
         }
       }
       logWs("out", "close", {

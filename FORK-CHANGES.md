@@ -63,6 +63,15 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
 - **Dynamic subcommand linkage**
   - Plugin-provided CLI commands (e.g. `openclaw foundry-openclaw`) were failing with "unknown command" despite the plugin being loaded. Plugin CLI registration runs in `run-main` before lazy subcli registration and before parse: `registerPluginCliCommands(program, loadConfig())` is invoked so plugin subcommands are on the root program in time. Built-in commands (e.g. `memory`) are registered during `buildProgram()`, so overlapping plugin commands are skipped and no duplicate-command error occurs. No manual binary edits are required; `openclaw <plugin-cmd>` works when the plugin is enabled and registers a CLI. See `src/cli/run-main.ts`, `src/plugins/cli.ts`, and tests in `src/plugins/cli.test.ts`, `src/cli/program/command-registry.test.ts`.
 
+### WebSocket recovery persistence
+
+- **Discord and gateway transient disconnect handling** — Keeps session handles alive during brief WebSocket disconnects (e.g. 1006):
+  - **Retention**: On disconnect, sessions are marked zombie instead of purged; a 30s reaper cleans up if no reconnection.
+  - **Re-binding**: When a new connection arrives for the same agent:channel:recipient triplet within the window, the reaper is halted and the new WebSocket is bound to the existing session.
+  - **Outbound queuing**: Discord reply delivery queues results during recovery instead of dropping them; queued replies flush on reconnect.
+  - Key files: `src/gateway/zombie-session-buffer.ts`, `src/discord/recovery-state.ts`, `src/discord/monitor.gateway.ts`, `src/discord/monitor/reply-delivery.ts`, `src/gateway/server/ws-connection.ts`.
+  - See [Discord channel docs](docs/channels/discord.md) for troubleshooting transient disconnects.
+
 ### Model / provider integrations
 
 - **Ollama**

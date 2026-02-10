@@ -5,6 +5,7 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { clearZombieBuffer } from "./zombie-session-buffer.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -96,6 +97,7 @@ export function createGatewayCloseHandler(params: {
       }
     }
     params.chatRunState.clear();
+    clearZombieBuffer();
     for (const c of params.clients) {
       try {
         c.socket.close(1012, "service restart");

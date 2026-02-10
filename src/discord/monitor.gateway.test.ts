@@ -1,6 +1,12 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
-import { waitForDiscordGatewayStop } from "./monitor.gateway.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { attachDiscordRecoveryHandlers, waitForDiscordGatewayStop } from "./monitor.gateway.js";
+import {
+  getQueuedCount,
+  isRecovering,
+  queueDelivery,
+  resetRecoveryStateForTest,
+} from "./recovery-state.js";
 
 describe("waitForDiscordGatewayStop", () => {
   it("resolves on abort and disconnects gateway", async () => {
@@ -80,5 +86,107 @@ describe("waitForDiscordGatewayStop", () => {
     abort.abort();
 
     await expect(promise).resolves.toBeUndefined();
+  });
+});
+
+describe("attachDiscordRecoveryHandlers", () => {
+  const accountId = "test-recovery-handlers";
+
+  beforeEach(() => {
+    resetRecoveryStateForTest();
+  });
+
+  afterEach(() => {
+    resetRecoveryStateForTest();
+  });
+
+  it("sets recovering on WebSocket connection closed", () => {
+    const emitter = new EventEmitter();
+    const stop = attachDiscordRecoveryHandlers({
+      emitter,
+      accountId,
+    });
+
+    emitter.emit("debug", "WebSocket connection closed");
+
+    expect(isRecovering(accountId)).toBe(true);
+    stop();
+  });
+
+  it("calls onQueued when replies are queued during disconnect", () => {
+    const emitter = new EventEmitter();
+    const onQueued = vi.fn();
+    attachDiscordRecoveryHandlers({
+      emitter,
+      accountId,
+      onQueued,
+    });
+
+    emitter.emit("debug", "WebSocket connection closed");
+
+    expect(isRecovering(accountId)).toBe(true);
+    expect(getQueuedCount(accountId)).toBe(0);
+    expect(onQueued).not.toHaveBeenCalled();
+  });
+
+  it("clears recovering and flushes on WebSocket connection opened", async () => {
+    const flushHandler = vi.fn(async () => {});
+    const { setFlushHandler } = await import("./recovery-state.js");
+    setFlushHandler(accountId, flushHandler);
+
+    const emitter = new EventEmitter();
+    const onFlushed = vi.fn();
+    const stop = attachDiscordRecoveryHandlers({
+      emitter,
+      accountId,
+      onFlushed,
+    });
+
+    emitter.emit("debug", "WebSocket connection closed");
+    expect(isRecovering(accountId)).toBe(true);
+    queueDelivery(accountId, {
+      target: "discord:channel:123",
+      replies: [{ text: "queued" }],
+      token: "token",
+      accountId,
+      runtime: { log: () => {}, error: () => {} },
+      textLimit: 2000,
+    });
+    expect(getQueuedCount(accountId)).toBe(1);
+
+    emitter.emit("debug", "WebSocket connection opened");
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(isRecovering(accountId)).toBe(false);
+    expect(flushHandler).toHaveBeenCalledTimes(1);
+    expect(flushHandler).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ target: "discord:channel:123" })]),
+    );
+    expect(onFlushed).toHaveBeenCalledWith(1);
+    stop();
+  });
+
+  it("does not set recovering when isShuttingDown returns true", () => {
+    const emitter = new EventEmitter();
+    const stop = attachDiscordRecoveryHandlers({
+      emitter,
+      accountId,
+      isShuttingDown: () => true,
+    });
+
+    emitter.emit("debug", "WebSocket connection closed");
+
+    expect(isRecovering(accountId)).toBe(false);
+    stop();
+  });
+
+  it("returns no-op when emitter is undefined", () => {
+    const stop = attachDiscordRecoveryHandlers({
+      accountId,
+    });
+    expect(stop).toBeDefined();
+    expect(typeof stop).toBe("function");
+    stop();
   });
 });

@@ -21,7 +21,11 @@ import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
-import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
+import {
+  attachDiscordRecoveryHandlers,
+  getDiscordGatewayEmitter,
+  waitForDiscordGatewayStop,
+} from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../resolve-users.js";
@@ -41,6 +45,7 @@ import {
   createDiscordCommandArgFallbackButton,
   createDiscordNativeCommand,
 } from "./native-command.js";
+import { registerDiscordRecoveryFlush } from "./reply-delivery.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -625,8 +630,24 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     emitter: gatewayEmitter,
     runtime,
   });
+  registerDiscordRecoveryFlush(account.accountId);
+  let shuttingDown = false;
+  const stopRecoveryHandlers = attachDiscordRecoveryHandlers({
+    emitter: gatewayEmitter,
+    accountId: account.accountId,
+    isShuttingDown: () => shuttingDown,
+    onQueued: (count) => {
+      logVerbose(`discord: recovery mode — ${count} reply/ies queued during disconnect`);
+    },
+    onFlushed: (count) => {
+      runtime.log?.(
+        `discord: reconnected — flushed ${count} queued repl${count === 1 ? "y" : "ies"}`,
+      );
+    },
+  });
   const abortSignal = opts.abortSignal;
   const onAbort = () => {
+    shuttingDown = true;
     if (!gateway) {
       return;
     }
@@ -686,6 +707,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
     });
   } finally {
+    shuttingDown = true;
+    stopRecoveryHandlers();
     unregisterGateway(account.accountId);
     stopGatewayLogging();
     if (helloTimeoutId) {

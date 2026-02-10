@@ -56,11 +56,12 @@ Full troubleshooting: [/channels/telegram#troubleshooting](/channels/telegram#tr
 
 ### Discord failure signatures
 
-| Symptom                         | Fastest check                       | Fix                                                       |
-| ------------------------------- | ----------------------------------- | --------------------------------------------------------- |
-| Bot online but no guild replies | `openclaw channels status --probe`  | Allow guild/channel and verify message content intent.    |
-| Group messages ignored          | Check logs for mention gating drops | Mention bot or set guild/channel `requireMention: false`. |
-| DM replies missing              | `openclaw pairing list discord`     | Approve DM pairing or adjust DM policy.                   |
+| Symptom                                       | Fastest check                                | Fix                                                             |
+| --------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------- |
+| Bot online but no guild replies               | `openclaw channels status --probe`           | Allow guild/channel and verify message content intent.          |
+| Group messages ignored                        | Check logs for mention gating drops          | Mention bot or set guild/channel `requireMention: false`.       |
+| DM replies missing                            | `openclaw pairing list discord`              | Approve DM pairing or adjust DM policy.                         |
+| Transient disconnect (1006) during long tools | Check logs for `WebSocket connection closed` | Fork queues replies; they flush on reconnect. No action needed. |
 
 Full troubleshooting: [/channels/discord#troubleshooting](/channels/discord#troubleshooting)
 

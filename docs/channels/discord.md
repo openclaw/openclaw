@@ -209,6 +209,7 @@ Notes:
 ### Troubleshooting
 
 - First: run `openclaw doctor` and `openclaw channels status --probe` (actionable warnings + quick audits).
+- **Transient WebSocket disconnects (1006)**: If the Discord gateway flickers during long-running tools (e.g. deep search), the fork keeps session handles alive for ~30 seconds and queues outbound replies. On reconnect, queued replies flush automatically. Logs show `discord: reconnected — flushed N queued replies` when this happens.
 - **“Used disallowed intents”**: enable **Message Content Intent** (and likely **Server Members Intent**) in the Developer Portal, then restart the gateway.
 - **Bot connects but never replies in a guild channel**:
   - Missing **Message Content Intent**, or
