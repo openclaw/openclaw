@@ -1,0 +1,10 @@
+{
+  "id": "wecom",
+  "channels": ["wecom"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+
