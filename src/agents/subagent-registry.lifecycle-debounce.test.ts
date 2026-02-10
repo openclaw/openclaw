@@ -164,7 +164,7 @@ describe("subagent lifecycle debounce", () => {
   it("preserves original startedAt across retry phase start events", async () => {
     await setupAndRegister();
 
-    // The registration sets startedAt = Date.now() (which is 0 with fake timers).
+    // The registration sets startedAt = Date.now() (1000 with these fake timers).
     // First attempt start (should NOT overwrite the registration startedAt)
     capturedEventHandler?.({
       runId: "run-retry",
