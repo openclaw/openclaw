@@ -1,0 +1,99 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.9",
+    "lastTouchedAt": "2026-02-10T00:00:00.000Z"
+  },
+  "models": {
+    "providers": {
+      "anthropic": {
+        "apiKey": "ANTHROPIC_API_KEY",
+        "models": [
+          {
+            "id": "claude-opus-4-6",
+            "name": "Claude Opus 4.6",
+            "reasoning": true,
+            "input": ["text", "image", "pdf"],
+            "contextWindow": 200000,
+            "maxTokens": 32768
+          },
+          {
+            "id": "claude-sonnet-4-5",
+            "name": "Claude Sonnet 4.5",
+            "reasoning": true,
+            "input": ["text", "image", "pdf"],
+            "contextWindow": 200000,
+            "maxTokens": 16384
+          }
+        ]
+      },
+      "google": {
+        "apiKey": "GEMINI_API_KEY",
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "models": [
+          {
+            "id": "gemini-3-pro-preview",
+            "name": "Gemini 3 Pro",
+            "reasoning": true,
+            "input": ["text", "image", "audio", "video", "pdf"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "gemini-3-flash-preview",
+            "name": "Gemini 3 Flash",
+            "reasoning": false,
+            "input": ["text", "image", "audio", "video", "pdf"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "models": {
+        "anthropic/claude-opus-4-6": {},
+        "google/gemini-3-pro-preview": {}
+      }
+    }
+  },
+  "hooks": {
+    "enabled": true,
+    "presets": ["gmail"],
+    "gmail": {
+      "account": "you@gmail.com",
+      "label": "INBOX",
+      "topic": "gog-gmail-watch",
+      "subscription": "gog-gmail-watch-push",
+      "includeBody": true,
+      "maxBytes": 20000,
+      "renewEveryMinutes": 720
+    },
+    "mappings": [
+      {
+        "id": "gmail-to-claude",
+        "match": { "source": "gmail" },
+        "action": "agent",
+        "name": "Gmail via Claude",
+        "messageTemplate": "New email from {{from}}: {{subject}}",
+        "model": "anthropic/claude-sonnet-4-5"
+      },
+      {
+        "id": "gmail-summary-gemini",
+        "match": { "source": "gmail", "path": "/gmail-summary" },
+        "action": "agent",
+        "name": "Gmail Summary via Gemini",
+        "messageTemplate": "Summarize this email thread: {{subject}} from {{from}}",
+        "model": "google/gemini-3-flash-preview"
+      }
+    ]
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "controlUi": {
+      "enabled": true
+    }
+  }
+}

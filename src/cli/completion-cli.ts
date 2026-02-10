@@ -100,6 +100,9 @@ function formatCompletionSourceLine(
   binName: string,
   cachePath: string,
 ): string {
+  if (shell === "powershell") {
+    return `. "${cachePath}"`;
+  }
   if (shell === "fish") {
     return `source "${cachePath}"`;
   }
@@ -317,6 +320,10 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   } else if (shell === "fish") {
     profilePath = path.join(home, ".config", "fish", "config.fish");
     sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
+  } else if (shell === "powershell") {
+    profilePath = getShellProfilePath("powershell");
+    // PowerShell uses dot-sourcing instead of source
+    sourceLine = `. "${cachePath}"`;
   } else {
     console.error(`Automated installation not supported for ${shell} yet.`);
     return;
@@ -350,7 +357,8 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
     await fs.writeFile(profilePath, update.next, "utf-8");
     if (!yes) {
-      console.log(`Completion installed. Restart your shell or run: source ${profilePath}`);
+      const reloadCmd = shell === "powershell" ? `. "${profilePath}"` : `source ${profilePath}`;
+      console.log(`Completion installed. Restart your shell or run: ${reloadCmd}`);
     }
   } catch (err) {
     console.error(`Failed to install completion: ${err as string}`);
