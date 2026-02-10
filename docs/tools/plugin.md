@@ -631,6 +631,7 @@ Command handler context:
 - `args`: Arguments passed after the command (if `acceptsArgs: true`)
 - `commandBody`: The full command text
 - `config`: The current OpenClaw config
+- `sessionKey`: The session key for the current session (e.g., `"agent:main:main"`)
 
 Command options:
 
@@ -664,6 +665,53 @@ Notes:
 - Command names must start with a letter and contain only letters, numbers, hyphens, and underscores
 - Reserved command names (like `help`, `status`, `reset`, etc.) cannot be overridden by plugins
 - Duplicate command registration across plugins will fail with a diagnostic error
+
+### Session store access
+
+Plugins can read and update session store entries via `api.sessions`. This
+enables plugins to implement features like session switching, where the
+plugin swaps the `sessionId` on a session entry to change which conversation
+context is active.
+
+```ts
+export default function (api) {
+  // Pre-load session modules for synchronous getEntry access
+  api.sessions.init().catch(() => {});
+
+  api.registerCommand({
+    name: "switch",
+    description: "Switch to a different session context",
+    acceptsArgs: true,
+    handler: async (ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) {
+        return { text: "Session key not available." };
+      }
+
+      // Read the current session entry
+      const entry = api.sessions.getEntry(sessionKey);
+
+      // Update the session entry (e.g., swap to a different sessionId)
+      await api.sessions.updateEntry(sessionKey, {
+        sessionId: "new-session-uuid",
+      });
+
+      return { text: "Session switched!" };
+    },
+  });
+}
+```
+
+Session API methods:
+
+- `sessions.init()`: Pre-load session modules. Call during plugin registration
+  if you need synchronous `getEntry` access. Returns a Promise.
+- `sessions.getEntry(key)`: Read a session entry by key. Returns `SessionEntry | undefined`.
+  Requires `init()` to have been called first.
+- `sessions.updateEntry(key, patch)`: Atomically update fields on a session entry.
+  Merges the patch with the existing entry. Automatically calls `init()` if needed.
+
+The `SessionEntry` type is exported from `openclaw/plugin-sdk` for TypeScript plugins.
 
 ### Register background services
 

@@ -8,6 +8,7 @@ import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
@@ -166,6 +167,8 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: number;
+  /** Session key for the current session (e.g., "agent:main:main") */
+  sessionKey?: string;
 };
 
 /**
@@ -286,6 +289,15 @@ export type OpenClawPluginApi = {
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   resolvePath: (input: string) => string;
+  /** Session store access for plugins that need to read or swap session entries. */
+  sessions: {
+    /** Read the session entry for a given session key. */
+    getEntry(key: string): SessionEntry | undefined;
+    /** Atomically update fields on a session entry (e.g., swap sessionId). */
+    updateEntry(key: string, patch: Partial<SessionEntry>): Promise<void>;
+    /** Pre-load session modules (call during plugin init if you need sync getEntry). */
+    init(): Promise<void>;
+  };
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
     hookName: K,

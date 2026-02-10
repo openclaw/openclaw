@@ -444,6 +444,13 @@ function createApi(): OpenClawPluginApi {
     resolvePath(input: string) {
       return input;
     },
+    sessions: {
+      getEntry() {
+        return undefined;
+      },
+      updateEntry: async () => {},
+      init: async () => {},
+    },
     on() {},
   };
 }
