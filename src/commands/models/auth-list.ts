@@ -1,29 +1,9 @@
 import type { RuntimeEnv } from "../../runtime.js";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
-import {
-  type AuthProfileStore,
-  ensureAuthProfileStore,
-  resolveAuthStorePathForDisplay,
-} from "../../agents/auth-profiles.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
-import { loadConfig } from "../../config/config.js";
 import { renderTable } from "../../terminal/table.js";
 import { colorize, theme } from "../../terminal/theme.js";
-import { shortenHomePath } from "../../utils.js";
-import { type ProfileDisplayInfo, resolveProfileDisplayInfos } from "./list.auth-overview.js";
+import { modelsAuthListLogic } from "./auth-list.logic.js";
 import { formatProfileStatus, isRich } from "./list.format.js";
-import { ensureFlagCompatibility, resolveKnownAgentId } from "./shared.js";
-
-function collectAllProviders(store: AuthProfileStore): string[] {
-  const providers = new Set<string>();
-  for (const cred of Object.values(store.profiles)) {
-    if (cred.provider) {
-      providers.add(normalizeProviderId(cred.provider));
-    }
-  }
-  return Array.from(providers).toSorted((a, b) => a.localeCompare(b));
-}
+import { ensureFlagCompatibility } from "./shared.js";
 
 export async function modelsAuthListCommand(
   opts: {
@@ -36,21 +16,15 @@ export async function modelsAuthListCommand(
 ) {
   ensureFlagCompatibility(opts);
 
-  const cfg = loadConfig();
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
-  const store = ensureAuthProfileStore(agentDir);
-  const authStorePath = shortenHomePath(resolveAuthStorePathForDisplay(agentDir));
-
-  const targetProviders = opts.provider
-    ? [normalizeProviderId(opts.provider.trim())]
-    : collectAllProviders(store);
-
-  const allInfos: ProfileDisplayInfo[] = [];
-  for (const provider of targetProviders) {
-    const infos = resolveProfileDisplayInfos({ provider, cfg, store });
-    allInfos.push(...infos);
-  }
+  const {
+    agentId,
+    agentDir,
+    authStorePath,
+    profiles: allInfos,
+  } = await modelsAuthListLogic({
+    provider: opts.provider,
+    agent: opts.agent,
+  });
 
   if (opts.json) {
     runtime.log(
