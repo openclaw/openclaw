@@ -40,6 +40,11 @@ jobs:
                   "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
               },
               {
+                label: "r: testflight",
+                close: true,
+                message: "Not available, build from source.",
+              },
+              {
                 label: "r: third-party-extension",
                 close: true,
                 message:
@@ -60,10 +65,24 @@ jobs:
               const title = issue.title ?? "";
               const body = issue.body ?? "";
               const haystack = `${title}\n${body}`.toLowerCase();
-              const hasLabel = (issue.labels ?? []).some((label) =>
+              const hasMoltbookLabel = (issue.labels ?? []).some((label) =>
                 typeof label === "string" ? label === "r: moltbook" : label?.name === "r: moltbook",
               );
-              if (haystack.includes("moltbook") && !hasLabel) {
+              const hasTestflightLabel = (issue.labels ?? []).some((label) =>
+                typeof label === "string"
+                  ? label === "r: testflight"
+                  : label?.name === "r: testflight",
+              );
+              if (title.toLowerCase().includes("testflight") && !hasTestflightLabel) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ["r: testflight"],
+                });
+                return;
+              }
+              if (haystack.includes("moltbook") && !hasMoltbookLabel) {
                 await github.rest.issues.addLabels({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
