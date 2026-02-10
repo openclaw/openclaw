@@ -113,6 +113,15 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("are not user-visible by default");
   });
 
+  it("guides subagent workflows to avoid polling loops", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
+    expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
+  });
+
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -474,7 +483,8 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("You CAN spawn your own sub-agents");
     expect(prompt).toContain("sessions_spawn");
     expect(prompt).toContain("`subagents` tool");
-    expect(prompt).toContain("announce their results back to you");
+    expect(prompt).toContain("announce their results back to you automatically");
+    expect(prompt).toContain("Do NOT repeatedly poll `subagents list`");
   });
 
   it("does not include spawning guidance for depth-1 leaf when maxSpawnDepth == 1", () => {

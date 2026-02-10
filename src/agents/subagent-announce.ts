@@ -279,6 +279,7 @@ export function buildSubagentSystemPrompt(params: {
     `2. **Complete the task** - Your final message will be automatically reported to the ${parentLabel}`,
     "3. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
     "4. **Be ephemeral** - You may be terminated after task completion. That's fine.",
+    "5. **Trust push-based completion** - Descendant results are auto-announced back to you; do not busy-poll for status.",
     "",
     "## Output Format",
     "When complete, your final response should include:",
@@ -299,8 +300,10 @@ export function buildSubagentSystemPrompt(params: {
     lines.push(
       "## Sub-Agent Spawning",
       "You CAN spawn your own sub-agents for parallel or complex work using `sessions_spawn`.",
-      "Use the `subagents` tool to list, steer, or kill your spawned sub-agents.",
-      "Your sub-agents will announce their results back to you (not to the main agent).",
+      "Use the `subagents` tool to steer, kill, or do an on-demand status check for your spawned sub-agents.",
+      "Your sub-agents will announce their results back to you automatically (not to the main agent).",
+      "Default workflow: spawn work, continue orchestrating, and wait for auto-announced completions.",
+      "Do NOT repeatedly poll `subagents list` in a loop unless you are actively debugging or intervening.",
       "Coordinate their work and synthesize results before reporting back.",
       "",
     );
