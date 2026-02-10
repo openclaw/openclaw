@@ -413,12 +413,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         // Archive existing transcript files
         for (const candidate of existingFiles) {
           try {
-            // Append session metadata to the transcript file before archiving
+            // Archive the file first (without mutating the original)
+            const archivedPath = archiveFileOnDisk(candidate, "deleted");
+            archived.push(archivedPath);
+            // Append metadata to the archived copy only
             if (entry) {
               const metadataLine = JSON.stringify({ __session_metadata__: entry }) + "\n";
-              fs.appendFileSync(candidate, metadataLine, "utf-8");
+              fs.appendFileSync(archivedPath, metadataLine, "utf-8");
             }
-            archived.push(archiveFileOnDisk(candidate, "deleted"));
           } catch {
             // Best-effort.
           }
