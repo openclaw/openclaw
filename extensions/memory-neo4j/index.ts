@@ -510,6 +510,11 @@ const memoryNeo4jPlugin = {
           .option("--decay-half-life <days>", "Base half-life in days (default: 30)")
           .option("--batch-size <n>", "Extraction batch size (default: 50)")
           .option("--delay <ms>", "Delay between extraction batches in ms (default: 1000)")
+          .option("--max-semantic-pairs <n>", "Max LLM-checked semantic dedup pairs (default: 500)")
+          .option(
+            "--concurrency <n>",
+            "Parallel LLM calls — match OLLAMA_NUM_PARALLEL (default: 8)",
+          )
           .option(
             "--skip-semantic",
             "Skip LLM-based semantic dedup (Phase 1b) and conflict detection (Phase 1c)",
@@ -524,6 +529,8 @@ const memoryNeo4jPlugin = {
               decayHalfLife?: string;
               batchSize?: string;
               delay?: string;
+              maxSemanticPairs?: string;
+              concurrency?: string;
               skipSemantic?: boolean;
             }) => {
               console.log("\n🌙 Memory Sleep Cycle");
@@ -595,12 +602,33 @@ const memoryNeo4jPlugin = {
                   return;
                 }
 
+                const maxSemanticPairs = opts.maxSemanticPairs
+                  ? parseInt(opts.maxSemanticPairs, 10)
+                  : undefined;
+                if (
+                  maxSemanticPairs != null &&
+                  (Number.isNaN(maxSemanticPairs) || maxSemanticPairs <= 0)
+                ) {
+                  console.error("Error: --max-semantic-pairs must be greater than 0");
+                  process.exitCode = 1;
+                  return;
+                }
+
+                const concurrency = opts.concurrency ? parseInt(opts.concurrency, 10) : undefined;
+                if (concurrency != null && (Number.isNaN(concurrency) || concurrency <= 0)) {
+                  console.error("Error: --concurrency must be greater than 0");
+                  process.exitCode = 1;
+                  return;
+                }
+
                 await db.ensureInitialized();
 
                 const result = await runSleepCycle(db, embeddings, extractionConfig, api.logger, {
                   agentId: opts.agent,
                   dedupThreshold: opts.dedupThreshold ? parseFloat(opts.dedupThreshold) : undefined,
                   skipSemanticDedup: opts.skipSemantic === true,
+                  maxSemanticDedupPairs: maxSemanticPairs,
+                  llmConcurrency: concurrency,
                   paretoPercentile: pareto,
                   promotionMinAgeDays: promotionMinAge,
                   decayRetentionThreshold: decayThreshold,

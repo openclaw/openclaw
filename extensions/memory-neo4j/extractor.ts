@@ -601,6 +601,12 @@ export type SleepCycleOptions = {
   paretoPercentile?: number; // Top N% for core (default: 0.2 = top 20%)
   promotionMinAgeDays?: number; // Min age before promotion (default: 7)
 
+  // Phase 1b: Semantic Dedup
+  maxSemanticDedupPairs?: number; // Max LLM-checked pairs (default: 500)
+
+  // Concurrency
+  llmConcurrency?: number; // Parallel LLM calls (default: 8, match OLLAMA_NUM_PARALLEL)
+
   // Phase 5: Extraction
   extractionBatchSize?: number; // Memories per batch (default: 50)
   extractionDelayMs?: number; // Delay between batches (default: 1000)
@@ -675,6 +681,8 @@ export async function runSleepCycle(
     abortSignal,
     dedupThreshold = 0.95,
     skipSemanticDedup = false,
+    maxSemanticDedupPairs = 500,
+    llmConcurrency = 8,
     paretoPercentile = 0.2,
     promotionMinAgeDays = 7,
     decayRetentionThreshold = 0.1,
@@ -701,7 +709,7 @@ export async function runSleepCycle(
     aborted: false,
   };
 
-  const LLM_CONCURRENCY = 8;
+  const LLM_CONCURRENCY = llmConcurrency;
 
   // --------------------------------------------------------------------------
   // Phase 1: Deduplication (Optimized - combined vector + semantic dedup)
@@ -809,17 +817,16 @@ export async function runSleepCycle(
         // Cap the number of LLM-checked pairs to prevent sleep cycle timeouts.
         // Sort by similarity descending so higher-similarity pairs (more likely
         // to be duplicates) are checked first.
-        const MAX_SEMANTIC_DEDUP_PAIRS = 50;
-        if (allPairs.length > MAX_SEMANTIC_DEDUP_PAIRS) {
+        if (allPairs.length > maxSemanticDedupPairs) {
           allPairs.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
-          const skipped = allPairs.length - MAX_SEMANTIC_DEDUP_PAIRS;
-          allPairs.length = MAX_SEMANTIC_DEDUP_PAIRS;
+          const skipped = allPairs.length - maxSemanticDedupPairs;
+          allPairs.length = maxSemanticDedupPairs;
           onProgress?.(
             "semanticDedup",
-            `Capped at ${MAX_SEMANTIC_DEDUP_PAIRS} pairs (${skipped} lower-similarity pairs skipped)`,
+            `Capped at ${maxSemanticDedupPairs} pairs (${skipped} lower-similarity pairs skipped)`,
           );
           logger.info(
-            `memory-neo4j: [sleep] Phase 1b capped to ${MAX_SEMANTIC_DEDUP_PAIRS} pairs (${skipped} skipped)`,
+            `memory-neo4j: [sleep] Phase 1b capped to ${maxSemanticDedupPairs} pairs (${skipped} skipped)`,
           );
         }
 
