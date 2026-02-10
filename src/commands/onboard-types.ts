@@ -23,6 +23,7 @@ export type AuthChoice =
   | "venice-api-key"
   | "together-api-key"
   | "huggingface-api-key"
+  | "novita-api-key"
   | "codex-cli"
   | "apiKey"
   | "gemini-api-key"
@@ -117,6 +118,7 @@ export type OnboardOptions = {
   veniceApiKey?: string;
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
+  novitaApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;

@@ -304,6 +304,37 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   }, 60_000);
 
+  it("stores Novita API key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-novita-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          authChoice: "novita-api-key",
+          novitaApiKey: "novita-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["novita:default"]?.provider).toBe("novita");
+      expect(cfg.auth?.profiles?.["novita:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("novita/moonshotai/kimi-k2.5");
+      await expectApiKeyProfile({
+        profileId: "novita:default",
+        provider: "novita",
+        key: "novita-test-key",
+      });
+    });
+  }, 60_000);
+
   it("stores Vercel AI Gateway API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-ai-gateway-", async ({ configPath, runtime }) => {
       await runNonInteractive(
