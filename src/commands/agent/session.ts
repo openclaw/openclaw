@@ -82,7 +82,12 @@ export function resolveSessionKeyForRequest(opts: {
   // When sessionId was provided but not found in the primary store, search all agent stores.
   // Sessions created under a specific agent live in that agent's store file; the primary
   // store (derived from the default agent) won't contain them.
-  if (!sessionKey && opts.sessionId && !explicitSessionKey) {
+  // Also covers the case where --to derived a sessionKey that doesn't match the requested sessionId.
+  if (
+    opts.sessionId &&
+    !explicitSessionKey &&
+    (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
+  ) {
     const allAgentIds = listAgentIds(opts.cfg);
     for (const agentId of allAgentIds) {
       if (agentId === storeAgentId) {

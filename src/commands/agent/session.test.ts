@@ -161,6 +161,43 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionKey).toBe("agent:main:main");
   });
 
+  it("searches other stores when --to derives a key that does not match --session-id", async () => {
+    const { resolveSessionKeyForRequest } = await importFresh();
+
+    mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
+    mocks.resolveStorePath.mockImplementation(
+      (_store: string | undefined, opts?: { agentId?: string }) => {
+        if (opts?.agentId === "mybot") {
+          return "/tmp/mybot-store.json";
+        }
+        return "/tmp/main-store.json";
+      },
+    );
+    mocks.loadSessionStore.mockImplementation((storePath: string) => {
+      if (storePath === "/tmp/main-store.json") {
+        return {
+          "agent:main:main": { sessionId: "other-session-id", updatedAt: 0 },
+        };
+      }
+      if (storePath === "/tmp/mybot-store.json") {
+        return {
+          "agent:mybot:main": { sessionId: "target-session-id", updatedAt: 0 },
+        };
+      }
+      return {};
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      to: "+15551234567",
+      sessionId: "target-session-id",
+    });
+    // --to derives agent:main:main, but its sessionId doesn't match target-session-id,
+    // so the cross-store search finds it in the mybot store
+    expect(result.sessionKey).toBe("agent:mybot:main");
+    expect(result.storePath).toBe("/tmp/mybot-store.json");
+  });
+
   it("skips already-searched primary store when iterating agents", async () => {
     const { resolveSessionKeyForRequest } = await importFresh();
 
