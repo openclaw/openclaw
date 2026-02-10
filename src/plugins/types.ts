@@ -337,6 +337,7 @@ export type PluginHookName =
   | "before_message_write"
   | "session_start"
   | "session_end"
+  | "session_before_end"
   | "subagent_spawning"
   | "subagent_delivery_target"
   | "subagent_spawned"
@@ -768,6 +769,13 @@ export type PluginHookSubagentEndedEvent = {
   error?: string;
 };
 
+// session_before_end hook
+export type PluginHookSessionBeforeEndEvent = {
+  sessionId: string;
+  reason: "new" | "reset" | "compact" | "auto";
+  messageCount: number;
+};
+
 // Gateway context
 export type PluginHookGatewayContext = {
   port?: number;
@@ -852,6 +860,10 @@ export type PluginHookHandlerMap = {
   ) => Promise<void> | void;
   session_end: (
     event: PluginHookSessionEndEvent,
+    ctx: PluginHookSessionContext,
+  ) => Promise<void> | void;
+  session_before_end: (
+    event: PluginHookSessionBeforeEndEvent,
     ctx: PluginHookSessionContext,
   ) => Promise<void> | void;
   subagent_spawning: (

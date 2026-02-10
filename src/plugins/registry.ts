@@ -622,3 +622,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTypedHook,
   };
 }
+
+let SHARED_REGISTRY: PluginRegistry | null = null;
+
+export function setPluginRegistry(registry: PluginRegistry) {
+  SHARED_REGISTRY = registry;
+}
+
+export function getPluginRegistry(): PluginRegistry | null {
+  return SHARED_REGISTRY;
+}
