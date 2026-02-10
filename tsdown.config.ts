@@ -37,6 +37,17 @@ export default defineConfig([
     platform: "node",
   },
   {
+    entry: [
+      "src/agents/pi-extensions/context-pruning.ts",
+      "src/agents/pi-extensions/compaction-safeguard.ts",
+      "src/agents/pi-extensions/transcript-sanitize.ts",
+    ],
+    outDir: "dist/pi-extensions",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
     entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
     env,
     fixedExtension: false,

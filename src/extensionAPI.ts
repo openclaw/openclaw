@@ -12,3 +12,6 @@ export {
   saveSessionStore,
   resolveSessionFilePath,
 } from "./config/sessions.ts";
+
+export { default as contextPruningExtension } from "./agents/pi-extensions/context-pruning/extension.js";
+export { estimateContextUsageRatio } from "./agents/pi-extensions/context-pruning/pruner.js";
