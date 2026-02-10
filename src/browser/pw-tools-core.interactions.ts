@@ -247,6 +247,15 @@ export async function evaluateViaPlaywright(opts: {
 
   const signal = opts.signal;
   let abortListener: (() => void) | undefined;
+  let abortReject: ((reason: unknown) => void) | undefined;
+  let abortPromise: Promise<never> | undefined;
+  if (signal) {
+    abortPromise = new Promise((_, reject) => {
+      abortReject = reject;
+    });
+    // Ensure the abort promise never becomes an unhandled rejection if we throw early.
+    void abortPromise.catch(() => {});
+  }
   if (signal) {
     const disconnect = () => {
       void forceDisconnectPlaywrightForTarget({
@@ -259,8 +268,16 @@ export async function evaluateViaPlaywright(opts: {
       disconnect();
       throw signal.reason ?? new Error("aborted");
     }
-    abortListener = () => disconnect();
+    abortListener = () => {
+      disconnect();
+      abortReject?.(signal.reason ?? new Error("aborted"));
+    };
     signal.addEventListener("abort", abortListener, { once: true });
+    // If the signal aborted between the initial check and listener registration, handle it.
+    if (signal.aborted) {
+      abortListener();
+      throw signal.reason ?? new Error("aborted");
+    }
   }
 
   try {
@@ -290,10 +307,21 @@ export async function evaluateViaPlaywright(opts: {
         }
         `,
       ) as (el: Element, args: { fnBody: string; timeoutMs: number }) => unknown;
-      return await locator.evaluate(elementEvaluator, {
+      const evalPromise = locator.evaluate(elementEvaluator, {
         fnBody: fnText,
         timeoutMs: evaluateTimeout,
       });
+      if (!abortPromise) {
+        return await evalPromise;
+      }
+      try {
+        return await Promise.race([evalPromise, abortPromise]);
+      } catch (err) {
+        // If abort wins the race, the underlying evaluate may reject later; ensure we don't
+        // surface it as an unhandled rejection.
+        void evalPromise.catch(() => {});
+        throw err;
+      }
     }
 
     // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
@@ -319,7 +347,19 @@ export async function evaluateViaPlaywright(opts: {
         }
       `,
     ) as (args: { fnBody: string; timeoutMs: number }) => unknown;
-    return await page.evaluate(browserEvaluator, { fnBody: fnText, timeoutMs: evaluateTimeout });
+    const evalPromise = page.evaluate(browserEvaluator, {
+      fnBody: fnText,
+      timeoutMs: evaluateTimeout,
+    });
+    if (!abortPromise) {
+      return await evalPromise;
+    }
+    try {
+      return await Promise.race([evalPromise, abortPromise]);
+    } catch (err) {
+      void evalPromise.catch(() => {});
+      throw err;
+    }
   } finally {
     if (signal && abortListener) {
       signal.removeEventListener("abort", abortListener);
