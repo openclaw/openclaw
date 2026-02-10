@@ -70,4 +70,33 @@ describe("config io paths", () => {
       expect(io.loadConfig().gateway?.port).toBe(20002);
     });
   });
+
+  it("can fail fast when config was written by a newer OpenClaw in strict mode", async () => {
+    await withTempHome(async (home) => {
+      const dir = path.join(home, ".openclaw");
+      await fs.mkdir(dir, { recursive: true });
+      const configPath = path.join(dir, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            meta: { lastTouchedVersion: "9999.1.0" },
+            gateway: { port: 18789 },
+          },
+          null,
+          2,
+        ),
+      );
+      const io = createConfigIO({
+        env: {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STRICT_CONFIG_VERSION: "1",
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.issues.at(0)?.message).toMatch(/newer OpenClaw/i);
+    });
+  });
 });

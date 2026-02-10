@@ -1,5 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { detectMime } from "../media/mime.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -293,6 +295,22 @@ export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
+      const requestedPath = typeof record?.path === "string" ? record.path.trim() : "";
+      if (requestedPath) {
+        const root =
+          typeof (base as { root?: unknown }).root === "string"
+            ? String((base as { root?: unknown }).root)
+            : undefined;
+        const absolutePath =
+          root && !path.isAbsolute(requestedPath) ? path.join(root, requestedPath) : requestedPath;
+        const stat = await fs.stat(absolutePath).catch(() => null);
+        if (stat?.isDirectory()) {
+          throw new Error(
+            `read expected a file path but got a directory: ${requestedPath}. ` +
+              "Use read on a specific file path, or list files first.",
+          );
+        }
+      }
       const result = await base.execute(toolCallId, normalized ?? params, signal);
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const normalizedResult = await normalizeReadImageResult(result, filePath);

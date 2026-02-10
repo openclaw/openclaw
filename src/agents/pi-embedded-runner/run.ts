@@ -256,6 +256,36 @@ export async function runEmbeddedPiAgent(
         message: string;
       }): FailoverReason => {
         if (params.allInCooldown) {
+          let sawBilling = false;
+          let sawAuth = false;
+          let sawRateLimit = false;
+
+          for (const candidate of profileCandidates) {
+            if (!candidate) {
+              continue;
+            }
+            const stats = authStore.usageStats?.[candidate];
+            if (!stats) {
+              continue;
+            }
+            if (stats.disabledReason === "billing") {
+              sawBilling = true;
+              continue;
+            }
+            if ((stats.failureCounts?.auth ?? 0) > 0) {
+              sawAuth = true;
+            }
+            if ((stats.failureCounts?.rate_limit ?? 0) > 0) {
+              sawRateLimit = true;
+            }
+          }
+
+          if (sawBilling) {
+            return "billing";
+          }
+          if (sawAuth && !sawRateLimit) {
+            return "auth";
+          }
           return "rate_limit";
         }
         const classified = classifyFailoverReason(params.message);
@@ -267,7 +297,9 @@ export async function runEmbeddedPiAgent(
         message?: string;
         error?: unknown;
       }): never => {
-        const fallbackMessage = `No available auth profile for ${provider} (all in cooldown or unavailable).`;
+        const fallbackMessage = params.allInCooldown
+          ? `No available auth profile for ${provider} (all profiles are currently unavailable). Re-run \`openclaw configure\` to verify provider credentials.`
+          : `No available auth profile for ${provider} (all in cooldown or unavailable).`;
         const message =
           params.message?.trim() ||
           (params.error ? describeUnknownError(params.error).trim() : "") ||

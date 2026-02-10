@@ -148,6 +148,61 @@ describe("browser server-context ensureTabAvailable", () => {
     expect(chosen.targetId).toBe("A");
   });
 
+  it("falls back to the only page tab when an invalid targetId is provided (openclaw driver)", async () => {
+    const fetchMock = vi.fn();
+    const responses = [
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+    ];
+
+    fetchMock.mockImplementation(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      const next = responses.shift();
+      if (!next) {
+        throw new Error("no more responses");
+      }
+      return { ok: true, json: async () => next } as unknown as Response;
+    });
+
+    global.fetch = fetchMock;
+
+    const state: BrowserServerState = {
+      // oxlint-disable-next-line typescript/no-explicit-any
+      server: null as any,
+      port: 0,
+      resolved: {
+        enabled: true,
+        controlPort: 18791,
+        cdpProtocol: "http",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        color: "#FF4500",
+        headless: true,
+        noSandbox: false,
+        attachOnly: false,
+        defaultProfile: "openclaw",
+        profiles: {
+          chrome: {
+            driver: "extension",
+            cdpUrl: "http://127.0.0.1:18792",
+            cdpPort: 18792,
+            color: "#00AA00",
+          },
+          openclaw: { cdpPort: 18800, color: "#FF4500", driver: "openclaw" },
+        },
+      },
+      profiles: new Map(),
+    };
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+    const chosen = await openclaw.ensureTabAvailable("STALE_TARGET");
+    expect(chosen.targetId).toBe("A");
+  });
+
   it("returns a descriptive message when no extension tabs are attached", async () => {
     const fetchMock = vi.fn();
     const responses = [[]];

@@ -147,7 +147,16 @@ function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
+function shouldStrictFailOnFutureConfig(env: NodeJS.ProcessEnv): boolean {
+  const raw = env.OPENCLAW_STRICT_CONFIG_VERSION?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+function warnIfConfigFromFuture(
+  cfg: OpenClawConfig,
+  logger: Pick<typeof console, "warn">,
+  env: NodeJS.ProcessEnv,
+): void {
   const touched = cfg.meta?.lastTouchedVersion;
   if (!touched) {
     return;
@@ -157,9 +166,15 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
     return;
   }
   if (cmp < 0) {
-    logger.warn(
-      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
-    );
+    const message = `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`;
+    if (shouldStrictFailOnFutureConfig(env)) {
+      const error = new Error(
+        `${message} Strict mode is enabled via OPENCLAW_STRICT_CONFIG_VERSION.`,
+      );
+      (error as { code?: string }).code = "CONFIG_VERSION_NEWER";
+      throw error;
+    }
+    logger.warn(message);
   }
 }
 
@@ -285,7 +300,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           .join("\n");
         deps.logger.warn(`Config warnings:\\n${details}`);
       }
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      warnIfConfigFromFuture(validated.config, deps.logger, deps.env);
       const cfg = applyModelDefaults(
         applyCompactionDefaults(
           applyContextPruningDefaults(
@@ -454,7 +469,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      warnIfConfigFromFuture(validated.config, deps.logger, deps.env);
       return {
         path: configPath,
         exists: true,

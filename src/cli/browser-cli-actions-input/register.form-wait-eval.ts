@@ -1,8 +1,16 @@
 import type { Command } from "commander";
+import type { BrowserFormField } from "../../browser/client-actions-core.js";
+import type { SnapshotResult } from "../../browser/client.js";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
-import { callBrowserAct, readFields, resolveBrowserActionContext } from "./shared.js";
+import { callBrowserRequest } from "../browser-cli-shared.js";
+import {
+  callBrowserAct,
+  readFields,
+  resolveBrowserActionContext,
+  resolveFieldsFromSnapshot,
+} from "./shared.js";
 
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
@@ -11,16 +19,41 @@ export function registerBrowserFormWaitEvalCommands(
   browser
     .command("fill")
     .description("Fill a form with JSON field descriptors")
-    .option("--fields <json>", "JSON array of field objects")
-    .option("--fields-file <path>", "Read JSON array from a file")
+    .option("--fields <json>", "JSON array of field objects (type + ref or label)")
+    .option("--fields-file <path>", "Read JSON field array from a file")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
-        const fields = await readFields({
+        const descriptors = await readFields({
           fields: opts.fields,
           fieldsFile: opts.fieldsFile,
         });
+        const needsLabelResolution = descriptors.some((field) => !field.ref);
+        let fields: BrowserFormField[];
+        if (needsLabelResolution) {
+          const browserSnapshot = await callBrowserRequest<SnapshotResult>(
+            parent,
+            {
+              method: "GET",
+              path: "/snapshot",
+              query: {
+                format: "ai",
+                interactive: true,
+                targetId: opts.targetId?.trim() || undefined,
+                profile,
+              },
+            },
+            { timeoutMs: 20000 },
+          );
+          fields = resolveFieldsFromSnapshot(descriptors, browserSnapshot);
+        } else {
+          fields = descriptors.map((field) =>
+            field.value === undefined
+              ? { ref: field.ref as string, type: field.type }
+              : { ref: field.ref as string, type: field.type, value: field.value },
+          );
+        }
         const result = await callBrowserAct<{ result?: unknown }>({
           parent,
           profile,

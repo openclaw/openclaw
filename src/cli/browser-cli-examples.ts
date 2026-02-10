@@ -25,7 +25,7 @@ export const browserActionExamples = [
   "openclaw browser drag 10 11",
   "openclaw browser select 9 OptionA OptionB",
   "openclaw browser upload /tmp/file.pdf",
-  'openclaw browser fill --fields \'[{"ref":"1","value":"Ada"}]\'',
+  'openclaw browser fill --fields \'[{"label":"Email","type":"textbox","value":"ada@example.com"}]\'',
   "openclaw browser dialog --accept",
   'openclaw browser wait --text "Done"',
   "openclaw browser evaluate --fn '(el) => el.textContent' --ref 7",

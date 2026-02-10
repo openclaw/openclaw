@@ -1,6 +1,6 @@
+import CoreLocation
 import OpenClawIPC
 import OpenClawKit
-import CoreLocation
 import SwiftUI
 
 struct PermissionsSettings: View {
@@ -164,7 +164,9 @@ struct PermissionRow: View {
         .padding(.vertical, self.compact ? 4 : 6)
     }
 
-    private var iconSize: CGFloat { self.compact ? 28 : 32 }
+    private var iconSize: CGFloat {
+        self.compact ? 28 : 32
+    }
 
     private var title: String {
         switch self.capability {

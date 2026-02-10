@@ -86,6 +86,9 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
 type ResolvedAuthCooldownConfig = {
   billingBackoffMs: number;
   billingMaxMs: number;
+  authBackoffMs: number;
+  authMaxMs: number;
+  authDisableThreshold: number;
   failureWindowMs: number;
 };
 
@@ -129,6 +132,9 @@ function resolveAuthCooldownConfig(params: {
   return {
     billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
     billingMaxMs: billingMaxHours * 60 * 60 * 1000,
+    authBackoffMs: 30 * 60 * 1000, // 30 minutes
+    authMaxMs: 6 * 60 * 60 * 1000, // 6 hours
+    authDisableThreshold: 3,
     failureWindowMs: failureWindowHours * 60 * 60 * 1000,
   };
 }
@@ -190,9 +196,28 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
+  } else if (params.reason === "auth") {
+    const authCount = failureCounts.auth ?? 1;
+    if (authCount >= params.cfgResolved.authDisableThreshold) {
+      const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
+        errorCount: authCount - params.cfgResolved.authDisableThreshold + 1,
+        baseMs: params.cfgResolved.authBackoffMs,
+        maxMs: params.cfgResolved.authMaxMs,
+      });
+      updatedStats.disabledUntil = params.now + backoffMs;
+      updatedStats.disabledReason = "auth";
+      updatedStats.cooldownUntil = undefined;
+    } else {
+      const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+      updatedStats.cooldownUntil = params.now + backoffMs;
+      updatedStats.disabledUntil = undefined;
+      updatedStats.disabledReason = undefined;
+    }
   } else {
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
     updatedStats.cooldownUntil = params.now + backoffMs;
+    updatedStats.disabledUntil = undefined;
+    updatedStats.disabledReason = undefined;
   }
 
   return updatedStats;
