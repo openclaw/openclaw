@@ -17,6 +17,11 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
 import {
+  buildTogetherModelDefinition,
+  TOGETHER_BASE_URL,
+  TOGETHER_MODEL_CATALOG,
+} from "../agents/together-models.js";
+import {
   buildVeniceModelDefinition,
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,
@@ -25,6 +30,7 @@ import {
 import {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  TOGETHER_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
@@ -594,6 +600,83 @@ export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
               }
             : undefined),
           primary: VENICE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Apply Together provider configuration without changing the default model.
+ * Registers Together models and sets up the provider, but preserves existing model selection.
+ */
+export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[TOGETHER_DEFAULT_MODEL_REF] = {
+    ...models[TOGETHER_DEFAULT_MODEL_REF],
+    alias: models[TOGETHER_DEFAULT_MODEL_REF]?.alias ?? "Together AI",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.together;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const togetherModels = TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...togetherModels.filter(
+      (model) => !existingModels.some((existing) => existing.id === model.id),
+    ),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.together = {
+    ...existingProviderRest,
+    baseUrl: TOGETHER_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : togetherModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Together provider configuration AND set Together as the default model.
+ * Use this when Together is the primary provider choice during onboarding.
+ */
+export function applyTogetherConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyTogetherProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: TOGETHER_DEFAULT_MODEL_REF,
         },
       },
     },

@@ -11,6 +11,7 @@ import {
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
 export type ProviderAuth = {
   provider: UsageProviderId;
@@ -36,7 +37,8 @@ function parseGoogleToken(apiKey: string): { token: string } | null {
 }
 
 function resolveZaiApiKey(): string | undefined {
-  const envDirect = process.env.ZAI_API_KEY?.trim() || process.env.Z_AI_API_KEY?.trim();
+  const envDirect =
+    normalizeSecretInput(process.env.ZAI_API_KEY) || normalizeSecretInput(process.env.Z_AI_API_KEY);
   if (envDirect) {
     return envDirect;
   }
@@ -59,8 +61,8 @@ function resolveZaiApiKey(): string | undefined {
   ].find((id) => store.profiles[id]?.type === "api_key");
   if (apiProfile) {
     const cred = store.profiles[apiProfile];
-    if (cred?.type === "api_key" && cred.key?.trim()) {
-      return cred.key.trim();
+    if (cred?.type === "api_key" && normalizeSecretInput(cred.key)) {
+      return normalizeSecretInput(cred.key);
     }
   }
 
@@ -81,7 +83,8 @@ function resolveZaiApiKey(): string | undefined {
 
 function resolveMinimaxApiKey(): string | undefined {
   const envDirect =
-    process.env.MINIMAX_CODE_PLAN_KEY?.trim() || process.env.MINIMAX_API_KEY?.trim();
+    normalizeSecretInput(process.env.MINIMAX_CODE_PLAN_KEY) ||
+    normalizeSecretInput(process.env.MINIMAX_API_KEY);
   if (envDirect) {
     return envDirect;
   }
@@ -106,17 +109,17 @@ function resolveMinimaxApiKey(): string | undefined {
     return undefined;
   }
   const cred = store.profiles[apiProfile];
-  if (cred?.type === "api_key" && cred.key?.trim()) {
-    return cred.key.trim();
+  if (cred?.type === "api_key" && normalizeSecretInput(cred.key)) {
+    return normalizeSecretInput(cred.key);
   }
-  if (cred?.type === "token" && cred.token?.trim()) {
-    return cred.token.trim();
+  if (cred?.type === "token" && normalizeSecretInput(cred.token)) {
+    return normalizeSecretInput(cred.token);
   }
   return undefined;
 }
 
 function resolveXiaomiApiKey(): string | undefined {
-  const envDirect = process.env.XIAOMI_API_KEY?.trim();
+  const envDirect = normalizeSecretInput(process.env.XIAOMI_API_KEY);
   if (envDirect) {
     return envDirect;
   }
@@ -141,11 +144,11 @@ function resolveXiaomiApiKey(): string | undefined {
     return undefined;
   }
   const cred = store.profiles[apiProfile];
-  if (cred?.type === "api_key" && cred.key?.trim()) {
-    return cred.key.trim();
+  if (cred?.type === "api_key" && normalizeSecretInput(cred.key)) {
+    return normalizeSecretInput(cred.key);
   }
-  if (cred?.type === "token" && cred.token?.trim()) {
-    return cred.token.trim();
+  if (cred?.type === "token" && normalizeSecretInput(cred.token)) {
+    return normalizeSecretInput(cred.token);
   }
   return undefined;
 }

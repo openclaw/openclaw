@@ -229,8 +229,9 @@ export const buildTelegramMessageContext = async ({
     }
 
     if (dmPolicy !== "open") {
-      const candidate = String(chatId);
       const senderUsername = msg.from?.username ?? "";
+      const senderUserId = msg.from?.id != null ? String(msg.from.id) : null;
+      const candidate = senderUserId ?? String(chatId);
       const allowMatch = resolveSenderAllowMatch({
         allow: effectiveDmAllow,
         senderId: candidate,
@@ -265,7 +266,8 @@ export const buildTelegramMessageContext = async ({
             if (created) {
               logger.info(
                 {
-                  chatId: candidate,
+                  chatId: String(chatId),
+                  senderUserId: senderUserId ?? undefined,
                   username: from?.username,
                   firstName: from?.first_name,
                   lastName: from?.last_name,
@@ -569,8 +571,19 @@ export const buildTelegramMessageContext = async ({
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
+  const inboundHistory =
+    isGroup && historyKey && historyLimit > 0
+      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
+          sender: entry.sender,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }))
+      : undefined;
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
+    // Agent prompt should be the raw user text only; metadata/context is provided via system prompt.
+    BodyForAgent: bodyText,
+    InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: commandBody,
     From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,

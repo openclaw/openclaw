@@ -4,10 +4,13 @@ import { __testing } from "./web-search.js";
 const {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
+  isDirectPerplexityBaseUrl,
+  resolvePerplexityRequestModel,
   normalizeFreshness,
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
+  extractGrokContent,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -58,6 +61,32 @@ describe("web_search perplexity baseUrl defaults", () => {
   });
 });
 
+describe("web_search perplexity model normalization", () => {
+  it("detects direct Perplexity host", () => {
+    expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai")).toBe(true);
+    expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai/")).toBe(true);
+    expect(isDirectPerplexityBaseUrl("https://openrouter.ai/api/v1")).toBe(false);
+  });
+
+  it("strips provider prefix for direct Perplexity", () => {
+    expect(resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro")).toBe(
+      "sonar-pro",
+    );
+  });
+
+  it("keeps prefixed model for OpenRouter", () => {
+    expect(
+      resolvePerplexityRequestModel("https://openrouter.ai/api/v1", "perplexity/sonar-pro"),
+    ).toBe("perplexity/sonar-pro");
+  });
+
+  it("keeps model unchanged when URL is invalid", () => {
+    expect(resolvePerplexityRequestModel("not-a-url", "perplexity/sonar-pro")).toBe(
+      "perplexity/sonar-pro",
+    );
+  });
+});
+
 describe("web_search freshness normalization", () => {
   it("accepts Brave shortcut values", () => {
     expect(normalizeFreshness("pd")).toBe("pd");
@@ -81,8 +110,18 @@ describe("web_search grok config resolution", () => {
   });
 
   it("returns undefined when no apiKey is available", () => {
-    expect(resolveGrokApiKey({})).toBeUndefined();
-    expect(resolveGrokApiKey(undefined)).toBeUndefined();
+    const previous = process.env.XAI_API_KEY;
+    try {
+      delete process.env.XAI_API_KEY;
+      expect(resolveGrokApiKey({})).toBeUndefined();
+      expect(resolveGrokApiKey(undefined)).toBeUndefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = previous;
+      }
+    }
   });
 
   it("uses default model when not specified", () => {
@@ -102,5 +141,25 @@ describe("web_search grok config resolution", () => {
   it("respects inlineCitations config", () => {
     expect(resolveGrokInlineCitations({ inlineCitations: true })).toBe(true);
     expect(resolveGrokInlineCitations({ inlineCitations: false })).toBe(false);
+  });
+});
+
+describe("web_search grok response parsing", () => {
+  it("extracts content from Responses API output blocks", () => {
+    expect(
+      extractGrokContent({
+        output: [
+          {
+            content: [{ text: "hello from output" }],
+          },
+        ],
+      }),
+    ).toBe("hello from output");
+  });
+
+  it("falls back to deprecated output_text", () => {
+    expect(extractGrokContent({ output_text: "hello from output_text" })).toBe(
+      "hello from output_text",
+    );
   });
 });
