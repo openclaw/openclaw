@@ -52,6 +52,29 @@ function saveToDiskSync<T>(filePath: string, map: Map<string, T[]>): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Shared exit-flush registry
+//
+// A single `process.on("exit")` listener flushes all active persistent maps.
+// This avoids leaking one listener per map and the MaxListenersExceededWarning
+// that would follow when many maps are created (e.g. in tests).
+// ---------------------------------------------------------------------------
+
+const activeMaps: Array<() => void> = [];
+let exitHookRegistered = false;
+
+function registerFlush(flush: () => void): void {
+  activeMaps.push(flush);
+  if (!exitHookRegistered) {
+    exitHookRegistered = true;
+    process.on("exit", () => {
+      for (const fn of activeMaps) {
+        fn();
+      }
+    });
+  }
+}
+
 /**
  * Create a Map that automatically persists to disk on changes.
  *
@@ -86,7 +109,7 @@ export function createPersistentHistoryMap<T>(
     }
   };
 
-  process.on("exit", flushSync);
+  registerFlush(flushSync);
 
   const scheduleSave = () => {
     dirty = true;
@@ -105,9 +128,7 @@ export function createPersistentHistoryMap<T>(
       }
     }, debounceMs);
     // Don't keep the process alive just for the debounce timer
-    if (saveTimer && typeof saveTimer === "object" && "unref" in saveTimer) {
-      (saveTimer as NodeJS.Timeout).unref();
-    }
+    saveTimer.unref();
   };
 
   const originalSet = map.set.bind(map);
