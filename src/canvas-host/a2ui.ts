@@ -10,23 +10,45 @@ export const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 export const CANVAS_WS_PATH = "/__openclaw__/ws";
 
-let cachedA2uiRootReal: string | null | undefined;
+let cachedA2uiRootReal: string | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
 
 async function resolveA2uiRoot(): Promise<string | null> {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    // Running from source (bun) or dist (tsc + copied assets).
-    path.resolve(here, "a2ui"),
-    // Running from dist without copied assets (fallback to source).
-    path.resolve(here, "../../src/canvas-host/a2ui"),
-    // Running from repo root.
-    path.resolve(process.cwd(), "src/canvas-host/a2ui"),
-    path.resolve(process.cwd(), "dist/canvas-host/a2ui"),
-  ];
-  if (process.execPath) {
-    candidates.unshift(path.resolve(path.dirname(process.execPath), "a2ui"));
+  const candidates: string[] = [];
+  const pushCandidate = (value: string | undefined) => {
+    if (!value) {
+      return;
+    }
+    const resolved = path.resolve(value);
+    if (!candidates.includes(resolved)) {
+      candidates.push(resolved);
+    }
+  };
+
+  const explicitRoot = process.env.OPENCLAW_A2UI_ROOT?.trim();
+  if (explicitRoot) {
+    pushCandidate(explicitRoot);
   }
+
+  if (process.execPath) {
+    pushCandidate(path.resolve(path.dirname(process.execPath), "a2ui"));
+  }
+  if (process.argv[1]) {
+    const argvDir = path.dirname(path.resolve(process.argv[1]));
+    // Works when running bundled dist/entry.js from npm installs.
+    pushCandidate(path.resolve(argvDir, "canvas-host/a2ui"));
+    pushCandidate(path.resolve(argvDir, "a2ui"));
+  }
+  // Running from source (bun) or dist (tsc + copied assets).
+  pushCandidate(path.resolve(here, "a2ui"));
+  // Running from a bundled dist chunk rooted at dist/*.js.
+  pushCandidate(path.resolve(here, "canvas-host/a2ui"));
+  // Running from dist without copied assets (fallback to source).
+  pushCandidate(path.resolve(here, "../../src/canvas-host/a2ui"));
+  // Running from repo root.
+  pushCandidate(path.resolve(process.cwd(), "src/canvas-host/a2ui"));
+  pushCandidate(path.resolve(process.cwd(), "dist/canvas-host/a2ui"));
 
   for (const dir of candidates) {
     try {
@@ -43,17 +65,28 @@ async function resolveA2uiRoot(): Promise<string | null> {
 }
 
 async function resolveA2uiRootReal(): Promise<string | null> {
-  if (cachedA2uiRootReal !== undefined) {
+  if (cachedA2uiRootReal) {
     return cachedA2uiRootReal;
   }
   if (!resolvingA2uiRoot) {
     resolvingA2uiRoot = (async () => {
       const root = await resolveA2uiRoot();
-      cachedA2uiRootReal = root ? await fs.realpath(root) : null;
-      return cachedA2uiRootReal;
-    })();
+      if (!root) {
+        return null;
+      }
+      const real = await fs.realpath(root);
+      cachedA2uiRootReal = real;
+      return real;
+    })().finally(() => {
+      resolvingA2uiRoot = null;
+    });
   }
   return resolvingA2uiRoot;
+}
+
+export function resetA2uiRootCacheForTests() {
+  cachedA2uiRootReal = undefined;
+  resolvingA2uiRoot = null;
 }
 
 function normalizeUrlPath(rawPath: string): string {

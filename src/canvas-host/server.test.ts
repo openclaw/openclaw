@@ -7,7 +7,12 @@ import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { defaultRuntime } from "../runtime.js";
-import { CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
+import {
+  CANVAS_HOST_PATH,
+  CANVAS_WS_PATH,
+  injectCanvasLiveReload,
+  resetA2uiRootCacheForTests,
+} from "./a2ui.js";
 import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 
 describe("canvas host", () => {
@@ -243,6 +248,57 @@ describe("canvas host", () => {
       if (createdBundle) {
         await fs.rm(bundlePath, { force: true });
       }
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries A2UI lookup after an initial miss and resolves bundled dist assets via argv[1]", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-a2ui-argv-"));
+    const canvasDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
+    const fakeDistDir = path.join(dir, "dist");
+    const fakeA2uiDir = path.join(fakeDistDir, "canvas-host", "a2ui");
+    const prevArgv1 = process.argv[1];
+    const prevCwd = process.cwd();
+
+    resetA2uiRootCacheForTests();
+    process.argv[1] = path.join(fakeDistDir, "entry.js");
+    process.chdir(dir);
+
+    const server = await startCanvasHost({
+      runtime: defaultRuntime,
+      rootDir: canvasDir,
+      port: 0,
+      listenHost: "127.0.0.1",
+      allowInTests: true,
+    });
+
+    try {
+      const missRes = await fetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
+      expect(missRes.status).toBe(503);
+
+      await fs.mkdir(fakeA2uiDir, { recursive: true });
+      await fs.writeFile(
+        path.join(fakeA2uiDir, "index.html"),
+        "<html><body>argv-a2ui</body></html>",
+        "utf8",
+      );
+      await fs.writeFile(path.join(fakeA2uiDir, "a2ui.bundle.js"), "window.argvA2ui = true;", "utf8");
+
+      const hitRes = await fetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
+      expect(hitRes.status).toBe(200);
+      expect(await hitRes.text()).toContain("argv-a2ui");
+
+      const bundleRes = await fetch(
+        `http://127.0.0.1:${server.port}/__openclaw__/a2ui/a2ui.bundle.js`,
+      );
+      expect(bundleRes.status).toBe(200);
+      expect(await bundleRes.text()).toContain("argvA2ui");
+    } finally {
+      await server.close();
+      process.argv[1] = prevArgv1;
+      process.chdir(prevCwd);
+      resetA2uiRootCacheForTests();
+      await fs.rm(canvasDir, { recursive: true, force: true });
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
