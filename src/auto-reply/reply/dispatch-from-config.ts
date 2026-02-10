@@ -1,8 +1,9 @@
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -17,6 +18,31 @@ import { getReplyFromConfig } from "../reply.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+
+async function maybeRecordCoreMemoriesEntry(params: {
+  text: string;
+  speaker: string;
+  type: string;
+  memoryDir?: string;
+}): Promise<void> {
+  try {
+    const trimmed = params.text.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const mod = (await import("@openclaw/core-memories")) as {
+      getCoreMemories: (opts?: { memoryDir?: string }) => Promise<{
+        addFlashEntry: (text: string, speaker?: string, type?: string) => unknown;
+      }>;
+    };
+
+    const cm = await mod.getCoreMemories({ memoryDir: params.memoryDir });
+    cm.addFlashEntry(trimmed, params.speaker, params.type);
+  } catch {
+    // Best-effort: CoreMemories may not be built/available in some installs.
+  }
+}
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
@@ -92,6 +118,24 @@ export async function dispatchReplyFromConfig(params: {
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey = ctx.SessionKey;
+
+  // CoreMemories should not rely on process cwd; store in the agent workspace.
+  const coreMemoriesDir = (() => {
+    const key = typeof sessionKey === "string" && sessionKey.trim() ? sessionKey.trim() : undefined;
+    if (!key) {
+      return undefined;
+    }
+    const agentId = resolveSessionAgentId({ sessionKey: key, config: cfg });
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+
+    const safeSession = key
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]/g, "_")
+      .slice(0, 120);
+
+    return path.join(workspaceDir, ".openclaw", "memory", "sessions", safeSession);
+  })();
+
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
 
@@ -143,6 +187,26 @@ export async function dispatchReplyFromConfig(params: {
   if (shouldSkipDuplicateInbound(ctx)) {
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+  }
+
+  // CoreMemories ingestion (best-effort): record inbound message text.
+  {
+    const inboundText =
+      typeof ctx.BodyForCommands === "string"
+        ? ctx.BodyForCommands
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+    const inboundSpeaker =
+      typeof ctx.SenderName === "string" && ctx.SenderName.trim() ? ctx.SenderName.trim() : "user";
+    void maybeRecordCoreMemoriesEntry({
+      text: inboundText,
+      speaker: inboundSpeaker,
+      type: "conversation",
+      memoryDir: coreMemoriesDir,
+    });
   }
 
   const inboundAudio = isInboundAudioContext(ctx);
@@ -256,6 +320,17 @@ export async function dispatchReplyFromConfig(params: {
       } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
+
+      // CoreMemories ingestion (best-effort): record abort reply text.
+      if (payload.text) {
+        void maybeRecordCoreMemoriesEntry({
+          text: payload.text,
+          speaker: "assistant",
+          type: "assistant_reply",
+          memoryDir: coreMemoriesDir,
+        });
+      }
+
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         const result = await routeReply({
           payload,
@@ -309,6 +384,17 @@ export async function dispatchReplyFromConfig(params: {
                   inboundAudio,
                   ttsAuto: sessionTtsAuto,
                 });
+
+                // CoreMemories ingestion (best-effort): record assistant tool-result text.
+                if (ttsPayload.text) {
+                  void maybeRecordCoreMemoriesEntry({
+                    text: ttsPayload.text,
+                    speaker: "assistant",
+                    type: "assistant_reply",
+                    memoryDir: coreMemoriesDir,
+                  });
+                }
+
                 if (shouldRouteToOriginating) {
                   await sendPayloadAsync(ttsPayload, undefined, false);
                 } else {
@@ -336,6 +422,17 @@ export async function dispatchReplyFromConfig(params: {
               inboundAudio,
               ttsAuto: sessionTtsAuto,
             });
+
+            // CoreMemories ingestion (best-effort): record assistant block-stream text.
+            if (ttsPayload.text) {
+              void maybeRecordCoreMemoriesEntry({
+                text: ttsPayload.text,
+                speaker: "assistant",
+                type: "assistant_reply",
+                memoryDir: coreMemoriesDir,
+              });
+            }
+
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
@@ -361,6 +458,17 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
+
+      // CoreMemories ingestion (best-effort): record assistant final reply text.
+      if (ttsReply.text) {
+        void maybeRecordCoreMemoriesEntry({
+          text: ttsReply.text,
+          speaker: "assistant",
+          type: "assistant_reply",
+          memoryDir: coreMemoriesDir,
+        });
+      }
+
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
         const result = await routeReply({

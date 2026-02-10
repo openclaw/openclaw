@@ -25,6 +25,13 @@ import type { PluginsConfig } from "./types.plugins.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
+export type CoreMemoriesConfig = {
+  /** Enable CoreMemories ingestion/retrieval (best-effort). Default: false. */
+  enabled?: boolean;
+  /** Compression mode used by CoreMemories. */
+  compression?: "auto" | "rule" | "ollama";
+};
+
 export type OpenClawConfig = {
   meta?: {
     /** Last OpenClaw version that wrote this config. */
@@ -97,6 +104,8 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  /** CoreMemories: hierarchical, file-backed memory store. */
+  coreMemories?: CoreMemoriesConfig;
 };
 
 export type ConfigValidationIssue = {
