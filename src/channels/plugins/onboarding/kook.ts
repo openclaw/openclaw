@@ -282,6 +282,29 @@ async function promptKookGuilds(params: {
     return cfg;
   }
 
+  await prompter.note(
+    [
+      tr(locale, "IMPORTANT SECURITY NOTICE", "重要安全提醒"),
+      "",
+      tr(
+        locale,
+        "If you do NOT set guild.users or channel.users, anyone in allowed channels can interact with your bot.",
+        "如果你没有配置 guild.users 或 channel.users，允许频道内的任何人都可以和机器人交互。",
+      ),
+      tr(
+        locale,
+        "This can be abused to run dangerous actions (including deleting files/data) via your bot.",
+        "这可能被恶意利用来执行危险操作（包括删除文件/数据）。",
+      ),
+      tr(
+        locale,
+        "Strongly recommended: configure explicit user allowlists for every guild/channel you expose.",
+        "强烈建议：对每个开放的服务器/频道配置明确的用户白名单。",
+      ),
+    ].join("\n"),
+    tr(locale, "Security Critical", "高危安全提示"),
+  );
+
   const newGuilds = { ...existingGuilds };
 
   while (true) {
@@ -778,9 +801,19 @@ export const kookOnboardingAdapter: ChannelOnboardingAdapter = {
           "Without an allowlist, your bot will respond to EVERYONE's commands.",
           "如果不设置白名单，机器人会响应所有人的命令。",
         ),
+        tr(
+          locale,
+          "For server channels: if guild.users/channel.users are not configured, anyone in allowed channels can interact with OpenClaw.",
+          "对于服务器频道：如果未配置 guild.users/channel.users，允许频道中的任何人都能和 OpenClaw 交互。",
+        ),
         tr(locale, "This poses serious risks including:", "这会带来严重风险，包括："),
         tr(locale, "  - Unauthorized access to your system", "  - 未授权访问你的系统"),
         tr(locale, "  - Potential file deletion or data loss", "  - 可能发生文件删除或数据丢失"),
+        tr(
+          locale,
+          "  - Malicious abuse by unauthorized channel members",
+          "  - 被未授权频道成员恶意滥用",
+        ),
         tr(locale, "  - Abuse of bot capabilities", "  - 机器人能力被滥用"),
         "",
         tr(
