@@ -96,6 +96,7 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
     allowDangerouslySkipPermissions: true,
     maxTurns: params.maxTurns ?? DEFAULT_MAX_TURNS,
     systemPrompt,
+    settingSources: ["user", "project", "local"],
     ...(params.model && { model: params.model }),
     ...(params.env && { env: params.env }),
     ...(params.resume

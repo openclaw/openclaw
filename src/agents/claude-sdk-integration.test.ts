@@ -133,6 +133,38 @@ describe("runSDKAgent", () => {
     expect(callArgs.options.allowDangerouslySkipPermissions).toBe(true);
   });
 
+  it("includes settingSources for user, project, and local settings", async () => {
+    queryMock.mockReturnValueOnce(
+      makeAsyncIterable([
+        {
+          type: "result",
+          subtype: "success",
+          result: "ok",
+          session_id: "s",
+          duration_ms: 100,
+          duration_api_ms: 80,
+          is_error: false,
+          num_turns: 1,
+          total_cost_usd: 0.01,
+          usage: {
+            input_tokens: 10,
+            output_tokens: 20,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          modelUsage: {},
+          permission_denials: [],
+          uuid: "u",
+        },
+      ]),
+    );
+
+    await runSDKAgent({ prompt: "test", cwd: "/tmp" });
+
+    const callArgs = queryMock.mock.calls[0]?.[0] as { options: Record<string, unknown> };
+    expect(callArgs.options.settingSources).toEqual(["user", "project", "local"]);
+  });
+
   it("passes systemPromptAppend via preset append", async () => {
     queryMock.mockReturnValueOnce(
       makeAsyncIterable([
