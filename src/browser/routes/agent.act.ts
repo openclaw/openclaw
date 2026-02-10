@@ -307,14 +307,17 @@ export function registerBrowserAgentActRoutes(
           }
           const ref = toStringOrEmpty(body.ref) || undefined;
           const evalTimeoutMs = toNumber(body.timeoutMs);
-          const result = await pw.evaluateViaPlaywright({
+          const evalRequest: Parameters<typeof pw.evaluateViaPlaywright>[0] = {
             cdpUrl,
             targetId: tab.targetId,
             fn,
             ref,
-            timeoutMs: evalTimeoutMs ?? undefined,
             signal: req.signal,
-          });
+          };
+          if (evalTimeoutMs !== undefined) {
+            evalRequest.timeoutMs = evalTimeoutMs;
+          }
+          const result = await pw.evaluateViaPlaywright(evalRequest);
           return res.json({
             ok: true,
             targetId: tab.targetId,

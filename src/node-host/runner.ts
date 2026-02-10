@@ -275,25 +275,36 @@ async function ensureBrowserControlService(): Promise<void> {
   return browserControlReady;
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs?: number, label?: string): Promise<T> {
+async function withTimeout<T>(
+  work: (signal: AbortSignal | undefined) => Promise<T>,
+  timeoutMs?: number,
+  label?: string,
+): Promise<T> {
   const resolved =
     typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
       ? Math.max(1, Math.floor(timeoutMs))
       : undefined;
   if (!resolved) {
-    return await promise;
+    return await work(undefined);
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`${label ?? "request"} timed out`));
-    }, resolved);
-  });
+  const abortCtrl = new AbortController();
+  const timeoutError = new Error(`${label ?? "request"} timed out`);
+  const timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
+
+  let abortListener: (() => void) | undefined;
+  const abortPromise: Promise<never> = abortCtrl.signal.aborted
+    ? Promise.reject(abortCtrl.signal.reason ?? timeoutError)
+    : new Promise((_, reject) => {
+        abortListener = () => reject(abortCtrl.signal.reason ?? timeoutError);
+        abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
+      });
+
   try {
-    return await Promise.race([promise, timeoutPromise]);
+    return await Promise.race([work(abortCtrl.signal), abortPromise]);
   } finally {
-    if (timer) {
-      clearTimeout(timer);
+    clearTimeout(timer);
+    if (abortListener) {
+      abortCtrl.signal.removeEventListener("abort", abortListener);
     }
   }
 }
@@ -790,12 +801,14 @@ async function handleInvoke(
       }
       const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
       const response = await withTimeout(
-        dispatcher.dispatch({
-          method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
-          path,
-          query,
-          body,
-        }),
+        (signal) =>
+          dispatcher.dispatch({
+            method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
+            path,
+            query,
+            body,
+            signal,
+          }),
         params.timeoutMs,
         "browser proxy request",
       );

@@ -1,134 +1,133 @@
-// Test the patched evaluateViaPlaywright by importing the built code
 import { chromium } from "playwright-core";
+import WebSocket from "ws";
 
 const CDP_URL = "http://127.0.0.1:18800";
 
-// Simulate what the patched evaluateViaPlaywright does
-async function patchedEvaluate(page, fnText, timeoutMs = 30000) {
-  const browserEvaluator = new Function(
-    "args",
-    `
-    "use strict";
-    var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
-    try {
-      var candidate = eval("(" + fnBody + ")");
-      var result = typeof candidate === "function" ? candidate() : candidate;
-      if (result && typeof result.then === "function") {
-        return Promise.race([
-          result,
-          new Promise(function(_, reject) {
-            setTimeout(function() { reject(new Error("evaluate timed out after " + timeoutMs + "ms")); }, timeoutMs);
-          })
-        ]);
-      }
-      return result;
-    } catch (err) {
-      throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
+async function getTargetIdForPage(page) {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const info = await session.send("Target.getTargetInfo");
+    const targetId = String(info?.targetInfo?.targetId ?? "").trim();
+    if (!targetId) {
+      throw new Error("Missing targetId");
     }
-    `,
-  );
-  return await page.evaluate(browserEvaluator, { fnBody: fnText, timeoutMs });
+    return targetId;
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
+
+async function terminateExecutionViaCdp(cdpUrl, targetId) {
+  const base = String(cdpUrl)
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/^ws:/, "http:")
+    .replace(/^wss:/, "https:")
+    .replace(/\/devtools\/browser\/.*$/, "")
+    .replace(/\/cdp$/, "");
+  const listUrl = `${base}/json/list`;
+  const res = await fetch(listUrl, { signal: AbortSignal.timeout(2000) });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch /json/list: HTTP ${res.status}`);
+  }
+  const pages = await res.json();
+  const target = Array.isArray(pages) ? pages.find((p) => p?.id === targetId) : null;
+  const wsUrl = String(target?.webSocketDebuggerUrl ?? "").trim();
+  if (!wsUrl) {
+    throw new Error("Missing webSocketDebuggerUrl for target");
+  }
+
+  const ws = new WebSocket(wsUrl, { handshakeTimeout: 2000 });
+  await new Promise((resolve, reject) => {
+    ws.once("open", () => resolve());
+    ws.once("error", (err) => reject(err));
+    setTimeout(() => reject(new Error("WebSocket open timed out")), 2000);
+  });
+
+  ws.send(JSON.stringify({ id: 1, method: "Runtime.terminateExecution" }));
+  await new Promise((r) => setTimeout(r, 250));
+  ws.close();
+}
+
+async function raceTimeout(promise, timeoutMs, label) {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function test() {
   console.log("Connecting to chromium...");
   const browser = await chromium.connectOverCDP(CDP_URL, { timeout: 10000 });
-  const page = browser.contexts().flatMap((c) => c.pages())[0];
+  const page = browser.contexts().flatMap((c) => c.pages())[0] ?? (await browser.newPage());
   await page.goto("https://example.com", { waitUntil: "domcontentloaded", timeout: 15000 });
 
-  // Test 1: Sync evaluate
-  console.log("\n--- Test 1: Sync evaluate ---");
-  const t1 = Date.now();
+  console.log("\n--- Test 1: Bounded async evaluate (Promise.race in browser) ---");
   try {
-    const r = await patchedEvaluate(page, "() => document.title", 5000);
-    console.log(`✅ (${Date.now() - t1}ms) Result:`, r);
-  } catch (e) {
-    console.log(`❌ (${Date.now() - t1}ms)`, e.message.slice(0, 100));
-  }
-
-  // Test 2: Short async evaluate
-  console.log("\n--- Test 2: Short async (1s, timeout 5s) ---");
-  const t2 = Date.now();
-  try {
-    const r = await patchedEvaluate(
-      page,
-      "async () => { await new Promise(r => setTimeout(r, 1000)); return 'fast'; }",
-      5000,
+    await raceTimeout(
+      page.evaluate(async () => {
+        return Promise.race([
+          (async () => {
+            await new Promise((r) => setTimeout(r, 30_000));
+            return "too slow";
+          })(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("evaluate timed out")), 3_000),
+          ),
+        ]);
+      }),
+      10_000,
+      "evaluate",
     );
-    console.log(`✅ (${Date.now() - t2}ms) Result:`, r);
+    console.log("❌ Expected bounded evaluate to timeout");
   } catch (e) {
-    console.log(`❌ (${Date.now() - t2}ms)`, e.message.slice(0, 100));
+    console.log("✅ Bounded evaluate timed out:", String(e).slice(0, 100));
   }
 
-  // Test 3: Long async evaluate (30s, timeout 5s) — THIS IS THE BUG SCENARIO
-  console.log("\n--- Test 3: Long async (30s, timeout 5s) — the bug scenario ---");
-  const t3 = Date.now();
+  console.log(
+    "\n--- Test 2: Recover from a stuck CPU-bound evaluate using Runtime.terminateExecution ---",
+  );
+  const targetId = await getTargetIdForPage(page);
+  const stuck = page.evaluate(() => {
+    // Busy loop: Date.now() makes the condition non-constant for linters.
+    // This should be interrupted by Runtime.terminateExecution.
+    while (Date.now() < 10 ** 15) {
+      // keep CPU busy
+      void 0;
+    }
+    return "unreachable";
+  });
+
+  setTimeout(() => {
+    void terminateExecutionViaCdp(CDP_URL, targetId).catch((err) => {
+      console.error("terminateExecution failed:", String(err).slice(0, 200));
+    });
+  }, 1500);
+
   try {
-    const r = await patchedEvaluate(
-      page,
-      "async () => { await new Promise(r => setTimeout(r, 30000)); return 'too slow'; }",
-      5000,
-    );
-    console.log(`❌ (${Date.now() - t3}ms) Should have timed out, got:`, r);
+    await raceTimeout(stuck, 8000, "stuck evaluate");
+    console.log("❌ Expected stuck evaluate to be terminated");
   } catch (e) {
-    console.log(`✅ (${Date.now() - t3}ms) Correctly timed out:`, e.message.slice(0, 100));
+    console.log("✅ Stuck evaluate interrupted:", String(e).slice(0, 120));
   }
 
-  // Test 4: Page still works after timeout?
-  console.log("\n--- Test 4: Page still usable after timeout? ---");
-  const t4 = Date.now();
-  try {
-    const r = await patchedEvaluate(page, "() => document.title", 5000);
-    console.log(`✅ (${Date.now() - t4}ms) Page works! Title:`, r);
-  } catch (e) {
-    console.log(`❌ (${Date.now() - t4}ms) Page stuck:`, e.message.slice(0, 100));
-  }
-
-  // Test 5: Navigate after timeout?
-  console.log("\n--- Test 5: Navigate after timeout? ---");
-  const t5 = Date.now();
-  try {
-    await page.goto("https://example.com", { waitUntil: "domcontentloaded", timeout: 10000 });
-    console.log(`✅ (${Date.now() - t5}ms) Navigate works!`);
-  } catch (e) {
-    console.log(`❌ (${Date.now() - t5}ms) Navigate stuck:`, e.message.slice(0, 100));
-  }
-
-  // Test 6: Scroll-style evaluate (what triggered the original bug)
-  console.log("\n--- Test 6: Scroll loop (10 iterations, 500ms each = 5s, timeout 3s) ---");
-  const t6 = Date.now();
-  try {
-    const r = await patchedEvaluate(
-      page,
-      `async () => {
-      for (let i = 0; i < 10; i++) {
-        window.scrollBy(0, 100);
-        await new Promise(r => setTimeout(r, 500));
-      }
-      return 'scrolled';
-    }`,
-      3000,
-    );
-    console.log(`❌ (${Date.now() - t6}ms) Should have timed out, got:`, r);
-  } catch (e) {
-    console.log(`✅ (${Date.now() - t6}ms) Correctly timed out:`, e.message.slice(0, 100));
-  }
-
-  // Test 7: Page still works after scroll timeout?
-  console.log("\n--- Test 7: Page still usable after scroll timeout? ---");
-  const t7 = Date.now();
-  try {
-    const r = await patchedEvaluate(page, "() => document.title", 5000);
-    console.log(`✅ (${Date.now() - t7}ms) Page works! Title:`, r);
-  } catch (e) {
-    console.log(`❌ (${Date.now() - t7}ms) Page stuck:`, e.message.slice(0, 100));
-  }
+  console.log("\n--- Test 3: Page usable after termination ---");
+  const title = await page.evaluate(() => document.title);
+  console.log("✅ Title:", title);
 
   await browser.close();
-  console.log("\n🎉 All tests complete!");
+  console.log("\nDone!");
 }
 
 test().catch((e) => {
-  console.error("Fatal:", e.message);
+  console.error("Fatal:", String(e));
   process.exit(1);
 });

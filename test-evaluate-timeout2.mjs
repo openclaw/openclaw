@@ -2,26 +2,6 @@ import { chromium } from "playwright-core";
 
 const CDP_URL = "http://127.0.0.1:18800";
 
-async function evaluateWithTimeout(page, fn, timeoutMs = 30000) {
-  // Wrap the user function in a timeout at the browser level
-  // This ensures the promise resolves/rejects within timeoutMs
-  const wrappedFn = `async () => {
-    const userFn = ${fn};
-    const result = typeof userFn === 'function' ? userFn() : userFn;
-    // If it's a promise, race it against a timeout
-    if (result && typeof result.then === 'function') {
-      return Promise.race([
-        result,
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('evaluate timed out after ${timeoutMs}ms')), ${timeoutMs})
-        )
-      ]);
-    }
-    return result;
-  }`;
-  return await page.evaluate(eval(`(${wrappedFn})`));
-}
-
 async function test() {
   console.log("Connecting to chromium...");
   const browser = await chromium.connectOverCDP(CDP_URL, { timeout: 10000 });

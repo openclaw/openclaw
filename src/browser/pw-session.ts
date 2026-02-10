@@ -8,6 +8,7 @@ import type {
 } from "playwright-core";
 import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
+import { rawDataToString } from "../infra/ws.js";
 import { getHeadersWithAuth } from "./cdp.helpers.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 
@@ -554,43 +555,159 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
     // This bypasses Playwright entirely and kills any running JS on the page,
     // unblocking the execution context for subsequent operations.
     if (opts.targetId) {
-      const cdpHttpBase = normalized
-        .replace(/^ws:\/\//, "http://")
-        .replace(/\/devtools\/browser\/.*$/, "");
-      try {
-        const pageWsRes = await fetch(`${cdpHttpBase}/json/list`, {
-          signal: AbortSignal.timeout(2000),
-        });
-        const pages = (await pageWsRes.json()) as Array<{
-          id: string;
-          webSocketDebuggerUrl?: string;
-        }>;
-        const target = pages.find((p) => p.id === opts.targetId);
-        if (target?.webSocketDebuggerUrl) {
-          const { WebSocket } = await import("ws");
-          const ws = new WebSocket(target.webSocketDebuggerUrl);
-          await new Promise<void>((resolve) => {
-            ws.on("open", () => {
-              // Runtime.terminateExecution kills running JS without navigating away.
-              // Safe: only stops the current execution, doesn't crash the page.
-              ws.send(JSON.stringify({ id: 1, method: "Runtime.terminateExecution" }));
-              // Give it a moment to process, then close
-              setTimeout(() => {
-                ws.close();
-                resolve();
-              }, 500);
-            });
-            ws.on("error", () => {
-              resolve();
-            });
-            setTimeout(() => {
-              ws.close();
-              resolve();
-            }, 2000);
+      const targetId = opts.targetId.trim();
+      if (targetId) {
+        const cdpHttpBase = normalized
+          .replace(/^ws:/, "http:")
+          .replace(/^wss:/, "https:")
+          .replace(/\/devtools\/browser\/.*$/, "")
+          .replace(/\/cdp$/, "");
+        const listUrl = `${cdpHttpBase}/json/list`;
+        try {
+          const pageWsRes = await fetch(listUrl, {
+            signal: AbortSignal.timeout(2000),
+            headers: getHeadersWithAuth(listUrl),
           });
+          if (pageWsRes.ok) {
+            const pages = (await pageWsRes.json()) as Array<{
+              id: string;
+              webSocketDebuggerUrl?: string;
+            }>;
+            const target = pages.find((p) => p.id === targetId);
+            const wsUrl = target?.webSocketDebuggerUrl?.trim() || "";
+            if (wsUrl) {
+              const headers = getHeadersWithAuth(wsUrl);
+              const WebSocket = (await import("ws")).default;
+              const ws = new WebSocket(wsUrl, {
+                handshakeTimeout: 2000,
+                ...(Object.keys(headers).length ? { headers } : {}),
+              });
+
+              type Pending = {
+                resolve: (value: unknown) => void;
+                reject: (err: Error) => void;
+              };
+              type CdpResponse = { id: number; result?: unknown; error?: { message?: string } };
+
+              let nextId = 1;
+              const pending = new Map<number, Pending>();
+
+              const send = (
+                method: string,
+                params?: Record<string, unknown>,
+                sessionId?: string,
+              ) => {
+                const id = nextId++;
+                ws.send(JSON.stringify({ id, method, params, sessionId }));
+                return new Promise<unknown>((resolve, reject) => {
+                  pending.set(id, { resolve, reject });
+                });
+              };
+
+              const closeWithError = (err: Error) => {
+                for (const [, p] of pending) {
+                  p.reject(err);
+                }
+                pending.clear();
+                try {
+                  ws.close();
+                } catch {
+                  // ignore
+                }
+              };
+
+              ws.on("message", (data) => {
+                try {
+                  const parsed = JSON.parse(rawDataToString(data)) as CdpResponse;
+                  if (typeof parsed.id !== "number") {
+                    return;
+                  }
+                  const p = pending.get(parsed.id);
+                  if (!p) {
+                    return;
+                  }
+                  pending.delete(parsed.id);
+                  if (parsed.error?.message) {
+                    p.reject(new Error(parsed.error.message));
+                    return;
+                  }
+                  p.resolve(parsed.result);
+                } catch {
+                  // ignore
+                }
+              });
+
+              ws.on("close", () => {
+                closeWithError(new Error("CDP socket closed"));
+              });
+
+              await new Promise<void>((resolve) => {
+                ws.once("open", () => resolve());
+                ws.once("error", () => resolve());
+                setTimeout(() => resolve(), 2000);
+              });
+
+              const runWithTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                const timeoutPromise = new Promise<never>((_, reject) => {
+                  timer = setTimeout(() => reject(new Error("CDP command timed out")), ms);
+                });
+                try {
+                  return await Promise.race([work, timeoutPromise]);
+                } finally {
+                  if (timer) {
+                    clearTimeout(timer);
+                  }
+                }
+              };
+
+              try {
+                let sessionId: string | undefined;
+                const needsAttach = (() => {
+                  try {
+                    const pathname = new URL(wsUrl).pathname;
+                    return (
+                      pathname === "/cdp" ||
+                      pathname.endsWith("/cdp") ||
+                      pathname.includes("/devtools/browser/")
+                    );
+                  } catch {
+                    return false;
+                  }
+                })();
+
+                if (needsAttach) {
+                  const attached = (await runWithTimeout(
+                    send("Target.attachToTarget", { targetId, flatten: true }),
+                    1500,
+                  )) as { sessionId?: unknown };
+                  if (typeof attached?.sessionId === "string" && attached.sessionId.trim()) {
+                    sessionId = attached.sessionId;
+                  }
+                }
+
+                await runWithTimeout(
+                  send("Runtime.terminateExecution", undefined, sessionId),
+                  1500,
+                );
+                if (sessionId) {
+                  // Best-effort cleanup; not required for termination to take effect.
+                  void send("Target.detachFromTarget", { sessionId }).catch(() => {});
+                }
+              } catch {
+                // Best-effort; continue with disconnect anyway
+              } finally {
+                try {
+                  ws.close();
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }
+        } catch {
+          // Best-effort; continue with disconnect anyway
         }
-      } catch {
-        // Best-effort; continue with disconnect anyway
       }
     }
 
