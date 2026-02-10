@@ -125,7 +125,7 @@ function upsertNode(record: {
   // Evict the oldest entry (Map insertion order) when at capacity,
   // but only if this is a genuinely new node (updates reuse the slot).
   if (!existing && remoteNodes.size >= MAX_REMOTE_NODES) {
-    const oldest = remoteNodes.keys().next().value as string | undefined;
+    const oldest = remoteNodes.keys().next().value;
     if (oldest) {
       remoteNodes.delete(oldest);
     }
@@ -235,7 +235,7 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
   }
   try {
     const parsed = payloadJSON
-      ? JSON.parse(payloadJSON)
+      ? (JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown })
       : (payload as { stdout?: unknown; bins?: unknown });
     if (Array.isArray(parsed.bins)) {
       return parsed.bins.map((bin) => String(bin).trim()).filter(Boolean);
