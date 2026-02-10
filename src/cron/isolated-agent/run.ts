@@ -519,7 +519,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const firstText = payloads[0]?.text ?? "";
   const summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   const outputText = pickLastNonEmptyTextFromPayloads(payloads);
-  const synthesizedText = outputText?.trim() || summary?.trim() || undefined;
+  let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
   let structuredOutput: unknown | undefined;
   if (responseSchema) {
     if (!outputText) {
@@ -550,9 +550,25 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     structuredOutput = validation.data;
   }
+
+  // If structured output includes a formattedReport field, use it for delivery
+  // instead of the raw JSON. This lets the model produce both machine-parseable
+  // JSON and a human-friendly message in a single response.
+  // Override synthesizedText (used by announce flow) and deliveryPayloads (used by direct flow).
+  const structuredDeliveryText =
+    structuredOutput &&
+    typeof structuredOutput === "object" &&
+    typeof (structuredOutput as Record<string, unknown>).formattedReport === "string"
+      ? ((structuredOutput as Record<string, unknown>).formattedReport as string)
+      : undefined;
+  if (structuredDeliveryText) {
+    synthesizedText = structuredDeliveryText;
+  }
+
   const deliveryPayload = pickLastDeliverablePayload(payloads);
-  const deliveryPayloads =
-    deliveryPayload !== undefined
+  const deliveryPayloads = structuredDeliveryText
+    ? [{ text: structuredDeliveryText }]
+    : deliveryPayload !== undefined
       ? [deliveryPayload]
       : synthesizedText
         ? [{ text: synthesizedText }]
@@ -610,10 +626,15 @@ export async function runCronIsolatedAgentTurn(params: {
 
     // Shared subagent announce flow is text-based and prompts the main agent to
     // summarize. When we have an explicit delivery target (delivery.to), sender
-    // identity, or structured content, prefer direct outbound delivery to send
-    // the actual cron output without summarization.
+    // identity, structured content (media/channel payloads), or formattedReport,
+    // prefer direct outbound delivery to send the actual cron output without summarization.
     const hasExplicitDeliveryTarget = Boolean(deliveryPlan.to);
-    if (deliveryPayloadHasStructuredContent || identity || hasExplicitDeliveryTarget) {
+    if (
+      structuredDeliveryText ||
+      deliveryPayloadHasStructuredContent ||
+      identity ||
+      hasExplicitDeliveryTarget
+    ) {
       try {
         const payloadsForDelivery =
           deliveryPayloadHasStructuredContent && deliveryPayloads.length > 0
