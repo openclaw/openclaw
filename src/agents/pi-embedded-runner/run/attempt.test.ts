@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
-import { injectHistoryImagesIntoMessages } from "./attempt.js";
+import { describe, expect, it, vi } from "vitest";
+import { injectHistoryImagesIntoMessages, installTranscriptPromptGuard } from "./attempt.js";
 
 describe("injectHistoryImagesIntoMessages", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
@@ -54,5 +54,98 @@ describe("injectHistoryImagesIntoMessages", () => {
 
     expect(didMutate).toBe(false);
     expect(messages[0]?.content).toBe("noop");
+  });
+});
+
+describe("installTranscriptPromptGuard", () => {
+  function makeMockSessionManager() {
+    const appended: AgentMessage[] = [];
+    return {
+      appendMessage: vi.fn((msg: AgentMessage) => {
+        appended.push(msg);
+      }),
+      appended,
+    };
+  }
+
+  it("replaces the first user message content with the original prompt", () => {
+    const sm = makeMockSessionManager();
+    const teardown = installTranscriptPromptGuard(sm, "Hello");
+
+    // Simulate what activeSession.prompt() does internally: appends a user message
+    sm.appendMessage({ role: "user", content: "MEMORY CONTEXT\n\nHello" } as AgentMessage);
+
+    expect(sm.appended).toHaveLength(1);
+    expect(sm.appended[0]?.content).toBe("Hello");
+    expect((sm.appended[0] as { role: string }).role).toBe("user");
+
+    teardown();
+  });
+
+  it("only intercepts the first user message (one-shot)", () => {
+    const sm = makeMockSessionManager();
+    const teardown = installTranscriptPromptGuard(sm, "original");
+
+    sm.appendMessage({ role: "user", content: "modified1" } as AgentMessage);
+    sm.appendMessage({ role: "user", content: "modified2" } as AgentMessage);
+
+    expect(sm.appended).toHaveLength(2);
+    // First user message: replaced with original
+    expect(sm.appended[0]?.content).toBe("original");
+    // Second user message: passed through unmodified
+    expect(sm.appended[1]?.content).toBe("modified2");
+
+    teardown();
+  });
+
+  it("passes non-user messages through unmodified", () => {
+    const sm = makeMockSessionManager();
+    const teardown = installTranscriptPromptGuard(sm, "original");
+
+    // Assistant message should pass through untouched
+    sm.appendMessage({ role: "assistant", content: "response" } as AgentMessage);
+
+    expect(sm.appended).toHaveLength(1);
+    expect(sm.appended[0]?.content).toBe("response");
+
+    // The next user message should still be intercepted (guard hasn't fired yet)
+    sm.appendMessage({ role: "user", content: "modified" } as AgentMessage);
+    expect(sm.appended[1]?.content).toBe("original");
+
+    teardown();
+  });
+
+  it("restores original appendMessage on teardown", () => {
+    const sm = makeMockSessionManager();
+    const originalFn = sm.appendMessage;
+    const teardown = installTranscriptPromptGuard(sm, "original");
+
+    // appendMessage should be replaced
+    expect(sm.appendMessage).not.toBe(originalFn);
+
+    teardown();
+
+    // After teardown, the original function is restored
+    // (it's the bound version, so we verify by calling it)
+    sm.appendMessage({ role: "user", content: "after teardown" } as AgentMessage);
+    expect(sm.appended).toHaveLength(1);
+    expect(sm.appended[0]?.content).toBe("after teardown");
+  });
+
+  it("preserves other message properties when replacing content", () => {
+    const sm = makeMockSessionManager();
+    const teardown = installTranscriptPromptGuard(sm, "clean prompt");
+
+    const msg = {
+      role: "user",
+      content: "dirty prompt with context",
+      metadata: { source: "telegram" },
+    } as AgentMessage;
+    sm.appendMessage(msg);
+
+    expect(sm.appended[0]?.content).toBe("clean prompt");
+    expect((sm.appended[0] as Record<string, unknown>).metadata).toEqual({ source: "telegram" });
+
+    teardown();
   });
 });
