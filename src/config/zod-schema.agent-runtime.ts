@@ -172,12 +172,7 @@ export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
     provider: z
-      .union([
-        z.literal("brave"),
-        z.literal("perplexity"),
-        z.literal("grok"),
-        z.literal("atlas"),
-      ])
+      .union([z.literal("brave"), z.literal("perplexity"), z.literal("grok"), z.literal("atlas")])
       .optional(),
     apiKey: z.string().optional(),
     maxResults: z.number().int().positive().optional(),

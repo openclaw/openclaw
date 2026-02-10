@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { CacheEntry } from "./web-shared.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { runAtlasPrompt } from "./atlas.js";
-import type { CacheEntry } from "./web-shared.js";
 import { normalizeCacheKey, readCache, writeCache } from "./web-shared.js";
 
 type AtlasSearchEntry = {
@@ -11,7 +11,7 @@ type AtlasSearchEntry = {
   description?: string;
 };
 
-function resolveSiteName(url: string | undefined): string | undefined {
+function resolveAtlasSiteName(url: string | undefined): string | undefined {
   if (!url) {
     return undefined;
   }
@@ -205,7 +205,7 @@ export async function runAtlasSearch(params: {
       const description = entry.snippet ?? entry.description ?? "";
       const title = entry.title ?? "";
       const url = entry.url ?? "";
-      const rawSiteName = resolveSiteName(url);
+      const rawSiteName = resolveAtlasSiteName(url);
       return {
         title: title ? wrapWebContent(title, "web_search") : "",
         url, // Keep raw for tool chaining
