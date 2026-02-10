@@ -81,8 +81,8 @@ export function resolveModel(
       const trimmedId = modelId.trim();
       const matchedModel = (providerCfg?.models ?? []).find((m) => m.id === trimmedId);
       const fallbackModel: Model<Api> = normalizeModelCompat({
-        id: modelId,
-        name: matchedModel?.name ?? modelId,
+        id: trimmedId,
+        name: matchedModel?.name ?? trimmedId,
         api: matchedModel?.api ?? providerCfg?.api ?? "openai-responses",
         provider,
         baseUrl: providerCfg?.baseUrl,
