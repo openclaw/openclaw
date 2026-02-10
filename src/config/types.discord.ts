@@ -95,6 +95,8 @@ export type DiscordExecApprovalConfig = {
   agentFilter?: string[];
   /** Only forward approvals matching these session key patterns (substring or regex). */
   sessionFilter?: string[];
+  /** Delete approval DMs after approval, denial, or timeout. Default: false. */
+  cleanupAfterResolve?: boolean;
 };
 
 export type DiscordAgentComponentsConfig = {
