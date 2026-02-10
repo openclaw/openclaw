@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Added
 
+- Commands: add `commands.allowFrom` config for separate command authorization, allowing operators to restrict slash commands to specific users while keeping chat open to others. (#12430) Thanks @thewilloftheshadow.
 - iOS: alpha node app + setup-code onboarding. (#11756) Thanks @mbelinky.
 - Channels: comprehensive BlueBubbles and channel cleanup. (#11093) Thanks @tyler6204.
 - Plugins: device pairing + phone control plugins (Telegram `/pair`, iOS/Android node controls). (#11755) Thanks @mbelinky.
