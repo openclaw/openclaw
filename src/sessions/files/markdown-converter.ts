@@ -1,4 +1,6 @@
 import csvToMarkdown from "csv-to-markdown-table";
+import type { InputFileLimits } from "../../media/input-files.js";
+import { extractPdfContent } from "../../media/input-files.js";
 
 export function csvToMarkdownTable(csv: string): string {
   if (!csv.trim()) {
@@ -71,18 +73,41 @@ export async function convertToMarkdown(
   type: SessionFileType,
   _filename: string,
 ): Promise<string> {
-  const text = buffer.toString("utf-8");
-
   switch (type) {
-    case "csv":
+    case "csv": {
+      const text = buffer.toString("utf-8");
       return csvToMarkdownTable(text);
-    case "json":
+    }
+    case "json": {
+      const text = buffer.toString("utf-8");
       return jsonToMarkdown(text);
-    case "text":
+    }
+    case "text": {
+      const text = buffer.toString("utf-8");
       return textToMarkdown(text);
-    case "pdf":
-      return pdfToMarkdown(text, false); // PDF text already extracted
-    default:
+    }
+    case "pdf": {
+      // Extract PDF text first
+      const limits: InputFileLimits = {
+        allowUrl: false,
+        allowedMimes: new Set(["application/pdf"]),
+        maxBytes: 50 * 1024 * 1024, // 50MB default
+        maxChars: 1_000_000, // 1M chars default
+        maxRedirects: 5,
+        timeoutMs: 30_000,
+        pdf: {
+          maxPages: 100, // Reasonable default
+          maxPixels: 10_000_000, // 10MP default
+          minTextChars: 10,
+        },
+      };
+      const extracted = await extractPdfContent({ buffer, limits });
+      const pdfText = extracted.text || "";
+      return pdfToMarkdown(pdfText, false);
+    }
+    default: {
+      const text = buffer.toString("utf-8");
       return text;
+    }
   }
 }
