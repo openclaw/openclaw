@@ -25,7 +25,11 @@
     "sandbox": {
             "mode": "non-main",
             "scope": "session",
-            "workspaceAccess": "ro"
+            "workspaceAccess": "ro",
+            "browser": {
+                "enabled": true,
+                "cdpUrl": "ws://openclaw-browser:9222"
+            }
     },
       "models": {
         "openrouter/auto": {

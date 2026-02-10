@@ -14,6 +14,7 @@ services:
       TZ: ${OPENCLAW_TZ:-UTC}
       # VPS-specific
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
@@ -87,3 +88,18 @@ services:
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
+
+  openclaw-browser:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox-browser
+    environment:
+      OPENCLAW_BROWSER_HEADLESS: "1"
+      OPENCLAW_BROWSER_CDP_PORT: "9222"
+      OPENCLAW_BROWSER_VNC_PORT: "5900"
+      OPENCLAW_BROWSER_NOVNC_PORT: "6080"
+      OPENCLAW_BROWSER_ENABLE_NOVNC: "0"
+    ports:
+      - "127.0.0.1:9222:9222"
+    init: true
+    restart: unless-stopped
