@@ -75,6 +75,13 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
 };
 
+export type SlackAssistantConfig = {
+  /** Enable Slack AI Assistant features (loading states, suggested prompts). Default: false. */
+  enabled?: boolean;
+  /** Loading status message shown while processing. Default: "is thinking...". */
+  statusMessage?: string;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -144,6 +151,8 @@ export type SlackAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Slack AI Assistant features (loading states, suggested prompts). */
+  assistant?: SlackAssistantConfig;
 };
 
 export type SlackConfig = {

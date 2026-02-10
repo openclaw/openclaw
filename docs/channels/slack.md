@@ -41,6 +41,7 @@ Minimal config:
    - `member_joined_channel`, `member_left_channel`
    - `channel_rename`
    - `pin_added`, `pin_removed`
+   - `assistant_thread_started`, `assistant_thread_context_changed` (optional, for AI Assistant features)
 6. Invite the bot to channels you want it to read.
 7. Slash Commands → create `/openclaw` if you use `channels.slack.slashCommand`. If you enable native commands, add one slash command per built-in command (same names as `/help`). Native defaults to off for Slack unless you set `channels.slack.commands.native: true` (global `commands.native` is `"auto"` which leaves Slack off).
 8. App Home → enable the **Messages Tab** so users can DM the bot.
@@ -213,7 +214,8 @@ user scopes if you plan to configure a user token.
         "emoji:read",
         "commands",
         "files:read",
-        "files:write"
+        "files:write",
+        "assistant:write"
       ],
       "user": [
         "channels:history",
@@ -237,6 +239,8 @@ user scopes if you plan to configure a user token.
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
+        "assistant_thread_started",
+        "assistant_thread_context_changed",
         "message.channels",
         "message.groups",
         "message.im",
@@ -284,6 +288,8 @@ conversation types you actually touch (channels, groups, im, mpim). See
   [https://docs.slack.dev/reference/scopes/emoji.read](https://docs.slack.dev/reference/scopes/emoji.read)
 - `files:write` (uploads via `files.uploadV2`)
   [https://docs.slack.dev/messaging/working-with-files/#upload](https://docs.slack.dev/messaging/working-with-files/#upload)
+- `assistant:write` (AI assistant features: loading states, suggested prompts, thread titles)
+  [https://docs.slack.dev/ai/developing-ai-apps](https://docs.slack.dev/ai/developing-ai-apps)
 
 ### User token scopes (optional, read-only by default)
 

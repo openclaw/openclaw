@@ -37,6 +37,7 @@ import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../../security/channel-metadata.js";
 import { reactSlackMessage } from "../../actions.js";
+import { setAssistantStatus } from "../../assistant.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
@@ -373,6 +374,18 @@ export async function prepareSlackMessage(params: {
         )
       : null;
 
+  // Set Slack AI Assistant status if enabled and we're acknowledging the message
+  const assistantConfig = account.config.assistant;
+  const assistantStatusPromise =
+    assistantConfig?.enabled && shouldAckReaction() && ackReactionMessageTs
+      ? setAssistantStatus({
+          client: ctx.app.client,
+          channelId: message.channel,
+          threadTs: ackReactionMessageTs,
+          status: assistantConfig.statusMessage ?? "is thinking...",
+        })
+      : null;
+
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
   const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
   const inboundLabel = isDirectMessage
@@ -581,5 +594,6 @@ export async function prepareSlackMessage(params: {
     ackReactionMessageTs,
     ackReactionValue,
     ackReactionPromise,
+    assistantStatusPromise,
   };
 }

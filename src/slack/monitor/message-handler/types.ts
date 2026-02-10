@@ -20,4 +20,6 @@ export type PreparedSlackMessage = {
   ackReactionMessageTs?: string;
   ackReactionValue: string;
   ackReactionPromise: Promise<boolean> | null;
+  /** Promise for Slack AI Assistant status (cleared after reply). */
+  assistantStatusPromise: Promise<boolean> | null;
 };
