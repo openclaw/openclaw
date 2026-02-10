@@ -1,10 +1,12 @@
 name: Auto response
 
+# CI disabled – restore issues/pull_request_target to re-enable
 on:
-  issues:
-    types: [opened, edited, labeled]
-  pull_request_target:
-    types: [labeled]
+  workflow_dispatch:
+  # issues:
+  #   types: [opened, edited, labeled]
+  # pull_request_target:
+  #   types: [labeled]
 
 permissions: {}
 

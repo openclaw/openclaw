@@ -1,11 +1,13 @@
 name: Docker Release
 
+# CI disabled – restore push/tags to re-enable
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - "v*"
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - main
+  #   tags:
+  #     - "v*"
 
 env:
   REGISTRY: ghcr.io

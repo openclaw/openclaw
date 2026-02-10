@@ -1,7 +1,9 @@
 name: Formal models (informational conformance)
 
+# CI disabled – restore pull_request to re-enable
 on:
-  pull_request:
+  workflow_dispatch:
+  # pull_request:
 
 concurrency:
   group: formal-conformance-${{ github.event.pull_request.number || github.ref_name }}

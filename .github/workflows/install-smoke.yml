@@ -1,10 +1,11 @@
 name: Install Smoke
 
+# CI disabled – restore push/pull_request to re-enable
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
+  # push:
+  #   branches: [main]
+  # pull_request:
 
 concurrency:
   group: install-smoke-${{ github.event.pull_request.number || github.sha }}

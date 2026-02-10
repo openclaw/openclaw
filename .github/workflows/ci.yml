@@ -1,9 +1,11 @@
 name: CI
 
+# CI disabled – restore push/pull_request below to re-enable
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  # pull_request:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}

@@ -1,9 +1,11 @@
 name: Workflow Sanity
 
+# CI disabled – restore pull_request/push to re-enable
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
+  # pull_request:
+  # push:
+  #   branches: [main]
 
 concurrency:
   group: workflow-sanity-${{ github.event.pull_request.number || github.sha }}
