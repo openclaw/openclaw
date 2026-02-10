@@ -355,14 +355,14 @@ describe("deliverOutboundPayloads", () => {
     expect(mockRunMessageSent).toHaveBeenCalledTimes(1);
     expect(mockRunMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: "+1555",
+        to: "whatsapp:user:+1555",
         content: "Hello\nWorld",
         success: true,
       }),
       expect.objectContaining({
         channelId: "whatsapp",
         accountId: "acct-1",
-        conversationId: "+1555",
+        conversationId: "whatsapp:user:+1555",
       }),
     );
   });

@@ -14,6 +14,7 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "../../auto-reply/chunk.js";
+import { toCanonicalAddress } from "../../auto-reply/reply/dispatch-from-config.js";
 import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
@@ -386,12 +387,12 @@ export async function deliverOutboundPayloads(params: {
       const ctx = {
         channelId: channel,
         accountId: accountId ?? undefined,
-        conversationId: to,
+        conversationId: toCanonicalAddress(to, { source: channel }) ?? to,
       };
       void hookRunner
         .runMessageSent(
           {
-            to,
+            to: toCanonicalAddress(to, { source: channel }) ?? to,
             content: deliveredText,
             success: true,
           },
