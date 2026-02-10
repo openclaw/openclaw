@@ -30,7 +30,6 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -370,18 +369,15 @@ export async function initSessionState(params: {
     ...ctx,
     // Keep BodyStripped aligned with Body (best default for agent prompts).
     // RawBody is reserved for command/directive parsing and may omit context.
-    BodyStripped: formatInboundBodyWithSenderMeta({
-      ctx,
-      body: normalizeInboundTextNewlines(
-        bodyStripped ??
-          ctx.BodyForAgent ??
-          ctx.Body ??
-          ctx.CommandBody ??
-          ctx.RawBody ??
-          ctx.BodyForCommands ??
-          "",
-      ),
-    }),
+    BodyStripped: normalizeInboundTextNewlines(
+      bodyStripped ??
+        ctx.BodyForAgent ??
+        ctx.Body ??
+        ctx.CommandBody ??
+        ctx.RawBody ??
+        ctx.BodyForCommands ??
+        "",
+    ),
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
   };
