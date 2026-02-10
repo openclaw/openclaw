@@ -442,6 +442,7 @@ Docs: https://docs.openclaw.ai
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
+- Agents: add error handling to orphaned message cleanup to prevent message processing queue from blocking. (#2262)
 
 - Skills: update session-logs paths to use ~/.openclaw. (#4502) Thanks @bonald.
 - Telegram: avoid silent empty replies by tracking normalization skips before fallback. (#3796)
