@@ -129,7 +129,7 @@ const SECRET_PATTERNS = [
  * Sanitize an error for safe transmission (e.g., to Slack)
  * Only redacts actual secrets, not general identifiers like UUIDs or session keys.
  */
-export function sanitizeError(err: Error | unknown): {
+export function sanitizeError(err: unknown): {
   message: string;
   sanitized: boolean;
 } {

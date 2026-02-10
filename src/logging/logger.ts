@@ -269,7 +269,7 @@ export { createContextualError, sanitizeError, sanitizeContextualErrorForSlack }
  * Automatically pulls context from the current operation stack if available.
  */
 export function logErrorWithContext(
-  err: Error | unknown,
+  err: unknown,
   context?: Partial<OperationContext>,
 ): ContextualError {
   const logger = getLogger();
@@ -305,7 +305,7 @@ export function logErrorWithContext(
 /**
  * Get a sanitized error message safe for external delivery (e.g., Slack).
  */
-export function getSafeErrorMessage(err: Error | unknown): string {
+export function getSafeErrorMessage(err: unknown): string {
   const { message } = sanitizeError(err);
   return message;
 }
