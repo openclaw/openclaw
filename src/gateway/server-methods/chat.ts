@@ -191,8 +191,12 @@ function appendAssistantTranscriptMessage(params: {
 
 /**
  * Append both the user's command message and the assistant's reply to the session transcript
- * in a single SessionManager instance. Using one instance guarantees the parentId chain stays
- * intact and both messages are written atomically.
+ * through a single SessionManager instance. Using one instance guarantees the parentId chain
+ * stays intact across both messages.
+ *
+ * Note: the two appends are NOT atomic — a crash between them could leave only the user message.
+ * This is acceptable because the assistant reply would simply be missing, which is the same
+ * failure mode as a crash during any other transcript write.
  *
  * This ensures the user's command message survives the UI's loadChatHistory() refresh, which
  * replaces local messages with the server transcript. See #12934.
