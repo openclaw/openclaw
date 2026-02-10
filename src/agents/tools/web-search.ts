@@ -145,22 +145,26 @@ function extractGrokContent(data: GrokSearchResponse): {
   // xAI Responses API: content is in output[].content[].text where type === "message"
   // and annotations live in output[].content[].annotations
   let text = "";
-  let annotations: GrokSearchResponse["inline_citations"] | undefined;
+  const allAnnotations: NonNullable<GrokSearchResponse["inline_citations"]> = [];
 
   if (Array.isArray(data.output)) {
     for (const item of data.output) {
       if (item.type === "message" && Array.isArray(item.content)) {
         for (const block of item.content) {
           if (block.type === "output_text" && block.text) {
+            // Track offset for adjusting annotation positions across blocks
+            const offset = text ? text.length + 1 : 0; // +1 for "\n" separator
             text += (text ? "\n" : "") + block.text;
-            if (!annotations && Array.isArray(block.annotations)) {
-              annotations = block.annotations
-                .filter((a) => a.type === "url_citation")
-                .map((a) => ({
-                  start_index: a.start_index ?? 0,
-                  end_index: a.end_index ?? 0,
-                  url: a.url ?? "",
-                }));
+            if (Array.isArray(block.annotations)) {
+              for (const a of block.annotations) {
+                if (a.type === "url_citation") {
+                  allAnnotations.push({
+                    start_index: (a.start_index ?? 0) + offset,
+                    end_index: (a.end_index ?? 0) + offset,
+                    url: a.url ?? "",
+                  });
+                }
+              }
             }
           }
         }
@@ -169,7 +173,7 @@ function extractGrokContent(data: GrokSearchResponse): {
   }
 
   if (text) {
-    return { text, annotations };
+    return { text, annotations: allAnnotations.length ? allAnnotations : undefined };
   }
 
   // Fallback to deprecated output_text for backwards compatibility

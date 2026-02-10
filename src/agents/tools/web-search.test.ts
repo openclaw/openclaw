@@ -198,6 +198,37 @@ describe("web_search grok response parsing", () => {
     expect(result.annotations).toBeUndefined();
   });
 
+  it("adjusts annotation offsets when concatenating multiple blocks", () => {
+    const result = extractGrokContent({
+      output: [
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: "hello", // length 5
+              annotations: [
+                { type: "url_citation", url: "https://a.com", start_index: 0, end_index: 5 },
+              ],
+            },
+            {
+              type: "output_text",
+              text: "world", // offset = 5 + 1 ("\n") = 6
+              annotations: [
+                { type: "url_citation", url: "https://b.com", start_index: 0, end_index: 5 },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.text).toBe("hello\nworld");
+    expect(result.annotations).toEqual([
+      { start_index: 0, end_index: 5, url: "https://a.com" },
+      { start_index: 6, end_index: 11, url: "https://b.com" },
+    ]);
+  });
+
   it("skips non-message output items", () => {
     const result = extractGrokContent({
       output: [
