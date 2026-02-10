@@ -4,7 +4,7 @@
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "license": "MIT",
-  "author": "",
+  "author": "Peter Steinberger and contributors",
   "bin": {
     "openclaw": "openclaw.mjs"
   },

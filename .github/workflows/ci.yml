@@ -471,8 +471,13 @@ jobs:
           done
           exit 1
 
+  # TODO: Re-enable iOS CI once simulator stability issues are resolved.
+  # iOS builds are temporarily disabled due to:
+  # 1. Simulator creation/boot flakiness in CI environments
+  # 2. GitHub's macOS runner concurrency limits (5 per org)
+  # Local iOS development and testing continues via: pnpm ios:build, pnpm ios:run
   ios:
-    if: false # ignore iOS in CI for now
+    if: false
     runs-on: macos-latest
     steps:
       - name: Checkout

@@ -43,13 +43,29 @@ The best way to help the project right now is by sending PRs.
 
 - Public Internet Exposure
 - Using OpenClaw in ways that the docs recommend not to
-- Prompt injection attacks
+- Prompt injection attacks (see note below)
+
+### Note on Prompt Injection
+
+Prompt injection is listed as "out of scope" for security reports because:
+
+1. **Inherent to LLM systems**: Prompt injection is a fundamental challenge with all LLM-based applications, not a bug specific to OpenClaw.
+2. **Model-level mitigation**: Defense primarily depends on the underlying model provider (Anthropic, OpenAI, etc.).
+3. **Personal assistant design**: OpenClaw is designed as a personal assistant with intentional access to tools and messaging.
+
+**Mitigation recommendations for users concerned about prompt injection:**
+
+- Use `dmPolicy="pairing"` (default) to require approval before responding to unknown senders
+- Configure allowlists (`allowFrom`) to limit who can interact with your assistant
+- Use `agents.defaults.sandbox.mode: "non-main"` to sandbox non-main sessions
+- Review the [Security guide](https://docs.openclaw.ai/gateway/security/) for hardening options
+- Run `openclaw security audit --deep` to identify risky configurations
 
 ## Operational Guidance
 
 For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:
 
-- `https://docs.openclaw.ai/gateway/security`
+- `https://docs.openclaw.ai/gateway/security/`
 
 ### Web Interface Safety
 
