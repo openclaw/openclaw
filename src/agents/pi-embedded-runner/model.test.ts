@@ -322,6 +322,102 @@ describe("resolveModel", () => {
     expect(result.error).toBe("Unknown model: openai-codex/gpt-4.1-mini");
   });
 
+  it("errors for unknown gpt-5.3-codex-* variants", () => {
+    const result = resolveModel("openai-codex", "gpt-5.3-codex-unknown", "/tmp/agent");
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: openai-codex/gpt-5.3-codex-unknown");
+  });
+
+  it("fallback does not bleed contextWindow from unrelated models[0]", () => {
+    // When a provider has models configured but the requested model is NOT in the array,
+    // the fallback should use DEFAULT_CONTEXT_TOKENS, not models[0].contextWindow.
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("other-model"),
+                contextWindow: 4096,
+                maxTokens: 2048,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("custom", "unknown-model", "/tmp/agent", cfg);
+
+    expect(result.model?.id).toBe("unknown-model");
+    // Should NOT be 4096 (from models[0]). Should be the default.
+    expect(result.model?.contextWindow).not.toBe(4096);
+  });
+
+  it("fallback propagates reasoning from matched provider model", () => {
+    // When a provider has a model with reasoning: true AND that model is the one requested,
+    // the fallback should propagate reasoning: true instead of hardcoding false.
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434/v1",
+            api: "openai-responses",
+            models: [
+              {
+                ...makeModel("thinking-model"),
+                reasoning: true,
+                contextWindow: 128000,
+                maxTokens: 64000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("ollama", "thinking-model", "/tmp/agent", cfg);
+
+    expect(result.model?.reasoning).toBe(true);
+    expect(result.model?.contextWindow).toBe(128000);
+    expect(result.model?.maxTokens).toBe(64000);
+
+  it("fallback uses correct model when provider has multiple models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434/v1",
+            api: "openai-responses",
+            models: [
+              {
+                ...makeModel("small-model"),
+                reasoning: false,
+                contextWindow: 4096,
+                maxTokens: 2048,
+              },
+              {
+                ...makeModel("big-model"),
+                reasoning: true,
+                contextWindow: 128000,
+                maxTokens: 64000,
+                input: ["text", "image"] as const,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("ollama", "big-model", "/tmp/agent", cfg);
+
+    expect(result.model?.reasoning).toBe(true);
+    expect(result.model?.contextWindow).toBe(128000);
+    expect(result.model?.maxTokens).toBe(64000);
+  });
+
+>>>>>>> 5284bb82a (fix(model): propagate provider model properties in fallback resolution)
   it("uses codex fallback even when openai-codex provider is configured", () => {
     // This test verifies the ordering: codex fallback must fire BEFORE the generic providerCfg fallback.
     // If ordering is wrong, the generic fallback would use api: "openai-responses" (the default)
