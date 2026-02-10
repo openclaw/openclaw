@@ -4,9 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
+
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: vi.fn(),
+}));
 
 function makeTempDir() {
   const dir = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
@@ -211,6 +215,67 @@ describe("installHooksFromArchive", () => {
       return;
     }
     expect(result.error).toContain("reserved path segment");
+  });
+});
+
+describe("installHooksFromPath", () => {
+  it("uses --ignore-scripts for dependency install", async () => {
+    const workDir = makeTempDir();
+    const stateDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    fs.mkdirSync(path.join(pkgDir, "hooks", "one-hook"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/test-hooks",
+        version: "0.0.1",
+        openclaw: { hooks: ["./hooks/one-hook"] },
+        dependencies: { "left-pad": "1.3.0" },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", "one-hook", "HOOK.md"),
+      [
+        "---",
+        "name: one-hook",
+        "description: One hook",
+        'metadata: {"openclaw":{"events":["command:new"]}}',
+        "---",
+        "",
+        "# One Hook",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", "one-hook", "handler.ts"),
+      "export default async () => {};\n",
+      "utf-8",
+    );
+
+    const { runCommandWithTimeout } = await import("../process/exec.js");
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+
+    const { installHooksFromPath } = await import("./install.js");
+    const res = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir: path.join(stateDir, "hooks"),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+
+    const calls = run.mock.calls.filter((c) => Array.isArray(c[0]) && c[0][0] === "npm");
+    expect(calls.length).toBe(1);
+    const first = calls[0];
+    if (!first) {
+      throw new Error("expected npm install call");
+    }
+    const [argv, opts] = first;
+    expect(argv).toEqual(["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"]);
+    expect(opts?.cwd).toBe(res.targetDir);
   });
 });
 
