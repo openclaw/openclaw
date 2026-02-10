@@ -31,7 +31,7 @@ Flow notes:
 - `quickstart`: minimal prompts, auto-generates a gateway token.
 - `manual`: full prompts for port/bind/auth (alias of `advanced`).
 - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
-- Custom API Endpoint: connect any OpenAI or Anthropic compatible endpoint,
+- Custom Provider: connect any OpenAI or Anthropic compatible endpoint,
   including hosted providers not listed. Use Unknown to auto-detect.
 
 ## Common follow-up commands
