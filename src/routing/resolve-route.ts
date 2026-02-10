@@ -8,6 +8,7 @@ import {
   buildAgentPeerSessionKey,
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
+  normalizeAccountId as normalizeSessionAccountId,
   normalizeAgentId,
   sanitizeAgentId,
 } from "./session-key.js";
@@ -60,11 +61,6 @@ function normalizeId(value: string | undefined | null): string {
   return (value ?? "").trim();
 }
 
-function normalizeAccountId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  return trimmed ? trimmed : DEFAULT_ACCOUNT_ID;
-}
-
 function matchesAccountId(match: string | undefined, actual: string): boolean {
   const trimmed = (match ?? "").trim();
   if (!trimmed) {
@@ -73,7 +69,7 @@ function matchesAccountId(match: string | undefined, actual: string): boolean {
   if (trimmed === "*") {
     return true;
   }
-  return trimmed === actual;
+  return normalizeSessionAccountId(trimmed) === normalizeSessionAccountId(actual);
 }
 
 export function buildAgentSessionKey(params: {
@@ -170,7 +166,7 @@ function matchesTeam(match: { teamId?: string | undefined } | undefined, teamId:
 
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
-  const accountId = normalizeAccountId(input.accountId);
+  const accountId = normalizeSessionAccountId(input.accountId);
   const peer = input.peer ? { kind: input.peer.kind, id: normalizeId(input.peer.id) } : null;
   const guildId = normalizeId(input.guildId);
   const teamId = normalizeId(input.teamId);

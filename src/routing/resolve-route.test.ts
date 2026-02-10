@@ -191,6 +191,20 @@ describe("resolveAgentRoute", () => {
     expect(otherRoute.agentId).toBe("main");
   });
 
+  test("account binding matches normalized account IDs to avoid fallback misrouting", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "Bot Main" } }],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "bot-main",
+      peer: { kind: "direct", id: "1000" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("binding.account");
+  });
+
   test("accountId=* matches any account as a channel fallback", () => {
     const cfg: OpenClawConfig = {
       bindings: [
