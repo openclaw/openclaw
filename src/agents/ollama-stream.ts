@@ -25,6 +25,7 @@ interface OllamaChatMessage {
   content: string;
   images?: string[];
   tool_calls?: OllamaToolCall[];
+  tool_name?: string;
 }
 
 interface OllamaTool {
@@ -140,9 +141,17 @@ export function convertToOllamaMessages(
       });
     } else if (role === "tool" || role === "toolResult") {
       // SDK uses "toolResult" (camelCase) for tool result messages.
-      // Ollama API expects "tool" role.
+      // Ollama API expects "tool" role with tool_name per the native spec.
       const text = extractTextContent(msg.content);
-      result.push({ role: "tool", content: text });
+      const toolName =
+        typeof (msg as { toolName?: unknown }).toolName === "string"
+          ? (msg as { toolName?: string }).toolName
+          : undefined;
+      result.push({
+        role: "tool",
+        content: text,
+        ...(toolName ? { tool_name: toolName } : {}),
+      });
     }
   }
 

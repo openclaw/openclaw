@@ -63,6 +63,19 @@ describe("convertToOllamaMessages", () => {
     expect(result).toEqual([{ role: "tool", content: "command output here" }]);
   });
 
+  it("includes tool_name from SDK toolResult messages", () => {
+    const messages = [{ role: "toolResult", content: "file contents here", toolName: "read" }];
+    const result = convertToOllamaMessages(messages);
+    expect(result).toEqual([{ role: "tool", content: "file contents here", tool_name: "read" }]);
+  });
+
+  it("omits tool_name when not provided in toolResult", () => {
+    const messages = [{ role: "toolResult", content: "output" }];
+    const result = convertToOllamaMessages(messages);
+    expect(result).toEqual([{ role: "tool", content: "output" }]);
+    expect(result[0]).not.toHaveProperty("tool_name");
+  });
+
   it("handles empty messages array", () => {
     const result = convertToOllamaMessages([]);
     expect(result).toEqual([]);
