@@ -130,6 +130,18 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /**
+   * Prune consecutive NO_REPLY assistant messages from context before sending to the model.
+   * Prevents the "cascade of silence" where accumulated NO_REPLYs cause the model to
+   * always respond with NO_REPLY.
+   *
+   * - true/undefined: keep at most 1 consecutive NO_REPLY (default behavior)
+   * - false: disable pruning
+   * - number: keep at most N consecutive NO_REPLYs
+   *
+   * See: https://github.com/openclaw/openclaw/issues/13387
+   */
+  pruneConsecutiveNoReply?: boolean | number;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Vector memory search configuration (per-agent overrides supported). */
