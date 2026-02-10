@@ -142,6 +142,7 @@
     "long": "^5.3.2",
     "markdown-it": "^14.1.0",
     "node-edge-tts": "^1.2.10",
+    "openai": "^6.19.0",
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.4.624",
     "playwright-core": "1.58.2",

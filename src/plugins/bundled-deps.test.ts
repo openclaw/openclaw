@@ -3,21 +3,31 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-type RootPackageJson = {
+type PackageJson = {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
 };
 
 describe("bundled extension deps", () => {
-  it("declares LanceDB dependency needed by bundled memory-lancedb", () => {
+  it("declares bundled extension runtime deps at the root (npm-installed)", () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const repoRoot = path.resolve(here, "../..");
-    const pkgPath = path.join(repoRoot, "package.json");
 
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as RootPackageJson;
-    const declared =
-      pkg.dependencies?.["@lancedb/lancedb"] ?? pkg.optionalDependencies?.["@lancedb/lancedb"];
+    const readJson = <T>(filePath: string): T => JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
 
-    expect(declared, "package.json must declare @lancedb/lancedb for memory-lancedb").toBeTruthy();
+    const rootPkg = readJson<PackageJson>(path.join(repoRoot, "package.json"));
+    const memoryLancePkg = readJson<PackageJson>(
+      path.join(repoRoot, "extensions", "memory-lancedb", "package.json"),
+    );
+
+    const required = Object.keys(memoryLancePkg.dependencies ?? {});
+    const missing = required.filter(
+      (dep) => !rootPkg.dependencies?.[dep] && !rootPkg.optionalDependencies?.[dep],
+    );
+
+    expect(
+      missing,
+      `package.json must declare bundled extension deps: ${missing.join(", ")}`,
+    ).toEqual([]);
   });
 });

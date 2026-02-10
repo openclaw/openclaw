@@ -133,6 +133,9 @@ importers:
       node-llama-cpp:
         specifier: 3.15.1
         version: 3.15.1(typescript@5.9.3)
+      openai:
+        specifier: ^6.19.0
+        version: 6.19.0(ws@8.19.0)(zod@4.3.6)
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0

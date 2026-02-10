@@ -1,0 +1,4 @@
+# Exclude workspace-installed deps from the published package.
+node_modules
+**/node_modules
+**/node_modules/**
