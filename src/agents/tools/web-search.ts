@@ -605,12 +605,20 @@ async function runWebSearch(params: {
   grokModel?: string;
   grokInlineCitations?: boolean;
 }): Promise<Record<string, unknown>> {
+  // Normalize base URLs for consistent cache keys
+  const normalizedPerplexityBaseUrl = (params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL)
+    .trim()
+    .replace(/\/$/, "");
+  const normalizedGrokBaseUrl = (params.grokBaseUrl ?? DEFAULT_GROK_BASE_URL)
+    .trim()
+    .replace(/\/$/, "");
+
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
-        ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokBaseUrl ?? DEFAULT_GROK_BASE_URL}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        ? `${params.provider}:${params.query}:${normalizedPerplexityBaseUrl}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
+        : `${params.provider}:${params.query}:${normalizedGrokBaseUrl}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
