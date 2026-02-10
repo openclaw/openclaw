@@ -167,6 +167,40 @@ export async function onTimer(state: CronServiceState) {
       const due = findDueJobs(state);
 
       if (due.length === 0) {
+        // Before recomputing, check if any jobs SHOULD have been due
+        // (nextRunAtMs in the past) but weren't caught by findDueJobs.
+        // This can happen if the timer didn't fire on time.
+        const now = state.deps.nowMs();
+        const missedJobs = (state.store?.jobs ?? []).filter((j) => {
+          if (!j.enabled) {
+            return false;
+          }
+          if (typeof j.state.runningAtMs === "number") {
+            return false;
+          }
+          // Exclude completed one-shot jobs (same check as runMissedJobs)
+          if (j.schedule.kind === "at" && j.state.lastStatus === "ok") {
+            return false;
+          }
+          const next = j.state.nextRunAtMs;
+          // Use >= to match findDueJobs predicate
+          return typeof next === "number" && now >= next;
+        });
+
+        if (missedJobs.length > 0) {
+          state.deps.log.warn(
+            { count: missedJobs.length, jobIds: missedJobs.map((j) => j.id) },
+            "cron: found missed jobs in onTimer, running them before recompute",
+          );
+          // Return them as due instead of recomputing
+          for (const job of missedJobs) {
+            job.state.runningAtMs = now;
+            job.state.lastError = undefined;
+          }
+          await persist(state);
+          return missedJobs.map((j) => ({ id: j.id, job: j }));
+        }
+
         const changed = recomputeNextRuns(state);
         if (changed) {
           await persist(state);
