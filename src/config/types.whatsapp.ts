@@ -14,6 +14,15 @@ export type WhatsAppActionConfig = {
   polls?: boolean;
 };
 
+export type WhatsAppFormattingConfig = {
+  /**
+   * Transform standard Markdown to WhatsApp-compatible formatting.
+   * Converts **bold** → *bold*, ~~strike~~ → ~strike~, # headers → *headers*, etc.
+   * Default: true.
+   */
+  markdownTransform?: boolean;
+};
+
 export type WhatsAppConfig = {
   /** Optional per-account WhatsApp configuration (multi-account). */
   accounts?: Record<string, WhatsAppAccountConfig>;
@@ -21,6 +30,8 @@ export type WhatsAppConfig = {
   capabilities?: string[];
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
+  /** WhatsApp-specific formatting options. */
+  formatting?: WhatsAppFormattingConfig;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
   /** Send read receipts for incoming messages (default true). */
@@ -109,6 +120,8 @@ export type WhatsAppAccountConfig = {
   capabilities?: string[];
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
+  /** WhatsApp-specific formatting options (per-account override). */
+  formatting?: WhatsAppFormattingConfig;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
   /** If false, do not start this WhatsApp account provider. Default: true. */

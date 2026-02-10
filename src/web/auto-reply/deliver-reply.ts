@@ -4,6 +4,7 @@ import type { WebInboundMsg } from "./types.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
+import { transformMarkdownForWhatsApp } from "../../markdown/whatsapp.js";
 import { sleep } from "../../utils.js";
 import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
@@ -24,13 +25,25 @@ export async function deliverWebReply(params: {
   connectionId?: string;
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
+  /** Transform Markdown to WhatsApp-compatible format (default: true). */
+  whatsappMarkdownTransform?: boolean;
 }) {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
   const tableMode = params.tableMode ?? "code";
   const chunkMode = params.chunkMode ?? "length";
-  const convertedText = convertMarkdownTables(replyResult.text || "", tableMode);
-  const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
+  const whatsappMarkdownTransform = params.whatsappMarkdownTransform ?? true;
+
+  // Step 1: Convert markdown tables
+  let processedText = convertMarkdownTables(replyResult.text || "", tableMode);
+
+  // Step 2: Transform Markdown to WhatsApp format (if enabled)
+  if (whatsappMarkdownTransform) {
+    processedText = transformMarkdownForWhatsApp(processedText);
+  }
+
+  // Step 3: Chunk the text
+  const textChunks = chunkMarkdownTextWithMode(processedText, textLimit, chunkMode);
   const mediaList = replyResult.mediaUrls?.length
     ? replyResult.mediaUrls
     : replyResult.mediaUrl

@@ -359,6 +359,13 @@ export async function processMessage(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info) => {
+        // Resolve WhatsApp formatting options (account-level overrides channel-level)
+        const accountFormatting =
+          params.cfg.channels?.whatsapp?.accounts?.[params.route.accountId ?? ""]?.formatting;
+        const channelFormatting = params.cfg.channels?.whatsapp?.formatting;
+        const whatsappMarkdownTransform =
+          accountFormatting?.markdownTransform ?? channelFormatting?.markdownTransform ?? true;
+
         await deliverWebReply({
           replyResult: payload,
           msg: params.msg,
@@ -370,6 +377,7 @@ export async function processMessage(params: {
           // Tool + block updates are noisy; skip their log lines.
           skipLog: info.kind !== "final",
           tableMode,
+          whatsappMarkdownTransform,
         });
         didSendReply = true;
         if (info.kind === "tool") {

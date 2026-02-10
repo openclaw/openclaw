@@ -4,6 +4,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { getChildLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
+import { transformMarkdownForWhatsApp } from "../markdown/whatsapp.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
@@ -34,6 +35,16 @@ export async function sendMessageWhatsApp(
     accountId: resolvedAccountId ?? options.accountId,
   });
   text = convertMarkdownTables(text ?? "", tableMode);
+
+  // Apply WhatsApp markdown transform (convert **bold** → *bold*, etc.)
+  const accountFormatting =
+    cfg.channels?.whatsapp?.accounts?.[resolvedAccountId ?? options.accountId ?? ""]?.formatting;
+  const channelFormatting = cfg.channels?.whatsapp?.formatting;
+  const markdownTransform =
+    accountFormatting?.markdownTransform ?? channelFormatting?.markdownTransform ?? true;
+  if (markdownTransform) {
+    text = transformMarkdownForWhatsApp(text);
+  }
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,

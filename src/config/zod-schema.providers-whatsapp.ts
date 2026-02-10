@@ -11,11 +11,25 @@ import {
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
+/** WhatsApp-specific formatting options. */
+export const WhatsAppFormattingSchema = z
+  .object({
+    /**
+     * Transform standard Markdown to WhatsApp-compatible formatting.
+     * Converts **bold** → *bold*, ~~strike~~ → ~strike~, # headers → *headers*, etc.
+     * Default: true.
+     */
+    markdownTransform: z.boolean().optional().default(true),
+  })
+  .strict()
+  .optional();
+
 export const WhatsAppAccountSchema = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
+    formatting: WhatsAppFormattingSchema,
     configWrites: z.boolean().optional(),
     enabled: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
@@ -81,6 +95,7 @@ export const WhatsAppConfigSchema = z
     accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
+    formatting: WhatsAppFormattingSchema,
     configWrites: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
