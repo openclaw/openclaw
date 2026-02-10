@@ -81,6 +81,7 @@ async function createChannelHandler(params: {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  agentId?: string | null;
   replyToId?: string | null;
   threadId?: string | number | null;
   deps?: OutboundSendDeps;
@@ -96,6 +97,7 @@ async function createChannelHandler(params: {
     channel: params.channel,
     to: params.to,
     accountId: params.accountId,
+    agentId: params.agentId,
     replyToId: params.replyToId,
     threadId: params.threadId,
     deps: params.deps,
@@ -113,6 +115,7 @@ function createPluginHandler(params: {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  agentId?: string | null;
   replyToId?: string | null;
   threadId?: string | number | null;
   deps?: OutboundSendDeps;
@@ -138,6 +141,7 @@ function createPluginHandler(params: {
             text: payload.text ?? "",
             mediaUrl: payload.mediaUrl,
             accountId: params.accountId,
+            agentId: params.agentId,
             replyToId: params.replyToId,
             threadId: params.threadId,
             gifPlayback: params.gifPlayback,
@@ -151,6 +155,7 @@ function createPluginHandler(params: {
         to: params.to,
         text,
         accountId: params.accountId,
+        agentId: params.agentId,
         replyToId: params.replyToId,
         threadId: params.threadId,
         gifPlayback: params.gifPlayback,
@@ -163,6 +168,7 @@ function createPluginHandler(params: {
         text: caption,
         mediaUrl,
         accountId: params.accountId,
+        agentId: params.agentId,
         replyToId: params.replyToId,
         threadId: params.threadId,
         gifPlayback: params.gifPlayback,
@@ -176,6 +182,8 @@ export async function deliverOutboundPayloads(params: {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  /** The agent id originating this outbound message (used for per-agent display identity). */
+  agentId?: string | null;
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;
@@ -194,6 +202,7 @@ export async function deliverOutboundPayloads(params: {
 }): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
   const accountId = params.accountId;
+  const agentId = params.agentId ?? params.mirror?.agentId ?? null;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
@@ -204,6 +213,7 @@ export async function deliverOutboundPayloads(params: {
     to,
     deps,
     accountId,
+    agentId,
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,

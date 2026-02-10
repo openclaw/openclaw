@@ -27,12 +27,23 @@ type SlackRecipient =
       id: string;
     };
 
+export type SlackPersona = {
+  /** Custom display name for the message (requires chat:write.customize scope). */
+  username?: string;
+  /** Slack emoji to use as the bot icon (e.g. ":robot_face:"). */
+  iconEmoji?: string;
+  /** URL to an image to use as the bot icon. */
+  iconUrl?: string;
+};
+
 type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
   client?: WebClient;
   threadTs?: string;
+  /** Per-agent display identity (name + icon) for this message. */
+  persona?: SlackPersona;
 };
 
 export type SlackSendResult = {
@@ -170,6 +181,17 @@ export async function sendMessageSlack(
       ? account.config.mediaMaxMb * 1024 * 1024
       : undefined;
 
+  // Build persona fields for chat.postMessage (requires chat:write.customize scope).
+  const personaFields: Record<string, string> = {};
+  if (opts.persona?.username) {
+    personaFields.username = opts.persona.username;
+  }
+  if (opts.persona?.iconUrl) {
+    personaFields.icon_url = opts.persona.iconUrl;
+  } else if (opts.persona?.iconEmoji) {
+    personaFields.icon_emoji = opts.persona.iconEmoji;
+  }
+
   let lastMessageId = "";
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = chunks;
@@ -186,6 +208,7 @@ export async function sendMessageSlack(
         channel: channelId,
         text: chunk,
         thread_ts: opts.threadTs,
+        ...personaFields,
       });
       lastMessageId = response.ts ?? lastMessageId;
     }
@@ -195,6 +218,7 @@ export async function sendMessageSlack(
         channel: channelId,
         text: chunk,
         thread_ts: opts.threadTs,
+        ...personaFields,
       });
       lastMessageId = response.ts ?? lastMessageId;
     }

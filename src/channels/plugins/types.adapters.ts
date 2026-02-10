@@ -79,6 +79,8 @@ export type ChannelOutboundContext = {
   replyToId?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;
+  /** The agent id originating this outbound message (used for per-agent display identity). */
+  agentId?: string | null;
   deps?: OutboundSendDeps;
 };
 
