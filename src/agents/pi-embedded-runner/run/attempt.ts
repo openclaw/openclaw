@@ -36,6 +36,7 @@ import {
   isEmptyAssistantMessageContent,
   resolveBootstrapMaxChars,
   stripImageBlocksFromMessages,
+  stripImageBlocksFromSessionFile,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
@@ -847,6 +848,14 @@ export async function runEmbeddedAttempt(
                 `empty assistant response with images in context — stripping images and retrying: runId=${params.runId} sessionId=${params.sessionId}`,
               );
               activeSession.agent.replaceMessages(stripped);
+              // Also persist the image removal to the session file so subsequent
+              // messages don't reload the images from disk.
+              const fileStripped = stripImageBlocksFromSessionFile(params.sessionFile);
+              if (fileStripped > 0) {
+                log.debug(
+                  `stripped ${fileStripped} image blocks from session file: ${params.sessionFile}`,
+                );
+              }
               await abortable(activeSession.prompt(effectivePrompt));
             }
           }

@@ -1,4 +1,5 @@
 import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
@@ -88,6 +89,50 @@ export function stripImageBlocksFromMessages(messages: AgentMessage[]): {
   });
 
   return { messages: out, hadImages };
+}
+
+/**
+ * Strip image blocks from a persisted session JSONL file so that subsequent
+ * prompts don't reload the images. Operates directly on the file, replacing
+ * \ content blocks with \.
+ *
+ * Returns the number of image blocks stripped.
+ */
+export function stripImageBlocksFromSessionFile(sessionFile: string): number {
+  let stripped = 0;
+  try {
+    const raw = readFileSync(sessionFile, "utf8");
+    const lines = raw.split("\n").filter(Boolean);
+    const out: string[] = [];
+    for (const line of lines) {
+      const entry = JSON.parse(line) as Record<string, unknown>;
+      if (entry.type === "message") {
+        const msg = entry.message as Record<string, unknown> | undefined;
+        const content = msg?.content;
+        if (Array.isArray(content)) {
+          msg!.content = content.map((block: unknown) => {
+            if (
+              block &&
+              typeof block === "object" &&
+              (block as { type?: unknown }).type === "image"
+            ) {
+              stripped++;
+              return { type: "text", text: "[image omitted]" };
+            }
+            return block;
+          });
+        }
+      }
+      out.push(JSON.stringify(entry));
+    }
+    if (stripped > 0) {
+      writeFileSync(sessionFile, out.join("\n") + "\n");
+    }
+  } catch {
+    // If the file can't be read/written, skip silently — the in-memory strip
+    // still works for the current retry, and the next compaction will drop old entries.
+  }
+  return stripped;
 }
 
 export async function sanitizeSessionMessagesImages(
