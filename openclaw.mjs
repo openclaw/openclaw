@@ -34,6 +34,24 @@ const installProcessWarningFilter = async () => {
 
 await installProcessWarningFilter();
 
+// Ultra-fast path for --version: resolve version from package.json without
+// loading the full CLI (avoids respawn, command registration, etc.).
+const versionArgs = new Set(["--version", "-V", "-v"]);
+const helpArgs = new Set(["--help", "-h"]);
+const hasVersion = process.argv.some((a) => versionArgs.has(a));
+const hasHelp = process.argv.some((a) => helpArgs.has(a));
+if (hasVersion && !hasHelp) {
+  const { createRequire } = await import("node:module");
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require("./package.json");
+    console.log(pkg.version);
+    process.exit(0);
+  } catch {
+    // Fall through to full CLI if package.json unavailable
+  }
+}
+
 const tryImport = async (specifier) => {
   try {
     await import(specifier);
