@@ -1,6 +1,8 @@
 // Typecast TTS provider implementation.
 // See https://typecast.ai/docs for API documentation.
 
+export { DEFAULT_OUTPUT, TELEGRAM_OUTPUT, TELEPHONY_OUTPUT } from "./tts-output.js";
+
 export const DEFAULT_TYPECAST_BASE_HOST = "https://api.typecast.ai";
 export const DEFAULT_TYPECAST_MODEL = "ssfm-v30" as const;
 export const DEFAULT_TYPECAST_EMOTION_PRESET = "normal" as const;
@@ -88,17 +90,32 @@ export async function callTypecast(
   return typecastTTS(buildTypecastCallParams(tc, { text, apiKey, audioFormat, timeoutMs }));
 }
 
-/** High-level: synthesise via Typecast for telephony (WAV) and return buffer + parsed sample rate. */
+/** High-level: synthesise via Typecast for telephony (WAV) and return full result. */
 export async function callTypecastTelephony(
   tc: ResolvedTypecastConfig,
   text: string,
   apiKey: string,
   timeoutMs: number,
-): Promise<{ audioBuffer: Buffer; sampleRate: number }> {
+  providerStart: number,
+): Promise<{
+  success: true;
+  audioBuffer: Buffer;
+  latencyMs: number;
+  provider: "typecast";
+  outputFormat: "wav";
+  sampleRate: number;
+}> {
   const audioBuffer = await typecastTTS(
     buildTypecastCallParams(tc, { text, apiKey, audioFormat: "wav", timeoutMs }),
   );
-  return { audioBuffer, sampleRate: parseWavSampleRate(audioBuffer) };
+  return {
+    success: true,
+    audioBuffer,
+    latencyMs: Date.now() - providerStart,
+    provider: "typecast",
+    outputFormat: "wav",
+    sampleRate: parseWavSampleRate(audioBuffer),
+  };
 }
 
 /** Parse sample rate from a WAV header (bytes 24–27, little-endian uint32). */
