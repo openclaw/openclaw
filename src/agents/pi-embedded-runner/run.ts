@@ -4,6 +4,7 @@ import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
+import { isLocalProviderUrl } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   isProfileInCooldown,
@@ -731,11 +732,17 @@ export async function runEmbeddedPiAgent(
             );
           }
 
-          // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
+          // Treat timeout as potential rate limit (Antigravity hangs on rate limit).
+          // Exception: local/self-hosted providers (e.g. Ollama) should not be
+          // penalized for timeouts — they have no rate limits, timeouts are just
+          // slow inference (#13336).
           const shouldRotate = (!aborted && failoverFailure) || timedOut;
+          const isLocalTimeout =
+            (timedOut || assistantFailoverReason === "timeout") &&
+            isLocalProviderUrl(model.baseUrl);
 
           if (shouldRotate) {
-            if (lastProfileId) {
+            if (lastProfileId && !isLocalTimeout) {
               const reason =
                 timedOut || assistantFailoverReason === "timeout"
                   ? "timeout"

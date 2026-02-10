@@ -34,3 +34,31 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
 
   return false;
 }
+
+/**
+ * Returns true if the given base URL points to a local/self-hosted service.
+ * Local providers (e.g. Ollama) should not be penalized with cooldown on
+ * timeouts since they have no rate limits — timeouts are just slow inference.
+ */
+export function isLocalProviderUrl(baseUrl: string | undefined | null): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    const url = new URL(baseUrl);
+    const host = url.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]" ||
+      host === "::1" ||
+      host === "0.0.0.0" ||
+      host.startsWith("192.168.") ||
+      host.startsWith("10.") ||
+      host.endsWith(".local") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    );
+  } catch {
+    return false;
+  }
+}
