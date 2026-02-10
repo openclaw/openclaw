@@ -109,6 +109,48 @@ describe("redactConfigSnapshot", () => {
     expect(result.config).toEqual(snapshot.config);
   });
 
+  it("does NOT redact token count configuration fields", () => {
+    const snapshot = makeSnapshot({
+      models: {
+        default: {
+          maxTokens: 4096,
+          maxOutputTokens: 2048,
+          minTokens: 100,
+        },
+        custom: {
+          tokenLimit: 8192,
+          totalTokens: 128000,
+          tokenCount: 500,
+          tokensPerSecond: 100,
+        },
+      },
+      channels: {
+        telegram: {
+          maxTokens: 8192, // Should NOT be redacted (numeric config)
+          botToken: "telegram-secret", // SHOULD be redacted (credential)
+        },
+      },
+    });
+    const result = redactConfigSnapshot(snapshot);
+
+    // Token count fields should be preserved
+    const models = result.config.models as Record<string, Record<string, any>>;
+    expect(models.default.maxTokens).toBe(4096);
+    expect(models.default.maxOutputTokens).toBe(2048);
+    expect(models.default.minTokens).toBe(100);
+    expect(models.custom.tokenLimit).toBe(8192);
+    expect(models.custom.totalTokens).toBe(128000);
+    expect(models.custom.tokenCount).toBe(500);
+    expect(models.custom.tokensPerSecond).toBe(100);
+
+    // maxTokens in channels should also be preserved
+    const channels = result.config.channels as Record<string, Record<string, any>>;
+    expect(channels.telegram.maxTokens).toBe(8192);
+
+    // But botToken should still be redacted
+    expect(channels.telegram.botToken).toBe(REDACTED_SENTINEL);
+  });
+
   it("preserves hash unchanged", () => {
     const snapshot = makeSnapshot({ gateway: { auth: { token: "secret-token-value-here" } } });
     const result = redactConfigSnapshot(snapshot);

@@ -660,15 +660,19 @@ export class CallManager {
       return;
     }
     const callId = event.callId || event.providerCallId;
+    console.log(
+      `[voice-call] Rejecting inbound call from ${event.from || "unknown"} due to policy`,
+    );
     try {
       await this.provider.hangupCall({
         callId,
         providerCallId: event.providerCallId,
-        reason: "hangup-bot",
+        reason: "policy_rejected",
       });
     } catch (err) {
-      console.warn(
-        `[voice-call] Failed to reject inbound call ${event.providerCallId}:`,
+      // Best-effort: log but don't fail
+      console.error(
+        `[voice-call] Failed to hang up rejected call ${event.providerCallId}:`,
         err instanceof Error ? err.message : err,
       );
     }

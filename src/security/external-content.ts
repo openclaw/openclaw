@@ -11,29 +11,34 @@
 /**
  * Patterns that may indicate prompt injection attempts.
  * These are logged for monitoring but content is still processed (wrapped safely).
+ * All patterns use /u flag for proper Unicode handling.
  */
 const SUSPICIOUS_PATTERNS = [
-  /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/i,
-  /disregard\s+(all\s+)?(previous|prior|above)/i,
-  /forget\s+(everything|all|your)\s+(instructions?|rules?|guidelines?)/i,
-  /you\s+are\s+now\s+(a|an)\s+/i,
-  /new\s+instructions?:/i,
-  /system\s*:?\s*(prompt|override|command)/i,
-  /\bexec\b.*command\s*=/i,
-  /elevated\s*=\s*true/i,
-  /rm\s+-rf/i,
-  /delete\s+all\s+(emails?|files?|data)/i,
-  /<\/?system>/i,
-  /\]\s*\n\s*\[?(system|assistant|user)\]?:/i,
+  /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/iu,
+  /disregard\s+(all\s+)?(previous|prior|above)/iu,
+  /forget\s+(everything|all|your)\s+(instructions?|rules?|guidelines?)/iu,
+  /you\s+are\s+now\s+(a|an)\s+/iu,
+  /new\s+instructions?:/iu,
+  /system\s*:?\s*(prompt|override|command)/iu,
+  /\bexec\b.*command\s*=/iu,
+  /elevated\s*=\s*true/iu,
+  /rm\s+-rf/iu,
+  /delete\s+all\s+(emails?|files?|data)/iu,
+  /<\/?system>/iu,
+  /\]\s*\n\s*\[?(system|assistant|user)\]?:/iu,
 ];
 
 /**
  * Check if content contains suspicious patterns that may indicate injection.
+ * Applies Unicode normalization to catch homoglyph-based bypass attempts.
  */
 export function detectSuspiciousPatterns(content: string): string[] {
+  // Apply the same normalization as marker detection to ensure consistency
+  const normalized = content.normalize("NFKC").replace(/[\u200B\u200C\u200D\uFEFF\u00AD]/g, "");
+
   const matches: string[] = [];
   for (const pattern of SUSPICIOUS_PATTERNS) {
-    if (pattern.test(content)) {
+    if (pattern.test(normalized)) {
       matches.push(pattern.source);
     }
   }
@@ -104,18 +109,35 @@ function foldMarkerChar(char: string): string {
 }
 
 function foldMarkerText(input: string): string {
-  return input.replace(/[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E]/g, (char) => foldMarkerChar(char));
+  // Apply Unicode NFKC normalization to handle homoglyphs and compatibility characters
+  // This maps visually similar characters to their canonical ASCII equivalents
+  const normalized = input.normalize("NFKC");
+
+  // Strip zero-width and invisible characters that could be used to bypass detection
+  // U+200B: Zero Width Space
+  // U+200C: Zero Width Non-Joiner
+  // U+200D: Zero Width Joiner
+  // U+FEFF: Zero Width No-Break Space (BOM)
+  // U+00AD: Soft Hyphen
+  const stripped = normalized.replace(/[\u200B\u200C\u200D\uFEFF\u00AD]/g, "");
+
+  // Apply fullwidth ASCII folding as a secondary measure
+  return stripped.replace(/[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E]/g, (char) =>
+    foldMarkerChar(char),
+  );
 }
 
 function replaceMarkers(content: string): string {
   const folded = foldMarkerText(content);
-  if (!/external_untrusted_content/i.test(folded)) {
+  // Add /u flag for proper Unicode handling
+  if (!/external_untrusted_content/iu.test(folded)) {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
   const patterns: Array<{ regex: RegExp; value: string }> = [
-    { regex: /<<<EXTERNAL_UNTRUSTED_CONTENT>>>/gi, value: "[[MARKER_SANITIZED]]" },
-    { regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>/gi, value: "[[END_MARKER_SANITIZED]]" },
+    // Add /u flag to all regex patterns for proper Unicode matching
+    { regex: /<<<EXTERNAL_UNTRUSTED_CONTENT>>>/giu, value: "[[MARKER_SANITIZED]]" },
+    { regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>/giu, value: "[[END_MARKER_SANITIZED]]" },
   ];
 
   for (const pattern of patterns) {

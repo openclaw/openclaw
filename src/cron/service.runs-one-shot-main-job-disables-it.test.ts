@@ -525,4 +525,107 @@ describe("CronService", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("deletes one-shot job with deleteAfterRun when status is skipped (Issue #13249)", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "empty-heartbeat-file",
+    }));
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runHeartbeatOnce,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    const job = await cron.add({
+      name: "one-shot skipped delete",
+      enabled: true,
+      deleteAfterRun: true, // should delete even when status is skipped
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(atMs);
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:02.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+
+    // Job should be deleted even though status was "skipped"
+    const jobs = await waitForJobs(cron, (items) => !items.some((item) => item.id === job.id));
+    expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("hello", {
+      agentId: undefined,
+    });
+    expect(runHeartbeatOnce).toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("disables one-shot job without deleteAfterRun when status is skipped", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "empty-heartbeat-file",
+    }));
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runHeartbeatOnce,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    const job = await cron.add({
+      name: "one-shot skipped disable",
+      enabled: true,
+      deleteAfterRun: false, // should disable but not delete
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(atMs);
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:02.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+
+    // Job should be disabled but not deleted when deleteAfterRun is false
+    const jobs = await waitForJobs(cron, (items) =>
+      items.some(
+        (item) => item.id === job.id && !item.enabled && item.state.lastStatus === "skipped",
+      ),
+    );
+    const updated = jobs.find((j) => j.id === job.id);
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.lastStatus).toBe("skipped");
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("hello", {
+      agentId: undefined,
+    });
+    expect(runHeartbeatOnce).toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
 });

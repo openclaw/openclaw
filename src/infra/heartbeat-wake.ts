@@ -10,16 +10,35 @@ let pendingReason: string | null = null;
 let scheduled = false;
 let running = false;
 let timer: NodeJS.Timeout | null = null;
+let scheduledAtMs: number | null = null;
+let scheduledDelayMs: number | null = null;
 
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
 
 function schedule(coalesceMs: number) {
-  if (timer) {
-    return;
+  // If we already have a timer, check if we need to reschedule with a shorter delay
+  if (timer && scheduledAtMs !== null && scheduledDelayMs !== null) {
+    const elapsedMs = Date.now() - scheduledAtMs;
+    const remainingMs = Math.max(0, scheduledDelayMs - elapsedMs);
+
+    // If the new request is more urgent (shorter delay), reschedule
+    if (coalesceMs < remainingMs) {
+      clearTimeout(timer);
+      timer = null;
+      scheduledAtMs = null;
+      scheduledDelayMs = null;
+    } else {
+      // Existing timer will fire sooner, keep it
+      return;
+    }
   }
+  scheduledAtMs = Date.now();
+  scheduledDelayMs = coalesceMs;
   timer = setTimeout(async () => {
     timer = null;
+    scheduledAtMs = null;
+    scheduledDelayMs = null;
     scheduled = false;
     const active = handler;
     if (!active) {

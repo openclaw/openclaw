@@ -12,10 +12,50 @@ export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
  * Patterns that identify sensitive config field names.
  * Aligned with the UI-hint logic in schema.ts.
  */
-const SENSITIVE_KEY_PATTERNS = [/token/i, /password/i, /secret/i, /api.?key/i];
+const SENSITIVE_KEY_PATTERNS = [
+  /^(?:bot)?token$/i, // Matches "token" or "botToken" but not "maxTokens"
+  /^(?:auth)?token$/i, // Matches "authToken" but not compound names
+  /password/i,
+  /secret/i,
+  /api.?key/i,
+];
+
+/**
+ * Whitelist of field names containing "token" that are NOT sensitive.
+ * These are numeric configuration values, not authentication credentials.
+ */
+const NON_SENSITIVE_TOKEN_FIELDS = new Set([
+  "maxtokens",
+  "maxoutputtokens",
+  "mintokens",
+  "totaltokens",
+  "inputtokens",
+  "outputtokens",
+  "tokenlimit",
+  "tokencount",
+  "tokenspersecond",
+  "numtokens",
+]);
 
 function isSensitiveKey(key: string): boolean {
-  return SENSITIVE_KEY_PATTERNS.some((pattern) => pattern.test(key));
+  const lowerKey = key.toLowerCase();
+
+  // Check whitelist first for token-related fields
+  if (NON_SENSITIVE_TOKEN_FIELDS.has(lowerKey)) {
+    return false;
+  }
+
+  // For fields containing "token", apply stricter matching
+  if (lowerKey.includes("token")) {
+    // Only consider it sensitive if it matches specific patterns
+    return (
+      /^(?:bot|auth|access|refresh|api)?tokens?$/i.test(key) ||
+      (/token$/i.test(key) && !/(max|min|total|input|output|num)tokens?$/i.test(key))
+    );
+  }
+
+  // For other patterns, use the original logic
+  return SENSITIVE_KEY_PATTERNS.slice(2).some((pattern) => pattern.test(key));
 }
 
 /**
