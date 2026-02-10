@@ -139,13 +139,24 @@ export function analyzeTaskComplexity(params: {
   messageHistoryDepth: number;
   hasToolCalls: boolean;
   systemPromptLength: number;
+  /** Token thresholds for tier selection (uses defaults if not provided) */
+  thresholds?: {
+    haikuMaxTokens: number;
+    sonnetMaxTokens: number;
+  };
 }): {
   tier: ModelTier;
   reason: string;
   confidence: number;
   estimatedTokens: number;
 } {
-  const { inputText, messageHistoryDepth, hasToolCalls, systemPromptLength } = params;
+  const { inputText, messageHistoryDepth, hasToolCalls, systemPromptLength, thresholds } = params;
+
+  // Use configured thresholds or fall back to defaults
+  const haikuMaxTokens =
+    thresholds?.haikuMaxTokens ?? DEFAULT_ROUTING_CONFIG.thresholds.haikuMaxTokens;
+  const sonnetMaxTokens =
+    thresholds?.sonnetMaxTokens ?? DEFAULT_ROUTING_CONFIG.thresholds.sonnetMaxTokens;
 
   const hasCodeRequest =
     /\bcode\b/i.test(inputText) ||
@@ -173,7 +184,7 @@ export function analyzeTaskComplexity(params: {
 
   // Check for simple patterns (→ Haiku)
   const isSimple = SIMPLE_TASK_PATTERNS.some((p) => p.test(inputText));
-  if (isSimple && estimatedTokens < 5_000 && messageHistoryDepth < 5) {
+  if (isSimple && estimatedTokens < haikuMaxTokens && messageHistoryDepth < 5) {
     return {
       tier: "haiku",
       reason: "Simple task pattern detected",
@@ -192,20 +203,20 @@ export function analyzeTaskComplexity(params: {
     };
   }
 
-  // Token-based thresholds
-  if (estimatedTokens < 5_000) {
+  // Token-based thresholds using configured values
+  if (estimatedTokens < haikuMaxTokens) {
     return {
       tier: "haiku",
-      reason: `Estimated ${estimatedTokens} tokens (below 5K threshold)`,
+      reason: `Estimated ${estimatedTokens} tokens (below ${haikuMaxTokens.toLocaleString()} threshold)`,
       confidence: 0.7,
       estimatedTokens,
     };
   }
 
-  if (estimatedTokens > 50_000 || (systemPromptLength > 10_000 && hasToolCalls)) {
+  if (estimatedTokens > sonnetMaxTokens || (systemPromptLength > 10_000 && hasToolCalls)) {
     return {
       tier: "opus",
-      reason: `Estimated ${estimatedTokens} tokens or complex system prompt with tools`,
+      reason: `Estimated ${estimatedTokens} tokens (above ${sonnetMaxTokens.toLocaleString()} threshold) or complex system prompt with tools`,
       confidence: 0.75,
       estimatedTokens,
     };
@@ -286,6 +297,7 @@ export function routeModel(params: {
     messageHistoryDepth: params.messageHistoryDepth,
     hasToolCalls: params.hasToolCalls,
     systemPromptLength: params.systemPromptLength,
+    thresholds: config.thresholds,
   });
 
   const tierConfig = config.tiers[analysis.tier];

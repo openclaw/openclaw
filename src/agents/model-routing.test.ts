@@ -148,6 +148,50 @@ describe("model-routing", () => {
       expect(result.confidence).toBeGreaterThan(0);
       expect(result.confidence).toBeLessThanOrEqual(1);
     });
+
+    it("respects custom haikuMaxTokens threshold", () => {
+      // With default threshold (5000), a ~2500 token estimate would be haiku
+      const withDefault = analyzeTaskComplexity({
+        inputText: "a".repeat(2000), // ~600 base tokens
+        messageHistoryDepth: 0,
+        hasToolCalls: false,
+        systemPromptLength: 500,
+      });
+      expect(withDefault.tier).toBe("haiku");
+
+      // With very low threshold (100), same input should NOT be haiku
+      const withLowThreshold = analyzeTaskComplexity({
+        inputText: "a".repeat(2000),
+        messageHistoryDepth: 0,
+        hasToolCalls: false,
+        systemPromptLength: 500,
+        thresholds: { haikuMaxTokens: 100, sonnetMaxTokens: 50_000 },
+      });
+      expect(withLowThreshold.tier).not.toBe("haiku");
+    });
+
+    it("respects custom sonnetMaxTokens threshold", () => {
+      // Longer input that triggers sonnet by default (medium complexity)
+      const mediumInput = "a".repeat(10000); // Creates ~3000 tokens estimate
+      const withDefault = analyzeTaskComplexity({
+        inputText: mediumInput,
+        messageHistoryDepth: 15,
+        hasToolCalls: true,
+        systemPromptLength: 5000,
+      });
+      // Default thresholds: haiku < 5K, sonnet < 50K, so ~9000+ tokens -> sonnet
+      expect(withDefault.tier).toBe("sonnet");
+
+      // With very low sonnet threshold, same input should escalate to opus
+      const withLowThreshold = analyzeTaskComplexity({
+        inputText: mediumInput,
+        messageHistoryDepth: 15,
+        hasToolCalls: true,
+        systemPromptLength: 5000,
+        thresholds: { haikuMaxTokens: 100, sonnetMaxTokens: 1000 },
+      });
+      expect(withLowThreshold.tier).toBe("opus");
+    });
   });
 
   describe("resolveModelRoutingConfig", () => {
