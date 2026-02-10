@@ -238,13 +238,10 @@ function resolveDefaultCollections(
   if (!include) {
     return [];
   }
-  // Strip null bytes from workspace path — some config sources introduce
-  // trailing \0 which causes ENOTDIR when QMD opens the file (#12919).
-  const sanitizedDir = workspaceDir.replaceAll("\0", "");
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    { path: sanitizedDir, pattern: "MEMORY.md", base: "memory-root" },
-    { path: sanitizedDir, pattern: "memory.md", base: "memory-alt" },
-    { path: path.join(sanitizedDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
+    { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
+    { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
+    { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
     name: ensureUniqueName(entry.base, existing),
@@ -264,7 +261,9 @@ export function resolveMemoryBackendConfig(params: {
     return { backend: "builtin", citations };
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  // Strip null bytes once at the top so all downstream paths (default
+  // collections, custom paths, session export dirs) are clean (#12919).
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId).replaceAll("\0", "");
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
