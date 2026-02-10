@@ -16,6 +16,7 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createGenerateTools } from "./tools/shengsuanyun/generate.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 
@@ -65,6 +66,9 @@ export function createOpenClawTools(options?: {
         sandboxRoot: options?.sandboxRoot,
         modelHasVision: options?.modelHasVision,
       })
+    : null;
+  const ShengSuanYunTools = options?.agentDir?.trim()
+    ? createGenerateTools({ config: options?.config })
     : null;
   const webSearchTool = createWebSearchTool({
     config: options?.config,
@@ -146,6 +150,7 @@ export function createOpenClawTools(options?: {
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
+    ...(ShengSuanYunTools ? ShengSuanYunTools : []),
   ];
 
   const pluginTools = resolvePluginTools({

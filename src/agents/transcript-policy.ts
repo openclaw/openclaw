@@ -73,6 +73,13 @@ function isMistralModel(params: { provider?: string | null; modelId?: string | n
   return MISTRAL_MODEL_HINTS.some((hint) => modelId.includes(hint));
 }
 
+function isShengSuanYunProvider(provider?: string | null): boolean {
+  if (!provider) {
+    return false;
+  }
+  return normalizeProviderId(provider) === "shengsuanyun";
+}
+
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -84,6 +91,7 @@ export function resolveTranscriptPolicy(params: {
   const isAnthropic = isAnthropicApi(params.modelApi, provider);
   const isOpenAi = isOpenAiProvider(provider) || (!provider && isOpenAiApi(params.modelApi));
   const isMistral = isMistralModel({ provider, modelId });
+  const isShengSuanYun = isShengSuanYunProvider(provider);
   const isOpenRouterGemini =
     (provider === "openrouter" || provider === "opencode") &&
     modelId.toLowerCase().includes("gemini");
@@ -95,7 +103,8 @@ export function resolveTranscriptPolicy(params: {
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
-  const sanitizeToolCallIds = isGoogle || isMistral;
+  // ShengSuanYun requires tool call IDs to be ≤40 characters
+  const sanitizeToolCallIds = isGoogle || isMistral || isShengSuanYun;
   const toolCallIdMode: ToolCallIdMode | undefined = isMistral
     ? "strict9"
     : sanitizeToolCallIds

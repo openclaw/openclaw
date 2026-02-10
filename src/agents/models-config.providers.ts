@@ -11,6 +11,7 @@ import {
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
+import { getShengSuanYunModels, SHENGSUANYUN_BASE_URL } from "./shengsuanyun-models.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -419,6 +420,15 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+async function buildShengSuanYunProvider(): Promise<ProviderConfig> {
+  const models = await getShengSuanYunModels();
+  return {
+    baseUrl: SHENGSUANYUN_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 function buildTogetherProvider(): ProviderConfig {
   return {
     baseUrl: TOGETHER_BASE_URL,
@@ -549,6 +559,12 @@ export async function resolveImplicitProviders(params: {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
   }
 
+  const shengsuanyunKey =
+    resolveEnvApiKeyVarName("shengsuanyun") ??
+    resolveApiKeyFromProfiles({ provider: "shengsuanyun", store: authStore });
+  if (shengsuanyunKey) {
+    providers.shengsuanyun = { ...(await buildShengSuanYunProvider()), apiKey: shengsuanyunKey };
+  }
   const togetherKey =
     resolveEnvApiKeyVarName("together") ??
     resolveApiKeyFromProfiles({ provider: "together", store: authStore });

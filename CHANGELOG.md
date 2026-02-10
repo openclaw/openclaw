@@ -175,6 +175,22 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Rebrand: rename the npm package/CLI to `moltbot`, add a `moltbot` compatibility shim, and move extensions to the `@moltbot/*` scope.
+- Models: add ShengSuanYun (胜算云) as a model provider with dynamic model discovery for both LLM and multimodal models (text-to-image, image-to-video, etc.).
+- Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.
+- macOS: limit project-local `node_modules/.bin` PATH preference to debug builds (reduce PATH hijacking risk).
+- macOS: finish Moltbot app rename for macOS sources, bundle identifiers, and shared kit paths. (#2844) Thanks @fal3.
+- Branding: update launchd labels, mobile bundle IDs, and logging subsystems to bot.molt (legacy com.clawdbot migrations). Thanks @thewilloftheshadow.
+- Tools: add per-sender group tool policies and fix precedence. (#1757) Thanks @adam91holt.
+- Agents: summarize dropped messages during compaction safeguard pruning. (#2509) Thanks @jogi47.
+- Memory Search: allow extra paths for memory indexing (ignores symlinks). (#3600) Thanks @kira-ariaki.
+- Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
+- Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
+- Matrix: switch plugin SDK to @vector-im/matrix-bot-sdk.
+- Docs: tighten Fly private deployment steps. (#2289) Thanks @dguido.
+- Docs: add migration guide for moving to a new machine. (#2381)
+- Docs: add Northflank one-click deployment guide. (#2167) Thanks @AdeboyeDN.
+
 - Feishu: add Feishu/Lark plugin support + docs. (#7313) Thanks @jiulingyun (openclaw-cn).
 - Web UI: add Agents dashboard for managing agent files, tools, skills, models, channels, and cron jobs.
 - Subagents: discourage direct messaging tool use unless a specific external recipient is requested.

@@ -22,7 +22,6 @@ import { forceFreePortAndWait } from "../ports.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
-  describeUnknownError,
   extractGatewayMiskeys,
   maybeExplainGatewayServiceStop,
   parsePort,
@@ -285,10 +284,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       err instanceof GatewayLockError ||
       (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
     ) {
-      const errMessage = describeUnknownError(err);
-      defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
-      );
+      // const errMessage = describeUnknownError(err);
+      // defaultRuntime.error(
+      //   `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
+      // );
       try {
         const diagnostics = await inspectPortUsage(port);
         if (diagnostics.status === "busy") {
