@@ -503,6 +503,20 @@ export const MemorySearchSchema = z
             vectorWeight: z.number().min(0).max(1).optional(),
             textWeight: z.number().min(0).max(1).optional(),
             candidateMultiplier: z.number().int().positive().optional(),
+            mmr: z
+              .object({
+                enabled: z.boolean().optional(),
+                lambda: z.number().min(0).max(1).optional(),
+              })
+              .strict()
+              .optional(),
+            temporalDecay: z
+              .object({
+                enabled: z.boolean().optional(),
+                halfLifeDays: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),
