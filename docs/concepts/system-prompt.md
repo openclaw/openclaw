@@ -59,6 +59,12 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `USER.md`
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (only on brand-new workspaces)
+- `MEMORY.md` (optional)
+- `memory.md` (optional fallback when `MEMORY.md` is absent)
+
+`memory/*.md` daily files are **not** auto-injected into the base system prompt.
+Those are typically accessed via `memory_search` / `memory_get` (or explicit
+`read` calls).
 
 Large files are truncated with a marker. The max per-file size is controlled by
 `agents.defaults.bootstrapMaxChars` (default: 20000). Missing files inject a
