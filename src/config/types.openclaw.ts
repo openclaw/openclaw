@@ -44,10 +44,10 @@ export type OpenClawConfig = {
     vars?: Record<string, string>;
     /** Sugar: allow env vars directly under env (string values only). */
     [key: string]:
-    | string
-    | Record<string, string>
-    | { enabled?: boolean; timeoutMs?: number }
-    | undefined;
+      | string
+      | Record<string, string>
+      | { enabled?: boolean; timeoutMs?: number }
+      | undefined;
   };
   wizard?: {
     lastRunAt?: string;
@@ -106,13 +106,17 @@ export type OpenClawConfig = {
       dailyTokenBudget?: number;
       monthlyTokenBudget?: number;
     };
-    providers?: Record<string, {
-      rpm?: number;
-      tpm?: number;
-      rpd?: number;
-      dailyTokenBudget?: number;
-      monthlyTokenBudget?: number;
-    } | undefined>;
+    providers?: Record<
+      string,
+      | {
+          rpm?: number;
+          tpm?: number;
+          rpd?: number;
+          dailyTokenBudget?: number;
+          monthlyTokenBudget?: number;
+        }
+      | undefined
+    >;
     queue?: { maxSize?: number; timeoutMs?: number };
     budgets?: { warningThresholds?: number[]; hardBlock?: boolean };
     retry?: { attempts?: number; minDelayMs?: number; maxDelayMs?: number; jitter?: number };

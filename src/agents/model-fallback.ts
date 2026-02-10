@@ -1,12 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveRateLimitsConfig } from "../rate-limits/config.js";
-import {
-  type CallResult,
-} from "../rate-limits/types.js";
-import {
-  getRateLimitedRunner,
-} from "../rate-limits/provider-wrapper.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
+import { resolveRateLimitsConfig } from "../rate-limits/config.js";
+import { getRateLimitedRunner } from "../rate-limits/provider-wrapper.js";
+import { type CallResult } from "../rate-limits/types.js";
 import {
   ensureAuthProfileStore,
   isProfileInCooldown,
@@ -143,10 +139,10 @@ function resolveFallbackCandidates(params: {
 }): ModelCandidate[] {
   const primary = params.cfg
     ? resolveConfiguredModelRef({
-      cfg: params.cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    })
+        cfg: params.cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      })
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
@@ -322,12 +318,13 @@ export async function runWithModelFallback<T>(params: {
   const summary =
     attempts.length > 0
       ? attempts
-        .map(
-          (attempt) =>
-            `${attempt.provider}/${attempt.model}: ${attempt.error}${attempt.reason ? ` (${attempt.reason})` : ""
-            }`,
-        )
-        .join(" | ")
+          .map(
+            (attempt) =>
+              `${attempt.provider}/${attempt.model}: ${attempt.error}${
+                attempt.reason ? ` (${attempt.reason})` : ""
+              }`,
+          )
+          .join(" | ")
       : "unknown";
   throw new Error(`All models failed (${attempts.length || candidates.length}): ${summary}`, {
     cause: lastError instanceof Error ? lastError : undefined,
@@ -401,8 +398,8 @@ export async function runWithImageModelFallback<T>(params: {
   const summary =
     attempts.length > 0
       ? attempts
-        .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-        .join(" | ")
+          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
+          .join(" | ")
       : "unknown";
   throw new Error(`All image models failed (${attempts.length || candidates.length}): ${summary}`, {
     cause: lastError instanceof Error ? lastError : undefined,
