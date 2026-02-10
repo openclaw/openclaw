@@ -20,6 +20,7 @@ export type DiscordGuildEntryResolved = {
   id?: string;
   slug?: string;
   requireMention?: boolean;
+  roleBindings?: Record<string, string>;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: Array<string | number>;
   channels?: Record<

@@ -29,6 +29,10 @@ export type ResolveAgentRouteInput = {
   parentPeer?: RoutePeer | null;
   guildId?: string | null;
   teamId?: string | null;
+  /** Mentioned Discord role ids in incoming message mention order. */
+  mentionedRoleIds?: string[];
+  /** Per-guild role → agent mapping. */
+  roleBindings?: Record<string, string>;
 };
 
 export type ResolvedAgentRoute = {
@@ -43,6 +47,7 @@ export type ResolvedAgentRoute = {
   matchedBy:
     | "binding.peer"
     | "binding.peer.parent"
+    | "binding.role"
     | "binding.guild"
     | "binding.team"
     | "binding.account"
@@ -227,6 +232,22 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     const parentPeerMatch = bindings.find((b) => matchesPeer(b.match, parentPeer));
     if (parentPeerMatch) {
       return choose(parentPeerMatch.agentId, "binding.peer.parent");
+    }
+  }
+
+  if (input.mentionedRoleIds?.length) {
+    const roleBindings = input.roleBindings;
+    if (roleBindings) {
+      for (const roleId of input.mentionedRoleIds) {
+        const normalizedRoleId = normalizeId(roleId);
+        if (!normalizedRoleId) {
+          continue;
+        }
+        const agentId = roleBindings[normalizedRoleId];
+        if (agentId) {
+          return choose(agentId, "binding.role");
+        }
+      }
     }
   }
 

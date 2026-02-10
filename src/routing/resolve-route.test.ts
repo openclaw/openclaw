@@ -255,7 +255,7 @@ test("dmScope=per-account-channel-peer uses default accountId when not provided"
 
 describe("parentPeer binding inheritance (thread support)", () => {
   test("thread inherits binding from parent channel when no direct match", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       bindings: [
         {
           agentId: "adecco",
@@ -277,7 +277,7 @@ describe("parentPeer binding inheritance (thread support)", () => {
   });
 
   test("direct peer binding wins over parent peer binding", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       bindings: [
         {
           agentId: "thread-agent",
@@ -306,7 +306,7 @@ describe("parentPeer binding inheritance (thread support)", () => {
   });
 
   test("parent peer binding wins over guild binding", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       bindings: [
         {
           agentId: "parent-agent",
@@ -336,7 +336,7 @@ describe("parentPeer binding inheritance (thread support)", () => {
   });
 
   test("falls back to guild binding when no parent peer match", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       bindings: [
         {
           agentId: "other-parent-agent",
@@ -366,7 +366,7 @@ describe("parentPeer binding inheritance (thread support)", () => {
   });
 
   test("parentPeer with empty id is ignored", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       bindings: [
         {
           agentId: "parent-agent",
@@ -388,7 +388,7 @@ describe("parentPeer binding inheritance (thread support)", () => {
   });
 
   test("null parentPeer is handled gracefully", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       bindings: [
         {
           agentId: "parent-agent",
@@ -404,6 +404,123 @@ describe("parentPeer binding inheritance (thread support)", () => {
       channel: "discord",
       peer: { kind: "channel", id: "thread-456" },
       parentPeer: null,
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+});
+
+describe("discord role mention routing", () => {
+  test("routes by first matching mentioned role in an unbound channel", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "guild-fallback",
+          match: {
+            channel: "discord",
+            guildId: "g1",
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      guildId: "g1",
+      peer: { kind: "channel", id: "unbound-channel" },
+      mentionedRoleIds: ["r-storm", "r-hunter"],
+      roleBindings: {
+        "r-storm": "storm",
+        "r-hunter": "hunter",
+      },
+    });
+    expect(route.agentId).toBe("storm");
+    expect(route.matchedBy).toBe("binding.role");
+  });
+
+  test("peer binding still wins over role mention", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "storm",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "storm-chat" },
+          },
+        },
+        {
+          agentId: "guild-fallback",
+          match: {
+            channel: "discord",
+            guildId: "g1",
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      guildId: "g1",
+      peer: { kind: "channel", id: "storm-chat" },
+      mentionedRoleIds: ["r-hunter"],
+      roleBindings: {
+        "r-hunter": "hunter",
+      },
+    });
+    expect(route.agentId).toBe("storm");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("role mention wins over guild fallback when peer is not bound", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "guild-fallback",
+          match: {
+            channel: "discord",
+            guildId: "g1",
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      guildId: "g1",
+      peer: { kind: "channel", id: "random-channel" },
+      mentionedRoleIds: ["r-hunter"],
+      roleBindings: {
+        "r-hunter": "hunter",
+      },
+    });
+    expect(route.agentId).toBe("hunter");
+    expect(route.matchedBy).toBe("binding.role");
+  });
+
+  test("falls back when role mentions do not map to an agent", () => {
+    const cfg: OpenClawConfig = {};
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "random-channel" },
+      mentionedRoleIds: ["r-unknown"],
+      roleBindings: {
+        "r-storm": "storm",
+      },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+
+  test("uses default agent in an unbound channel with no role mentions", () => {
+    const cfg: OpenClawConfig = {};
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "random-channel" },
+      roleBindings: {
+        "r-storm": "storm",
+      },
     });
     expect(route.agentId).toBe("main");
     expect(route.matchedBy).toBe("default");

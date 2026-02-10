@@ -219,12 +219,21 @@ export async function preflightDiscordMessage(
     earlyThreadParentType = parentInfo.type;
   }
 
+  const guildInfo = isGuildMessage
+    ? resolveDiscordGuildEntry({
+        guild: params.data.guild ?? undefined,
+        guildEntries: params.guildEntries,
+      })
+    : null;
+
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const route = resolveAgentRoute({
     cfg: loadConfig(),
     channel: "discord",
     accountId: params.accountId,
     guildId: params.data.guild_id ?? undefined,
+    mentionedRoleIds: message.mentionedRoles,
+    roleBindings: guildInfo?.roleBindings,
     peer: {
       kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
       id: isDirectMessage ? author.id : message.channelId,
@@ -274,12 +283,6 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const guildInfo = isGuildMessage
-    ? resolveDiscordGuildEntry({
-        guild: params.data.guild ?? undefined,
-        guildEntries: params.guildEntries,
-      })
-    : null;
   if (
     isGuildMessage &&
     params.guildEntries &&
