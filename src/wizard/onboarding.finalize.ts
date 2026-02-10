@@ -180,6 +180,7 @@ export async function finalizeOnboardingWizard(
           programArguments,
           workingDirectory,
           environment,
+          watchdog: true,
         });
       } catch (err) {
         installError = err instanceof Error ? err.message : String(err);

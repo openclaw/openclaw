@@ -29,6 +29,7 @@ export function createGatewayCloseHandler(params: {
   wss: WebSocketServer;
   httpServer: HttpServer;
   httpServers?: HttpServer[];
+  stopWatchdog?: (() => void) | undefined;
 }) {
   return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
     const reasonRaw = typeof opts?.reason === "string" ? opts.reason.trim() : "";
@@ -81,6 +82,7 @@ export function createGatewayCloseHandler(params: {
     clearInterval(params.tickInterval);
     clearInterval(params.healthInterval);
     clearInterval(params.dedupeCleanup);
+    params.stopWatchdog?.();
     if (params.agentUnsub) {
       try {
         params.agentUnsub();

@@ -203,6 +203,7 @@ export async function maybeRepairGatewayServiceConfig(
       programArguments,
       workingDirectory,
       environment,
+      watchdog: true,
     });
   } catch (err) {
     runtime.error(`Gateway service update failed: ${String(err)}`);
