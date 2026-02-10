@@ -275,6 +275,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         lastTo: explicitDeliveryContext?.to ?? deliveryFields.lastTo ?? entry?.lastTo,
         lastAccountId:
           explicitDeliveryContext?.accountId ?? deliveryFields.lastAccountId ?? entry?.lastAccountId,
+        lastThreadId:
+          explicitDeliveryContext?.threadId ?? deliveryFields.lastThreadId ?? entry?.lastThreadId,
         modelOverride: entry?.modelOverride,
         providerOverride: entry?.providerOverride,
         label: labelValue,
