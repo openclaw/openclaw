@@ -78,7 +78,8 @@ export function resolveModel(
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
-      const matchedModel = (providerCfg?.models ?? []).find((m) => m.id === modelId);
+      const trimmedId = modelId.trim();
+      const matchedModel = (providerCfg?.models ?? []).find((m) => m.id === trimmedId);
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
         name: matchedModel?.name ?? modelId,
