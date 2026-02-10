@@ -46,14 +46,27 @@ describe("runInteractiveOnboarding", () => {
   });
 
   it("restores terminal state without resuming stdin on cancel", async () => {
-    const runtime = makeRuntime();
+    const exitError = new Error("exit");
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(() => {
+        throw exitError;
+      }) as unknown as RuntimeEnv["exit"],
+    };
     mocks.runOnboardingWizard.mockRejectedValueOnce(new WizardCancelledError("cancelled"));
 
-    await runInteractiveOnboarding({} as never, runtime);
+    await expect(runInteractiveOnboarding({} as never, runtime)).rejects.toBe(exitError);
 
     expect(runtime.exit).toHaveBeenCalledWith(0);
     expect(mocks.restoreTerminalState).toHaveBeenCalledWith("onboarding finish", {
       resumeStdin: false,
     });
+    const restoreOrder =
+      mocks.restoreTerminalState.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    const exitOrder =
+      (runtime.exit as unknown as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ??
+      Number.MAX_SAFE_INTEGER;
+    expect(restoreOrder).toBeLessThan(exitOrder);
   });
 });
