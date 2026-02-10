@@ -84,7 +84,7 @@ final class ExecApprovalsGatewayPrompter {
         let requestSession = request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Check exec-approvals.json settings (use per-agent resolved config)
-        let approvals = ExecApprovalsStore.resolve(agentId: requestSession)
+        let approvals = ExecApprovalsStore.resolve(agentId: request.request.agentId)
         let security = approvals.agent.security
         let ask = approvals.agent.ask
         
