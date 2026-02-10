@@ -218,7 +218,10 @@ export function extractAssistantText(msg: AssistantMessage): string {
         .filter(Boolean)
     : [];
   const extracted = blocks.join("\n").trim();
-  return sanitizeUserFacingText(extracted);
+  // Only apply keyword-based error rewrites when the assistant message is actually an error.
+  // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
+  const errorContext = msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());
+  return sanitizeUserFacingText(extracted, { errorContext });
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {

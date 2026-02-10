@@ -389,6 +389,10 @@ export function extractAssistantText(message: unknown): string | undefined {
     }
   }
   const joined = chunks.join("").trim();
-  // This is assistant text extracted from a transcript, not a provider error payload.
-  return joined ? sanitizeUserFacingText(joined) : undefined;
+  const stopReason = (message as { stopReason?: unknown }).stopReason;
+  const errorMessage = (message as { errorMessage?: unknown }).errorMessage;
+  const errorContext =
+    stopReason === "error" || (typeof errorMessage === "string" && Boolean(errorMessage.trim()));
+
+  return joined ? sanitizeUserFacingText(joined, { errorContext }) : undefined;
 }
