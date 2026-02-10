@@ -188,6 +188,14 @@
           },
           "required": ["halfLifeDays"]
         }
+      },
+      "autoRecallSkipPattern": {
+        "type": "string",
+        "description": "RegExp pattern to skip auto-recall for matching session keys (e.g. voice|realtime)"
+      },
+      "autoCaptureSkipPattern": {
+        "type": "string",
+        "description": "RegExp pattern to skip auto-capture for matching session keys (e.g. voice|realtime)"
       }
     },
     "required": ["neo4j"]
