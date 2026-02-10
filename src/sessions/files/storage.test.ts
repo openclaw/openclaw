@@ -29,7 +29,9 @@ describe("file storage", () => {
     });
     expect(fileId).toBeTruthy();
     const file = await getFile({ sessionId, agentId, fileId, filesDir: testDir });
-    expect(file.buffer.toString()).toBe("test content");
+    // File is now saved as markdown (wrapped in code block for plain text)
+    const content = file.buffer.toString();
+    expect(content).toContain("test content");
   });
 
   it("saves CSV and parses it", async () => {
@@ -81,5 +83,74 @@ describe("file storage", () => {
     await deleteFile({ sessionId, agentId, fileId, filesDir: testDir });
     const files = await listFiles({ sessionId, agentId, filesDir: testDir });
     expect(files).toHaveLength(0);
+  });
+
+  describe("saveFile with markdown", () => {
+    it("saves CSV file as .md instead of .raw", async () => {
+      const csvBuffer = Buffer.from("id,name\n1,Test", "utf-8");
+      const fileId = await saveFile({
+        sessionId,
+        agentId,
+        filename: "test.csv",
+        type: "csv",
+        buffer: csvBuffer,
+        filesDir: testDir,
+      });
+
+      const mdPath = path.join(testDir, `${fileId}-test.csv.md`);
+      const rawPath = path.join(testDir, `${fileId}-test.csv.raw`);
+
+      // .md file should exist
+      const mdExists = await fs
+        .access(mdPath)
+        .then(() => true)
+        .catch(() => false);
+      expect(mdExists).toBe(true);
+
+      // .raw file should NOT exist
+      const rawExists = await fs
+        .access(rawPath)
+        .then(() => true)
+        .catch(() => false);
+      expect(rawExists).toBe(false);
+
+      // Content should be markdown table
+      const mdContent = await fs.readFile(mdPath, "utf-8");
+      expect(mdContent).toContain("| id | name |");
+    });
+
+    it("saves JSON file as .md", async () => {
+      const jsonBuffer = Buffer.from('{"key":"value"}', "utf-8");
+      const fileId = await saveFile({
+        sessionId,
+        agentId,
+        filename: "test.json",
+        type: "json",
+        buffer: jsonBuffer,
+        filesDir: testDir,
+      });
+
+      const mdPath = path.join(testDir, `${fileId}-test.json.md`);
+      const mdContent = await fs.readFile(mdPath, "utf-8");
+      expect(mdContent).toContain("```json");
+      expect(mdContent).toContain('"key": "value"');
+    });
+
+    it("saves text file as .md", async () => {
+      const textBuffer = Buffer.from("Plain text content", "utf-8");
+      const fileId = await saveFile({
+        sessionId,
+        agentId,
+        filename: "test.txt",
+        type: "text",
+        buffer: textBuffer,
+        filesDir: testDir,
+      });
+
+      const mdPath = path.join(testDir, `${fileId}-test.txt.md`);
+      const mdContent = await fs.readFile(mdPath, "utf-8");
+      expect(mdContent).toContain("```");
+      expect(mdContent).toContain("Plain text content");
+    });
   });
 });

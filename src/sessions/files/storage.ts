@@ -4,6 +4,7 @@ import path from "node:path";
 import type { SessionFileType, SessionFileMetadata } from "./types.js";
 import { parseCsv } from "./csv-parser.js";
 import { loadIndex, addFileToIndex, removeFileFromIndex } from "./index.js";
+import { convertToMarkdown } from "./markdown-converter.js";
 import { resolveSessionFilesDir } from "./paths.js";
 
 export async function saveFile(params: {
@@ -20,10 +21,13 @@ export async function saveFile(params: {
 
   const fileId = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
   const fileBase = `${fileId}-${filename}`;
-  const rawPath = path.join(baseDir, `${fileBase}.raw`);
+  const mdPath = path.join(baseDir, `${fileBase}.md`);
 
   await fs.mkdir(baseDir, { recursive: true });
-  await fs.writeFile(rawPath, buffer);
+
+  // Convert to markdown and save
+  const markdown = await convertToMarkdown(buffer, type, filename);
+  await fs.writeFile(mdPath, markdown, "utf-8");
 
   const metadata: SessionFileMetadata = {
     id: fileId,
@@ -64,8 +68,20 @@ export async function getFile(params: {
   if (!file) {
     throw new Error(`File ${fileId} not found`);
   }
-  const rawPath = path.join(baseDir, `${fileId}-${file.filename}.raw`);
-  const buffer = await fs.readFile(rawPath);
+
+  const fileBase = `${fileId}-${file.filename}`;
+  const mdPath = path.join(baseDir, `${fileBase}.md`);
+  const rawPath = path.join(baseDir, `${fileBase}.raw`);
+
+  // Try .md first, fallback to .raw for backward compatibility
+  let buffer: Buffer;
+  try {
+    buffer = await fs.readFile(mdPath);
+  } catch {
+    // Fallback to .raw for backward compatibility
+    buffer = await fs.readFile(rawPath);
+  }
+
   return { buffer, metadata: file };
 }
 
