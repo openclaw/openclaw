@@ -181,7 +181,7 @@ openclaw sessions scrub --no-backup
 
 - [sessions list](./sessions.md) — List conversation sessions
 - [doctor](./doctor.md) — Health checks including session secrets detection
-- [security audit](./security-audit.md) — Comprehensive security audit
+- [security](./security.md) — Comprehensive security audit
 
 ## Technical details
 
