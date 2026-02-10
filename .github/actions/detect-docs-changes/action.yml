@@ -8,6 +8,9 @@ outputs:
   docs_only:
     description: "'true' if all changes are docs/markdown, 'false' otherwise"
     value: ${{ steps.check.outputs.docs_only }}
+  docs_changed:
+    description: "'true' if any changed file is under docs/ or is markdown"
+    value: ${{ steps.check.outputs.docs_changed }}
 
 runs:
   using: composite
@@ -28,7 +31,16 @@ runs:
         CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")
         if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then
           echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          echo "docs_changed=false" >> "$GITHUB_OUTPUT"
           exit 0
+        fi
+
+        # Check if any changed file is a doc
+        DOCS=$(echo "$CHANGED" | grep -E '^docs/|\.md$|\.mdx$' || true)
+        if [ -n "$DOCS" ]; then
+          echo "docs_changed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "docs_changed=false" >> "$GITHUB_OUTPUT"
         fi
 
         # Check if all changed files are docs or markdown
