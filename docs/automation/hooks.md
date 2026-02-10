@@ -233,6 +233,7 @@ Triggered when agent commands are issued:
 ### Agent Events
 
 - **`agent:bootstrap`**: Before workspace bootstrap files are injected (hooks may mutate `context.bootstrapFiles`)
+- **`agent:reply`**: After an agent turn completes. Context includes `replyText` (joined assistant text) and `toolMetas` (tools executed during the turn), plus optional routing metadata like `channel`/`to` and model/provider info.
 
 ### Gateway Events
 
