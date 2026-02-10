@@ -814,10 +814,11 @@ export async function resolveImplicitProviders(params: {
   const novitaDiscoveryKey =
     resolveEnvApiKeyValue("novita") ??
     resolveApiKeyFromProfiles({ provider: "novita", store: authStore });
-  if (novitaKey && novitaDiscoveryKey) {
+  const novitaResolvedKey = novitaDiscoveryKey ?? novitaKey;
+  if (novitaResolvedKey) {
     providers.novita = {
-      ...(await buildNovitaProvider(novitaDiscoveryKey)),
-      apiKey: novitaKey,
+      ...(await buildNovitaProvider(novitaResolvedKey)),
+      apiKey: novitaKey ?? novitaResolvedKey,
     };
   }
 

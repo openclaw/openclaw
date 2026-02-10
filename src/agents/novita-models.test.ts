@@ -75,6 +75,7 @@ describe("novita model discovery", () => {
 
       const known = models.find((model) => model.id === "moonshotai/kimi-k2.5");
       expect(known).toBeDefined();
+      expect(known?.api).toBe("openai-completions");
       expect(known?.input).toEqual(["text", "image"]);
       expect(known?.reasoning).toBe(true);
       expect(known?.cost.input).toBe(1200);
@@ -84,6 +85,7 @@ describe("novita model discovery", () => {
 
       const discovered = models.find((model) => model.id === "example/reasoning-model");
       expect(discovered).toBeDefined();
+      expect(discovered?.api).toBe("openai-completions");
       expect(discovered?.name).toBe("Reasoning Model");
       expect(discovered?.input).toEqual(["text", "image"]);
       expect(discovered?.reasoning).toBe(true);

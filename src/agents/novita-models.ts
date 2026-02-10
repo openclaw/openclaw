@@ -222,6 +222,7 @@ export async function discoverNovitaModels(params: {
       resolved.push({
         id,
         name: resolvedName,
+        api: "openai-completions",
         reasoning: inferredReasoning,
         input: hasImageInput ? ["text", "image"] : ["text"],
         cost: {
