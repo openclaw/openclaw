@@ -1,9 +1,11 @@
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 import {
+  readClaudeCliCredentialsCached,
   readQwenCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
+  CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_NEAR_EXPIRY_MS,
   EXTERNAL_CLI_SYNC_TTL_MS,
   QWEN_CLI_PROFILE_ID,
@@ -37,7 +39,11 @@ function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: nu
   if (cred.type !== "oauth" && cred.type !== "token") {
     return false;
   }
-  if (cred.provider !== "qwen-portal" && cred.provider !== "minimax-portal") {
+  if (
+    cred.provider !== "anthropic" &&
+    cred.provider !== "qwen-portal" &&
+    cred.provider !== "minimax-portal"
+  ) {
     return false;
   }
   if (typeof cred.expires !== "number") {
@@ -82,13 +88,46 @@ function syncExternalCliCredentialsForProvider(
 }
 
 /**
- * Sync OAuth credentials from external CLI tools (Qwen Code CLI, MiniMax CLI) into the store.
+ * Sync OAuth credentials from external CLI tools (Claude CLI, Qwen Code CLI, MiniMax CLI) into the store.
  *
  * Returns true if any credentials were updated.
  */
 export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
   let mutated = false;
   const now = Date.now();
+
+  // Sync from Claude CLI
+  const existingClaude = store.profiles[CLAUDE_CLI_PROFILE_ID];
+  const shouldSyncClaude =
+    !existingClaude ||
+    existingClaude.provider !== "anthropic" ||
+    !isExternalProfileFresh(existingClaude, now);
+  const claudeCreds = shouldSyncClaude
+    ? readClaudeCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS })
+    : null;
+  if (claudeCreds) {
+    const existing = store.profiles[CLAUDE_CLI_PROFILE_ID];
+    const existingExpires =
+      existing && (existing.type === "oauth" || existing.type === "token")
+        ? existing.expires
+        : undefined;
+    const shouldUpdate =
+      !existing ||
+      existing.provider !== "anthropic" ||
+      (typeof existingExpires === "number" && existingExpires <= now) ||
+      (typeof claudeCreds.expires === "number" &&
+        typeof existingExpires === "number" &&
+        claudeCreds.expires > existingExpires);
+
+    if (shouldUpdate) {
+      store.profiles[CLAUDE_CLI_PROFILE_ID] = claudeCreds;
+      mutated = true;
+      log.info("synced anthropic credentials from claude cli", {
+        profileId: CLAUDE_CLI_PROFILE_ID,
+        expires: new Date(claudeCreds.expires).toISOString(),
+      });
+    }
+  }
 
   // Sync from Qwen Code CLI
   const existingQwen = store.profiles[QWEN_CLI_PROFILE_ID];
