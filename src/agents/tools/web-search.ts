@@ -628,7 +628,7 @@ async function runWebSearch(params: {
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
         : params.provider === "searxng"
-        ? `${params.provider}:${params.query}:${params.searxngBaseUrl}`
+        ? `${params.provider}:${params.query}:${params.searxngBaseUrl}:${params.count}`
         : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
