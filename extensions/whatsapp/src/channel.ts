@@ -71,8 +71,9 @@ function markdownToWhatsApp(text: string): string {
   result = result.replace(/\*\*(.+?)\*\*/g, "*$1*");
 
   // Convert italic: remaining single *text* → _text_
-  // Only match *text* that isn't part of **text** (already converted above)
-  result = result.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "_$1_");
+  // Bold (**text**) was already converted above, so remaining *text* is italic.
+  // Avoid lookbehind for broader runtime compatibility.
+  result = result.replace(/(?:^|([^*]))\*([^*]+)\*(?=[^*]|$)/g, "$1_$2_");
 
   // Convert headers to bold (WhatsApp has no header support)
   result = result.replace(/^#{1,6}\s+(.+)$/gm, "*$1*");
