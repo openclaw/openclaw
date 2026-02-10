@@ -22,6 +22,10 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
 
 export function listDiscordAccountIds(cfg: OpenClawConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
+  const rootToken = cfg.channels?.discord?.token;
+  if (rootToken && !ids.includes(DEFAULT_ACCOUNT_ID)) {
+    ids.push(DEFAULT_ACCOUNT_ID);
+  }
   if (ids.length === 0) {
     return [DEFAULT_ACCOUNT_ID];
   }
