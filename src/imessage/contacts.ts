@@ -37,11 +37,17 @@ function normalizePhoneCandidates(raw: string): string[] {
   }
 
   // Best-effort normalization for Contacts substring matching.
-  // We try the raw value first, then digits-only (to handle stored numbers like "(253) 370-4422").
+  // We try the raw value first, then digits-only + suffixes (to handle stored numbers like "(253) 370-4422").
   const digitsOnly = trimmed.replace(/\D/g, "");
   const candidates = [trimmed];
   if (digitsOnly && digitsOnly !== trimmed) {
     candidates.push(digitsOnly);
+    if (digitsOnly.length >= 10) {
+      candidates.push(digitsOnly.slice(-10));
+    }
+    if (digitsOnly.length >= 7) {
+      candidates.push(digitsOnly.slice(-7));
+    }
   }
   return Array.from(new Set(candidates));
 }
@@ -60,25 +66,57 @@ async function lookupViaUserScript(phoneQuery: string): Promise<string | null> {
 }
 
 async function lookupViaInlineAppleScript(phoneQuery: string): Promise<string | null> {
-  // Mirrors the behavior of ~/clawd/scripts/contacts_lookup.applescript but keeps it self-contained.
+  // Self-contained lookup:
+  // - First, try the fast Contacts predicate match ("contains")
+  // - If that fails, fall back to scanning phone digits and matching suffixes (last 10/7)
   const script = [
+    "on digitsOnly(s)",
+    '  set out to ""',
+    '  set digits to "0123456789"',
+    "  repeat with i from 1 to (count of characters of s)",
+    "    set c to character i of s",
+    "    if digits contains c then set out to out & c",
+    "  end repeat",
+    "  return out",
+    "end digitsOnly",
     "on run argv",
     '  if (count of argv) = 0 then return ""',
     "  set q to item 1 of argv",
     '  tell application "Contacts"',
     "    set matches to people whose value of phones contains q",
-    '    if (count of matches) is 0 then return ""',
-    "    set p to item 1 of matches",
-    "    set fn to first name of p",
-    "    set ln to last name of p",
-    '    if fn is missing value then set fn to ""',
-    '    if ln is missing value then set ln to ""',
-    '    return (fn & " " & ln)',
+    "    if (count of matches) is not 0 then",
+    "      set p to item 1 of matches",
+    "      try",
+    "        return name of p",
+    "      on error",
+    '        return ""',
+    "      end try",
+    "    end if",
+    "",
+    "    set qDigits to my digitsOnly(q)",
+    '    if qDigits is "" then return ""',
+    "    set qLen to (count of characters of qDigits)",
+    '    set qLast10 to ""',
+    '    set qLast7 to ""',
+    "    if qLen >= 10 then set qLast10 to text (qLen - 9) thru qLen of qDigits",
+    "    if qLen >= 7 then set qLast7 to text (qLen - 6) thru qLen of qDigits",
+    "",
+    "    repeat with p in people",
+    "      try",
+    "        repeat with ph in phones of p",
+    "          set vDigits to my digitsOnly(value of ph as string)",
+    "          if vDigits ends with qDigits then return name of p",
+    '          if qLast10 is not "" and vDigits ends with qLast10 then return name of p',
+    '          if qLast7 is not "" and vDigits ends with qLast7 then return name of p',
+    "        end repeat",
+    "      end try",
+    "    end repeat",
+    '    return ""',
     "  end tell",
     "end run",
   ].join("\n");
   const output = await execText("/usr/bin/osascript", ["-e", script, phoneQuery], {
-    timeoutMs: 2000,
+    timeoutMs: 4000,
   });
   const resolved = output?.trim() ?? "";
   return resolved ? resolved : null;
