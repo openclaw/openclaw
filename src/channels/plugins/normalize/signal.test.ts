@@ -30,15 +30,15 @@ describe("signal target normalization", () => {
   });
 
   it("preserves case-sensitive Base64 group IDs", () => {
-    expect(normalizeSignalMessagingTarget("group:p5dJRYq+l7dszyNRxJgVJsr78x5ggcBhXPla1ot1UK0=")).toBe(
-      "group:p5dJRYq+l7dszyNRxJgVJsr78x5ggcBhXPla1ot1UK0=",
-    );
+    expect(
+      normalizeSignalMessagingTarget("group:p5dJRYq+l7dszyNRxJgVJsr78x5ggcBhXPla1ot1UK0="),
+    ).toBe("group:p5dJRYq+l7dszyNRxJgVJsr78x5ggcBhXPla1ot1UK0=");
   });
 
   it("preserves case-sensitive Base64 group IDs with signal: prefix", () => {
-    expect(normalizeSignalMessagingTarget("signal:group:p5dJRYq+l7dszyNRxJgVJsr78x5ggcBhXPla1ot1UK0=")).toBe(
-      "group:p5dJRYq+l7dszyNRxJgVJsr78x5ggcBhXPla1ot1UK0=",
-    );
+    expect(
+      normalizeSignalMessagingTarget("signal:group:p5dJRYq+l7dszyNRxJgVJsr78x5ggcBhXPla1ot1UK0="),
+    ).toBe("group:p5dJRYq+l7dszyNRxJgVJsr78x5ggcBhXPla1ot1UK0=");
   });
 
   it("still lowercases phone numbers and usernames", () => {
