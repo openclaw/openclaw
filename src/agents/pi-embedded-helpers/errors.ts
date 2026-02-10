@@ -473,6 +473,7 @@ const ERROR_PATTERNS = {
     "insufficient credits",
     "credit balance",
     "plans & billing",
+    "insufficient balance",
   ],
   auth: [
     /invalid[_ ]?api[_ ]?key/,
@@ -533,16 +534,8 @@ export function isBillingErrorMessage(raw: string): boolean {
   if (!value) {
     return false;
   }
-  if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
-    return true;
-  }
-  return (
-    value.includes("billing") &&
-    (value.includes("upgrade") ||
-      value.includes("credits") ||
-      value.includes("payment") ||
-      value.includes("plan"))
-  );
+  
+  return matchesErrorPatterns(value, ERROR_PATTERNS.billing);
 }
 
 export function isMissingToolCallInputError(raw: string): boolean {
