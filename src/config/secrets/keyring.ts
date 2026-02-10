@@ -237,13 +237,12 @@ function createLinuxProvider(account: string): SecretsProvider {
         }
         return value;
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("empty") || msg.includes("exit code")) {
-          throw new MissingSecretError(secretName, "keyring");
-        }
-        throw new Error(`Failed to retrieve secret "${secretName}" from keyring: ${msg}`, {
-          cause: err,
-        });
+        // secret-tool exits non-zero when a key isn't found. execFileAsync wraps
+        // this as an Error, but the message may just be stderr (often empty) rather
+        // than including "exit code". Treat any execFile rejection after our own
+        // "empty" sentinel as a missing secret — if the tool itself is broken,
+        // ensureSecretTool() would have already thrown.
+        throw new MissingSecretError(secretName, "keyring");
       }
     },
 
