@@ -481,4 +481,62 @@ describe("loadOpenClawPlugins", () => {
     expect(loaded?.origin).toBe("config");
     expect(overridden?.origin).toBe("bundled");
   });
+
+  it("injects globalThis.require for CJS interop in jiti-loaded plugins", () => {
+    // The loader module must set globalThis.require so that CJS dependencies
+    // loaded by jiti can call require() at runtime (see #12854).
+    expect(typeof globalThis.require).toBe("function");
+    // Verify the shim actually resolves Node.js built-in modules
+    const resolved = globalThis.require("node:path");
+    expect(typeof resolved.join).toBe("function");
+  });
+
+  it("loads plugins whose CJS dependencies call require() at runtime", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const dir = makeTempDir();
+
+    // Create a CJS helper module that uses require() internally.
+    // This simulates a real CJS dependency (e.g. @vector-im/matrix-bot-sdk)
+    // whose internal code calls require("events"), require("htmlencode"), etc.
+    fs.writeFileSync(
+      path.join(dir, "cjs-helper.cjs"),
+      [
+        `"use strict";`,
+        `const nodePath = require("node:path");`,
+        `module.exports = { joined: nodePath.join("a", "b") };`,
+      ].join("\n"),
+      "utf-8",
+    );
+
+    // Plugin that loads the CJS helper via globalThis.require and uses it during registration
+    writePlugin({
+      id: "cjs-compat",
+      body: [
+        `const helper = globalThis.require(${JSON.stringify(path.join(dir, "cjs-helper.cjs"))});`,
+        `export default {`,
+        `  id: "cjs-compat",`,
+        `  register() {`,
+        `    if (helper.joined !== ${JSON.stringify(path.join("a", "b"))}) {`,
+        `      throw new Error("CJS require interop failed");`,
+        `    }`,
+        `  },`,
+        `};`,
+      ].join("\n"),
+      dir,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [path.join(dir, "cjs-compat.js")] },
+          allow: ["cjs-compat"],
+        },
+      },
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === "cjs-compat");
+    expect(plugin?.status).toBe("loaded");
+  });
 });

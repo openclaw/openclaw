@@ -1,7 +1,15 @@
 import { createJiti } from "jiti";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+// Provide require() globally for CJS dependencies of jiti-loaded plugins (#12854).
+// jiti evaluates extensions in an ESM context where require is unavailable, causing
+// CJS packages that internally call require() to fail at runtime.
+if (typeof globalThis.require !== "function") {
+  globalThis.require = createRequire(import.meta.url);
+}
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type {
