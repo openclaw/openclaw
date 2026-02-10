@@ -53,6 +53,7 @@ type TargetInfoResponse = {
 type ConnectedBrowser = {
   browser: Browser;
   cdpUrl: string;
+  onDisconnected?: () => void;
 };
 
 type PageState = {
@@ -334,14 +335,15 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         const endpoint = wsUrl ?? normalized;
         const headers = getHeadersWithAuth(endpoint);
         const browser = await chromium.connectOverCDP(endpoint, { timeout, headers });
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized };
-        cached = connected;
-        observeBrowser(browser);
-        browser.on("disconnected", () => {
+        const onDisconnected = () => {
           if (cached?.browser === browser) {
             cached = null;
           }
-        });
+        };
+        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
+        cached = connected;
+        browser.on("disconnected", onDisconnected);
+        observeBrowser(browser);
         return connected;
       } catch (err) {
         lastErr = err;
@@ -508,7 +510,9 @@ export async function closePlaywrightBrowserConnection(): Promise<void> {
   if (!cur) {
     return;
   }
-  cur.browser.removeAllListeners("disconnected");
+  if (cur.onDisconnected && typeof cur.browser.off === "function") {
+    cur.browser.off("disconnected", cur.onDisconnected);
+  }
   await cur.browser.close().catch(() => {});
 }
 
@@ -648,7 +652,9 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   if (cur) {
     // Remove the "disconnected" listener to prevent the old browser's teardown
     // from racing with a fresh connection and nulling the new `cached`.
-    cur.browser.removeAllListeners("disconnected");
+    if (cur.onDisconnected && typeof cur.browser.off === "function") {
+      cur.browser.off("disconnected", cur.onDisconnected);
+    }
 
     // Best-effort: kill any stuck JS to unblock the target's execution context before we
     // disconnect Playwright's CDP connection.
