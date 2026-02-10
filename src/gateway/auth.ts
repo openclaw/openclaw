@@ -124,12 +124,12 @@ function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
   if (!req) {
     return null;
   }
-  const login = req.headers["tailscale-user-login"];
+  const login = headerValue(req.headers["tailscale-user-login"]);
   if (typeof login !== "string" || !login.trim()) {
     return null;
   }
-  const nameRaw = req.headers["tailscale-user-name"];
-  const profilePic = req.headers["tailscale-user-profile-pic"];
+  const nameRaw = headerValue(req.headers["tailscale-user-name"]);
+  const profilePic = headerValue(req.headers["tailscale-user-profile-pic"]);
   const name = typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : login.trim();
   return {
     login: login.trim(),
