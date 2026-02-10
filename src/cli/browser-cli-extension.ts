@@ -4,9 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { movePathToTrash } from "../browser/trash.js";
 import { resolveStateDir } from "../config/paths.js";
-import { danger, info } from "../globals.js";
 import { copyToClipboard } from "../infra/clipboard.js";
-import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -77,13 +75,15 @@ export function registerBrowserExtensionCommands(
     .command("install")
     .description("Install the Chrome extension to a stable local path")
     .action(async (_opts, cmd) => {
+      const { danger, info } = await import("../globals.js");
+      const { defaultRuntime } = await import("../runtime.js");
       const parent = parentOpts(cmd);
       let installed: { path: string };
       try {
         installed = await installChromeExtension();
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
+        return defaultRuntime.exit(1);
       }
 
       if (parent?.json) {
@@ -98,9 +98,9 @@ export function registerBrowserExtensionCommands(
           [
             copied ? "Copied to clipboard." : "Copy to clipboard unavailable.",
             "Next:",
-            `- Chrome → chrome://extensions → enable “Developer mode”`,
-            `- “Load unpacked” → select: ${displayPath}`,
-            `- Pin “OpenClaw Browser Relay”, then click it on the tab (badge shows ON)`,
+            `- Chrome → chrome://extensions → enable "Developer mode"`,
+            `- "Load unpacked" → select: ${displayPath}`,
+            `- Pin "OpenClaw Browser Relay", then click it on the tab (badge shows ON)`,
             "",
             `${theme.muted("Docs:")} ${formatDocsLink("/tools/chrome-extension", "docs.openclaw.ai/tools/chrome-extension")}`,
           ].join("\n"),
@@ -112,6 +112,8 @@ export function registerBrowserExtensionCommands(
     .command("path")
     .description("Print the path to the installed Chrome extension (load unpacked)")
     .action(async (_opts, cmd) => {
+      const { danger, info } = await import("../globals.js");
+      const { defaultRuntime } = await import("../runtime.js");
       const parent = parentOpts(cmd);
       const dir = installedExtensionRootDir();
       if (!hasManifest(dir)) {

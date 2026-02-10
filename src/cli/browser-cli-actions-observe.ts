@@ -1,11 +1,11 @@
 import type { Command } from "commander";
-import { danger } from "../globals.js";
-import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
-import { runCommandWithRuntime } from "./cli-utils.js";
 
-function runBrowserObserve(action: () => Promise<void>) {
+async function runBrowserObserve(action: () => Promise<void>) {
+  const { danger } = await import("../globals.js");
+  const { defaultRuntime } = await import("../runtime.js");
+  const { runCommandWithRuntime } = await import("./cli-utils.js");
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     defaultRuntime.error(danger(String(err)));
     defaultRuntime.exit(1);
@@ -25,6 +25,7 @@ export function registerBrowserActionObserveCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserObserve(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest<{ messages: unknown[] }>(
           parent,
           {
@@ -54,6 +55,7 @@ export function registerBrowserActionObserveCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserObserve(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest<{ path: string }>(
           parent,
           {
@@ -89,6 +91,7 @@ export function registerBrowserActionObserveCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserObserve(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
         const maxChars = Number.isFinite(opts.maxChars) ? opts.maxChars : undefined;
         const result = await callBrowserRequest<{ response: { body: string } }>(

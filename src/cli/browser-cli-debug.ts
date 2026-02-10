@@ -1,11 +1,11 @@
 import type { Command } from "commander";
-import { danger } from "../globals.js";
-import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
-import { runCommandWithRuntime } from "./cli-utils.js";
 
-function runBrowserDebug(action: () => Promise<void>) {
+async function runBrowserDebug(action: () => Promise<void>) {
+  const { danger } = await import("../globals.js");
+  const { defaultRuntime } = await import("../runtime.js");
+  const { runCommandWithRuntime } = await import("./cli-utils.js");
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     defaultRuntime.error(danger(String(err)));
     defaultRuntime.exit(1);
@@ -25,6 +25,7 @@ export function registerBrowserDebugCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserDebug(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest(
           parent,
           {
@@ -55,6 +56,7 @@ export function registerBrowserDebugCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserDebug(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest<{
           errors: Array<{ timestamp: string; name?: string; message: string }>;
         }>(
@@ -96,6 +98,7 @@ export function registerBrowserDebugCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserDebug(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest<{
           requests: Array<{
             timestamp: string;
@@ -153,6 +156,7 @@ export function registerBrowserDebugCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserDebug(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest(
           parent,
           {
@@ -188,6 +192,7 @@ export function registerBrowserDebugCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserDebug(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest<{ path: string }>(
           parent,
           {

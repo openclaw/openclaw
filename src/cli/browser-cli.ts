@@ -1,7 +1,5 @@
 import type { Command } from "commander";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
-import { danger } from "../globals.js";
-import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { registerBrowserActionInputCommands } from "./browser-cli-actions-input.js";
@@ -12,7 +10,6 @@ import { registerBrowserExtensionCommands } from "./browser-cli-extension.js";
 import { registerBrowserInspectCommands } from "./browser-cli-inspect.js";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
 import { registerBrowserStateCommands } from "./browser-cli-state.js";
-import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions } from "./gateway-rpc.js";
 import { formatHelpExamples } from "./help-format.js";
 
@@ -33,8 +30,11 @@ export function registerBrowserCli(program: Command) {
           "docs.openclaw.ai/cli/browser",
         )}\n`,
     )
-    .action(() => {
+    .action(async () => {
       browser.outputHelp();
+      const { danger } = await import("../globals.js");
+      const { defaultRuntime } = await import("../runtime.js");
+      const { formatCliCommand } = await import("./command-format.js");
       defaultRuntime.error(
         danger(`Missing subcommand. Try: "${formatCliCommand("openclaw browser status")}"`),
       );

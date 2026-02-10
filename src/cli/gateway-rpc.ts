@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { callGateway } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withProgress } from "./progress.js";
 
@@ -32,8 +31,9 @@ export async function callGatewayFromCli(
       indeterminate: true,
       enabled: showProgress,
     },
-    async () =>
-      await callGateway({
+    async () => {
+      const { callGateway } = await import("../gateway/call.js");
+      return await callGateway({
         url: opts.url,
         token: opts.token,
         method,
@@ -42,6 +42,7 @@ export async function callGatewayFromCli(
         timeoutMs: Number(opts.timeout ?? 10_000),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
-      }),
+      });
+    },
   );
 }
