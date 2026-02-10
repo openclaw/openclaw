@@ -310,9 +310,16 @@ export async function syncSkillsToWorkspace(params: {
     await fsp.mkdir(targetSkillsDir, { recursive: true });
 
     for (const entry of entries) {
+      const baseDir = entry.skill.baseDir;
+      if (!baseDir || !fs.existsSync(baseDir)) {
+        skillsLogger.warn(
+          `[skills] Skipping ${entry.skill.name}: source dir missing (${baseDir ?? "unknown"})`,
+        );
+        continue;
+      }
       const dest = path.join(targetSkillsDir, entry.skill.name);
       try {
-        await fsp.cp(entry.skill.baseDir, dest, {
+        await fsp.cp(baseDir, dest, {
           recursive: true,
           force: true,
         });

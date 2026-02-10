@@ -95,7 +95,19 @@ openclaw models list | grep -i ollama
 
 **What likely happened:** You may have run `openclaw doctor` at some point (it's recommended in the docs for updates), and it detected your fork path didn't match the expected global install path, then offered to "fix" it by overwriting your custom configuration.
 
-## Why skills.json Can Disappear
+## Build-phase race (gateway or cron during `pnpm build`)
+
+The build script is **non-atomic**: `tsdown` used to clean the entire `dist/` directory at the start, and `copy-skills-data.ts` restores `dist/data/skills.json` only at the end. That created a ~20–40 second window where `dist/` was empty. If the gateway was running (or a cron job fired) during that window, the prompt engine hit ENOENT when loading the skills library.
+
+**Fixes applied in this fork:**
+
+1. **No-clean build** — `tsdown.config.ts` sets `clean: false` so the output directory is **not** wiped before build. Existing files (including `dist/data/skills.json`) stay until overwritten. `copy-skills-data.ts` still runs at the end and overwrites `skills.json`, so there is no empty-window race.
+2. **Eager-load at gateway boot** — The gateway calls `SkillsLoader.loadLibrary()` once during startup and caches the result in memory. So even if a build runs later and removes the file from disk, the **running** process keeps using the in-memory copy until the next restart.
+3. **Retry on ENOENT** — If the first load fails because all paths are missing (e.g. a build started just before boot), the loader retries for a short window instead of immediately returning an empty library.
+
+**Recommendation:** Still stop the gateway before a full build when possible (`systemctl --user stop openclaw-gateway.service` then `pnpm build` then start). That avoids the process holding old code in memory. The above measures make it safe if you forget to stop.
+
+## Why skills.json Can Disappear (git clean / agent)
 
 If the OpenClaw **agent** is asked to run a "status" or "check" on the system and its **workspace is the fork repo** (`/root/projects/openclaw-fork`), it may run shell commands such as:
 
@@ -117,6 +129,19 @@ Because **`dist/` is gitignored**, `git clean -fd` removes the entire `dist/` tr
    ```
 
 3. **Resolution order:** The gateway looks for `skills.json` in this order: (1) `dist/data/skills.json` when the process is started as `node dist/index.js` (canonical for bundled/production), (2) same-directory-as-loader `data/skills.json`, (3) **source** path `src/agents/prompt-engine/data/skills.json` if the dist copy is missing. So if only `dist/` was wiped (repo intact), the gateway may still start and you will see: `Loaded skills from source path (dist copy missing)`.
+
+## Agent exec and missing skill dirs
+
+If you see a log line like:
+
+```text
+error [tools] exec failed: ls: cannot access '/root/projects/openclaw-fork/skills/bird/': No such file or directory
+```
+
+the **agent** ran a shell command (e.g. `ls …/skills/bird/`) via the exec tool. That path does not exist on the machine (e.g. the optional **bird** skill is not installed or not in that workspace). This error **does not remove skills**; it only means that one exec tool call failed because the path was missing.
+
+- **Why it happens:** The agent may be following docs or prompts that mention a skill (e.g. bird) and tries to list or inspect that skill’s directory. If the skill is optional and not present in the repo or workspace, the command fails.
+- **What to do:** Ignore the error if you do not need that skill. To use the skill, install it (e.g. via ClawHub) into the workspace or `~/.openclaw/skills/`. Skill sync into sandboxes now skips entries whose source directory is missing, so a missing skill dir will not break syncing of other skills.
 
 ## Protection Mechanisms
 

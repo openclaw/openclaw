@@ -52,6 +52,48 @@ function getSkillsPathsToTry(): string[] {
 export class SkillsLoader {
   private static cache: SkillLibrary | null = null;
 
+  private static async retryLoadAfterEnoent(
+    paths: string[],
+    primaryPath: string,
+    options?: { retries?: number; delayMs?: number },
+  ): Promise<SkillLibrary | null> {
+    const retries = options?.retries ?? 20;
+    const delayMs = options?.delayMs ?? 1000;
+
+    for (let attempt = 0; attempt < retries; attempt += 1) {
+      // Simple delay between attempts
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      for (const p of paths) {
+        try {
+          const rawData = await fs.readFile(p, "utf-8");
+          const library = JSON.parse(rawData) as SkillLibrary;
+          if (p !== primaryPath) {
+            console.warn(
+              "[PromptEngine] Loaded skills from source path after wait (dist copy missing):",
+              p,
+            );
+          }
+          return library;
+        } catch (err) {
+          const code =
+            err && typeof err === "object" && "code" in err
+              ? (err as NodeJS.ErrnoException).code
+              : undefined;
+          if (code === "ENOENT") {
+            // Still rebuilding; try next path / attempt.
+            continue;
+          }
+          console.error("[PromptEngine] Failed to load skills library during wait:", err);
+          return {};
+        }
+      }
+    }
+
+    return null;
+  }
+
   /**
    * Loads the skills.json file and caches it in memory.
    * Tries dist/data (when run as node dist/index.js), then __dirname/data, then source path.
@@ -63,6 +105,7 @@ export class SkillsLoader {
 
     const paths = getSkillsPathsToTry();
     const primaryPath = paths[0];
+    let sawEnoentOnly = true;
     for (const p of paths) {
       try {
         const rawData = await fs.readFile(p, "utf-8");
@@ -77,12 +120,27 @@ export class SkillsLoader {
             ? (err as NodeJS.ErrnoException).code
             : undefined;
         if (code === "ENOENT") {
+          // Track that we only saw ENOENT so far; we may be in a build window.
           continue;
         }
+        sawEnoentOnly = false;
         console.error("[PromptEngine] Failed to load skills library:", err);
         return {};
       }
     }
+    if (sawEnoentOnly) {
+      // All attempts failed with ENOENT – likely a build-phase race where dist/ is being rebuilt.
+      const retried = await this.retryLoadAfterEnoent(paths, primaryPath);
+      if (retried) {
+        this.cache = retried;
+        return this.cache;
+      }
+      console.error(
+        "[PromptEngine] skills.json not found in dist or source path after build wait window",
+      );
+      return {};
+    }
+
     console.error("[PromptEngine] skills.json not found in dist or source path");
     return {};
   }

@@ -1,7 +1,8 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "./skills.js";
 
 async function writeSkill(params: {
@@ -136,5 +137,43 @@ describe("buildWorkspaceSkillsPrompt", () => {
       skillFilter: [],
     });
     expect(emptyPrompt).toBe("");
+  });
+
+  it("skips entries whose source dir is missing during sync (no throw, other skills copied)", async () => {
+    const sourceWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const targetWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "demo-skill"),
+      name: "demo-skill",
+      description: "Present",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "ghost-skill"),
+      name: "ghost-skill",
+      description: "Will be reported missing",
+    });
+
+    const realExistsSync = nodeFs.existsSync.bind(nodeFs);
+    const existsSyncSpy = vi.spyOn(nodeFs, "existsSync").mockImplementation((p: string) => {
+      if (String(p).includes("ghost-skill")) {
+        return false;
+      }
+      return realExistsSync(p);
+    });
+
+    try {
+      await syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+      });
+    } finally {
+      existsSyncSpy.mockRestore();
+    }
+
+    const targetDemo = path.join(targetWorkspace, "skills", "demo-skill", "SKILL.md");
+    const targetGhost = path.join(targetWorkspace, "skills", "ghost-skill");
+    await expect(fs.readFile(targetDemo, "utf-8")).resolves.toContain("Present");
+    await expect(fs.access(targetGhost)).rejects.toThrow(); // ghost not copied
   });
 });
