@@ -70,12 +70,6 @@ function resolveAccountConfig(
   return accounts[accountId] as ZulipAccountConfig | undefined;
 }
 
-function mergeZulipAccountConfig(cfg: OpenClawConfig, accountId: string): ZulipAccountConfig {
-  const { accounts: _ignored, ...base } = (resolveZulipSection(cfg) ?? {}) as ZulipConfig;
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
-}
-
 function resolveZulipRequireMention(config: ZulipAccountConfig): boolean | undefined {
   if (config.chatmode === "oncall") {
     return true;
@@ -96,7 +90,9 @@ export function resolveZulipAccount(params: {
   const accountId = normalizeAccountId(params.accountId);
   const zulipSection = resolveZulipSection(params.cfg);
   const baseEnabled = zulipSection?.enabled !== false;
-  const merged = mergeZulipAccountConfig(params.cfg, accountId);
+  const { accounts: _ignored, ...baseConfig } = (zulipSection ?? {}) as ZulipConfig;
+  const accountConfig = resolveAccountConfig(params.cfg, accountId) ?? {};
+  const merged = { ...baseConfig, ...accountConfig };
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
 
@@ -104,17 +100,29 @@ export function resolveZulipAccount(params: {
   const envApiKey = allowEnv ? process.env.ZULIP_API_KEY?.trim() : undefined;
   const envEmail = allowEnv ? process.env.ZULIP_EMAIL?.trim() : undefined;
   const envUrl = allowEnv ? process.env.ZULIP_URL?.trim() : undefined;
+  const envSite = allowEnv ? process.env.ZULIP_SITE?.trim() : undefined;
+  const envRealm = allowEnv ? process.env.ZULIP_REALM?.trim() : undefined;
   const configApiKey = merged.apiKey?.trim();
   const configEmail = merged.email?.trim();
-  const configUrl = merged.url?.trim();
+  const configUrl =
+    accountConfig.url ??
+    accountConfig.site ??
+    accountConfig.realm ??
+    baseConfig.url ??
+    baseConfig.site ??
+    baseConfig.realm;
+  const configUrlTrimmed = configUrl?.trim();
   const apiKey = configApiKey || envApiKey;
   const email = configEmail || envEmail;
-  const baseUrl = normalizeZulipBaseUrl(configUrl || envUrl);
+  const baseUrl = normalizeZulipBaseUrl(
+    configUrlTrimmed || envUrl || envSite || envRealm,
+  );
   const requireMention = resolveZulipRequireMention(merged);
 
   const apiKeySource: ZulipTokenSource = configApiKey ? "config" : envApiKey ? "env" : "none";
   const emailSource: ZulipEmailSource = configEmail ? "config" : envEmail ? "env" : "none";
-  const baseUrlSource: ZulipBaseUrlSource = configUrl ? "config" : envUrl ? "env" : "none";
+  const baseUrlSource: ZulipBaseUrlSource =
+    configUrlTrimmed ? "config" : envUrl || envSite || envRealm ? "env" : "none";
 
   return {
     accountId,
