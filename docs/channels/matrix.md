@@ -190,7 +190,7 @@ If you want **one session per Matrix room**, including 2-member rooms / DM-like 
 
 - `channels.matrix.sessionScope = "room"`
 
-In `"room"` mode, all inbound messages are routed by room ID (unique session key per room).
+In `"room"` mode, all inbound messages are routed by room ID (unique session key per room). This works for encrypted rooms too; encryption only affects message decryption, not session routing.
 
 ## Access control (DMs)
 

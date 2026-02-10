@@ -458,6 +458,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         roomId,
       });
 
+      // Verbose-only: helps diagnose session routing without spamming normal logs.
+      logVerboseMessage(
+        `matrix: sessionScope=${sessionScope} routePeer.kind=${routePeer.kind} routePeer.id=${routePeer.id}`,
+      );
+
       const baseRoute = core.channel.routing.resolveAgentRoute({
         cfg,
         channel: "matrix",
