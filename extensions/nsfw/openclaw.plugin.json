@@ -1,0 +1,10 @@
+{
+  "id": "nsfw",
+  "name": "NSFW – Not Satisfy For Weekend",
+  "description": "Toggle-able system prompt injection via /nsfw command.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -467,7 +467,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/nsfw:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/open-prose:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/regex-replace:
     devDependencies:
       openclaw:
         specifier: workspace:*
