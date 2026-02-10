@@ -111,7 +111,7 @@ export type AgentWebhookParams = {
  * 
  * 辅助函数：从 IncomingMessage 中解析 URL 查询字符串，用于获取签名、时间戳等参数。
  */
-function resolveQueryParams(req: IncomingMessage): URLSearchParams {
+function resolveWecomAgentQueryParams(req: IncomingMessage): URLSearchParams {
     const url = new URL(req.url ?? "/", "http://localhost");
     return url.searchParams;
 }
@@ -122,7 +122,7 @@ function resolveQueryParams(req: IncomingMessage): URLSearchParams {
  * 异步读取 HTTP POST 请求的原始 BODY 数据（XML 字符串）。
  * 包含最大体积限制检查，防止内存溢出攻击。
  */
-async function readRawBody(req: IncomingMessage, maxSize: number = LIMITS.MAX_REQUEST_BODY_SIZE): Promise<string> {
+async function readWecomAgentRawBody(req: IncomingMessage, maxSize: number = LIMITS.MAX_REQUEST_BODY_SIZE): Promise<string> {
     return new Promise((resolve, reject) => {
         const chunks: Buffer[] = [];
         let size = 0;
@@ -159,7 +159,7 @@ async function handleUrlVerification(
     res: ServerResponse,
     agent: ResolvedAgentAccount,
 ): Promise<boolean> {
-    const query = resolveQueryParams(req);
+    const query = resolveWecomAgentQueryParams(req);
     const timestamp = query.get("timestamp") ?? "";
     const nonce = query.get("nonce") ?? "";
     const echostr = query.get("echostr") ?? "";
@@ -213,12 +213,12 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
 
     try {
         log?.(`[wecom-agent] inbound: method=${req.method ?? "UNKNOWN"} remote=${req.socket?.remoteAddress ?? "unknown"}`);
-        const rawXml = await readRawBody(req);
+        const rawXml = await readWecomAgentRawBody(req);
         log?.(`[wecom-agent] inbound: rawXmlBytes=${Buffer.byteLength(rawXml, "utf8")}`);
         const encrypted = extractEncryptFromXml(rawXml);
         log?.(`[wecom-agent] inbound: hasEncrypt=${Boolean(encrypted)} encryptLen=${encrypted ? String(encrypted).length : 0}`);
 
-        const query = resolveQueryParams(req);
+        const query = resolveWecomAgentQueryParams(req);
         const timestamp = query.get("timestamp") ?? "";
         const nonce = query.get("nonce") ?? "";
         const signature = query.get("msg_signature") ?? "";

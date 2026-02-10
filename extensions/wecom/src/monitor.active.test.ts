@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { sendActiveMessage, handleWecomWebhookRequest, registerWecomWebhookTarget } from "./monitor.js";
-import * as cryptoHelpers from "./crypto.js";
+import * as cryptoHelpers from "./crypto/index.js";
 import * as runtime from "./runtime.js";
 import * as agentApi from "./agent/api-client.js";
 import { IncomingMessage, ServerResponse } from "node:http";

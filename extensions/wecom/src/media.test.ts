@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { decryptWecomMedia } from "./media.js";
-import { WECOM_PKCS7_BLOCK_SIZE } from "./crypto.js";
+import { WECOM_PKCS7_BLOCK_SIZE } from "./crypto/index.js";
 import crypto from "node:crypto";
 
 const { undiciFetch } = vi.hoisted(() => {

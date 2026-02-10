@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
 import type { ResolvedWecomAccount } from "./types.js";
-import { computeWecomMsgSignature, decryptWecomEncrypted, encryptWecomPlaintext } from "./crypto.js";
+import { computeWecomMsgSignature, decryptWecomEncrypted, encryptWecomPlaintext } from "./crypto/index.js";
 import { handleWecomWebhookRequest, registerWecomWebhookTarget } from "./monitor.js";
 
 function createMockRequest(params: {

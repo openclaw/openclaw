@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { decodeEncodingAESKey, pkcs7Unpad, WECOM_PKCS7_BLOCK_SIZE } from "./crypto.js";
+import { decodeEncodingAESKey, pkcs7Unpad, WECOM_PKCS7_BLOCK_SIZE } from "./crypto/index.js";
 import { readResponseBodyAsBuffer, wecomFetch, type WecomHttpOptions } from "./http.js";
 
 /**
