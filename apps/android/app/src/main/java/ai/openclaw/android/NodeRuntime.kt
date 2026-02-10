@@ -197,6 +197,7 @@ class NodeRuntime(context: Context) {
         nodeStatusText = "Connected"
         updateStatus()
         maybeNavigateToA2uiOnConnect()
+        startSignificantLocationMonitoring()
       },
       onDisconnected = { message ->
         nodeConnected = false
@@ -595,6 +596,25 @@ class NodeRuntime(context: Context) {
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
       )
+  }
+
+  private fun startSignificantLocationMonitoring() {
+    if (locationMode.value == LocationMode.Off) return
+    if (!hasFineLocationPermission() && !hasCoarseLocationPermission()) return
+    location.startMonitoringSignificantChanges { lat, lon, accuracyMeters ->
+      scope.launch {
+        nodeSession.sendNodeEvent(
+          event = "location.update",
+          payloadJson =
+            buildJsonObject {
+              put("lat", JsonPrimitive(lat))
+              put("lon", JsonPrimitive(lon))
+              put("accuracyMeters", JsonPrimitive(accuracyMeters.toDouble()))
+              put("source", JsonPrimitive("android-significant-location"))
+            }.toString(),
+        )
+      }
+    }
   }
 
   fun connectManual() {

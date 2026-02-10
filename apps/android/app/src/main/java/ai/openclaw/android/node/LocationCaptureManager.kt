@@ -19,6 +19,12 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 class LocationCaptureManager(private val context: Context) {
   data class Payload(val payloadJson: String)
 
+  fun interface OnLocationUpdate {
+    fun onUpdate(lat: Double, lon: Double, accuracyMeters: Float)
+  }
+
+  private var significantLocationListener: android.location.LocationListener? = null
+
   suspend fun getLocation(
     desiredProviders: List<String>,
     maxAgeMs: Long?,
@@ -113,5 +119,46 @@ class LocationCaptureManager(private val context: Context) {
         }
       }
     }
+  }
+
+  /**
+   * Start monitoring for significant location changes (~500m displacement).
+   * Updates are delivered on the main looper to avoid threading issues.
+   */
+  fun startMonitoringSignificantChanges(callback: OnLocationUpdate) {
+    stopMonitoringSignificantChanges()
+    val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    val fineOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val coarseOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    if (!fineOk && !coarseOk) return
+
+    val provider =
+      when {
+        fineOk && manager.isProviderEnabled(LocationManager.GPS_PROVIDER) ->
+          LocationManager.GPS_PROVIDER
+        manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) ->
+          LocationManager.NETWORK_PROVIDER
+        else -> return
+      }
+
+    val listener =
+      android.location.LocationListener { location ->
+        callback.onUpdate(location.latitude, location.longitude, location.accuracy)
+      }
+    significantLocationListener = listener
+    // minTimeMs=0 means accept updates as soon as available; minDistanceM=500 provides
+    // battery-efficient displacement threshold comparable to iOS significant location changes.
+    manager.requestLocationUpdates(provider, 0L, 500f, listener, context.mainLooper)
+  }
+
+  fun stopMonitoringSignificantChanges() {
+    val listener = significantLocationListener ?: return
+    significantLocationListener = null
+    val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    manager.removeUpdates(listener)
   }
 }

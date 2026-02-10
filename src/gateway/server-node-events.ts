@@ -5,6 +5,7 @@ import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { writeNodeLocationState } from "../infra/node-location-state.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -240,6 +241,40 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
       requestHeartbeatNow({ reason: "exec-event" });
+      return;
+    }
+    case "location.update": {
+      if (!evt.payloadJSON) {
+        return;
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse(evt.payloadJSON) as unknown;
+      } catch {
+        return;
+      }
+      const obj =
+        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+      const lat = typeof obj.lat === "number" && Number.isFinite(obj.lat) ? obj.lat : undefined;
+      const lon = typeof obj.lon === "number" && Number.isFinite(obj.lon) ? obj.lon : undefined;
+      if (lat === undefined || lon === undefined) {
+        return;
+      }
+      const accuracyMeters =
+        typeof obj.accuracyMeters === "number" && Number.isFinite(obj.accuracyMeters)
+          ? obj.accuracyMeters
+          : undefined;
+      const source = typeof obj.source === "string" ? obj.source.trim() : undefined;
+      void writeNodeLocationState({
+        lat,
+        lon,
+        accuracyMeters,
+        timestamp: new Date().toISOString(),
+        nodeId,
+        source,
+      }).catch((err) => {
+        ctx.logGateway.warn(`location.update write failed node=${nodeId}: ${formatForLog(err)}`);
+      });
       return;
     }
     default:
