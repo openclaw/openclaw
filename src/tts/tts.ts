@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { stripMarkdown } from "../line/markdown-to-line.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
@@ -1521,6 +1522,12 @@ export async function maybeApplyTtsToPayload(params: {
         textForAudio = `${textForAudio.slice(0, maxLength - 3)}...`;
       }
     }
+  }
+
+  // Strip markdown formatting so TTS engines don't read symbols literally
+  // (e.g. "hashtag hashtag hashtag" for ### headers)
+  if (!wasSummarized) {
+    textForAudio = stripMarkdown(textForAudio);
   }
 
   const ttsStart = Date.now();
