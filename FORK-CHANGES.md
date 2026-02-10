@@ -3,8 +3,8 @@
 Tracking all changes in our fork that are not yet in upstream `openclaw/openclaw:main`.
 Use this to identify when upstream absorbs our fixes so we can drop the fork delta.
 
-**Last synced with upstream:** 2026-02-10 (upstream commit `47f6bb414`)
-**Our merge commit:** `3ed4d3bc9`
+**Last synced with upstream:** 2026-02-10 (upstream commit `53fd26a96`)
+**Our merge commit:** `56eda3fcf`
 
 ---
 
