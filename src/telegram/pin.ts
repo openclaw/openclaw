@@ -79,7 +79,7 @@ export async function unpinMessageTelegram(
   });
 
   await request(
-    () => api.unpinChatMessage(normalizedChatId, { message_id: Math.trunc(messageId) }),
+    () => api.unpinChatMessage(normalizedChatId, Math.trunc(messageId)),
     "unpinMessage",
   );
 
