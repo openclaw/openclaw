@@ -116,7 +116,7 @@ describe("memory search config", () => {
     };
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.remote?.batch).toEqual({
-      enabled: true,
+      enabled: false,
       wait: true,
       concurrency: 2,
       pollIntervalMs: 2000,
@@ -150,7 +150,7 @@ describe("memory search config", () => {
     };
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.remote?.batch).toEqual({
-      enabled: true,
+      enabled: false,
       wait: true,
       concurrency: 2,
       pollIntervalMs: 2000,
@@ -207,7 +207,7 @@ describe("memory search config", () => {
       apiKey: "default-key",
       headers: { "X-Default": "on" },
       batch: {
-        enabled: true,
+        enabled: false,
         wait: true,
         concurrency: 2,
         pollIntervalMs: 2000,

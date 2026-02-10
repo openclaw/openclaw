@@ -554,7 +554,7 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.remote.headers":
     "Extra headers for remote embeddings (merged; remote overrides OpenAI headers).",
   "agents.defaults.memorySearch.remote.batch.enabled":
-    "Enable batch API for memory embeddings (OpenAI/Gemini; default: true).",
+    "Enable batch API for memory embeddings (OpenAI/Gemini/Voyage; default: false).",
   "agents.defaults.memorySearch.remote.batch.wait":
     "Wait for batch completion when indexing (default: true).",
   "agents.defaults.memorySearch.remote.batch.concurrency":
