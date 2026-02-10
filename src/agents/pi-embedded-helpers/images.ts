@@ -28,6 +28,68 @@ export function isEmptyAssistantMessageContent(
   });
 }
 
+/**
+ * Strip all image blocks from messages, replacing them with a text placeholder.
+ * Used as a recovery mechanism when the model returns an empty response and the
+ * context contains images that may be causing the failure (e.g. provider claims
+ * vision support but actually returns empty on image input).
+ *
+ * Returns the stripped messages and whether any images were found.
+ */
+export function stripImageBlocksFromMessages(messages: AgentMessage[]): {
+  messages: AgentMessage[];
+  hadImages: boolean;
+} {
+  let hadImages = false;
+
+  const stripBlocks = (blocks: unknown[]): unknown[] =>
+    blocks.map((block) => {
+      if (block && typeof block === "object" && (block as { type?: unknown }).type === "image") {
+        hadImages = true;
+        return { type: "text", text: "[image omitted]" };
+      }
+      return block;
+    });
+
+  const out: AgentMessage[] = messages.map((msg) => {
+    if (!msg || typeof msg !== "object") {
+      return msg;
+    }
+    const role = (msg as { role?: unknown }).role;
+
+    if (role === "toolResult") {
+      const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
+      if (Array.isArray(toolMsg.content)) {
+        return { ...toolMsg, content: stripBlocks(toolMsg.content) as typeof toolMsg.content };
+      }
+    }
+
+    if (role === "user") {
+      const userMsg = msg as Extract<AgentMessage, { role: "user" }>;
+      if (Array.isArray(userMsg.content)) {
+        return {
+          ...userMsg,
+          content: stripBlocks(userMsg.content) as typeof userMsg.content,
+        };
+      }
+    }
+
+    if (role === "assistant") {
+      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+      if (Array.isArray(assistantMsg.content)) {
+        return {
+          ...assistantMsg,
+          content: stripBlocks(assistantMsg.content) as typeof assistantMsg.content,
+        };
+      }
+    }
+
+    return msg;
+  });
+
+  return { messages: out, hadImages };
+}
+
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,

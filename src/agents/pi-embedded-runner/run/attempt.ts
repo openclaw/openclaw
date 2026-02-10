@@ -38,7 +38,9 @@ import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
 import {
   isCloudCodeAssistFormatError,
+  isEmptyAssistantMessageContent,
   resolveBootstrapMaxChars,
+  stripImageBlocksFromMessages,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
@@ -960,6 +962,26 @@ export async function runEmbeddedAttempt(
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
+          }
+
+          // Recovery: if the model returned an empty response and the context contains
+          // images, strip all image blocks and retry once. Some providers (e.g. GitHub
+          // Copilot) claim vision support but silently return empty when images are present.
+          const lastAfterPrompt = activeSession.messages.at(-1);
+          if (
+            lastAfterPrompt?.role === "assistant" &&
+            isEmptyAssistantMessageContent(lastAfterPrompt)
+          ) {
+            const { messages: stripped, hadImages } = stripImageBlocksFromMessages(
+              activeSession.messages,
+            );
+            if (hadImages) {
+              log.warn(
+                `empty assistant response with images in context — stripping images and retrying: runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+              activeSession.agent.replaceMessages(stripped);
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
           }
         } catch (err) {
           promptError = err;
