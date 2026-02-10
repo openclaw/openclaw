@@ -352,7 +352,21 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       : deps.isSignalReactionMessage(dataMessage?.reaction)
         ? dataMessage?.reaction
         : null;
-    const messageText = (dataMessage?.message ?? "").trim();
+    // Process mentions: replace placeholder chars with @name or @uuid
+    let messageText = dataMessage?.message ?? "";
+    const mentions = dataMessage?.mentions ?? [];
+    if (mentions.length > 0) {
+      // Sort mentions by start position descending to replace from end first
+      const sortedMentions = [...mentions].sort((a, b) => (b.start ?? 0) - (a.start ?? 0));
+      for (const mention of sortedMentions) {
+        const start = mention.start ?? 0;
+        const len = mention.length ?? 1;
+        const name = mention.name ?? mention.number ?? mention.uuid ?? "someone";
+        const replacement = `@${name}`;
+        messageText = messageText.slice(0, start) + replacement + messageText.slice(start + len);
+      }
+    }
+    messageText = messageText.trim();
     const quoteText = dataMessage?.quote?.text?.trim() ?? "";
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
