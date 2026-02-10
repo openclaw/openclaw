@@ -223,6 +223,7 @@ export const buildTelegramMessageContext = async ({
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled"
   if (!isGroup) {
     if (dmPolicy === "disabled") {
+      logVerbose(`Blocked telegram DM from ${chatId} (dmPolicy: disabled)`);
       return null;
     }
 

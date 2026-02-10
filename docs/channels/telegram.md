@@ -729,6 +729,20 @@ The agent sees reactions as **system notifications** in the conversation history
 - Fix by enabling IPv6 egress **or** forcing IPv4 resolution for `api.telegram.org` (for example, add an `/etc/hosts` entry using the IPv4 A record, or prefer IPv4 in your OS DNS stack), then restart the gateway.
 - Quick check: `dig +short api.telegram.org A` and `dig +short api.telegram.org AAAA` to confirm what DNS returns.
 
+**Bot is polling but DMs are silently ignored (no inbound logs):**
+
+- Most common cause: `dmPolicy` is set to `"allowlist"` but `allowFrom` doesn't include your Telegram user ID or username. Check with `openclaw status` — if the channel shows OK but messages aren't processed, verify your `allowFrom` entries.
+- Use numeric user IDs for reliability (usernames can change). Find your ID by sending a message to `@userinfobot` on Telegram.
+- If `dmPolicy` is `"pairing"` (default), you must approve the pairing code on first contact. Check `openclaw pairing list` for pending requests.
+- If `dmPolicy` is `"disabled"`, all DMs are silently dropped. Set it to `"pairing"` or `"allowlist"` to receive messages.
+- Enable verbose logging (`OPENCLAW_VERBOSE=1`) to see rejection reasons for blocked messages.
+
+**Bot polls successfully but consumes messages without processing them:**
+
+- Check the update offset file in `~/.openclaw/state/telegram/update-offset-*.json`. A stale offset from a previous bot token can cause the gateway to skip all updates with lower IDs.
+- Fix: stop the gateway, delete the offset file, then restart. The gateway will begin polling from the latest update.
+- If you recently revoked and recreated the bot token, always delete the offset file — Telegram resets update IDs for new tokens.
+
 ## Configuration reference (Telegram)
 
 Full configuration: [Configuration](/gateway/configuration)
