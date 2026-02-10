@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionModelRef } from "./session-utils.js";
 
 describe("resolveSessionModelRef", () => {
@@ -8,10 +10,10 @@ describe("resolveSessionModelRef", () => {
         model: { primary: "anthropic/claude-opus-4-6" },
       },
     },
-  } as any;
+  } as unknown as OpenClawConfig;
 
   it("returns agent default when session has no model info", () => {
-    const result = resolveSessionModelRef(cfg, { sessionId: "s1" } as any);
+    const result = resolveSessionModelRef(cfg, { sessionId: "s1" } as unknown as SessionEntry);
     expect(result.model).toBe("claude-opus-4-6");
     expect(result.provider).toBe("anthropic");
   });
@@ -21,7 +23,7 @@ describe("resolveSessionModelRef", () => {
       sessionId: "s1",
       modelOverride: "claude-haiku-4-5",
       providerOverride: "anthropic",
-    } as any;
+    } as unknown as SessionEntry;
     const result = resolveSessionModelRef(cfg, entry);
     expect(result.model).toBe("claude-haiku-4-5");
     expect(result.provider).toBe("anthropic");
@@ -32,7 +34,7 @@ describe("resolveSessionModelRef", () => {
       sessionId: "s1",
       modelProvider: "google-gemini-cli",
       model: "gemini-3-pro-preview",
-    } as any;
+    } as unknown as SessionEntry;
     const result = resolveSessionModelRef(cfg, entry);
     expect(result.model).toBe("gemini-3-pro-preview");
     expect(result.provider).toBe("google-gemini-cli");
@@ -45,7 +47,7 @@ describe("resolveSessionModelRef", () => {
       providerOverride: "anthropic",
       modelProvider: "google-gemini-cli",
       model: "gemini-3-pro-preview",
-    } as any;
+    } as unknown as SessionEntry;
     const result = resolveSessionModelRef(cfg, entry);
     expect(result.model).toBe("claude-haiku-4-5");
     expect(result.provider).toBe("anthropic");
