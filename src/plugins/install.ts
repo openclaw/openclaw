@@ -249,6 +249,15 @@ async function installPluginFromPackageDir(params: {
 
   logger.info?.(`Installing to ${targetDir}…`);
   let backupDir: string | null = null;
+  const restoreBackup = async () => {
+    if (!backupDir) {
+      return;
+    }
+    await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rename(backupDir, targetDir).catch(() => undefined);
+    backupDir = null;
+  };
+
   if (mode === "update" && (await fileExists(targetDir))) {
     backupDir = `${targetDir}.backup-${Date.now()}`;
     await fs.rename(targetDir, backupDir);
@@ -256,10 +265,7 @@ async function installPluginFromPackageDir(params: {
   try {
     await fs.cp(params.packageDir, targetDir, { recursive: true });
   } catch (err) {
-    if (backupDir) {
-      await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
-      await fs.rename(backupDir, targetDir).catch(() => undefined);
-    }
+    await restoreBackup();
     return { ok: false, error: `failed to copy plugin: ${String(err)}` };
   }
 
@@ -278,15 +284,18 @@ async function installPluginFromPackageDir(params: {
   const hasDeps = Object.keys(deps).length > 0;
   if (hasDeps) {
     logger.info?.("Installing plugin dependencies…");
-    const npmRes = await runCommandWithTimeout(["npm", "install", "--omit=dev", "--silent"], {
-      timeoutMs: Math.max(timeoutMs, 300_000),
-      cwd: targetDir,
-    });
+    let npmRes: Awaited<ReturnType<typeof runCommandWithTimeout>>;
+    try {
+      npmRes = await runCommandWithTimeout(["npm", "install", "--omit=dev", "--silent"], {
+        timeoutMs: Math.max(timeoutMs, 300_000),
+        cwd: targetDir,
+      });
+    } catch (err) {
+      await restoreBackup();
+      return { ok: false, error: `npm install failed: ${String(err)}` };
+    }
     if (npmRes.code !== 0) {
-      if (backupDir) {
-        await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
-        await fs.rename(backupDir, targetDir).catch(() => undefined);
-      }
+      await restoreBackup();
       return {
         ok: false,
         error: `npm install failed: ${npmRes.stderr.trim() || npmRes.stdout.trim()}`,

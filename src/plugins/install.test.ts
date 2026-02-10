@@ -268,6 +268,75 @@ describe("installPluginFromArchive", () => {
     expect(manifest.version).toBe("0.0.2");
   });
 
+  it("restores previous plugin when dependency install throws during update", async () => {
+    vi.resetModules();
+    vi.doMock("../process/exec.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+      return {
+        ...actual,
+        runCommandWithTimeout: async () => {
+          throw new Error("spawn ENOENT");
+        },
+      };
+    });
+
+    try {
+      const tmpDir = makeTempDir();
+      const pluginDir = path.join(tmpDir, "plugin-src");
+      fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+
+      const writePackage = (version: string, withDeps: boolean) => {
+        fs.writeFileSync(
+          path.join(pluginDir, "package.json"),
+          JSON.stringify({
+            name: "rollback-plugin",
+            version,
+            dependencies: withDeps ? { leftpad: "1.3.0" } : undefined,
+            openclaw: { extensions: ["./dist/index.js"] },
+          }),
+          "utf-8",
+        );
+      };
+
+      writePackage("1.0.0", false);
+      fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+
+      const extensionsDir = path.join(tmpDir, "extensions");
+      const { installPluginFromDir } = await import("./install.js");
+      const first = await installPluginFromDir({
+        dirPath: pluginDir,
+        extensionsDir,
+      });
+      expect(first.ok).toBe(true);
+
+      writePackage("2.0.0", true);
+      const second = await installPluginFromDir({
+        dirPath: pluginDir,
+        extensionsDir,
+        mode: "update",
+      });
+
+      expect(second.ok).toBe(false);
+      if (second.ok) {
+        return;
+      }
+      expect(second.error).toContain("npm install failed");
+
+      const installedManifest = JSON.parse(
+        fs.readFileSync(path.join(extensionsDir, "rollback-plugin", "package.json"), "utf-8"),
+      ) as { version?: string };
+      expect(installedManifest.version).toBe("1.0.0");
+      const staleBackups = fs
+        .readdirSync(extensionsDir)
+        .filter((entry) => entry.startsWith("rollback-plugin.backup-"));
+      expect(staleBackups).toHaveLength(0);
+    } finally {
+      vi.doUnmock("../process/exec.js");
+      vi.resetModules();
+    }
+  });
+
   it("rejects traversal-like plugin names", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
