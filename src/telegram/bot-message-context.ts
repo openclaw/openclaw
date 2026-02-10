@@ -571,8 +571,19 @@ export const buildTelegramMessageContext = async ({
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
+  const inboundHistory =
+    isGroup && historyKey && historyLimit > 0
+      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
+          sender: entry.sender,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }))
+      : undefined;
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
+    // Agent prompt should be the raw user text only; metadata/context is provided via system prompt.
+    BodyForAgent: bodyText,
+    InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: commandBody,
     From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,

@@ -127,8 +127,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     }
     const signalTo = entry.isGroup ? `group:${entry.groupId}` : `signal:${entry.senderRecipient}`;
+    const inboundHistory =
+      entry.isGroup && historyKey && deps.historyLimit > 0
+        ? (deps.groupHistories.get(historyKey) ?? []).map((historyEntry) => ({
+            sender: historyEntry.sender,
+            body: historyEntry.body,
+            timestamp: historyEntry.timestamp,
+          }))
+        : undefined;
     const ctxPayload = finalizeInboundContext({
       Body: combinedBody,
+      BodyForAgent: entry.bodyText,
+      InboundHistory: inboundHistory,
       RawBody: entry.bodyText,
       CommandBody: entry.bodyText,
       From: entry.isGroup

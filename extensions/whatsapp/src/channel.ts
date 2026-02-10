@@ -201,7 +201,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     resolveRequireMention: resolveWhatsAppGroupRequireMention,
     resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
     resolveGroupIntroHint: () =>
-      "WhatsApp IDs: SenderId is the participant JID; [message_id: ...] is the message id for reactions (use SenderId as participant).",
+      "WhatsApp IDs: SenderId is the participant JID (group participant id).",
   },
   mentions: {
     stripPatterns: ({ ctx }) => {
