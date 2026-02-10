@@ -12,7 +12,9 @@ import {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
+  SESSIONS_HISTORY_MAX_BYTES,
   type SessionListRow,
+  sanitizeAndCapSessionMessages,
   stripToolMessages,
 } from "./sessions-helpers.js";
 
@@ -21,6 +23,7 @@ const SessionsListToolSchema = Type.Object({
   limit: Type.Optional(Type.Number({ minimum: 1 })),
   activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
+  includeThinking: Type.Optional(Type.Boolean()),
 });
 
 function resolveSandboxSessionToolsVisibility(cfg: ReturnType<typeof loadConfig>) {
@@ -76,6 +79,7 @@ export function createSessionsListTool(opts?: {
           ? Math.max(0, Math.floor(params.messageLimit))
           : 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
+      const includeThinking = params.includeThinking === true;
 
       const list = await callGateway<{ sessions: Array<SessionListRow>; path: string }>({
         method: "sessions.list",
@@ -200,7 +204,13 @@ export function createSessionsListTool(opts?: {
           });
           const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
           const filtered = stripToolMessages(rawMessages);
-          row.messages = filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
+          const limited = filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
+          row.messages = sanitizeAndCapSessionMessages({
+            messages: limited,
+            includeThinking,
+            maxBytes: SESSIONS_HISTORY_MAX_BYTES,
+            placeholderText: "[sessions_list omitted: message too large]",
+          }).messages;
         }
 
         rows.push(row);
