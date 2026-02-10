@@ -584,11 +584,10 @@ async function runNimbleSearch(params: {
   query: string;
   count: number;
   apiKey: string;
-  baseUrl: string;
   timeoutSeconds: number;
   deepSearch: boolean;
 }): Promise<NimbleSearchResult[]> {
-  const endpoint = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = NIMBLE_API_ENDPOINT;
 
   const res = await fetch(endpoint, {
     method: "POST",
@@ -695,7 +694,6 @@ async function runWebSearch(params: {
       query: params.query,
       count: params.count,
       apiKey: params.apiKey,
-      baseUrl: NIMBLE_API_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
       deepSearch: params.nimbleDeepSearch ?? false,
     });
