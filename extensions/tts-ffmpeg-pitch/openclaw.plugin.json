@@ -1,0 +1,36 @@
+{
+  "id": "tts-ffmpeg-pitch",
+  "name": "TTS FFmpeg Pitch Modulation",
+  "version": "1.0.0",
+  "description": "Post-process TTS audio with FFmpeg pitch/speed modulation",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pitch": {
+        "type": "number",
+        "default": 1.0,
+        "minimum": 0.5,
+        "maximum": 2.0,
+        "description": "Pitch multiplier (1.0 = normal, <1.0 = deeper, >1.0 = higher)"
+      },
+      "speed": {
+        "type": "number",
+        "default": 1.0,
+        "minimum": 0.5,
+        "maximum": 2.0,
+        "description": "Speed multiplier (1.0 = normal)"
+      }
+    }
+  },
+  "uiHints": {
+    "pitch": {
+      "label": "Pitch Multiplier",
+      "placeholder": "1.0"
+    },
+    "speed": {
+      "label": "Speed Multiplier",
+      "placeholder": "1.0"
+    }
+  }
+}

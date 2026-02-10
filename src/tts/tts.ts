@@ -1,5 +1,6 @@
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
+import { spawn } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -121,6 +122,12 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  postProcess?: {
+    enabled?: boolean;
+    command?: string;
+    timeoutMs?: number;
+    env?: Record<string, string>;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -296,6 +303,14 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
     },
+    postProcess: raw.postProcess
+      ? {
+          enabled: raw.postProcess.enabled,
+          command: raw.postProcess.command?.trim() || undefined,
+          timeoutMs: raw.postProcess.timeoutMs,
+          env: raw.postProcess.env,
+        }
+      : undefined,
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -1158,6 +1173,104 @@ async function edgeTTS(params: {
   await tts.ttsPromise(text, outputPath);
 }
 
+const DEFAULT_POST_PROCESS_TIMEOUT_MS = 5000;
+
+async function applyPostProcessing(params: {
+  inputPath: string;
+  config: ResolvedTtsConfig;
+}): Promise<string> {
+  const { inputPath, config } = params;
+  const postProcess = config.postProcess;
+
+  if (!postProcess?.enabled || !postProcess.command?.trim()) {
+    return inputPath;
+  }
+
+  const command = resolveUserPath(postProcess.command.trim());
+  const timeoutMs = postProcess.timeoutMs ?? DEFAULT_POST_PROCESS_TIMEOUT_MS;
+
+  // Validate timeout range
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 30000) {
+    logVerbose(`TTS: invalid post-process timeout ${timeoutMs}ms, using default.`);
+    return inputPath;
+  }
+
+  const tempDir = mkdtempSync(path.join(tmpdir(), "tts-post-"));
+  const outputPath = path.join(tempDir, `processed-${Date.now()}${path.extname(inputPath)}`);
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const env = {
+        ...process.env,
+        ...postProcess.env,
+        OPENCLAW_TTS_INPUT: inputPath,
+        OPENCLAW_TTS_OUTPUT: outputPath,
+      };
+
+      const proc = spawn(command, [], {
+        env,
+        stdio: "pipe",
+      });
+
+      let stderr = "";
+      let didResolve = false;
+
+      proc.stderr?.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      proc.on("error", (err) => {
+        if (!didResolve) {
+          didResolve = true;
+          reject(new Error(`Post-process spawn failed: ${err.message}`));
+        }
+      });
+
+      proc.on("exit", (code, signal) => {
+        if (didResolve) {
+          return;
+        }
+        didResolve = true;
+
+        if (signal) {
+          reject(new Error(`Post-process killed by signal ${signal}`));
+        } else if (code !== 0) {
+          reject(new Error(`Post-process exited with code ${code}: ${stderr.trim()}`));
+        } else if (!existsSync(outputPath)) {
+          reject(new Error(`Post-process did not create output file at ${outputPath}`));
+        } else {
+          resolve();
+        }
+      });
+
+      const timer = setTimeout(() => {
+        if (!didResolve) {
+          didResolve = true;
+          proc.kill();
+          reject(new Error("Post-process timeout"));
+        }
+      }, timeoutMs);
+
+      // Clear timer on exit to prevent dangling timeout
+      proc.on("exit", () => {
+        clearTimeout(timer);
+      });
+    });
+
+    scheduleCleanup(tempDir);
+    return outputPath;
+  } catch (err) {
+    const error = err as Error;
+    logVerbose(`TTS: post-processing failed (${error.message}), using original audio.`);
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+    return inputPath;
+  }
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1243,11 +1356,17 @@ export async function textToSpeech(params: {
         }
 
         scheduleCleanup(tempDir);
-        const voiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
+
+        const finalPath = await applyPostProcessing({
+          inputPath: edgeResult.audioPath,
+          config,
+        });
+
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: finalPath });
 
         return {
           success: true,
-          audioPath: edgeResult.audioPath,
+          audioPath: finalPath,
           latencyMs: Date.now() - providerStart,
           provider,
           outputFormat: edgeResult.outputFormat,
@@ -1305,9 +1424,14 @@ export async function textToSpeech(params: {
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
 
+      const finalPath = await applyPostProcessing({
+        inputPath: audioPath,
+        config,
+      });
+
       return {
         success: true,
-        audioPath,
+        audioPath: finalPath,
         latencyMs,
         provider,
         outputFormat: provider === "openai" ? output.openai : output.elevenlabs,

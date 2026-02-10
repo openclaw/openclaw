@@ -73,6 +73,17 @@ export type TtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  /** Optional post-processing hook for TTS audio manipulation. */
+  postProcess?: {
+    /** Enable post-processing. */
+    enabled?: boolean;
+    /** Command to execute (receives input path via OPENCLAW_TTS_INPUT env var, writes to OPENCLAW_TTS_OUTPUT). */
+    command?: string;
+    /** Timeout in ms (default: 5000). */
+    timeoutMs?: number;
+    /** Environment variables to pass to the command. */
+    env?: Record<string, string>;
+  };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */

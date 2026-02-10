@@ -223,6 +223,15 @@ export const TtsConfigSchema = z
       })
       .strict()
       .optional(),
+    postProcess: z
+      .object({
+        enabled: z.boolean().optional(),
+        command: z.string().optional(),
+        timeoutMs: z.number().int().min(100).max(30000).optional(),
+        env: z.record(z.string(), z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
