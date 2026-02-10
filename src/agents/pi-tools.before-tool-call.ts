@@ -4,6 +4,9 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
 
+// Symbol to mark tools that have already been wrapped with hooks
+const HOOK_WRAPPED_SYMBOL = Symbol("hookWrapped");
+
 type HookContext = {
   agentId?: string;
   sessionKey?: string;
@@ -119,8 +122,12 @@ export function wrapToolWithBeforeToolCallHook(
   if (!execute) {
     return tool;
   }
+  // Return early if tool is already wrapped (idempotent)
+  if ((tool as unknown as Record<symbol, unknown>)[HOOK_WRAPPED_SYMBOL]) {
+    return tool;
+  }
   const toolName = tool.name || "tool";
-  return {
+  const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       // Before hook - can modify params or block the call
@@ -157,6 +164,9 @@ export function wrapToolWithBeforeToolCallHook(
       return afterOutcome.result as any;
     },
   };
+  // Mark as wrapped to prevent double-wrapping
+  (wrappedTool as unknown as Record<symbol, unknown>)[HOOK_WRAPPED_SYMBOL] = true;
+  return wrappedTool;
 }
 
 export const __testing = {
