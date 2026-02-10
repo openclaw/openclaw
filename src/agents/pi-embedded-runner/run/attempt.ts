@@ -974,6 +974,9 @@ export async function runEmbeddedAttempt(
                 }
                 // Apply modified content from plugin hooks (e.g. developerMode taint headers)
                 if (emitResult?.content && emitResult.content !== content) {
+                  log.info(
+                    `before_response_emit: APPLYING modified content (len=${emitResult.content.length}, aTexts=${assistantTexts.length})`,
+                  );
                   // Update assistantTexts — this is what the delivery pipeline actually uses
                   if (assistantTexts.length > 0) {
                     assistantTexts[assistantTexts.length - 1] = emitResult.content;
@@ -995,6 +998,10 @@ export async function runEmbeddedAttempt(
                       }
                     }
                   }
+                } else {
+                  log.info(
+                    `before_response_emit: no modification (hasResult=${!!emitResult}, hasContent=${!!emitResult?.content})`,
+                  );
                 }
               } catch (err) {
                 log.warn(`before_response_emit hook failed: ${String(err)}`);
