@@ -131,6 +131,15 @@ type PerplexitySearchResponse = {
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
 
+function extractGrokContent(data: GrokSearchResponse): string | undefined {
+  // xAI Responses API format: output[0].content[0].text
+  const fromResponses = data.output?.[0]?.content?.[0]?.text;
+  if (typeof fromResponses === "string" && fromResponses) {
+    return fromResponses;
+  }
+  return typeof data.output_text === "string" ? data.output_text : undefined;
+}
+
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") {
@@ -484,8 +493,7 @@ async function runGrokSearch(params: {
   }
 
   const data = (await res.json()) as GrokSearchResponse;
-  // Extract content from xAI Responses API format: output[0].content[0].text
-  const content = data.output?.[0]?.content?.[0]?.text ?? data.output_text ?? "No response";
+  const content = extractGrokContent(data) ?? "No response";
   const citations = data.citations ?? [];
   const inlineCitations = data.inline_citations;
 
@@ -557,7 +565,7 @@ async function runWebSearch(params: {
       provider: params.provider,
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       tookMs: Date.now() - start,
-      content,
+      content: wrapWebContent(content),
       citations,
       inlineCitations,
     };
@@ -722,4 +730,5 @@ export const __testing = {
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
+  extractGrokContent,
 } as const;
