@@ -39,6 +39,7 @@ clawdock-help
 ```
 
 On first command, ClawDock auto-detects your OpenClaw directory:
+
 - Checks common paths (`~/openclaw`, `~/workspace/openclaw`, etc.)
 - If found, asks you to confirm
 - Saves to `~/.clawdock/config`
