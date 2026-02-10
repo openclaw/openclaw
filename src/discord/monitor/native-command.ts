@@ -749,6 +749,7 @@ async function dispatchDiscordCommandInteraction(params: {
   });
   const ctxPayload = finalizeInboundContext({
     Body: prompt,
+    BodyForAgent: prompt,
     RawBody: prompt,
     CommandBody: prompt,
     CommandArgs: commandArgs,
