@@ -82,10 +82,53 @@ const MemoryQmdSchema = z
   })
   .strict();
 
+const MemoryHybridDailyLogSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    template: z.string().optional(),
+    createDaysAhead: z.number().int().min(0).max(7).optional(),
+    createAt: z
+      .string()
+      .regex(/^\d{1,2}:\d{2}$/)
+      .optional(),
+  })
+  .strict();
+
+const MemoryHybridDailyReviewSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    at: z
+      .string()
+      .regex(/^\d{1,2}:\d{2}$/)
+      .optional(),
+    message: z.string().optional(),
+    channelId: z.string().optional(),
+  })
+  .strict();
+
+const MemoryHybridSessionEndSchema = z
+  .object({
+    prompt: z.boolean().optional(),
+    minDurationMinutes: z.number().int().min(1).max(120).optional(),
+    message: z.string().optional(),
+  })
+  .strict();
+
+const MemoryHybridSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    dailyLog: MemoryHybridDailyLogSchema.optional(),
+    dailyReview: MemoryHybridDailyReviewSchema.optional(),
+    sessionEnd: MemoryHybridSessionEndSchema.optional(),
+  })
+  .strict();
+
 const MemorySchema = z
   .object({
     backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
+    mode: z.union([z.literal("manual"), z.literal("hybrid")]).optional(),
+    hybrid: MemoryHybridSchema.optional(),
     qmd: MemoryQmdSchema.optional(),
   })
   .strict()
