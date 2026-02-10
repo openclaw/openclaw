@@ -1,6 +1,6 @@
 {
   "id": "nsfw",
-  "name": "NSFW – Not Satisfy For Weekend",
+  "name": "NSFW - Unrestricted Content",
   "description": "Toggle-able system prompt injection via /nsfw command.",
   "configSchema": {
     "type": "object",

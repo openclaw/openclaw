@@ -1,5 +1,5 @@
 /**
- * OpenClaw NSFW Plugin — Not Satisfy For Weekend
+ * OpenClaw NSFW Plugin - Unrestricted Content
  *
  * Toggle with `/nsfw true` or `/nsfw false`.
  * State is in-memory only — defaults to OFF and resets on restart.

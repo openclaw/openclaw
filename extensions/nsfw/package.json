@@ -2,7 +2,7 @@
   "name": "@openclaw/nsfw",
   "version": "2026.2.11",
   "private": true,
-  "description": "NSFW – Not Satisfy For Weekend. Conditional system prompt injection plugin.",
+  "description": "NSFW – Conditional system prompt injection plugin.",
   "type": "module",
   "devDependencies": {
     "openclaw": "workspace:*"
