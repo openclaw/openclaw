@@ -3,6 +3,7 @@ import { loadConfig } from "../config/config.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { normalizeChatId, resolveToken, resolveTelegramClientOptions } from "./send.js";
 
 /**
@@ -28,19 +29,16 @@ export async function pinMessageTelegram(
 
   const request = createTelegramRetryRunner({
     configRetry: account.config.retry,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
 
-  const params: Record<string, unknown> = {
-    chat_id: normalizedChatId,
-    message_id: Math.trunc(messageId),
-  };
-
+  const other: Record<string, unknown> = {};
   if (opts.disableNotification !== undefined) {
-    params.disable_notification = opts.disableNotification;
+    other.disable_notification = opts.disableNotification;
   }
 
   await request(
-    () => api.pinChatMessage(normalizedChatId, Math.trunc(messageId), params),
+    () => api.pinChatMessage(normalizedChatId, Math.trunc(messageId), other),
     "pinMessage",
   );
 
@@ -76,6 +74,7 @@ export async function unpinMessageTelegram(
 
   const request = createTelegramRetryRunner({
     configRetry: account.config.retry,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
 
   await request(
