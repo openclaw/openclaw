@@ -321,7 +321,9 @@ export class AsteriskAriProvider implements VoiceCallProvider {
       if (!cleaned && chId) {
         this.pendingInboundChannels.delete(chId);
         const call = this.manager.getCallByProviderCallId(chId);
-        if (call) {
+        // cleanup() is the single source of truth for call.ended.
+        // This fallback is only for cases where we never tracked the call state in this provider.
+        if (call && !TerminalStates.has(call.state)) {
           this.manager.processEvent(
             makeEvent({
               type: "call.ended",
