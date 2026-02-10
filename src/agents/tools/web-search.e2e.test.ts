@@ -10,6 +10,7 @@ const {
   normalizeFreshness,
   freshnessToPerplexityRecency,
   resolveGrokApiKey,
+  resolveGrokBaseUrl,
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
@@ -134,6 +135,23 @@ describe("web_search grok config resolution", () => {
       expect(resolveGrokApiKey({})).toBeUndefined();
       expect(resolveGrokApiKey(undefined)).toBeUndefined();
     });
+  });
+
+  it("uses default baseUrl when not specified", () => {
+    expect(resolveGrokBaseUrl({})).toBe("https://api.x.ai/v1");
+    expect(resolveGrokBaseUrl(undefined)).toBe("https://api.x.ai/v1");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveGrokBaseUrl({ baseUrl: "https://custom.api.com/v1" })).toBe(
+      "https://custom.api.com/v1",
+    );
+  });
+
+  it("trims whitespace from baseUrl", () => {
+    expect(resolveGrokBaseUrl({ baseUrl: "  https://custom.api.com/v1  " })).toBe(
+      "https://custom.api.com/v1",
+    );
   });
 
   it("uses default model when not specified", () => {

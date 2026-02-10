@@ -244,6 +244,7 @@ export const ToolsWebSearchSchema = z
       .object({
         apiKey: z.string().optional().register(sensitive),
         model: z.string().optional(),
+        baseUrl: z.string().optional(),
         inlineCitations: z.boolean().optional(),
       })
       .strict()

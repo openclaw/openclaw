@@ -812,6 +812,12 @@ Docs: https://docs.openclaw.ai
 - Tests: update thread ID handling in Slack message collection tests. (#14108) Thanks @swizzmagik.
 - Update/Daemon: fix post-update restart compatibility by generating `dist/cli/daemon-cli.js` with alias-aware exports from hashed daemon bundles, preventing `registerDaemonCli` import failures during `openclaw update`.
 
+## 2026.2.10
+
+### Added
+
+- Tools/web_search: add custom `baseUrl` configuration support for Grok provider.
+
 ## 2026.2.9
 
 ### Added
