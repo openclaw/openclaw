@@ -1,15 +1,18 @@
 name: Labeler
 
+# Disabled: no automatic labeling (enable by uncommenting triggers below)
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened]
-  issues:
-    types: [opened]
+  workflow_dispatch: {}
+  # pull_request_target:
+  #   types: [opened, synchronize, reopened]
+  # issues:
+  #   types: [opened]
 
 permissions: {}
 
 jobs:
   label:
+    if: secrets.GH_APP_PRIVATE_KEY != ''
     permissions:
       contents: read
       pull-requests: write
@@ -48,6 +51,7 @@ jobs:
             });
 
   label-issues:
+    if: secrets.GH_APP_PRIVATE_KEY != ''
     permissions:
       issues: write
     runs-on: ubuntu-latest

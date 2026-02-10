@@ -198,6 +198,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/google-antigravity-auth/**"
+"extensions: google-drive":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google-drive/**"
 "extensions: google-gemini-cli-auth":
   - changed-files:
       - any-glob-to-any-file:
