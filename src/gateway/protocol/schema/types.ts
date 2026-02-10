@@ -24,6 +24,11 @@ import type {
   AgentsListResultSchema,
   AgentsUpdateParamsSchema,
   AgentsUpdateResultSchema,
+  CommandsListEntrySchema,
+  CommandsListParamsSchema,
+  CommandsListResultSchema,
+  CommandArgChoiceSchema,
+  CommandArgSchema,
   ModelChoiceSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
@@ -204,6 +209,11 @@ export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
+export type CommandsListParams = Static<typeof CommandsListParamsSchema>;
+export type CommandArgChoice = Static<typeof CommandArgChoiceSchema>;
+export type CommandArg = Static<typeof CommandArgSchema>;
+export type CommandsListEntry = Static<typeof CommandsListEntrySchema>;
+export type CommandsListResult = Static<typeof CommandsListResultSchema>;
 export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
 export type SkillsBinsParams = Static<typeof SkillsBinsParamsSchema>;
 export type SkillsBinsResult = Static<typeof SkillsBinsResultSchema>;
