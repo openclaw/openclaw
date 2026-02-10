@@ -160,6 +160,12 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
     resetTriggers: ["/new", "/reset"],
     store: "~/.openclaw/agents/default/sessions/sessions.json",
+    maintenance: {
+      mode: "warn",
+      pruneDays: 30,
+      maxEntries: 500,
+      rotateBytes: 10_485_760,
+    },
     typingIntervalSeconds: 5,
     sendPolicy: {
       default: "allow",
@@ -344,6 +350,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     enabled: true,
     store: "~/.openclaw/cron/cron.json",
     maxConcurrentRuns: 2,
+    sessionRetention: "24h",
   },
 
   // Webhooks
