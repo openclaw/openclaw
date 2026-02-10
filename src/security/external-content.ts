@@ -83,80 +83,109 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
 };
 
 const MARKER_IGNORED_CHARS = new Set(["\u200B", "\u200C", "\u200D", "\uFEFF", "\u00AD"]);
+const MARKER_STRIP_PATTERN = /[\p{Cf}\p{M}]/u;
 
-const MARKER_CONFUSABLES: Record<string, string> = {
+/**
+ * Marker-specific confusable skeleton fold for Greek/Cyrillic lookalikes.
+ * This intentionally focuses on letters used by EXTERNAL_UNTRUSTED_CONTENT markers.
+ */
+const MARKER_CONFUSABLE_SKELETON: Record<string, string> = {
   "\u0391": "A",
-  "\u03B1": "a",
-  "\u0395": "E",
-  "\u03B5": "e",
-  "\u039D": "N",
-  "\u03BD": "n",
-  "\u039F": "O",
-  "\u03BF": "o",
-  "\u03A4": "T",
-  "\u03C4": "t",
-  "\u03A7": "X",
-  "\u03C7": "x",
+  "\u03B1": "A",
   "\u0410": "A",
-  "\u0430": "a",
+  "\u0430": "A",
+  "\u03F9": "C",
+  "\u03F2": "C",
   "\u0421": "C",
-  "\u0441": "c",
+  "\u0441": "C",
+  "\u0500": "D",
+  "\u0501": "D",
+  "\u0395": "E",
+  "\u03B5": "E",
   "\u0415": "E",
-  "\u0435": "e",
-  "\u041D": "H",
-  "\u043D": "h",
+  "\u0435": "E",
+  "\u0401": "E",
+  "\u0451": "E",
+  "\u04C0": "L",
+  "\u04CF": "L",
+  "\u039D": "N",
+  "\u03BD": "N",
+  "\u039F": "O",
+  "\u03BF": "O",
   "\u041E": "O",
-  "\u043E": "o",
+  "\u043E": "O",
+  "\u042F": "R",
+  "\u044F": "R",
+  "\u0405": "S",
+  "\u0455": "S",
+  "\u03DA": "S",
+  "\u03DB": "S",
+  "\u03A4": "T",
+  "\u03C4": "T",
   "\u0422": "T",
-  "\u0442": "t",
+  "\u0442": "T",
+  "\u03A5": "U",
+  "\u03C5": "U",
+  "\u04AE": "U",
+  "\u04AF": "U",
+  "\u03A7": "X",
+  "\u03C7": "X",
   "\u0425": "X",
-  "\u0445": "x",
+  "\u0445": "X",
 };
 
-function foldMarkerText(input: string): { text: string; map: number[] } {
+function foldMarkerText(input: string): { text: string; starts: number[]; ends: number[] } {
   let text = "";
-  const map: number[] = [];
+  const starts: number[] = [];
+  const ends: number[] = [];
 
-  for (let index = 0; index < input.length; index++) {
-    const rawChar = input[index];
-    const normalized = rawChar.normalize("NFKC");
-    for (let i = 0; i < normalized.length; i++) {
-      const char = normalized[i];
-      if (MARKER_IGNORED_CHARS.has(char)) {
+  let offset = 0;
+  for (const rawChar of input) {
+    const sourceStart = offset;
+    offset += rawChar.length;
+
+    for (const normalizedChar of rawChar.normalize("NFKD")) {
+      if (MARKER_IGNORED_CHARS.has(normalizedChar) || MARKER_STRIP_PATTERN.test(normalizedChar)) {
         continue;
       }
-      text += MARKER_CONFUSABLES[char] ?? char;
-      map.push(index);
+
+      const skeleton = MARKER_CONFUSABLE_SKELETON[normalizedChar] ?? normalizedChar;
+      const folded = skeleton.normalize("NFKC");
+      text += folded;
+      for (let i = 0; i < folded.length; i++) {
+        starts.push(sourceStart);
+        ends.push(offset);
+      }
     }
   }
 
-  return { text, map };
+  return { text, starts, ends };
 }
 
 function replaceMarkers(content: string): string {
   const folded = foldMarkerText(content);
-  if (!/external_untrusted_content/i.test(folded.text)) {
+  if (!/external_untrusted_content/iu.test(folded.text)) {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
   const patterns: Array<{ regex: RegExp; value: string }> = [
-    { regex: /<<<EXTERNAL_UNTRUSTED_CONTENT>>>/gi, value: "[[MARKER_SANITIZED]]" },
-    { regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>/gi, value: "[[END_MARKER_SANITIZED]]" },
+    { regex: /<<<EXTERNAL_UNTRUSTED_CONTENT>>>/giu, value: "[[MARKER_SANITIZED]]" },
+    { regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>/giu, value: "[[END_MARKER_SANITIZED]]" },
   ];
 
   for (const pattern of patterns) {
     pattern.regex.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.regex.exec(folded.text)) !== null) {
-      const start = folded.map[match.index];
+      const start = folded.starts[match.index];
       const endIndex = match.index + match[0].length - 1;
-      const end = folded.map[endIndex];
+      const end = folded.ends[endIndex];
       if (start === undefined || end === undefined) {
         continue;
       }
       replacements.push({
         start,
-        end: end + 1,
+        end,
         value: pattern.value,
       });
     }
