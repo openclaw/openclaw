@@ -175,7 +175,7 @@ jobs:
           if-no-files-found: error
 
   test-installer-script:
-    name: Test PowerShell Installer
+    name: Test Windows Installation
     runs-on: windows-latest
     needs: build-npm-package
     steps:
@@ -187,32 +187,133 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Check for install.ps1 in sibling repo
-        id: check_installer
+      - name: Download built package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-package-windows
+          path: ./test-artifacts
+
+      - name: Display downloaded artifacts
         shell: powershell
         run: |
-          $installerPath = "../molt.bot/public/install.ps1"
-          if (Test-Path $installerPath) {
-            Write-Output "installer_exists=true" >> $env:GITHUB_OUTPUT
-            Write-Output "Installer script found at $installerPath"
+          Write-Host "Downloaded artifacts:" -ForegroundColor Cyan
+          Get-ChildItem ./test-artifacts -Recurse | Select-Object FullName, Length
+
+      - name: Create test user directory
+        shell: powershell
+        run: |
+          $testDir = "C:\TestOpenClaw"
+          New-Item -Path $testDir -ItemType Directory -Force | Out-Null
+          Write-Host "Created test directory: $testDir" -ForegroundColor Green
+
+      - name: Test installer with local tarball
+        shell: powershell
+        run: |
+          # Get the tarball path
+          $tarball = Get-ChildItem ./test-artifacts/*.tgz | Select-Object -First 1
+          Write-Host "Testing installation with: $($tarball.FullName)" -ForegroundColor Cyan
+
+          # Create a test OpenClaw directory
+          $testInstallPath = "C:\TestOpenClaw"
+          $testBinPath = Join-Path $testInstallPath "bin"
+          New-Item -Path $testBinPath -ItemType Directory -Force | Out-Null
+
+          # Extract tarball directly
+          Write-Host "Extracting tarball..." -ForegroundColor Yellow
+          tar -xzf $tarball.FullName -C $testBinPath
+
+          Write-Host "Extraction complete" -ForegroundColor Green
+          Write-Host "Contents of bin directory:" -ForegroundColor Cyan
+          Get-ChildItem $testBinPath | Select-Object Name, Length
+
+      - name: Verify node_modules exists
+        shell: powershell
+        run: |
+          $testBinPath = "C:\TestOpenClaw\bin"
+          $nodeModulesPath = Join-Path $testBinPath "node_modules"
+
+          if (Test-Path $nodeModulesPath) {
+            Write-Host "✓ node_modules found (bundled successfully)" -ForegroundColor Green
+            $packageCount = (Get-ChildItem $nodeModulesPath -Directory | Measure-Object).Count
+            Write-Host "  Package count: $packageCount" -ForegroundColor Cyan
           } else {
-            Write-Output "installer_exists=false" >> $env:GITHUB_OUTPUT
-            Write-Output "Installer script not found at $installerPath"
+            Write-Host "✗ ERROR: node_modules NOT found!" -ForegroundColor Red
+            Write-Host "  Package should have bundled dependencies" -ForegroundColor Red
+            exit 1
           }
 
-      - name: Display installer help (if exists)
-        if: steps.check_installer.outputs.installer_exists == 'true'
+      - name: Verify dist/index.js exists
         shell: powershell
         run: |
-          $script = Get-Content ../molt.bot/public/install.ps1 -Raw
-          & ([scriptblock]::Create($script)) -Help
+          $testBinPath = "C:\TestOpenClaw\bin"
+          $indexPath = Join-Path $testBinPath "dist\index.js"
 
-      - name: Test NPM global install
+          if (Test-Path $indexPath) {
+            Write-Host "✓ dist/index.js found" -ForegroundColor Green
+          } else {
+            Write-Host "✗ ERROR: dist/index.js NOT found!" -ForegroundColor Red
+            Write-Host "  Checking for index.js in other locations..." -ForegroundColor Yellow
+            Get-ChildItem $testBinPath -Filter "index.js" -Recurse | Select-Object FullName
+            exit 1
+          }
+
+      - name: Test OpenClaw CLI
         shell: powershell
         run: |
-          Write-Output "Testing npm install from local package..."
-          # Download artifact and test install would go here
-          Write-Output "NPM install test placeholder - would test package from artifacts"
+          $testBinPath = "C:\TestOpenClaw\bin"
+          Push-Location $testBinPath
+
+          Write-Host "Testing OpenClaw CLI..." -ForegroundColor Cyan
+
+          # Test --version
+          Write-Host "`nTesting: node dist/index.js --version" -ForegroundColor Yellow
+          node dist/index.js --version
+
+          # Test --help
+          Write-Host "`nTesting: node dist/index.js --help" -ForegroundColor Yellow
+          node dist/index.js --help | Select-Object -First 20
+
+          Pop-Location
+          Write-Host "`n✓ OpenClaw CLI works!" -ForegroundColor Green
+
+      - name: Test Install-OpenClaw.ps1 script syntax
+        shell: powershell
+        run: |
+          Write-Host "Validating Install-OpenClaw.ps1 syntax..." -ForegroundColor Cyan
+          $script = Get-Content scripts/Install-OpenClaw.ps1 -Raw
+          $errors = $null
+          [System.Management.Automation.PSParser]::Tokenize($script, [ref]$errors) | Out-Null
+
+          if ($errors.Count -eq 0) {
+            Write-Host "✓ Install-OpenClaw.ps1 syntax is valid" -ForegroundColor Green
+          } else {
+            Write-Host "✗ Syntax errors found in Install-OpenClaw.ps1:" -ForegroundColor Red
+            $errors | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+            exit 1
+          }
+
+      - name: Test Uninstall-OpenClaw.ps1 script syntax
+        shell: powershell
+        run: |
+          Write-Host "Validating Uninstall-OpenClaw.ps1 syntax..." -ForegroundColor Cyan
+          $script = Get-Content scripts/Uninstall-OpenClaw.ps1 -Raw
+          $errors = $null
+          [System.Management.Automation.PSParser]::Tokenize($script, [ref]$errors) | Out-Null
+
+          if ($errors.Count -eq 0) {
+            Write-Host "✓ Uninstall-OpenClaw.ps1 syntax is valid" -ForegroundColor Green
+          } else {
+            Write-Host "✗ Syntax errors found in Uninstall-OpenClaw.ps1:" -ForegroundColor Red
+            $errors | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+            exit 1
+          }
+
+      - name: Cleanup test directory
+        if: always()
+        shell: powershell
+        run: |
+          Remove-Item -Path "C:\TestOpenClaw" -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host "Cleaned up test directory" -ForegroundColor Gray
 
   # Future: Native Windows app build
   build-windows-app:
