@@ -60,6 +60,7 @@ export const AgentDefaultsSchema = z
         mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),
         ttl: z.string().optional(),
         keepLastAssistants: z.number().int().nonnegative().optional(),
+        stripThinking: z.boolean().optional(),
         softTrimRatio: z.number().min(0).max(1).optional(),
         hardClearRatio: z.number().min(0).max(1).optional(),
         minPrunableToolChars: z.number().int().nonnegative().optional(),

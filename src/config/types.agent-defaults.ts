@@ -30,6 +30,7 @@ export type AgentContextPruningConfig = {
   /** TTL to consider cache expired (duration string, default unit: minutes). */
   ttl?: string;
   keepLastAssistants?: number;
+  stripThinking?: boolean;
   softTrimRatio?: number;
   hardClearRatio?: number;
   minPrunableToolChars?: number;

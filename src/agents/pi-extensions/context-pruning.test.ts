@@ -74,6 +74,33 @@ function makeAssistant(text: string): AgentMessage {
   };
 }
 
+function makeAssistantWithBlocks(
+  blocks: Array<{ type: string; [key: string]: unknown }>,
+): AgentMessage {
+  return {
+    role: "assistant",
+    content: blocks as unknown as AgentMessage["content"],
+    api: "openai-responses",
+    provider: "openai",
+    model: "fake",
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+function getThinkingBlocks(msg: AgentMessage): string[] {
+  if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+    return [];
+  }
+  return (
+    msg.content.filter((b) => b.type === "thinking") as Array<{
+      type: "thinking";
+      thinking: string;
+    }>
+  ).map((b) => b.thinking);
+}
+
 function makeUser(text: string): AgentMessage {
   return { role: "user", content: text, timestamp: Date.now() };
 }
@@ -521,5 +548,112 @@ describe("context-pruning", () => {
     expect(text).toContain("abcdef");
     expect(text).toContain("efghij");
     expect(text).toContain("[Tool result trimmed:");
+  });
+
+  it("stripThinking=false leaves thinking blocks untouched", () => {
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistantWithBlocks([
+        { type: "thinking", thinking: "hidden" },
+        { type: "text", text: "answer" },
+      ]),
+    ];
+
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      keepLastAssistants: 0,
+      stripThinking: false,
+    };
+
+    const ctx = {
+      model: { contextWindow: 1000 },
+    } as unknown as ExtensionContext;
+    const next = pruneContextMessages({ messages, settings, ctx });
+
+    expect(getThinkingBlocks(next[1])).toEqual(["hidden"]);
+  });
+
+  it("stripThinking=true strips thinking before cutoff", () => {
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistantWithBlocks([
+        { type: "thinking", thinking: "hidden" },
+        { type: "text", text: "answer" },
+      ]),
+    ];
+
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      keepLastAssistants: 0,
+      stripThinking: true,
+    };
+
+    const ctx = {
+      model: { contextWindow: 1000 },
+    } as unknown as ExtensionContext;
+    const next = pruneContextMessages({ messages, settings, ctx });
+    const assistant = next[1];
+
+    expect(getThinkingBlocks(assistant)).toEqual([]);
+    if (assistant.role !== "assistant" || !Array.isArray(assistant.content)) {
+      throw new Error("expected assistant content array");
+    }
+    expect(assistant.content.some((b) => b.type === "text")).toBe(true);
+  });
+
+  it("stripThinking=true preserves thinking in protected tail", () => {
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistantWithBlocks([
+        { type: "thinking", thinking: "old" },
+        { type: "text", text: "a1" },
+      ]),
+      makeUser("u2"),
+      makeAssistantWithBlocks([
+        { type: "thinking", thinking: "new" },
+        { type: "text", text: "a2" },
+      ]),
+    ];
+
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      keepLastAssistants: 1,
+      stripThinking: true,
+    };
+
+    const ctx = {
+      model: { contextWindow: 1000 },
+    } as unknown as ExtensionContext;
+    const next = pruneContextMessages({ messages, settings, ctx });
+
+    expect(getThinkingBlocks(next[1])).toEqual([]);
+    expect(getThinkingBlocks(next[3])).toEqual(["new"]);
+  });
+
+  it("stripThinking=true replaces empty assistant content with blank text", () => {
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistantWithBlocks([{ type: "thinking", thinking: "secret" }]),
+    ];
+
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      keepLastAssistants: 0,
+      stripThinking: true,
+    };
+
+    const ctx = {
+      model: { contextWindow: 1000 },
+    } as unknown as ExtensionContext;
+    const next = pruneContextMessages({ messages, settings, ctx });
+    const assistant = next[1];
+
+    expect(getThinkingBlocks(assistant)).toEqual([]);
+    if (assistant.role !== "assistant" || !Array.isArray(assistant.content)) {
+      throw new Error("expected assistant content array");
+    }
+    expect(assistant.content).toHaveLength(1);
+    expect(assistant.content[0]?.type).toBe("text");
+    expect(assistant.content[0]?.text).toBe("");
   });
 });
