@@ -249,7 +249,7 @@ function createProvider(config: SecretsConfig, env?: NodeJS.ProcessEnv): Secrets
       throw new SecretsProviderError(
         `Secrets provider "${config.provider}" is not yet implemented. ` +
           `Supported providers: gcp, env, keyring. ` +
-          `See https://docs.openclaw.ai/gateway/secrets for alternatives. ` +
+          `See docs/gateway/secrets for alternatives. ` +
           `Contributions welcome — see src/config/secrets/${config.provider === "1password" ? "onepassword" : config.provider}.ts`,
       );
     default:
