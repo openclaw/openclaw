@@ -60,41 +60,50 @@ export function stripImageBlocksFromMessages(messages: AgentMessage[]): {
       return block;
     });
 
-  const out: AgentMessage[] = messages.map((msg) => {
-    if (!msg || typeof msg !== "object") {
+  const out: AgentMessage[] = messages
+    // Drop empty assistant messages left by previous failed prompts
+    .filter((msg) => {
+      if (!msg || typeof msg !== "object") {
+        return true;
+      }
+      const m = msg as { role?: unknown; content?: unknown };
+      return !(m.role === "assistant" && Array.isArray(m.content) && m.content.length === 0);
+    })
+    .map((msg) => {
+      if (!msg || typeof msg !== "object") {
+        return msg;
+      }
+      const role = (msg as { role?: unknown }).role;
+
+      if (role === "toolResult") {
+        const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
+        if (Array.isArray(toolMsg.content)) {
+          return { ...toolMsg, content: stripBlocks(toolMsg.content) as typeof toolMsg.content };
+        }
+      }
+
+      if (role === "user") {
+        const userMsg = msg as Extract<AgentMessage, { role: "user" }>;
+        if (Array.isArray(userMsg.content)) {
+          return {
+            ...userMsg,
+            content: stripBlocks(userMsg.content) as typeof userMsg.content,
+          };
+        }
+      }
+
+      if (role === "assistant") {
+        const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+        if (Array.isArray(assistantMsg.content)) {
+          return {
+            ...assistantMsg,
+            content: stripBlocks(assistantMsg.content) as typeof assistantMsg.content,
+          };
+        }
+      }
+
       return msg;
-    }
-    const role = (msg as { role?: unknown }).role;
-
-    if (role === "toolResult") {
-      const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
-      if (Array.isArray(toolMsg.content)) {
-        return { ...toolMsg, content: stripBlocks(toolMsg.content) as typeof toolMsg.content };
-      }
-    }
-
-    if (role === "user") {
-      const userMsg = msg as Extract<AgentMessage, { role: "user" }>;
-      if (Array.isArray(userMsg.content)) {
-        return {
-          ...userMsg,
-          content: stripBlocks(userMsg.content) as typeof userMsg.content,
-        };
-      }
-    }
-
-    if (role === "assistant") {
-      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      if (Array.isArray(assistantMsg.content)) {
-        return {
-          ...assistantMsg,
-          content: stripBlocks(assistantMsg.content) as typeof assistantMsg.content,
-        };
-      }
-    }
-
-    return msg;
-  });
+    });
 
   return { messages: out, hadImages };
 }
@@ -118,6 +127,11 @@ export function stripImageBlocksFromSessionFile(sessionFile: string): number {
         const msg = entry.message as Record<string, unknown> | undefined;
         const content = msg?.content;
         if (Array.isArray(content)) {
+          // Drop empty assistant messages left by previous failed prompts
+          if (msg?.role === "assistant" && content.length === 0) {
+            stripped++;
+            continue;
+          }
           const stripFileBlocks = (blocks: unknown[]): unknown[] =>
             blocks.map((block: unknown) => {
               if (!block || typeof block !== "object") {
