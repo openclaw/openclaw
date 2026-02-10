@@ -46,6 +46,8 @@ describe("Cost Metrics", () => {
     it("extracts metrics from cost usage summary", () => {
       const summary: CostUsageSummary = {
         updatedAt: Date.now(),
+        days: 1,
+        daily: [],
         totals: {
           input: 10000,
           output: 5000,
@@ -53,6 +55,10 @@ describe("Cost Metrics", () => {
           cacheWrite: 0,
           totalTokens: 15000,
           totalCost: 0.15,
+          inputCost: 0.08,
+          outputCost: 0.07,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
           missingCostEntries: 0,
         },
       };

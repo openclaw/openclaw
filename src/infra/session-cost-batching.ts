@@ -1,4 +1,4 @@
-import type { CostUsageSummary, CostUsageTotals } from "./session-cost-usage.js";
+import type { CostUsageTotals } from "./session-cost-usage.js";
 
 /**
  * Cost query batching utility.
@@ -12,6 +12,18 @@ export type CostUsageMetaCache = {
   yearly?: Array<CostUsageTotals & { year: string }>;
   totals: CostUsageTotals;
   generatedAt: number;
+};
+
+/**
+ * Extracted cost aggregation from cached result.
+ * This is a flexible type that can represent daily, monthly, or yearly aggregations.
+ */
+export type ExtractedCostAggregation = {
+  updatedAt: number;
+  totals: CostUsageTotals;
+  daily?: Array<CostUsageTotals & { date: string }>;
+  monthly?: Array<CostUsageTotals & { month: string }>;
+  yearly?: Array<CostUsageTotals & { year: string }>;
 };
 
 /**
@@ -66,7 +78,7 @@ export class CostQueryBatcher {
   extractAggregation(
     result: CostUsageMetaCache,
     type: "daily" | "monthly" | "yearly",
-  ): CostUsageSummary | null {
+  ): ExtractedCostAggregation | null {
     const aggregation =
       type === "daily"
         ? result.daily
