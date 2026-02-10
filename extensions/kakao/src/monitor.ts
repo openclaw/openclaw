@@ -195,8 +195,6 @@ async function sendKakaoCallbackResponse(
       runtime.error?.(
         `[kakao] callback response failed (${res.status})${body ? `: ${body}` : ""}`,
       );
-    } else {
-      runtime.log?.("[kakao] callback response ok");
     }
   } catch (err) {
     runtime.error?.(`[kakao] callback response error: ${String(err)}`);
@@ -381,11 +379,6 @@ async function processKakaoRequest(params: {
     dispatcherOptions: {
       ...prefixOptions,
       deliver: async (payload) => {
-        target.runtime.log?.(
-          `[kakao] deliver payload text len=${payload.text?.length ?? 0} hasMedia=${Boolean(
-            payload.mediaUrl || payload.mediaUrls?.length,
-          )}`,
-        );
         if (payload.text) {
           chunks.push(payload.text);
         }
@@ -448,9 +441,6 @@ export async function handleKakaoWebhookRequest(
     res.end("ambiguous kakao webhook target");
     return true;
   }
-  target.runtime.log?.(
-    `[kakao] inbound utterance="${request.userRequest.utterance}" userId="${request.userRequest.user?.id ?? ""}"`,
-  );
 
   target.statusSink?.({ lastInboundAt: Date.now() });
 
@@ -468,9 +458,6 @@ export async function handleKakaoWebhookRequest(
     );
 
     void (async () => {
-      target.runtime.log?.(
-        `[kakao] callback start userId="${request.userRequest?.user?.id ?? ""}"`,
-      );
       let text: string | null = null;
       try {
         text = await processKakaoRequest({ request, target });
@@ -480,9 +467,6 @@ export async function handleKakaoWebhookRequest(
       const responseText = text ?? "응답을 생성하지 못했어요.";
       await sendKakaoCallbackResponse(callbackUrl, buildKakaoResponse(responseText), target.runtime);
       target.statusSink?.({ lastOutboundAt: Date.now() });
-      target.runtime.log?.(
-        `[kakao] callback done text len=${responseText.length}`,
-      );
     })();
     return true;
   }
