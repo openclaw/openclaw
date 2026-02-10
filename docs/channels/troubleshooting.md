@@ -44,11 +44,15 @@ Full troubleshooting: [/channels/whatsapp#troubleshooting-quick](/channels/whats
 
 ### Telegram failure signatures
 
-| Symptom                           | Fastest check                                   | Fix                                                       |
-| --------------------------------- | ----------------------------------------------- | --------------------------------------------------------- |
-| `/start` but no usable reply flow | `openclaw pairing list telegram`                | Approve pairing or change DM policy.                      |
-| Bot online but group stays silent | Verify mention requirement and bot privacy mode | Disable privacy mode for group visibility or mention bot. |
-| Send failures with network errors | Inspect logs for Telegram API call failures     | Fix DNS/IPv6/proxy routing to `api.telegram.org`.         |
+| Symptom                                            | Fastest check                                           | Fix                                                       |
+| -------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------- |
+| `/start` but no usable reply flow                  | `openclaw pairing list telegram`                        | Approve pairing or change DM policy.                      |
+| Bot online but group stays silent                  | Verify mention requirement and bot privacy mode         | Disable privacy mode for group visibility or mention bot. |
+| Send failures with network errors                  | Inspect logs for Telegram API call failures             | Fix DNS/IPv6/proxy routing to `api.telegram.org`.         |
+| Bot polls but DMs silently ignored                 | `OPENCLAW_VERBOSE=1` + check logs for "Blocked" lines   | Verify `allowFrom` includes your numeric user ID.         |
+| `dmPolicy: "open"` config validation error         | Check `allowFrom` field                                 | `open` requires `allowFrom: ["*"]`.                       |
+| `setMyCommands` fails with `BOT_COMMANDS_TOO_MUCH` | Check number of installed skills                        | Cosmetic — auto-truncated at 100 commands.                |
+| Messages consumed but never processed              | Check `~/.openclaw/state/telegram/update-offset-*.json` | Delete offset file and restart after token rotation.      |
 
 Full troubleshooting: [/channels/telegram#troubleshooting](/channels/telegram#troubleshooting)
 
