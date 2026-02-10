@@ -307,6 +307,13 @@ export const OpenClawSchema = z
         mappings: z.array(HookMappingSchema).optional(),
         gmail: HooksGmailSchema,
         internal: InternalHooksSchema,
+        webhooks: z
+          .object({
+            enabled: z.boolean().optional(),
+            presets: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

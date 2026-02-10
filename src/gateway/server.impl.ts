@@ -92,6 +92,7 @@ const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
 const logHooks = log.child("hooks");
+const logWebhooks = log.child("webhooks");
 const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const gatewayRuntime = runtimeForLogger(log);
@@ -267,6 +268,7 @@ export async function startGatewayServer(
     tailscaleMode,
   } = runtimeConfig;
   let hooksConfig = runtimeConfig.hooksConfig;
+  let webhooksConfig = runtimeConfig.webhooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
   let controlUiRootState: ControlUiRootState | undefined;
@@ -341,6 +343,7 @@ export async function startGatewayServer(
     resolvedAuth,
     gatewayTls,
     hooksConfig: () => hooksConfig,
+    webhooksConfig: () => webhooksConfig,
     pluginRegistry,
     deps,
     canvasRuntime,
@@ -349,6 +352,7 @@ export async function startGatewayServer(
     logCanvas,
     log,
     logHooks,
+    logWebhooks,
     logPlugins,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
@@ -563,12 +567,14 @@ export async function startGatewayServer(
     broadcast,
     getState: () => ({
       hooksConfig,
+      webhooksConfig,
       heartbeatRunner,
       cronState,
       browserControl,
     }),
     setState: (nextState) => {
       hooksConfig = nextState.hooksConfig;
+      webhooksConfig = nextState.webhooksConfig;
       heartbeatRunner = nextState.heartbeatRunner;
       cronState = nextState.cronState;
       cron = cronState.cron;

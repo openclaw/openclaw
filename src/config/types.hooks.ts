@@ -121,4 +121,9 @@ export type HooksConfig = {
   gmail?: HooksGmailConfig;
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
+  /** Inbound webhook configuration */
+  webhooks?: {
+    enabled?: boolean;
+    presets?: string[];
+  };
 };
