@@ -5,7 +5,6 @@ import { createInboundDebouncer } from "../../auto-reply/inbound-debounce.js";
 import { formatLocationText } from "../../channels/location.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -23,6 +22,19 @@ import {
 import { downloadInboundMedia } from "./media.js";
 import { createWebSendApi } from "./send-api.js";
 
+/** Reaction notification event data */
+export interface WebReactionEvent {
+  accountId: string;
+  chatJid: string;
+  messageId: string;
+  emoji: string;
+  action: "added" | "removed";
+  reactorJid: string;
+  reactorE164: string | null;
+  /** Whether the reacted message was sent by us (key.fromMe) */
+  fromMe: boolean;
+}
+
 export async function monitorWebInbox(options: {
   verbose: boolean;
   accountId: string;
@@ -35,6 +47,10 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /** Reaction notification mode: off, own (only our messages), all */
+  reactionNotifications?: "off" | "own" | "all";
+  /** Callback for reaction events (called after mode filtering) */
+  onReaction?: (event: WebReactionEvent) => Promise<void>;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -346,6 +362,13 @@ export async function monitorWebInbox(options: {
   const handleMessagesReaction = async (
     reactions: Array<{ key: proto.IMessageKey; reaction: proto.IReaction }>,
   ) => {
+    const reactionMode = options.reactionNotifications ?? "off";
+
+    // Skip if notifications are disabled
+    if (reactionMode === "off") {
+      return;
+    }
+
     for (const { key, reaction } of reactions) {
       try {
         recordChannelActivity({
@@ -360,6 +383,13 @@ export async function monitorWebInbox(options: {
 
         const messageId = key.id ?? "unknown";
         const chatJid = key.remoteJid ?? "unknown";
+        const fromMe = key.fromMe === true;
+
+        // For "own" mode, only notify about reactions to messages we sent
+        if (reactionMode === "own" && !fromMe) {
+          continue;
+        }
+
         // The person who reacted - from reaction.key.participant or key.participant
         const reactorJid =
           (reaction as { key?: { participant?: string } }).key?.participant ??
@@ -370,23 +400,27 @@ export async function monitorWebInbox(options: {
         const reactorE164 = await resolveInboundJid(reactorJid);
         const reactorLabel = reactorE164 ?? reactorJid;
 
-        // Format the notification text
-        const emojiDisplay = removed ? "(removed)" : emoji;
-        const text = `WhatsApp reaction ${action}: ${emojiDisplay} by ${reactorLabel} on msg ${messageId}`;
-
-        // Emit system event so the agent can see the reaction
-        enqueueSystemEvent(text, {
-          sessionKey: `agent:main:main`, // TODO: resolve via routing
-          contextKey: `whatsapp:reaction:${action}:${messageId}:${reactorJid}:${emoji}`,
-        });
-
         inboundLogger.info(
-          { chatJid, messageId, emoji: emojiDisplay, action, reactor: reactorLabel },
+          { chatJid, messageId, emoji: emoji || "(removed)", action, reactor: reactorLabel, fromMe },
           "whatsapp reaction event",
         );
 
         if (shouldLogVerbose()) {
-          logVerbose(`WhatsApp reaction ${action}: ${emojiDisplay} by ${reactorLabel}`);
+          logVerbose(`WhatsApp reaction ${action}: ${emoji || "(removed)"} by ${reactorLabel}`);
+        }
+
+        // Call the onReaction callback if provided (higher layer handles routing)
+        if (options.onReaction) {
+          await options.onReaction({
+            accountId: options.accountId,
+            chatJid,
+            messageId,
+            emoji,
+            action,
+            reactorJid,
+            reactorE164,
+            fromMe,
+          });
         }
       } catch (err) {
         inboundLogger.error({ error: String(err) }, "failed handling reaction event");
