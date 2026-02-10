@@ -137,7 +137,9 @@ describe("browser config", () => {
   });
 
   it("rejects unsupported protocols", () => {
-    expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(/must be http/i);
+    expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
+      /must be http/i,
+    );
   });
 
   it("accepts ws:// and wss:// cdpUrl and normalizes to http/https", () => {
