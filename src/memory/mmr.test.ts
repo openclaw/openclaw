@@ -148,7 +148,7 @@ describe("mmrRerank", () => {
     });
 
     it("lambda=0 maximizes diversity", () => {
-      const result = mmrRerank(diverseItems, { lambda: 0 });
+      const result = mmrRerank(diverseItems, { enabled: true, lambda: 0 });
       // First item is still highest score (no penalty yet)
       expect(result[0].id).toBe("1");
       // Second should be most different from first
@@ -161,7 +161,7 @@ describe("mmrRerank", () => {
     });
 
     it("clamps lambda < 0 to 0", () => {
-      const result = mmrRerank(diverseItems, { lambda: -0.5 });
+      const result = mmrRerank(diverseItems, { enabled: true, lambda: -0.5 });
       expect(result[0].id).toBe("1");
       expect(result[1].id).toBe("3");
     });
@@ -176,7 +176,7 @@ describe("mmrRerank", () => {
         { id: "4", score: 0.85, content: "machine learning algorithms" },
       ];
 
-      const result = mmrRerank(items, { lambda: 0.5 });
+      const result = mmrRerank(items, { enabled: true, lambda: 0.5 });
 
       // First is always highest score
       expect(result[0].id).toBe("1");
@@ -191,7 +191,7 @@ describe("mmrRerank", () => {
         { id: "3", score: 0.8, content: "different stuff" },
       ];
 
-      const result = mmrRerank(items, { lambda: 0.5 });
+      const result = mmrRerank(items, { enabled: true, lambda: 0.5 });
       expect(result[0].id).toBe("1");
       // Second should be different, not identical duplicate
       expect(result[1].id).toBe("3");
@@ -344,7 +344,7 @@ describe("applyMMRToHybridResults", () => {
       },
     ];
 
-    const reranked = applyMMRToHybridResults(results, { lambda: 0.5 });
+    const reranked = applyMMRToHybridResults(results, { enabled: true, lambda: 0.5 });
 
     // First stays the same (highest score)
     expect(reranked[0].path).toBe("/a.ts");
@@ -365,7 +365,7 @@ describe("applyMMRToHybridResults", () => {
 
 describe("DEFAULT_MMR_CONFIG", () => {
   it("has expected default values", () => {
-    expect(DEFAULT_MMR_CONFIG.enabled).toBe(true);
+    expect(DEFAULT_MMR_CONFIG.enabled).toBe(false);
     expect(DEFAULT_MMR_CONFIG.lambda).toBe(0.7);
   });
 });

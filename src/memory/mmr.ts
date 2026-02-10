@@ -14,14 +14,14 @@ export type MMRItem = {
 };
 
 export type MMRConfig = {
-  /** Enable/disable MMR re-ranking. Default: true */
+  /** Enable/disable MMR re-ranking. Default: false (opt-in) */
   enabled: boolean;
   /** Lambda parameter: 0 = max diversity, 1 = max relevance. Default: 0.7 */
   lambda: number;
 };
 
 export const DEFAULT_MMR_CONFIG: MMRConfig = {
-  enabled: true,
+  enabled: false,
   lambda: 0.7,
 };
 
@@ -163,7 +163,7 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
       // Use original score as tiebreaker (higher is better)
       if (
         mmrScore > bestMMRScore ||
-        (mmrScore === bestMMRScore && bestItem && candidate.score > bestItem.score)
+        (mmrScore === bestMMRScore && (bestItem === null || candidate.score > bestItem.score))
       ) {
         bestMMRScore = mmrScore;
         bestItem = candidate;
