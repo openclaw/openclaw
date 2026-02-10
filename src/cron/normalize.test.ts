@@ -280,6 +280,58 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.wakeMode).toBe("now");
   });
 
+  it("coerces string schedule as cron expression", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "string-cron",
+      schedule: "0 5 * * *",
+      payload: { kind: "systemEvent", text: "wake up" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.expr).toBe("0 5 * * *");
+  });
+
+  it("coerces string schedule as ISO timestamp", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "string-at",
+      schedule: "2026-03-01T10:00:00Z",
+      payload: { kind: "systemEvent", text: "reminder" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("at");
+    expect(schedule.at).toBe("2026-03-01T10:00:00.000Z");
+  });
+
+  it("coerces string payload to systemEvent", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "string-payload",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: "hello world",
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("systemEvent");
+    expect(payload.text).toBe("hello world");
+  });
+
+  it("coerces both string schedule and string payload together", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "all-strings",
+      schedule: "0 5 * * *",
+      payload: "good morning",
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.expr).toBe("0 5 * * *");
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("systemEvent");
+    expect(payload.text).toBe("good morning");
+  });
+
   it("strips invalid delivery mode from partial delivery objects", () => {
     const normalized = normalizeCronJobCreate({
       name: "delivery mode",
