@@ -277,10 +277,22 @@ export function handleMessageEnd(
     text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
+
+  // Always extract thinking for event bus consumers (e.g. chatCompletions SSE).
+  // The full text is emitted once per assistant turn so HTTP/WS clients can
+  // surface reasoning even when the channel-level reasoning mode is off.
+  const rawThinkingFull =
+    extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText);
+  if (rawThinkingFull) {
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "reasoning",
+      data: { text: rawThinkingFull },
+    });
+  }
+
   const rawThinking =
-    ctx.state.includeReasoning || ctx.state.streamReasoning
-      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
-      : "";
+    ctx.state.includeReasoning || ctx.state.streamReasoning ? rawThinkingFull : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
   const trimmedText = text.trim();
   const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;

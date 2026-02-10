@@ -542,6 +542,39 @@ export async function handleOpenAiHttpRequest(
       return;
     }
 
+    if (evt.stream === "reasoning") {
+      const text = typeof evt.data?.text === "string" ? evt.data.text : "";
+      if (!text) {
+        return;
+      }
+
+      if (!wroteRole) {
+        wroteRole = true;
+        writeSse(res, {
+          id: runId,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{ index: 0, delta: { role: "assistant" } }],
+        });
+      }
+
+      writeSse(res, {
+        id: runId,
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [
+          {
+            index: 0,
+            delta: { reasoning_content: text },
+            finish_reason: null,
+          },
+        ],
+      });
+      return;
+    }
+
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
