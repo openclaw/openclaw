@@ -8,10 +8,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
 export interface DynamicAgentConfig {
-    enabled: boolean;
-    dmCreateAgent: boolean;
-    groupEnabled: boolean;
-    adminUsers: string[];
+  enabled: boolean;
+  dmCreateAgent: boolean;
+  groupEnabled: boolean;
+  adminUsers: string[];
 }
 
 /**
@@ -20,13 +20,15 @@ export interface DynamicAgentConfig {
  * 从全局配置中读取动态 Agent 配置，提供默认值。
  */
 export function getDynamicAgentConfig(config: OpenClawConfig): DynamicAgentConfig {
-    const dynamicAgents = (config as { channels?: { wecom?: { dynamicAgents?: Partial<DynamicAgentConfig> } } })?.channels?.wecom?.dynamicAgents;
-    return {
-        enabled: dynamicAgents?.enabled ?? false,
-        dmCreateAgent: dynamicAgents?.dmCreateAgent ?? true,
-        groupEnabled: dynamicAgents?.groupEnabled ?? true,
-        adminUsers: dynamicAgents?.adminUsers ?? [],
-    };
+  const dynamicAgents = (
+    config as { channels?: { wecom?: { dynamicAgents?: Partial<DynamicAgentConfig> } } }
+  )?.channels?.wecom?.dynamicAgents;
+  return {
+    enabled: dynamicAgents?.enabled ?? false,
+    dmCreateAgent: dynamicAgents?.dmCreateAgent ?? true,
+    groupEnabled: dynamicAgents?.groupEnabled ?? true,
+    adminUsers: dynamicAgents?.adminUsers ?? [],
+  };
 }
 
 /**
@@ -42,10 +44,10 @@ export function getDynamicAgentConfig(config: OpenClawConfig): DynamicAgentConfi
  * generateAgentId("group", "wr123456") // "wecom-group-wr123456"
  */
 export function generateAgentId(chatType: "dm" | "group", peerId: string): string {
-    const sanitized = String(peerId)
-        .toLowerCase()
-        .replace(/[^a-z0-9_-]/g, "_");
-    return `wecom-${chatType}-${sanitized}`;
+  const sanitized = String(peerId)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "_");
+  return `wecom-${chatType}-${sanitized}`;
 }
 
 /**
@@ -55,30 +57,28 @@ export function generateAgentId(chatType: "dm" | "group", peerId: string): strin
  * 管理员（adminUsers）始终绕过动态路由，使用主 Agent。
  */
 export function shouldUseDynamicAgent(params: {
-    chatType: "dm" | "group";
-    senderId: string;
-    config: OpenClawConfig;
+  chatType: "dm" | "group";
+  senderId: string;
+  config: OpenClawConfig;
 }): boolean {
-    const { chatType, senderId, config } = params;
-    const dynamicConfig = getDynamicAgentConfig(config);
+  const { chatType, senderId, config } = params;
+  const dynamicConfig = getDynamicAgentConfig(config);
 
-    if (!dynamicConfig.enabled) {
-        return false;
-    }
+  if (!dynamicConfig.enabled) {
+    return false;
+  }
 
-    // 管理员绕过动态路由
-    const sender = String(senderId).trim().toLowerCase();
-    const isAdmin = dynamicConfig.adminUsers.some(
-        (admin) => admin.trim().toLowerCase() === sender
-    );
-    if (isAdmin) {
-        return false;
-    }
+  // 管理员绕过动态路由
+  const sender = String(senderId).trim().toLowerCase();
+  const isAdmin = dynamicConfig.adminUsers.some((admin) => admin.trim().toLowerCase() === sender);
+  if (isAdmin) {
+    return false;
+  }
 
-    if (chatType === "group") {
-        return dynamicConfig.groupEnabled;
-    }
-    return dynamicConfig.dmCreateAgent;
+  if (chatType === "group") {
+    return dynamicConfig.groupEnabled;
+  }
+  return dynamicConfig.dmCreateAgent;
 }
 
 /**
@@ -95,38 +95,40 @@ let ensureDynamicAgentWriteQueue: Promise<void> = Promise.resolve();
  * 将 Agent ID 插入 agents.list（如果不存在）
  */
 function upsertAgentIdOnlyEntry(cfg: Record<string, unknown>, agentId: string): boolean {
-    if (!cfg.agents || typeof cfg.agents !== "object") {
-        cfg.agents = {};
-    }
+  if (!cfg.agents || typeof cfg.agents !== "object") {
+    cfg.agents = {};
+  }
 
-    const agentsObj = cfg.agents as Record<string, unknown>;
-    const currentList: Array<{ id: string }> = Array.isArray(agentsObj.list) ? agentsObj.list as Array<{ id: string }> : [];
-    const existingIds = new Set(
-        currentList
-            .map((entry) => entry?.id?.trim().toLowerCase())
-            .filter((id): id is string => Boolean(id))
-    );
+  const agentsObj = cfg.agents as Record<string, unknown>;
+  const currentList: Array<{ id: string }> = Array.isArray(agentsObj.list)
+    ? (agentsObj.list as Array<{ id: string }>)
+    : [];
+  const existingIds = new Set(
+    currentList
+      .map((entry) => entry?.id?.trim().toLowerCase())
+      .filter((id): id is string => Boolean(id)),
+  );
 
-    let changed = false;
-    const nextList = [...currentList];
+  let changed = false;
+  const nextList = [...currentList];
 
-    // 首次创建时保留 main 作为默认
-    if (nextList.length === 0) {
-        nextList.push({ id: "main" });
-        existingIds.add("main");
-        changed = true;
-    }
+  // 首次创建时保留 main 作为默认
+  if (nextList.length === 0) {
+    nextList.push({ id: "main" });
+    existingIds.add("main");
+    changed = true;
+  }
 
-    if (!existingIds.has(agentId.toLowerCase())) {
-        nextList.push({ id: agentId });
-        changed = true;
-    }
+  if (!existingIds.has(agentId.toLowerCase())) {
+    nextList.push({ id: agentId });
+    changed = true;
+  }
 
-    if (changed) {
-        agentsObj.list = nextList;
-    }
+  if (changed) {
+    agentsObj.list = nextList;
+  }
 
-    return changed;
+  return changed;
 }
 
 /**
@@ -140,32 +142,32 @@ function upsertAgentIdOnlyEntry(cfg: Record<string, unknown>, agentId: string): 
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function ensureDynamicAgentListed(agentId: string, runtime: any): Promise<void> {
-    const normalizedId = String(agentId).trim().toLowerCase();
-    if (!normalizedId) return;
-    if (ensuredDynamicAgentIds.has(normalizedId)) return;
+  const normalizedId = String(agentId).trim().toLowerCase();
+  if (!normalizedId) return;
+  if (ensuredDynamicAgentIds.has(normalizedId)) return;
 
-    const configRuntime = runtime?.config;
-    if (!configRuntime?.loadConfig || !configRuntime?.writeConfigFile) return;
+  const configRuntime = runtime?.config;
+  if (!configRuntime?.loadConfig || !configRuntime?.writeConfigFile) return;
 
-    ensureDynamicAgentWriteQueue = ensureDynamicAgentWriteQueue
-        .then(async () => {
-            if (ensuredDynamicAgentIds.has(normalizedId)) return;
+  ensureDynamicAgentWriteQueue = ensureDynamicAgentWriteQueue
+    .then(async () => {
+      if (ensuredDynamicAgentIds.has(normalizedId)) return;
 
-            const latestConfig = configRuntime.loadConfig!();
-            if (!latestConfig || typeof latestConfig !== "object") return;
+      const latestConfig = configRuntime.loadConfig!();
+      if (!latestConfig || typeof latestConfig !== "object") return;
 
-            const changed = upsertAgentIdOnlyEntry(latestConfig as Record<string, unknown>, normalizedId);
-            if (changed) {
-                await configRuntime.writeConfigFile!(latestConfig as unknown);
-            }
+      const changed = upsertAgentIdOnlyEntry(latestConfig as Record<string, unknown>, normalizedId);
+      if (changed) {
+        await configRuntime.writeConfigFile!(latestConfig as unknown);
+      }
 
-            ensuredDynamicAgentIds.add(normalizedId);
-        })
-        .catch((err) => {
-            console.warn(`[wecom] 动态 Agent 添加失败: ${normalizedId}`, err);
-        });
+      ensuredDynamicAgentIds.add(normalizedId);
+    })
+    .catch((err) => {
+      console.warn(`[wecom] 动态 Agent 添加失败: ${normalizedId}`, err);
+    });
 
-    await ensureDynamicAgentWriteQueue;
+  await ensureDynamicAgentWriteQueue;
 }
 
 /**
@@ -174,5 +176,5 @@ export async function ensureDynamicAgentListed(agentId: string, runtime: any): P
  * 主要用于测试场景，重置内存中的缓存状态。
  */
 export function resetEnsuredCache(): void {
-    ensuredDynamicAgentIds.clear();
+  ensuredDynamicAgentIds.clear();
 }

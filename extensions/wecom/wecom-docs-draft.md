@@ -224,10 +224,10 @@ WeCom Agent 主动发送链路默认拦截普通群 `chatid` 目标，建议优�
 
 ## 常用命令
 
-| 命令 | 说明 |
-| --- | --- |
-| `/new` | 开启新会话 |
-| `/reset` | 重置会话 |
+| 命令     | 说明       |
+| -------- | ---------- |
+| `/new`   | 开启新会话 |
+| `/reset` | 重置会话   |
 
 ---
 
@@ -282,27 +282,27 @@ openclaw config set channels.wecom.media.maxBytes 52428800
 
 ## 配置参考
 
-| 配置项 | 说明 | 默认值 |
-| --- | --- | --- |
-| `channels.wecom.enabled` | 启用/禁用 WeCom | `true` |
-| `channels.wecom.bot.token` | Bot 回调 Token | - |
-| `channels.wecom.bot.encodingAESKey` | Bot 回调 AESKey | - |
-| `channels.wecom.bot.receiveId` | Bot 接收者 ID | `""` |
-| `channels.wecom.bot.streamPlaceholderContent` | 流式占位文案 | - |
-| `channels.wecom.bot.welcomeText` | Bot 欢迎语 | - |
-| `channels.wecom.bot.dm.policy` | Bot DM 策略 | `pairing` |
-| `channels.wecom.bot.dm.allowFrom` | Bot DM 白名单 | - |
-| `channels.wecom.agent.corpId` | 企业 ID | - |
-| `channels.wecom.agent.corpSecret` | 应用 Secret | - |
-| `channels.wecom.agent.agentId` | 应用 AgentId | - |
-| `channels.wecom.agent.token` | Agent 回调 Token | - |
-| `channels.wecom.agent.encodingAESKey` | Agent 回调 AESKey | - |
-| `channels.wecom.agent.welcomeText` | Agent 欢迎语 | - |
-| `channels.wecom.agent.dm.policy` | Agent DM 策略 | `pairing` |
-| `channels.wecom.agent.dm.allowFrom` | Agent DM 白名单 | - |
-| `channels.wecom.network.egressProxyUrl` | 出口代理 URL | - |
-| `channels.wecom.media.maxBytes` | 媒体下载上限（字节） | 实现默认值 |
-| `channels.wecom.dynamicAgents.enabled` | 启用动态 Agent | `false` |
-| `channels.wecom.dynamicAgents.dmCreateAgent` | 私聊自动分配 Agent | `true` |
-| `channels.wecom.dynamicAgents.groupEnabled` | 群聊自动分配 Agent | `true` |
-| `channels.wecom.dynamicAgents.adminUsers` | 管理员绕过列表 | `[]` |
+| 配置项                                        | 说明                 | 默认值     |
+| --------------------------------------------- | -------------------- | ---------- |
+| `channels.wecom.enabled`                      | 启用/禁用 WeCom      | `true`     |
+| `channels.wecom.bot.token`                    | Bot 回调 Token       | -          |
+| `channels.wecom.bot.encodingAESKey`           | Bot 回调 AESKey      | -          |
+| `channels.wecom.bot.receiveId`                | Bot 接收者 ID        | `""`       |
+| `channels.wecom.bot.streamPlaceholderContent` | 流式占位文案         | -          |
+| `channels.wecom.bot.welcomeText`              | Bot 欢迎语           | -          |
+| `channels.wecom.bot.dm.policy`                | Bot DM 策略          | `pairing`  |
+| `channels.wecom.bot.dm.allowFrom`             | Bot DM 白名单        | -          |
+| `channels.wecom.agent.corpId`                 | 企业 ID              | -          |
+| `channels.wecom.agent.corpSecret`             | 应用 Secret          | -          |
+| `channels.wecom.agent.agentId`                | 应用 AgentId         | -          |
+| `channels.wecom.agent.token`                  | Agent 回调 Token     | -          |
+| `channels.wecom.agent.encodingAESKey`         | Agent 回调 AESKey    | -          |
+| `channels.wecom.agent.welcomeText`            | Agent 欢迎语         | -          |
+| `channels.wecom.agent.dm.policy`              | Agent DM 策略        | `pairing`  |
+| `channels.wecom.agent.dm.allowFrom`           | Agent DM 白名单      | -          |
+| `channels.wecom.network.egressProxyUrl`       | 出口代理 URL         | -          |
+| `channels.wecom.media.maxBytes`               | 媒体下载上限（字节） | 实现默认值 |
+| `channels.wecom.dynamicAgents.enabled`        | 启用动态 Agent       | `false`    |
+| `channels.wecom.dynamicAgents.dmCreateAgent`  | 私聊自动分配 Agent   | `true`     |
+| `channels.wecom.dynamicAgents.groupEnabled`   | 群聊自动分配 Agent   | `true`     |
+| `channels.wecom.dynamicAgents.adminUsers`     | 管理员绕过列表       | `[]`       |

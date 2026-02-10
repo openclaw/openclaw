@@ -3,10 +3,9 @@
  */
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-
+import { wecomPlugin } from "./src/channel.js";
 import { handleWecomWebhookRequest } from "./src/monitor.js";
 import { setWecomRuntime } from "./src/runtime.js";
-import { wecomPlugin } from "./src/channel.js";
 
 const plugin = {
   id: "wecom",
@@ -15,7 +14,7 @@ const plugin = {
   configSchema: emptyPluginConfigSchema(),
   /**
    * **register (注册插件)**
-   * 
+   *
    * OpenClaw 插件入口点。
    * 1. 注入 Runtime 环境 (api.runtime)。
    * 2. 注册 WeCom 渠道插件 (ChannelPlugin)。

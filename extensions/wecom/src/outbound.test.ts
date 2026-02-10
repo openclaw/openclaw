@@ -41,9 +41,9 @@ describe("wecomOutbound", () => {
     };
 
     // Chat ID (wr/wc) is intentionally NOT supported for Agent outbound.
-    await expect(wecomOutbound.sendText({ cfg, to: "wr123", text: "hello" } as any)).rejects.toThrow(
-      /不支持向群 chatId 发送/,
-    );
+    await expect(
+      wecomOutbound.sendText({ cfg, to: "wr123", text: "hello" } as any),
+    ).rejects.toThrow(/不支持向群 chatId 发送/);
     expect(api.sendText).not.toHaveBeenCalled();
 
     // Test: User ID (Default)

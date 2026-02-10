@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-
-import { computeWecomMsgSignature, decryptWecomEncrypted, encryptWecomPlaintext } from "./crypto/index.js";
+import {
+  computeWecomMsgSignature,
+  decryptWecomEncrypted,
+  encryptWecomPlaintext,
+} from "./crypto/index.js";
 
 describe("wecom crypto", () => {
   it("round-trips plaintext", () => {

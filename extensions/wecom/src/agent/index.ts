@@ -3,10 +3,4 @@
  */
 
 export { handleAgentWebhook, type AgentWebhookParams } from "./handler.js";
-export {
-    getAccessToken,
-    sendText,
-    uploadMedia,
-    sendMedia,
-    downloadMedia,
-} from "./api-client.js";
+export { getAccessToken, sendText, uploadMedia, sendMedia, downloadMedia } from "./api-client.js";

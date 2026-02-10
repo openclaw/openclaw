@@ -1,9 +1,11 @@
 import type { ChannelOutboundAdapter, ChannelOutboundContext } from "openclaw/plugin-sdk";
-
-import { sendText as sendAgentText, sendMedia as sendAgentMedia, uploadMedia } from "./agent/api-client.js";
+import {
+  sendText as sendAgentText,
+  sendMedia as sendAgentMedia,
+  uploadMedia,
+} from "./agent/api-client.js";
 import { resolveWecomAccounts } from "./config/index.js";
 import { getWecomRuntime } from "./runtime.js";
-
 import { resolveWecomTarget } from "./target.js";
 
 function resolveAgentConfigOrThrow(cfg: ChannelOutboundContext["cfg"]) {
@@ -14,7 +16,9 @@ function resolveAgentConfigOrThrow(cfg: ChannelOutboundContext["cfg"]) {
     );
   }
   // 注意：不要在日志里输出 corpSecret 等敏感信息
-  console.log(`[wecom-outbound] Using agent config: corpId=${account.corpId}, agentId=${account.agentId}`);
+  console.log(
+    `[wecom-outbound] Using agent config: corpId=${account.corpId}, agentId=${account.agentId}`,
+  );
   return account;
 }
 
@@ -49,12 +53,13 @@ export const wecomOutbound: ChannelOutboundAdapter = {
     const trimmed = String(outgoingText ?? "").trim();
     const rawTo = typeof to === "string" ? to.trim().toLowerCase() : "";
     const isAgentSessionTarget = rawTo.startsWith("wecom-agent:");
-    const looksLikeNewSessionAck =
-      /new session started/i.test(trimmed) && /model:/i.test(trimmed);
+    const looksLikeNewSessionAck = /new session started/i.test(trimmed) && /model:/i.test(trimmed);
 
     if (looksLikeNewSessionAck) {
       if (!isAgentSessionTarget) {
-        console.log(`[wecom-outbound] Suppressed command ack to avoid Bot/Agent double-reply (len=${trimmed.length})`);
+        console.log(
+          `[wecom-outbound] Suppressed command ack to avoid Bot/Agent double-reply (len=${trimmed.length})`,
+        );
         return { channel: "wecom", messageId: `suppressed-${Date.now()}`, timestamp: Date.now() };
       }
 
@@ -63,7 +68,9 @@ export const wecomOutbound: ChannelOutboundAdapter = {
         return m?.[1]?.trim();
       })();
       const rewritten = modelLabel ? `✅ 已开启新会话（模型：${modelLabel}）` : "✅ 已开启新会话。";
-      console.log(`[wecom-outbound] Rewrote command ack for agent session (len=${rewritten.length})`);
+      console.log(
+        `[wecom-outbound] Rewrote command ack for agent session (len=${rewritten.length})`,
+      );
       outgoingText = rewritten;
     }
 
@@ -75,7 +82,9 @@ export const wecomOutbound: ChannelOutboundAdapter = {
           `请改为发送给用户（userid / user:xxx），或由 Bot 模式在群内交付。`,
       );
     }
-    console.log(`[wecom-outbound] Sending text to target=${JSON.stringify(target)} (len=${outgoingText.length})`);
+    console.log(
+      `[wecom-outbound] Sending text to target=${JSON.stringify(target)} (len=${outgoingText.length})`,
+    );
 
     try {
       await sendAgentText({
@@ -144,14 +153,26 @@ export const wecomOutbound: ChannelOutboundAdapter = {
       // 根据扩展名推断 content-type
       const ext = path.extname(mediaUrl).slice(1).toLowerCase();
       const mimeTypes: Record<string, string> = {
-        jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif",
-        webp: "image/webp", bmp: "image/bmp", mp3: "audio/mpeg", wav: "audio/wav",
-        amr: "audio/amr", mp4: "video/mp4", pdf: "application/pdf", doc: "application/msword",
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        png: "image/png",
+        gif: "image/gif",
+        webp: "image/webp",
+        bmp: "image/bmp",
+        mp3: "audio/mpeg",
+        wav: "audio/wav",
+        amr: "audio/amr",
+        mp4: "video/mp4",
+        pdf: "application/pdf",
+        doc: "application/msword",
         docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        xls: "application/vnd.ms-excel",
+        xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       };
       contentType = mimeTypes[ext] || "application/octet-stream";
-      console.log(`[wecom-outbound] Reading local file: ${mediaUrl}, ext=${ext}, contentType=${contentType}`);
+      console.log(
+        `[wecom-outbound] Reading local file: ${mediaUrl}, ext=${ext}, contentType=${contentType}`,
+      );
     }
 
     let mediaType: "image" | "voice" | "video" | "file" = "file";
@@ -167,7 +188,9 @@ export const wecomOutbound: ChannelOutboundAdapter = {
     });
 
     const { touser, toparty, totag, chatid } = target;
-    console.log(`[wecom-outbound] Sending media (${mediaType}) to ${JSON.stringify(target)} (mediaId=${mediaId})`);
+    console.log(
+      `[wecom-outbound] Sending media (${mediaType}) to ${JSON.stringify(target)} (mediaId=${mediaId})`,
+    );
 
     try {
       await sendAgentMedia({
@@ -180,9 +203,9 @@ export const wecomOutbound: ChannelOutboundAdapter = {
         mediaType,
         ...(mediaType === "video" && text?.trim()
           ? {
-            title: text.trim().slice(0, 64),
-            description: text.trim().slice(0, 512),
-          }
+              title: text.trim().slice(0, 64),
+              description: text.trim().slice(0, 512),
+            }
           : {}),
       });
       console.log(`[wecom-outbound] Successfully sent media to ${JSON.stringify(target)}`);

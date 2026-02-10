@@ -1,9 +1,22 @@
 {
   "name": "@openclaw/wecom",
   "version": "2.2.7",
-  "type": "module",
   "description": "OpenClaw WeCom (WeChat Work) intelligent bot channel plugin",
   "author": "YanHaidao (VX: YanHaidao)",
+  "type": "module",
+  "dependencies": {
+    "fast-xml-parser": "5.3.4",
+    "undici": "^7.20.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.0",
+    "openclaw": "workspace:*",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
@@ -30,18 +43,5 @@
       "localPath": "extensions/wecom",
       "defaultChoice": "npm"
     }
-  },
-  "dependencies": {
-    "fast-xml-parser": "5.3.4",
-    "undici": "^7.20.0",
-    "zod": "^4.3.6"
-  },
-  "peerDependencies": {
-    "openclaw": ">=2026.1.26"
-  },
-  "devDependencies": {
-    "openclaw": "workspace:*",
-    "@types/node": "^25.2.0",
-    "typescript": "^5.9.3"
   }
 }

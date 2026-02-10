@@ -225,9 +225,9 @@ Prefer user/party/tag targets, or use Bot for in-group delivery.
 
 ## Common commands
 
-| Command | Description |
-| --- | --- |
-| `/new` | Start a new session |
+| Command  | Description           |
+| -------- | --------------------- |
+| `/new`   | Start a new session   |
 | `/reset` | Reset current session |
 
 ---
@@ -283,27 +283,27 @@ openclaw config set channels.wecom.media.maxBytes 52428800
 
 ## Configuration reference
 
-| Config key | Description | Default |
-| --- | --- | --- |
-| `channels.wecom.enabled` | Enable or disable WeCom | `true` |
-| `channels.wecom.bot.token` | Bot callback token | - |
-| `channels.wecom.bot.encodingAESKey` | Bot callback AES key | - |
-| `channels.wecom.bot.receiveId` | Bot receiver ID | `""` |
-| `channels.wecom.bot.streamPlaceholderContent` | Streaming placeholder | - |
-| `channels.wecom.bot.welcomeText` | Bot welcome text | - |
-| `channels.wecom.bot.dm.policy` | Bot DM policy | `pairing` |
-| `channels.wecom.bot.dm.allowFrom` | Bot DM allowlist | - |
-| `channels.wecom.agent.corpId` | Corp ID | - |
-| `channels.wecom.agent.corpSecret` | App secret | - |
-| `channels.wecom.agent.agentId` | Agent ID | - |
-| `channels.wecom.agent.token` | Agent callback token | - |
-| `channels.wecom.agent.encodingAESKey` | Agent callback AES key | - |
-| `channels.wecom.agent.welcomeText` | Agent welcome text | - |
-| `channels.wecom.agent.dm.policy` | Agent DM policy | `pairing` |
-| `channels.wecom.agent.dm.allowFrom` | Agent DM allowlist | - |
-| `channels.wecom.network.egressProxyUrl` | Egress proxy URL | - |
-| `channels.wecom.media.maxBytes` | Media download limit (bytes) | `83886080` |
-| `channels.wecom.dynamicAgents.enabled` | Enable dynamic agent routing | `false` |
-| `channels.wecom.dynamicAgents.dmCreateAgent` | Auto-create agent for DM | `true` |
-| `channels.wecom.dynamicAgents.groupEnabled` | Enable dynamic agent in groups | `true` |
-| `channels.wecom.dynamicAgents.adminUsers` | Admin bypass list | `[]` |
+| Config key                                    | Description                    | Default    |
+| --------------------------------------------- | ------------------------------ | ---------- |
+| `channels.wecom.enabled`                      | Enable or disable WeCom        | `true`     |
+| `channels.wecom.bot.token`                    | Bot callback token             | -          |
+| `channels.wecom.bot.encodingAESKey`           | Bot callback AES key           | -          |
+| `channels.wecom.bot.receiveId`                | Bot receiver ID                | `""`       |
+| `channels.wecom.bot.streamPlaceholderContent` | Streaming placeholder          | -          |
+| `channels.wecom.bot.welcomeText`              | Bot welcome text               | -          |
+| `channels.wecom.bot.dm.policy`                | Bot DM policy                  | `pairing`  |
+| `channels.wecom.bot.dm.allowFrom`             | Bot DM allowlist               | -          |
+| `channels.wecom.agent.corpId`                 | Corp ID                        | -          |
+| `channels.wecom.agent.corpSecret`             | App secret                     | -          |
+| `channels.wecom.agent.agentId`                | Agent ID                       | -          |
+| `channels.wecom.agent.token`                  | Agent callback token           | -          |
+| `channels.wecom.agent.encodingAESKey`         | Agent callback AES key         | -          |
+| `channels.wecom.agent.welcomeText`            | Agent welcome text             | -          |
+| `channels.wecom.agent.dm.policy`              | Agent DM policy                | `pairing`  |
+| `channels.wecom.agent.dm.allowFrom`           | Agent DM allowlist             | -          |
+| `channels.wecom.network.egressProxyUrl`       | Egress proxy URL               | -          |
+| `channels.wecom.media.maxBytes`               | Media download limit (bytes)   | `83886080` |
+| `channels.wecom.dynamicAgents.enabled`        | Enable dynamic agent routing   | `false`    |
+| `channels.wecom.dynamicAgents.dmCreateAgent`  | Auto-create agent for DM       | `true`     |
+| `channels.wecom.dynamicAgents.groupEnabled`   | Enable dynamic agent in groups | `true`     |
+| `channels.wecom.dynamicAgents.adminUsers`     | Admin bypass list              | `[]`       |

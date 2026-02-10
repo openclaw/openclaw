@@ -16,7 +16,6 @@
   🤝 与腾讯云团队共建维护 / Co-built with Tencent Cloud contributors
 </p>
 
-
 ## 🤝 共建说明
 
 - 本项目由 **YanHaidao** 发起并持续维护。
@@ -302,8 +301,8 @@ openclaw cron rm <jobId>
 {
   cron: {
     enabled: true,
-    store: "~/.openclaw/cron/jobs.json"
-  }
+    store: "~/.openclaw/cron/jobs.json",
+  },
 }
 ```
 

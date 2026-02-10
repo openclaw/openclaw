@@ -1,5 +1,4 @@
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
-
 import type { WecomAccountConfig } from "../types.js";
 
 function normalizeWecomAllowFromEntry(raw: string): string {
@@ -35,7 +34,11 @@ export async function resolveWecomCommandAuthorization(params: {
 }> {
   const { core, cfg, accountConfig, rawBody, senderUserId } = params;
 
-  const dmPolicy = (accountConfig.dm?.policy ?? "pairing") as "pairing" | "allowlist" | "open" | "disabled";
+  const dmPolicy = (accountConfig.dm?.policy ?? "pairing") as
+    | "pairing"
+    | "allowlist"
+    | "open"
+    | "disabled";
   const configAllowFrom = (accountConfig.dm?.allowFrom ?? []).map((v) => String(v));
 
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, cfg);
@@ -50,15 +53,17 @@ export async function resolveWecomCommandAuthorization(params: {
   const effectiveAllowFrom = dmPolicy === "open" ? ["*"] : configAllowFrom;
 
   const senderAllowed = isWecomSenderAllowed(senderUserId, effectiveAllowFrom);
-  const allowAllConfigured = effectiveAllowFrom.some((entry) => normalizeWecomAllowFromEntry(entry) === "*");
+  const allowAllConfigured = effectiveAllowFrom.some(
+    (entry) => normalizeWecomAllowFromEntry(entry) === "*",
+  );
   const authorizerConfigured = allowAllConfigured || effectiveAllowFrom.length > 0;
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
   const commandAuthorized = shouldComputeAuth
     ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-      useAccessGroups,
-      authorizers: [{ configured: authorizerConfigured, allowed: senderAllowed }],
-    })
+        useAccessGroups,
+        authorizers: [{ configured: authorizerConfigured, allowed: senderAllowed }],
+      })
     : undefined;
 
   return {

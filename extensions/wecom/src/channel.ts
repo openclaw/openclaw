@@ -1,17 +1,12 @@
-import type {
-  ChannelAccountSnapshot,
-  ChannelPlugin,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot, ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk";
-
+import type { ResolvedAgentAccount, ResolvedBotAccount } from "./types/index.js";
 import { resolveWecomAccounts } from "./config/index.js";
 import { WecomConfigSchema } from "./config/index.js";
-import type { ResolvedAgentAccount, ResolvedBotAccount } from "./types/index.js";
 import { registerAgentWebhookTarget, registerWecomWebhookTarget } from "./monitor.js";
 import { wecomOnboardingAdapter } from "./onboarding.js";
 import { wecomOutbound } from "./outbound.js";
@@ -45,7 +40,7 @@ type ResolvedWecomAccount = {
 
 /**
  * **resolveWecomAccount (解析账号配置)**
- * 
+ *
  * 从全局配置中解析出 WeCom 渠道的配置状态。
  * 兼容 Bot 和 Agent 两种模式的配置检查。
  */
@@ -106,12 +101,17 @@ export const wecomPlugin: ChannelPlugin<ResolvedWecomAccount> = {
       name: account.name,
       enabled: account.enabled,
       configured: account.configured,
-      webhookPath: account.bot?.config ? "/wecom/bot" : account.agent?.config ? "/wecom/agent" : "/wecom",
+      webhookPath: account.bot?.config
+        ? "/wecom/bot"
+        : account.agent?.config
+          ? "/wecom/agent"
+          : "/wecom",
     }),
     resolveAllowFrom: ({ cfg, accountId }) => {
       const account = resolveWecomAccount(cfg as OpenClawConfig);
       // 与其他渠道保持一致：直接返回 allowFrom，空则允许所有人
-      const allowFrom = account.agent?.config.dm?.allowFrom ?? account.bot?.config.dm?.allowFrom ?? [];
+      const allowFrom =
+        account.agent?.config.dm?.allowFrom ?? account.bot?.config.dm?.allowFrom ?? [];
       return allowFrom.map((entry) => String(entry));
     },
     formatAllowFrom: ({ allowFrom }) =>
@@ -164,7 +164,11 @@ export const wecomPlugin: ChannelPlugin<ResolvedWecomAccount> = {
       name: account.name,
       enabled: account.enabled,
       configured: account.configured,
-      webhookPath: account.bot?.config ? "/wecom/bot" : account.agent?.config ? "/wecom/agent" : "/wecom",
+      webhookPath: account.bot?.config
+        ? "/wecom/bot"
+        : account.agent?.config
+          ? "/wecom/agent"
+          : "/wecom",
       running: runtime?.running ?? false,
       lastStartAt: runtime?.lastStartAt ?? null,
       lastStopAt: runtime?.lastStopAt ?? null,
@@ -177,7 +181,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWecomAccount> = {
   gateway: {
     /**
      * **startAccount (启动账号)**
-     * 
+     *
      * 插件生命周期：启动
      * 职责：
      * 1. 检查配置是否有效。
@@ -196,7 +200,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWecomAccount> = {
       if (!botConfigured && !agentConfigured) {
         ctx.log?.warn(`[${account.accountId}] wecom not configured; skipping webhook registration`);
         ctx.setStatus({ accountId: account.accountId, running: false, configured: false });
-        return { stop: () => { } };
+        return { stop: () => {} };
       }
 
       const unregisters: Array<() => void> = [];
@@ -209,13 +213,15 @@ export const wecomPlugin: ChannelPlugin<ResolvedWecomAccount> = {
               runtime: ctx.runtime,
               // The HTTP handler resolves the active PluginRuntime via getWecomRuntime().
               // The stored target only needs to be decrypt/verify-capable.
-              core: ({} as unknown) as any,
+              core: {} as unknown as any,
               path,
               statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
             }),
           );
         }
-        ctx.log?.info(`[${account.accountId}] wecom bot webhook registered at /wecom and /wecom/bot`);
+        ctx.log?.info(
+          `[${account.accountId}] wecom bot webhook registered at /wecom and /wecom/bot`,
+        );
       }
       if (agent && agentConfigured) {
         unregisters.push(

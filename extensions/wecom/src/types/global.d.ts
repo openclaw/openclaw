@@ -1,9 +1,8 @@
-
 declare global {
-    var Buffer: any;
-    namespace NodeJS {
-        interface Timeout { }
-    }
+  var Buffer: any;
+  namespace NodeJS {
+    interface Timeout {}
+  }
 }
 
-export { };
+export {};

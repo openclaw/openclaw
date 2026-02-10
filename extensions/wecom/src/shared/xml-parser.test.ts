@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-
 import { extractContent, extractMediaId, extractMsgId } from "./xml-parser.js";
 
 describe("wecom xml-parser", () => {

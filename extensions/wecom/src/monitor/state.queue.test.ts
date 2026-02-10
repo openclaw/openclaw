@@ -1,5 +1,4 @@
 import { describe, expect, test, vi } from "vitest";
-
 import type { WecomInboundMessage } from "../types.js";
 import type { WecomWebhookTarget } from "./types.js";
 import { StreamStore } from "./state.js";
@@ -145,7 +144,7 @@ describe("wecom StreamStore queue", () => {
 
   test("clears conversation state when idle so next message becomes active", async () => {
     const store = new StreamStore();
-    store.setFlushHandler(() => { });
+    store.setFlushHandler(() => {});
 
     const target = {
       account: {} as any,

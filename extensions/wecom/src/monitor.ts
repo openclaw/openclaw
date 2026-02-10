@@ -1,35 +1,39 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-
-import crypto from "node:crypto";
-
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
-
+import crypto from "node:crypto";
+import type {
+  WecomRuntimeEnv,
+  WecomWebhookTarget,
+  StreamState,
+  ActiveReplyState,
+} from "./monitor/types.js";
+import type { WecomInboundMessage } from "./types.js";
 import type { ResolvedAgentAccount } from "./types/index.js";
 import type { ResolvedBotAccount } from "./types/index.js";
-import type { WecomInboundMessage } from "./types.js";
+import {
+  sendText as sendAgentText,
+  sendMedia as sendAgentMedia,
+  uploadMedia,
+} from "./agent/api-client.js";
+import { handleAgentWebhook } from "./agent/index.js";
+import { resolveWecomAccounts, resolveWecomEgressProxyUrl } from "./config/index.js";
 import {
   decryptWecomEncrypted,
   encryptWecomPlaintext,
   verifyWecomSignature,
   computeWecomMsgSignature,
 } from "./crypto/index.js";
-import { getWecomRuntime } from "./runtime.js";
-import { WEBHOOK_PATHS } from "./types/constants.js";
-import { handleAgentWebhook } from "./agent/index.js";
-import { resolveWecomAccounts, resolveWecomEgressProxyUrl } from "./config/index.js";
 import { wecomFetch } from "./http.js";
-import { sendText as sendAgentText, sendMedia as sendAgentMedia, uploadMedia } from "./agent/api-client.js";
-
+import { createWecomMonitorProcessor } from "./monitor/processing.js";
 /**
  * **核心监控模块 (Monitor Loop)**
- * 
+ *
  * 负责接收企业微信 Webhook 回调，处理消息流、媒体解密、消息去重防抖，并分发给 Agent 处理。
  * 它是插件与企业微信交互的“心脏”，管理着所有会话的生命周期。
  */
-
-import type { WecomRuntimeEnv, WecomWebhookTarget, StreamState, ActiveReplyState } from "./monitor/types.js";
 import { monitorState, LIMITS } from "./monitor/state.js";
-import { createWecomMonitorProcessor } from "./monitor/processing.js";
+import { getWecomRuntime } from "./runtime.js";
+import { WEBHOOK_PATHS } from "./types/constants.js";
 
 // Stores (convenience aliases)
 const streamStore = monitorState.streamStore;
@@ -60,7 +64,7 @@ const ERROR_HELP = "\n\n遇到问题？联系作者: YanHaidao (微信: YanHaida
 
 /**
  * **normalizeWebhookPath (标准化 Webhook 路径)**
- * 
+ *
  * 将用户配置的路径统一格式化为以 `/` 开头且不以 `/` 结尾的字符串。
  * 例如: `wecom` -> `/wecom`
  */
@@ -72,10 +76,9 @@ function normalizeWebhookPath(raw: string): string {
   return withSlash;
 }
 
-
 /**
  * **ensurePruneTimer (启动清理定时器)**
- * 
+ *
  * 当有活跃的 Webhook Target 注册时，调用 MonitorState 启动自动清理任务。
  * 清理任务包括：删除过期 Stream、移除无效 Active Reply URL 等。
  */
@@ -85,7 +88,7 @@ function ensurePruneTimer() {
 
 /**
  * **checkPruneTimer (检查并停止清理定时器)**
- * 
+ *
  * 当没有活跃的 Webhook Target 时（Bot 和 Agent 均移除），停止清理任务以节省资源。
  */
 function checkPruneTimer() {
@@ -96,9 +99,6 @@ function checkPruneTimer() {
   }
 }
 
-
-
-
 function truncateUtf8Bytes(text: string, maxBytes: number): string {
   const buf = Buffer.from(text, "utf8");
   if (buf.length <= maxBytes) return text;
@@ -108,7 +108,7 @@ function truncateUtf8Bytes(text: string, maxBytes: number): string {
 
 /**
  * **jsonOk (返回 JSON 响应)**
- * 
+ *
  * 辅助函数：向企业微信服务器返回 HTTP 200 及 JSON 内容。
  * 注意企业微信要求加密内容以 Content-Type: text/plain 返回，但这里为了通用性使用了标准 JSON 响应，
  * 并通过 Content-Type 修正适配。
@@ -122,9 +122,9 @@ function jsonOk(res: ServerResponse, body: unknown): void {
 
 /**
  * **readJsonBody (读取 JSON 请求体)**
- * 
+ *
  * 异步读取 HTTP 请求体并解析为 JSON。包含大小限制检查，防止大包攻击。
- * 
+ *
  * @param req HTTP 请求对象
  * @param maxBytes 最大允许字节数
  */
@@ -161,7 +161,7 @@ async function readJsonBody(req: IncomingMessage, maxBytes: number) {
 
 /**
  * **buildEncryptedJsonReply (构建加密回复)**
- * 
+ *
  * 将明文 JSON 包装成企业微信要求的加密 XML/JSON 格式（此处实际返回 JSON 结构）。
  * 包含签名计算逻辑。
  */
@@ -202,18 +202,13 @@ function resolvePath(req: IncomingMessage): string {
 }
 
 function resolveSignatureParam(params: URLSearchParams): string {
-  return (
-    params.get("msg_signature") ??
-    params.get("msgsignature") ??
-    params.get("signature") ??
-    ""
-  );
+  return params.get("msg_signature") ?? params.get("msgsignature") ?? params.get("signature") ?? "";
 }
 
-function buildStreamPlaceholderReply(params: {
-  streamId: string;
-  placeholderContent?: string;
-}): { msgtype: "stream"; stream: { id: string; finish: boolean; content: string } } {
+function buildStreamPlaceholderReply(params: { streamId: string; placeholderContent?: string }): {
+  msgtype: "stream";
+  stream: { id: string; finish: boolean; content: string };
+} {
   const content = params.placeholderContent?.trim() || "1";
   return {
     msgtype: "stream",
@@ -226,7 +221,10 @@ function buildStreamPlaceholderReply(params: {
   };
 }
 
-function buildStreamImmediateTextReply(params: { streamId: string; content: string }): { msgtype: "stream"; stream: { id: string; finish: boolean; content: string } } {
+function buildStreamImmediateTextReply(params: { streamId: string; content: string }): {
+  msgtype: "stream";
+  stream: { id: string; finish: boolean; content: string };
+} {
   return {
     msgtype: "stream",
     stream: {
@@ -237,7 +235,10 @@ function buildStreamImmediateTextReply(params: { streamId: string; content: stri
   };
 }
 
-function buildStreamTextPlaceholderReply(params: { streamId: string; content: string }): { msgtype: "stream"; stream: { id: string; finish: boolean; content: string } } {
+function buildStreamTextPlaceholderReply(params: { streamId: string; content: string }): {
+  msgtype: "stream";
+  stream: { id: string; finish: boolean; content: string };
+} {
   return {
     msgtype: "stream",
     stream: {
@@ -248,7 +249,10 @@ function buildStreamTextPlaceholderReply(params: { streamId: string; content: st
   };
 }
 
-function buildStreamReplyFromState(state: StreamState): { msgtype: "stream"; stream: { id: string; finish: boolean; content: string } } {
+function buildStreamReplyFromState(state: StreamState): {
+  msgtype: "stream";
+  stream: { id: string; finish: boolean; content: string };
+} {
   const content = truncateUtf8Bytes(state.content, STREAM_MAX_BYTES);
   // Images handled? The original code had image logic.
   // Ensure we return message item if images exist
@@ -258,12 +262,14 @@ function buildStreamReplyFromState(state: StreamState): { msgtype: "stream"; str
       id: state.streamId,
       finish: state.finished,
       content,
-      ...(state.finished && state.images?.length ? {
-        msg_item: state.images.map(img => ({
-          msgtype: "image",
-          image: { base64: img.base64, md5: img.md5 }
-        }))
-      } : {})
+      ...(state.finished && state.images?.length
+        ? {
+            msg_item: state.images.map((img) => ({
+              msgtype: "image",
+              image: { base64: img.base64, md5: img.md5 },
+            })),
+          }
+        : {}),
     },
   };
 }
@@ -293,7 +299,8 @@ function buildFallbackPrompt(params: {
   chatType?: "group" | "direct";
 }): string {
   const who = params.userId ? `（${params.userId}）` : "";
-  const scope = params.chatType === "group" ? "群聊" : params.chatType === "direct" ? "私聊" : "会话";
+  const scope =
+    params.chatType === "group" ? "群聊" : params.chatType === "direct" ? "私聊" : "会话";
   if (!params.agentConfigured) {
     return `${scope}中需要通过应用私信发送${params.filename ? `（${params.filename}）` : ""}，但管理员尚未配置企业微信自建应用（Agent）通道。请联系管理员配置后再试。${who}`.trim();
   }
@@ -367,7 +374,8 @@ async function sendAgentDmMedia(params: {
     const res = await fetch(params.mediaUrlOrPath, { signal: AbortSignal.timeout(30_000) });
     if (!res.ok) throw new Error(`media download failed: ${res.status}`);
     buffer = Buffer.from(await res.arrayBuffer());
-    inferredContentType = inferredContentType || res.headers.get("content-type") || "application/octet-stream";
+    inferredContentType =
+      inferredContentType || res.headers.get("content-type") || "application/octet-stream";
   } else {
     const fs = await import("node:fs/promises");
     buffer = await fs.readFile(params.mediaUrlOrPath);
@@ -467,10 +475,12 @@ function getActiveReplyUrl(streamId: string): string | undefined {
   return activeReplyStore.getUrl(streamId);
 }
 
-async function useActiveReplyOnce(streamId: string, fn: (params: { responseUrl: string; proxyUrl?: string }) => Promise<void>): Promise<void> {
+async function useActiveReplyOnce(
+  streamId: string,
+  fn: (params: { responseUrl: string; proxyUrl?: string }) => Promise<void>,
+): Promise<void> {
   return activeReplyStore.use(streamId, fn);
 }
-
 
 function logVerbose(target: WecomWebhookTarget, message: string): void {
   const should =
@@ -493,7 +503,9 @@ function logWecomInfo(target: WecomWebhookTarget, message: string): void {
 function resolveWecomSenderUserId(msg: WecomInboundMessage): string | undefined {
   const direct = msg.from?.userid?.trim();
   if (direct) return direct;
-  const legacy = String((msg as any).fromuserid ?? (msg as any).from_userid ?? (msg as any).fromUserId ?? "").trim();
+  const legacy = String(
+    (msg as any).fromuserid ?? (msg as any).from_userid ?? (msg as any).fromUserId ?? "",
+  ).trim();
   return legacy || undefined;
 }
 
@@ -560,7 +572,7 @@ export function registerAgentWebhookTarget(target: AgentWebhookTarget): () => vo
 
 /**
  * **handleWecomWebhookRequest (HTTP 请求入口)**
- * 
+ *
  * 处理来自企业微信的所有 Webhook 请求。
  * 职责：
  * 1. 路由分发：区分 Agent 模式 (`/wecom/agent`) 和 Bot 模式 (其他路径)。
@@ -570,7 +582,10 @@ export function registerAgentWebhookTarget(target: AgentWebhookTarget): () => vo
  *    - GET 请求：处理 EchoStr 验证。
  *    - POST 请求：接收消息，放入 StreamStore，返回流式 First Chunk。
  */
-export async function handleWecomWebhookRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+export async function handleWecomWebhookRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
   const path = resolvePath(req);
   const reqId = crypto.randomUUID().slice(0, 8);
   const remote = req.socket?.remoteAddress ?? "unknown";
@@ -628,7 +643,17 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
 
   if (req.method === "GET") {
     const echostr = query.get("echostr") ?? "";
-    const target = targets.find(c => c.account.token && verifyWecomSignature({ token: c.account.token, timestamp, nonce, encrypt: echostr, signature }));
+    const target = targets.find(
+      (c) =>
+        c.account.token &&
+        verifyWecomSignature({
+          token: c.account.token,
+          timestamp,
+          nonce,
+          encrypt: echostr,
+          signature,
+        }),
+    );
     if (!target || !target.account.encodingAESKey) {
       res.statusCode = 401;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -636,7 +661,11 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
       return true;
     }
     try {
-      const plain = decryptWecomEncrypted({ encodingAESKey: target.account.encodingAESKey, receiveId: target.account.receiveId, encrypt: echostr });
+      const plain = decryptWecomEncrypted({
+        encodingAESKey: target.account.encodingAESKey,
+        receiveId: target.account.receiveId,
+        encrypt: echostr,
+      });
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end(plain);
@@ -663,7 +692,11 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
   console.log(
     `[wecom] inbound(bot): reqId=${reqId} rawJsonBytes=${Buffer.byteLength(JSON.stringify(record), "utf8")} hasEncrypt=${Boolean(encrypt)} encryptLen=${encrypt.length}`,
   );
-  const target = targets.find(c => c.account.token && verifyWecomSignature({ token: c.account.token, timestamp, nonce, encrypt, signature }));
+  const target = targets.find(
+    (c) =>
+      c.account.token &&
+      verifyWecomSignature({ token: c.account.token, timestamp, nonce, encrypt, signature }),
+  );
   if (!target || !target.account.configured || !target.account.encodingAESKey) {
     res.statusCode = 401;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -672,11 +705,18 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
   }
 
   // 选定 target 后，把 reqId 带入结构化日志，方便串联排查
-  logWecomInfo(target, `inbound(bot): reqId=${reqId} selectedAccount=${target.account.accountId} path=${path}`);
+  logWecomInfo(
+    target,
+    `inbound(bot): reqId=${reqId} selectedAccount=${target.account.accountId} path=${path}`,
+  );
 
   let plain: string;
   try {
-    plain = decryptWecomEncrypted({ encodingAESKey: target.account.encodingAESKey, receiveId: target.account.receiveId, encrypt });
+    plain = decryptWecomEncrypted({
+      encodingAESKey: target.account.encodingAESKey,
+      receiveId: target.account.receiveId,
+      encrypt,
+    });
   } catch (err) {
     res.statusCode = 400;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -698,19 +738,27 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
       // Dedupe: skip if already processed this event
       if (msgid && streamStore.getStreamByMsgId(msgid)) {
         logVerbose(target, `template_card_event: already processed msgid=${msgid}, skipping`);
-        jsonOk(res, buildEncryptedJsonReply({ account: target.account, plaintextJson: {}, nonce, timestamp }));
+        jsonOk(
+          res,
+          buildEncryptedJsonReply({ account: target.account, plaintextJson: {}, nonce, timestamp }),
+        );
         return true;
       }
 
       const cardEvent = (msg as any).event?.template_card_event;
       let interactionDesc = `[卡片交互] 按钮: ${cardEvent?.event_key || "unknown"}`;
       if (cardEvent?.selected_items?.selected_item?.length) {
-        const selects = cardEvent.selected_items.selected_item.map((i: any) => `${i.question_key}=${i.option_ids?.option_id?.join(",")}`);
+        const selects = cardEvent.selected_items.selected_item.map(
+          (i: any) => `${i.question_key}=${i.option_ids?.option_id?.join(",")}`,
+        );
         interactionDesc += ` 选择: ${selects.join("; ")}`;
       }
       if (cardEvent?.task_id) interactionDesc += ` (任务ID: ${cardEvent.task_id})`;
 
-      jsonOk(res, buildEncryptedJsonReply({ account: target.account, plaintextJson: {}, nonce, timestamp }));
+      jsonOk(
+        res,
+        buildEncryptedJsonReply({ account: target.account, plaintextJson: {}, nonce, timestamp }),
+      );
 
       const streamId = streamStore.createStream({ msgid });
       streamStore.markStarted(streamId);
@@ -721,17 +769,28 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
         accountId: target.account.accountId,
         msg: { ...msg, msgtype: "text", text: { content: interactionDesc } } as any,
         streamId,
-      }).catch(err => target.runtime.error?.(`interaction failed: ${String(err)}`));
+      }).catch((err) => target.runtime.error?.(`interaction failed: ${String(err)}`));
       return true;
     }
 
     if (eventtype === "enter_chat") {
       const welcome = target.account.config.welcomeText?.trim();
-      jsonOk(res, buildEncryptedJsonReply({ account: target.account, plaintextJson: welcome ? { msgtype: "text", text: { content: welcome } } : {}, nonce, timestamp }));
+      jsonOk(
+        res,
+        buildEncryptedJsonReply({
+          account: target.account,
+          plaintextJson: welcome ? { msgtype: "text", text: { content: welcome } } : {},
+          nonce,
+          timestamp,
+        }),
+      );
       return true;
     }
 
-    jsonOk(res, buildEncryptedJsonReply({ account: target.account, plaintextJson: {}, nonce, timestamp }));
+    jsonOk(
+      res,
+      buildEncryptedJsonReply({ account: target.account, plaintextJson: {}, nonce, timestamp }),
+    );
     return true;
   }
 
@@ -739,15 +798,27 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
   if (msgtype === "stream") {
     const streamId = String((msg as any).stream?.id ?? "").trim();
     const state = streamStore.getStream(streamId);
-    const reply = state ? buildStreamReplyFromState(state) : buildStreamReplyFromState({ streamId: streamId || "unknown", createdAt: Date.now(), updatedAt: Date.now(), started: true, finished: true, content: "" });
-    jsonOk(res, buildEncryptedJsonReply({ account: target.account, plaintextJson: reply, nonce, timestamp }));
+    const reply = state
+      ? buildStreamReplyFromState(state)
+      : buildStreamReplyFromState({
+          streamId: streamId || "unknown",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          started: true,
+          finished: true,
+          content: "",
+        });
+    jsonOk(
+      res,
+      buildEncryptedJsonReply({ account: target.account, plaintextJson: reply, nonce, timestamp }),
+    );
     return true;
   }
 
   // Handle Message (with Debounce)
   try {
     const userid = resolveWecomSenderUserId(msg) || "unknown";
-    const chatId = msg.chattype === "group" ? (msg.chatid?.trim() || "unknown") : userid;
+    const chatId = msg.chattype === "group" ? msg.chatid?.trim() || "unknown" : userid;
     const conversationKey = `wecom:${target.account.accountId}:${userid}:${chatId}`;
     const msgContent = buildInboundBody(msg);
 
@@ -760,16 +831,22 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
     if (msg.msgid) {
       const existingStreamId = streamStore.getStreamByMsgId(String(msg.msgid));
       if (existingStreamId) {
-        logWecomInfo(target, `message: 重复的 msgid=${msg.msgid}，跳过处理并返回占位符 streamId=${existingStreamId}`);
-        jsonOk(res, buildEncryptedJsonReply({
-          account: target.account,
-          plaintextJson: buildStreamPlaceholderReply({
-            streamId: existingStreamId,
-            placeholderContent: target.account.config.streamPlaceholderContent
+        logWecomInfo(
+          target,
+          `message: 重复的 msgid=${msg.msgid}，跳过处理并返回占位符 streamId=${existingStreamId}`,
+        );
+        jsonOk(
+          res,
+          buildEncryptedJsonReply({
+            account: target.account,
+            plaintextJson: buildStreamPlaceholderReply({
+              streamId: existingStreamId,
+              placeholderContent: target.account.config.streamPlaceholderContent,
+            }),
+            nonce,
+            timestamp,
           }),
-          nonce,
-          timestamp
-        }));
+        );
         return true;
       }
     }
@@ -783,7 +860,7 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
       msgContent,
       nonce,
       timestamp,
-      debounceMs: (target.account.config as any).debounceMs
+      debounceMs: (target.account.config as any).debounceMs,
     });
 
     // 无论是否新建，都尽量保存 response_url（用于兜底提示/最终帧推送）
@@ -796,29 +873,38 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
     const mergedQueuedPlaceholder = "已收到，已合并排队处理中...";
 
     if (status === "active_new") {
-      jsonOk(res, buildEncryptedJsonReply({
-        account: target.account,
-        plaintextJson: buildStreamPlaceholderReply({
-          streamId,
-          placeholderContent: defaultPlaceholder
+      jsonOk(
+        res,
+        buildEncryptedJsonReply({
+          account: target.account,
+          plaintextJson: buildStreamPlaceholderReply({
+            streamId,
+            placeholderContent: defaultPlaceholder,
+          }),
+          nonce,
+          timestamp,
         }),
-        nonce,
-        timestamp
-      }));
+      );
       return true;
     }
 
     if (status === "queued_new") {
-      logWecomInfo(target, `queue: 已进入下一批次 streamId=${streamId} msgid=${String(msg.msgid ?? "")}`);
-      jsonOk(res, buildEncryptedJsonReply({
-        account: target.account,
-        plaintextJson: buildStreamPlaceholderReply({
-          streamId,
-          placeholderContent: queuedPlaceholder
+      logWecomInfo(
+        target,
+        `queue: 已进入下一批次 streamId=${streamId} msgid=${String(msg.msgid ?? "")}`,
+      );
+      jsonOk(
+        res,
+        buildEncryptedJsonReply({
+          account: target.account,
+          plaintextJson: buildStreamPlaceholderReply({
+            streamId,
+            placeholderContent: queuedPlaceholder,
+          }),
+          nonce,
+          timestamp,
         }),
-        nonce,
-        timestamp
-      }));
+      );
       return true;
     }
 
@@ -832,23 +918,38 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
     });
     if (msg.msgid) streamStore.setStreamIdForMsgId(String(msg.msgid), ackStreamId);
     streamStore.addAckStreamForBatch({ batchStreamId: streamId, ackStreamId });
-    logWecomInfo(target, `queue: 已合并排队（回执流） ackStreamId=${ackStreamId} mergedIntoStreamId=${streamId} msgid=${String(msg.msgid ?? "")}`);
-    jsonOk(res, buildEncryptedJsonReply({
-      account: target.account,
-      plaintextJson: buildStreamTextPlaceholderReply({ streamId: ackStreamId, content: mergedQueuedPlaceholder }),
-      nonce,
-      timestamp
-    }));
+    logWecomInfo(
+      target,
+      `queue: 已合并排队（回执流） ackStreamId=${ackStreamId} mergedIntoStreamId=${streamId} msgid=${String(msg.msgid ?? "")}`,
+    );
+    jsonOk(
+      res,
+      buildEncryptedJsonReply({
+        account: target.account,
+        plaintextJson: buildStreamTextPlaceholderReply({
+          streamId: ackStreamId,
+          content: mergedQueuedPlaceholder,
+        }),
+        nonce,
+        timestamp,
+      }),
+    );
     return true;
   } catch (err) {
     target.runtime.error?.(`[wecom] Bot message handler crashed: ${String(err)}`);
     // 尽量返回 200，避免企微重试风暴；同时给一个可见的错误文本
-    jsonOk(res, buildEncryptedJsonReply({
-      account: target.account,
-      plaintextJson: { msgtype: "text", text: { content: "服务内部错误：Bot 处理异常，请稍后重试。" } },
-      nonce,
-      timestamp
-    }));
+    jsonOk(
+      res,
+      buildEncryptedJsonReply({
+        account: target.account,
+        plaintextJson: {
+          msgtype: "text",
+          text: { content: "服务内部错误：Bot 处理异常，请稍后重试。" },
+        },
+        nonce,
+        timestamp,
+      }),
+    );
     return true;
   }
 }

@@ -1,12 +1,13 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-
 import { describe, expect, it } from "vitest";
-
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-
 import type { ResolvedWecomAccount } from "./types.js";
-import { computeWecomMsgSignature, decryptWecomEncrypted, encryptWecomPlaintext } from "./crypto/index.js";
+import {
+  computeWecomMsgSignature,
+  decryptWecomEncrypted,
+  encryptWecomPlaintext,
+} from "./crypto/index.js";
 import { handleWecomWebhookRequest, registerWecomWebhookTarget } from "./monitor.js";
 
 function createMockRequest(params: {
@@ -176,7 +177,12 @@ describe("handleWecomWebhookRequest", () => {
       token,
       encodingAESKey,
       receiveId: "",
-      config: { webhookPath: "/hook", token, encodingAESKey, streamPlaceholderContent: "正在思考..." },
+      config: {
+        webhookPath: "/hook",
+        token,
+        encodingAESKey,
+        streamPlaceholderContent: "正在思考...",
+      },
     };
 
     const unregister = registerWecomWebhookTarget({
@@ -277,7 +283,11 @@ describe("handleWecomWebhookRequest", () => {
       const res1 = createMockResponse();
       await handleWecomWebhookRequest(makeReq("MSGID-M1"), res1);
       const json1 = JSON.parse(res1._getData()) as any;
-      const replyPlain1 = decryptWecomEncrypted({ encodingAESKey, receiveId: "", encrypt: json1.encrypt });
+      const replyPlain1 = decryptWecomEncrypted({
+        encodingAESKey,
+        receiveId: "",
+        encrypt: json1.encrypt,
+      });
       const reply1 = JSON.parse(replyPlain1) as any;
       expect(reply1.msgtype).toBe("stream");
       expect(reply1.stream?.finish).toBe(false);
@@ -285,7 +295,11 @@ describe("handleWecomWebhookRequest", () => {
       const res2 = createMockResponse();
       await handleWecomWebhookRequest(makeReq("MSGID-M2"), res2);
       const json2 = JSON.parse(res2._getData()) as any;
-      const replyPlain2 = decryptWecomEncrypted({ encodingAESKey, receiveId: "", encrypt: json2.encrypt });
+      const replyPlain2 = decryptWecomEncrypted({
+        encodingAESKey,
+        receiveId: "",
+        encrypt: json2.encrypt,
+      });
       const reply2 = JSON.parse(replyPlain2) as any;
       expect(reply2.msgtype).toBe("stream");
       expect(reply2.stream?.finish).toBe(false);
@@ -295,7 +309,11 @@ describe("handleWecomWebhookRequest", () => {
       const res3 = createMockResponse();
       await handleWecomWebhookRequest(makeReq("MSGID-M3"), res3);
       const json3 = JSON.parse(res3._getData()) as any;
-      const replyPlain3 = decryptWecomEncrypted({ encodingAESKey, receiveId: "", encrypt: json3.encrypt });
+      const replyPlain3 = decryptWecomEncrypted({
+        encodingAESKey,
+        receiveId: "",
+        encrypt: json3.encrypt,
+      });
       const reply3 = JSON.parse(replyPlain3) as any;
       expect(reply3.msgtype).toBe("stream");
       // merged follow-up should get its own ack stream (not finished yet);

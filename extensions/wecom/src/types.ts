@@ -93,13 +93,24 @@ export type WecomInboundMessage =
   | (WecomInboundBase & { quote?: WecomInboundQuote } & Record<string, unknown>);
 
 export type WecomTemplateCard = {
-  card_type: "text_notice" | "news_notice" | "button_interaction" | "vote_interaction" | "multiple_interaction";
+  card_type:
+    | "text_notice"
+    | "news_notice"
+    | "button_interaction"
+    | "vote_interaction"
+    | "multiple_interaction";
   source?: { icon_url?: string; desc?: string; desc_color?: number };
   main_title?: { title?: string; desc?: string };
   task_id?: string;
   button_list?: Array<{ text: string; style?: number; key: string }>;
   sub_title_text?: string;
-  horizontal_content_list?: Array<{ keyname: string; value?: string; type?: number; url?: string; userid?: string }>;
+  horizontal_content_list?: Array<{
+    keyname: string;
+    value?: string;
+    type?: number;
+    url?: string;
+    userid?: string;
+  }>;
   card_action?: { type: number; url?: string; appid?: string; pagepath?: string };
   action_menu?: { desc: string; action_list: Array<{ text: string; key: string }> };
   select_list?: Array<{
@@ -134,7 +145,6 @@ export type WecomInboundTemplateCardEvent = WecomInboundBase & {
   };
 };
 
-
 /**
  * Template card event payload (button click, checkbox, select)
  */
@@ -156,4 +166,3 @@ export type WecomOutboundMessage =
   | { msgtype: "text"; text: { content: string } }
   | { msgtype: "markdown"; markdown: { content: string } }
   | { msgtype: "template_card"; template_card: WecomTemplateCard };
-
