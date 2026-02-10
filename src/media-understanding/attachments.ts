@@ -7,6 +7,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
 import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { isAbortError } from "../infra/unhandled-rejections.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
 import { detectMime, getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
@@ -139,16 +140,6 @@ export function isAudioAttachment(attachment: MediaAttachment): boolean {
 
 export function isImageAttachment(attachment: MediaAttachment): boolean {
   return resolveAttachmentKind(attachment) === "image";
-}
-
-function isAbortError(err: unknown): boolean {
-  if (!err) {
-    return false;
-  }
-  if (err instanceof Error && err.name === "AbortError") {
-    return true;
-  }
-  return false;
 }
 
 function resolveRequestUrl(input: RequestInfo | URL): string {
