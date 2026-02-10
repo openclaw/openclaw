@@ -323,6 +323,5 @@ openclaw config set agents.defaults.model.fallbacks '["anthropic/claude-sonnet-4
 ## Related Documentation
 
 - [OpenClaw Configuration](/configuration)
-- [Model Providers](/models/providers)
-- [Agent Setup](/agents)
+- [Providers Overview](/providers)
 - [Qianfan API Documentation](https://cloud.baidu.com/doc/WENXINWORKSHOP/index.html)
