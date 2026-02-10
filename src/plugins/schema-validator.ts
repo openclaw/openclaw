@@ -40,7 +40,7 @@ export function validateJsonSchemaValue(params: {
   if (!cached || cached.schema !== params.schema) {
     // Evict the oldest entry when at capacity (FIFO via Map insertion order).
     if (!schemaCache.has(params.cacheKey) && schemaCache.size >= MAX_SCHEMA_CACHE_SIZE) {
-      const oldest = schemaCache.keys().next().value as string | undefined;
+      const oldest = schemaCache.keys().next().value;
       if (oldest) {
         schemaCache.delete(oldest);
       }
