@@ -15,11 +15,14 @@ type QueueEntry = {
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
+const DEFAULT_MAX_QUEUE_DEPTH = 1000;
+
 type LaneState = {
   lane: string;
   queue: QueueEntry[];
   active: number;
   maxConcurrent: number;
+  maxQueueDepth: number;
   draining: boolean;
 };
 
@@ -35,6 +38,7 @@ function getLaneState(lane: string): LaneState {
     queue: [],
     active: 0,
     maxConcurrent: 1,
+    maxQueueDepth: DEFAULT_MAX_QUEUE_DEPTH,
     draining: false,
   };
   lanes.set(lane, created);
@@ -107,6 +111,11 @@ export function enqueueCommandInLane<T>(
   const cleaned = lane.trim() || CommandLane.Main;
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
+  if (state.queue.length >= state.maxQueueDepth) {
+    return Promise.reject(
+      new Error(`command queue full: lane=${cleaned} depth=${state.queue.length}`),
+    );
+  }
   return new Promise<T>((resolve, reject) => {
     state.queue.push({
       task: () => task(),
