@@ -47,6 +47,56 @@ describe("security audit", () => {
     );
   });
 
+  it("distinguishes external webhooks from internal hooks in the attack surface summary", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: { internal: { enabled: true } },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    const finding = res.findings.find((f) => f.checkId === "summary.attack_surface");
+    expect(finding).toBeDefined();
+    // Should report webhooks as disabled and internal hooks as enabled
+    expect(finding?.detail).toContain("hooks.webhooks: disabled");
+    expect(finding?.detail).toContain("hooks.internal: enabled");
+  });
+
+  it("reports both hook systems as enabled when both are configured", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: { enabled: true, internal: { enabled: true } },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    const finding = res.findings.find((f) => f.checkId === "summary.attack_surface");
+    expect(finding).toBeDefined();
+    expect(finding?.detail).toContain("hooks.webhooks: enabled");
+    expect(finding?.detail).toContain("hooks.internal: enabled");
+  });
+
+  it("reports both hook systems as disabled when neither is configured", async () => {
+    const cfg: OpenClawConfig = {};
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    const finding = res.findings.find((f) => f.checkId === "summary.attack_surface");
+    expect(finding).toBeDefined();
+    expect(finding?.detail).toContain("hooks.webhooks: disabled");
+    expect(finding?.detail).toContain("hooks.internal: disabled");
+  });
+
   it("flags non-loopback bind without auth as critical", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
