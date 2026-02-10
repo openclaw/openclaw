@@ -6,6 +6,7 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentModelFallbacksOverride,
+  resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
@@ -520,7 +521,7 @@ export async function runCronIsolatedAgentTurn(params: {
       `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
   }
 
-  let skillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
+let skillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
   if (isFastTestEnv) {
     // Fast unit-test mode: avoid scanning the workspace and writing session stores.
     skillsSnapshot = skillsSnapshot ?? { prompt: "", skills: [] };
@@ -529,9 +530,11 @@ export async function runCronIsolatedAgentTurn(params: {
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const needsSkillsSnapshot =
       !existingSnapshot || existingSnapshot.version !== skillsSnapshotVersion;
+    const skillFilter = resolveAgentSkillsFilter(cfgWithAgentDefaults, agentId);
     if (needsSkillsSnapshot) {
       skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfgWithAgentDefaults,
+        skillFilter,
         eligibility: { remote: getRemoteSkillEligibility() },
         snapshotVersion: skillsSnapshotVersion,
       });
