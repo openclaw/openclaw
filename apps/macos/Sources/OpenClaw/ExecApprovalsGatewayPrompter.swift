@@ -50,19 +50,19 @@ final class ExecApprovalsGatewayPrompter {
                     method: .execApprovalResolve,
                     params: [
                         "id": AnyCodable(request.id),
-                        "decision": AnyCodable("allow-once"),
+                        "decision": AnyCodable(ExecApprovalDecision.allowOnce.rawValue),
                     ],
                     timeoutMs: 10000)
                 return
             }
             guard presentation.canPresent else {
                 // Can't show prompt – use askFallback policy
-                let decision: String = presentation.askFallback == .full ? "allow-once" : "deny"
+                let decision: ExecApprovalDecision = presentation.askFallback == .full ? .allowOnce : .deny
                 try await GatewayConnection.shared.requestVoid(
                     method: .execApprovalResolve,
                     params: [
                         "id": AnyCodable(request.id),
-                        "decision": AnyCodable(decision),
+                        "decision": AnyCodable(decision.rawValue),
                     ],
                     timeoutMs: 10000)
                 return
