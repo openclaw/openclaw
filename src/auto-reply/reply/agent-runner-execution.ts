@@ -148,7 +148,7 @@ export async function runAgentTurnWithFallback(params: {
   const lastOverflow = sessionEntry?.lastOverflowAt ?? 0;
   const withinWindow = Date.now() - lastOverflow < OVERFLOW_CIRCUIT_BREAKER_WINDOW_MS;
   if (overflowCount >= MAX_CONSECUTIVE_OVERFLOWS && withinWindow) {
-    defaultRuntime.warn(
+    logVerbose(
       `Circuit breaker triggered: ${overflowCount} consecutive overflows in session ${params.sessionKey}. ` +
         `Returning static message without LLM call.`,
     );
