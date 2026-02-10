@@ -413,6 +413,65 @@ describe("context-pruning", () => {
     expect(second).toBeUndefined();
   });
 
+  it("forcePruneRatio bypasses cache-ttl when context is over threshold", () => {
+    const sessionManager = {};
+
+    setContextPruningRuntime(sessionManager, {
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 0,
+        forcePruneRatio: 0.7,
+        softTrimRatio: 0,
+        hardClearRatio: 0,
+        minPrunableToolChars: 0,
+        hardClear: { enabled: true, placeholder: "[cleared]" },
+        softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
+      },
+      contextWindowTokens: 1000,
+      isToolPrunable: () => true,
+      lastCacheTouchAt: Date.now(),
+    });
+
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeToolResult({
+        toolCallId: "t1",
+        toolName: "exec",
+        text: "x".repeat(20_000),
+      }),
+    ];
+
+    let handler:
+      | ((
+          event: { messages: AgentMessage[] },
+          ctx: ExtensionContext,
+        ) => { messages: AgentMessage[] } | undefined)
+      | undefined;
+
+    const api = {
+      on: (name: string, fn: unknown) => {
+        if (name === "context") {
+          handler = fn as typeof handler;
+        }
+      },
+      appendEntry: (_type: string, _data?: unknown) => {},
+    } as unknown as ExtensionAPI;
+
+    contextPruningExtension(api);
+    if (!handler) {
+      throw new Error("missing context handler");
+    }
+
+    const result = handler({ messages }, {
+      model: undefined,
+      sessionManager,
+    } as unknown as ExtensionContext);
+    if (!result) {
+      throw new Error("expected force prune");
+    }
+    expect(toolText(findToolResult(result.messages, "t1"))).toBe("[cleared]");
+  });
+
   it("respects tools allow/deny (deny wins; wildcards supported)", () => {
     const messages: AgentMessage[] = [
       makeUser("u1"),

@@ -31,6 +31,7 @@ export type AgentContextPruningConfig = {
   ttl?: string;
   keepLastAssistants?: number;
   stripThinking?: boolean;
+  forcePruneRatio?: number;
   softTrimRatio?: number;
   hardClearRatio?: number;
   minPrunableToolChars?: number;

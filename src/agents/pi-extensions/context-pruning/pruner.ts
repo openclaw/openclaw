@@ -150,8 +150,22 @@ function estimateMessageChars(message: AgentMessage): number {
   return 256;
 }
 
-function estimateContextChars(messages: AgentMessage[]): number {
+export function estimateContextChars(messages: AgentMessage[]): number {
   return messages.reduce((sum, m) => sum + estimateMessageChars(m), 0);
+}
+
+export function estimateContextUsageRatio(
+  messages: AgentMessage[],
+  contextWindowTokens?: number | null,
+): number {
+  if (!contextWindowTokens || !Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
+    return 0;
+  }
+  const charWindow = contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE;
+  if (charWindow <= 0) {
+    return 0;
+  }
+  return estimateContextChars(messages) / charWindow;
 }
 
 function findAssistantCutoffIndex(

@@ -61,6 +61,7 @@ export const AgentDefaultsSchema = z
         ttl: z.string().optional(),
         keepLastAssistants: z.number().int().nonnegative().optional(),
         stripThinking: z.boolean().optional(),
+        forcePruneRatio: z.number().min(0).max(1).optional(),
         softTrimRatio: z.number().min(0).max(1).optional(),
         hardClearRatio: z.number().min(0).max(1).optional(),
         minPrunableToolChars: z.number().int().nonnegative().optional(),
