@@ -430,6 +430,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   let selectedMemoryPluginId: string | null = null;
   let memorySlotMatched = false;
 
+  const savedRequire = globalThis.require;
+
   for (const candidate of discovery.candidates) {
     const manifestRecord = manifestByRoot.get(candidate.rootDir);
     if (!manifestRecord) {
@@ -662,9 +664,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
   }
 
-  // Restore globalThis.require to a stable base anchored at the project root
-  // so runtime require() calls after loading resolve from a predictable path.
-  globalThis.require = createRequire(import.meta.url);
+  // Restore the pre-existing require (or the module-level fallback) so runtime
+  // code that relied on the original require semantics is not broken.
+  globalThis.require = savedRequire;
 
   if (typeof memorySlot === "string" && !memorySlotMatched) {
     registry.diagnostics.push({
