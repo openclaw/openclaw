@@ -33,6 +33,20 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("preserves assistant content discussing billing topics (#13434)", () => {
+    const prose =
+      "**Billing:** Processed through ABC Financial Services. Members pay 26 bi-weekly **payments** of $19.99.";
+    const normalized = normalizeReplyPayload({ text: prose });
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toBe(prose);
+  });
+
+  it("rewrites real billing error through normalizeReplyPayload (#13434)", () => {
+    const normalized = normalizeReplyPayload({ text: "insufficient credits" });
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toContain("billing error");
+  });
+
   it("records empty skips", () => {
     const reasons: string[] = [];
     const normalized = normalizeReplyPayload(
