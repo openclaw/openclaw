@@ -229,6 +229,11 @@ async function resolvePatchPath(
   }
 
   const resolved = resolvePathFromCwd(filePath, options.cwd);
+  const cwdResolved = path.resolve(options.cwd);
+  const relative = path.relative(cwdResolved, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Path escapes workspace root: ${filePath}`);
+  }
   return {
     resolved,
     display: toDisplayPath(resolved, options.cwd),

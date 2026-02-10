@@ -53,6 +53,43 @@ describe("applyPatch", () => {
     });
   });
 
+  it("rejects path traversal via ../ without sandbox", async () => {
+    await withTempDir(async (dir) => {
+      const patch = `*** Begin Patch
+*** Add File: ../../../etc/malicious.txt
++pwned
+*** End Patch`;
+
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow("Path escapes workspace root");
+    });
+  });
+
+  it("rejects absolute path without sandbox", async () => {
+    await withTempDir(async (dir) => {
+      const patch = `*** Begin Patch
+*** Add File: /tmp/malicious.txt
++pwned
+*** End Patch`;
+
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow("Path escapes workspace root");
+    });
+  });
+
+  it("allows relative paths within workspace without sandbox", async () => {
+    await withTempDir(async (dir) => {
+      const patch = `*** Begin Patch
+*** Add File: sub/dir/safe.txt
++safe content
+*** End Patch`;
+
+      const result = await applyPatch(patch, { cwd: dir });
+      const contents = await fs.readFile(path.join(dir, "sub/dir/safe.txt"), "utf8");
+
+      expect(contents).toBe("safe content\n");
+      expect(result.summary.added).toEqual(["sub/dir/safe.txt"]);
+    });
+  });
+
   it("supports end-of-file inserts", async () => {
     await withTempDir(async (dir) => {
       const target = path.join(dir, "end.txt");
