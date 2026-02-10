@@ -151,7 +151,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   },
   {
     value: "custom",
-    label: "Custom API Endpoint",
+    label: "Custom Provider",
     hint: "Any OpenAI or Anthropic compatible endpoint",
     choices: ["custom-api-key"],
   },
@@ -259,7 +259,7 @@ export function buildAuthChoiceOptions(params: {
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
   });
-  options.push({ value: "custom-api-key", label: "Custom API Endpoint" });
+  options.push({ value: "custom-api-key", label: "Custom Provider" });
 
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });

@@ -422,7 +422,7 @@ export async function promptCustomApiConfig(params: {
   const hasModel = existingModels.some((model) => model.id === modelId);
   const nextModel = {
     id: modelId,
-    name: `${modelId} (Custom API)`,
+    name: `${modelId} (Custom Provider)`,
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MAX_TOKENS,
     input: ["text"] as ["text"],
