@@ -40,6 +40,16 @@ import {
   AgentsListParamsSchema,
   type AgentsListResult,
   AgentsListResultSchema,
+  type CommandsListParams,
+  CommandsListParamsSchema,
+  type CommandsListResult,
+  CommandsListResultSchema,
+  type CommandsListEntry,
+  CommandsListEntrySchema,
+  type CommandArg,
+  CommandArgSchema,
+  type CommandArgChoice,
+  CommandArgChoiceSchema,
   type AgentWaitParams,
   AgentWaitParamsSchema,
   type ChannelsLogoutParams,
@@ -307,6 +317,7 @@ export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
   ChannelsLogoutParamsSchema,
 );
 export const validateModelsListParams = ajv.compile<ModelsListParams>(ModelsListParamsSchema);
+export const validateCommandsListParams = ajv.compile<CommandsListParams>(CommandsListParamsSchema);
 export const validateSkillsStatusParams = ajv.compile<SkillsStatusParams>(SkillsStatusParamsSchema);
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
@@ -468,6 +479,11 @@ export {
   AgentsListParamsSchema,
   AgentsListResultSchema,
   ModelsListParamsSchema,
+  CommandsListParamsSchema,
+  CommandArgChoiceSchema,
+  CommandArgSchema,
+  CommandsListEntrySchema,
+  CommandsListResultSchema,
   SkillsStatusParamsSchema,
   SkillsInstallParamsSchema,
   SkillsUpdateParamsSchema,
@@ -554,6 +570,11 @@ export type {
   AgentsFilesSetResult,
   AgentsListParams,
   AgentsListResult,
+  CommandsListParams,
+  CommandArgChoice,
+  CommandArg,
+  CommandsListEntry,
+  CommandsListResult,
   SkillsStatusParams,
   SkillsBinsParams,
   SkillsBinsResult,

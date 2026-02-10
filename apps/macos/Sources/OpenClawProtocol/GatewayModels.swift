@@ -1947,6 +1947,147 @@ public struct ModelsListResult: Codable, Sendable {
     }
 }
 
+public struct CommandsListParams: Codable, Sendable {
+    public let provider: String?
+    public let sessionkey: String?
+    public let includeplugins: Bool?
+    public let includeskills: Bool?
+
+    public init(
+        provider: String?,
+        sessionkey: String?,
+        includeplugins: Bool?,
+        includeskills: Bool?
+    ) {
+        self.provider = provider
+        self.sessionkey = sessionkey
+        self.includeplugins = includeplugins
+        self.includeskills = includeskills
+    }
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case sessionkey = "sessionKey"
+        case includeplugins = "includePlugins"
+        case includeskills = "includeSkills"
+    }
+}
+
+public struct CommandArgChoice: Codable, Sendable {
+    public let value: String
+    public let label: String
+
+    public init(
+        value: String,
+        label: String
+    ) {
+        self.value = value
+        self.label = label
+    }
+    private enum CodingKeys: String, CodingKey {
+        case value
+        case label
+    }
+}
+
+public struct CommandArg: Codable, Sendable {
+    public let name: String
+    public let description: String
+    public let type: AnyCodable
+    public let required: Bool?
+    public let captureremaining: Bool?
+    public let choices: [CommandArgChoice]?
+
+    public init(
+        name: String,
+        description: String,
+        type: AnyCodable,
+        required: Bool?,
+        captureremaining: Bool?,
+        choices: [CommandArgChoice]?
+    ) {
+        self.name = name
+        self.description = description
+        self.type = type
+        self.required = required
+        self.captureremaining = captureremaining
+        self.choices = choices
+    }
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case type
+        case required
+        case captureremaining = "captureRemaining"
+        case choices
+    }
+}
+
+public struct CommandsListEntry: Codable, Sendable {
+    public let key: String
+    public let name: String
+    public let slash: String
+    public let description: String
+    public let scope: AnyCodable
+    public let source: AnyCodable
+    public let category: AnyCodable?
+    public let aliases: [String]?
+    public let nativename: String?
+    public let acceptsargs: Bool?
+    public let args: [CommandArg]?
+
+    public init(
+        key: String,
+        name: String,
+        slash: String,
+        description: String,
+        scope: AnyCodable,
+        source: AnyCodable,
+        category: AnyCodable?,
+        aliases: [String]?,
+        nativename: String?,
+        acceptsargs: Bool?,
+        args: [CommandArg]?
+    ) {
+        self.key = key
+        self.name = name
+        self.slash = slash
+        self.description = description
+        self.scope = scope
+        self.source = source
+        self.category = category
+        self.aliases = aliases
+        self.nativename = nativename
+        self.acceptsargs = acceptsargs
+        self.args = args
+    }
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case name
+        case slash
+        case description
+        case scope
+        case source
+        case category
+        case aliases
+        case nativename = "nativeName"
+        case acceptsargs = "acceptsArgs"
+        case args
+    }
+}
+
+public struct CommandsListResult: Codable, Sendable {
+    public let commands: [CommandsListEntry]
+
+    public init(
+        commands: [CommandsListEntry]
+    ) {
+        self.commands = commands
+    }
+    private enum CodingKeys: String, CodingKey {
+        case commands
+    }
+}
+
 public struct SkillsStatusParams: Codable, Sendable {
     public let agentid: String?
 

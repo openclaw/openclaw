@@ -173,6 +173,70 @@ export const ModelsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const CommandsListParamsSchema = Type.Object(
+  {
+    provider: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(NonEmptyString),
+    includePlugins: Type.Optional(Type.Boolean()),
+    includeSkills: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const CommandArgChoiceSchema = Type.Object(
+  {
+    value: NonEmptyString,
+    label: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const CommandArgSchema = Type.Object(
+  {
+    name: NonEmptyString,
+    description: NonEmptyString,
+    type: Type.Union([Type.Literal("string"), Type.Literal("number"), Type.Literal("boolean")]),
+    required: Type.Optional(Type.Boolean()),
+    captureRemaining: Type.Optional(Type.Boolean()),
+    choices: Type.Optional(Type.Array(CommandArgChoiceSchema)),
+  },
+  { additionalProperties: false },
+);
+
+export const CommandsListEntrySchema = Type.Object(
+  {
+    key: NonEmptyString,
+    name: NonEmptyString,
+    slash: NonEmptyString,
+    description: NonEmptyString,
+    scope: Type.Union([Type.Literal("text"), Type.Literal("native"), Type.Literal("both")]),
+    source: Type.Union([Type.Literal("core"), Type.Literal("skill"), Type.Literal("plugin")]),
+    category: Type.Optional(
+      Type.Union([
+        Type.Literal("session"),
+        Type.Literal("options"),
+        Type.Literal("status"),
+        Type.Literal("management"),
+        Type.Literal("media"),
+        Type.Literal("tools"),
+        Type.Literal("docks"),
+      ]),
+    ),
+    aliases: Type.Optional(Type.Array(NonEmptyString)),
+    nativeName: Type.Optional(NonEmptyString),
+    acceptsArgs: Type.Optional(Type.Boolean()),
+    args: Type.Optional(Type.Array(CommandArgSchema)),
+  },
+  { additionalProperties: false },
+);
+
+export const CommandsListResultSchema = Type.Object(
+  {
+    commands: Type.Array(CommandsListEntrySchema),
+  },
+  { additionalProperties: false },
+);
+
 export const SkillsStatusParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
