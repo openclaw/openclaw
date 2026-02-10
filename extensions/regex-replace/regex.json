@@ -1,0 +1,12 @@
+[
+  {
+    "pattern": "<disclaimer>[\\s\\S]*?</disclaimer>",
+    "flags": "gm",
+    "replacement": ""
+  },
+  {
+    "pattern": "ricky",
+    "flags": "gi",
+    "replacement": "user"
+  }
+]

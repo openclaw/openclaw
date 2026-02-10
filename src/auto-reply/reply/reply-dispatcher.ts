@@ -5,6 +5,7 @@ import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
@@ -54,6 +55,8 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Context for the message_sending plugin hook. */
+  hookContext?: { channelId: string; accountId?: string; conversationId?: string };
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -151,9 +154,29 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
+        // Run message_sending plugin hook — allows plugins to modify or cancel outgoing text.
+        let outPayload = normalized;
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("message_sending") && outPayload.text) {
+          try {
+            const hookCtx = options.hookContext ?? { channelId: "unknown" };
+            const hookResult = await hookRunner.runMessageSending(
+              { to: hookCtx.conversationId ?? "", content: outPayload.text },
+              hookCtx,
+            );
+            if (hookResult?.cancel) {
+              return; // plugin cancelled this message
+            }
+            if (hookResult?.content !== undefined) {
+              outPayload = { ...outPayload, text: hookResult.content };
+            }
+          } catch {
+            // hook errors are already caught+logged by the runner; deliver original
+          }
+        }
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        await options.deliver(outPayload, { kind });
       })
       .catch((err) => {
         options.onError?.(err, { kind });
