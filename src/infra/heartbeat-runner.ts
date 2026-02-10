@@ -12,6 +12,7 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { isEmbeddedPiRunActive } from "../agents/pi-embedded.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -545,6 +546,10 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
+  const sessionId = entry?.sessionId;
+  if (sessionId && isEmbeddedPiRunActive(sessionId)) {
+    return { status: "skipped", reason: "session-busy" };
+  }
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
