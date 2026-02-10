@@ -53,6 +53,15 @@
       }
     }
   },
+  "browser": {
+    "enabled": true,
+    "defaultProfile": "docker",
+    "profiles": {
+      "docker": {
+        "cdpUrl": "http://openclaw-browser:9222"
+      }
+    }
+  },
   "messages": {
     "ackReactionScope": "group-mentions"
   },
