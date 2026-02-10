@@ -97,13 +97,7 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
     maxTurns: params.maxTurns ?? DEFAULT_MAX_TURNS,
     systemPrompt,
     settingSources: ["user", "project", "local"],
-    debug: true,
-    stderr: (data: string) => {
-      const line = data.trim();
-      if (line) {
-        log.info(`sdk stderr: ${line}`);
-      }
-    },
+    debugFile: `/tmp/openclaw-sdk-debug-${Date.now()}.log`,
     ...(params.model && { model: params.model }),
     ...(params.env && { env: params.env }),
     ...(params.resume
@@ -114,7 +108,7 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
   };
 
   log.info(
-    `sdk exec: model=${params.model ?? "default"} promptChars=${params.prompt.length} maxTurns=${options.maxTurns}`,
+    `sdk exec: model=${params.model ?? "default"} promptChars=${params.prompt.length} maxTurns=${options.maxTurns} debugFile=${options.debugFile}`,
   );
 
   try {
