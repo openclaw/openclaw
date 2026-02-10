@@ -39,15 +39,21 @@ export function tokenize(text: string): Set<string> {
  * Returns a value in [0, 1] where 1 means identical sets.
  */
 export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
-  if (setA.size === 0 && setB.size === 0) return 1;
-  if (setA.size === 0 || setB.size === 0) return 0;
+  if (setA.size === 0 && setB.size === 0) {
+    return 1;
+  }
+  if (setA.size === 0 || setB.size === 0) {
+    return 0;
+  }
 
   let intersectionSize = 0;
   const smaller = setA.size <= setB.size ? setA : setB;
   const larger = setA.size <= setB.size ? setB : setA;
 
   for (const token of smaller) {
-    if (larger.has(token)) intersectionSize++;
+    if (larger.has(token)) {
+      intersectionSize++;
+    }
   }
 
   const unionSize = setA.size + setB.size - intersectionSize;
@@ -69,7 +75,9 @@ function maxSimilarityToSelected(
   selectedItems: MMRItem[],
   tokenCache: Map<string, Set<string>>,
 ): number {
-  if (selectedItems.length === 0) return 0;
+  if (selectedItems.length === 0) {
+    return 0;
+  }
 
   let maxSim = 0;
   const itemTokens = tokenCache.get(item.id) ?? tokenize(item.content);
@@ -77,7 +85,9 @@ function maxSimilarityToSelected(
   for (const selected of selectedItems) {
     const selectedTokens = tokenCache.get(selected.id) ?? tokenize(selected.content);
     const sim = jaccardSimilarity(itemTokens, selectedTokens);
-    if (sim > maxSim) maxSim = sim;
+    if (sim > maxSim) {
+      maxSim = sim;
+    }
   }
 
   return maxSim;
@@ -107,14 +117,16 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
   const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
 
   // Early exits
-  if (!enabled || items.length <= 1) return [...items];
+  if (!enabled || items.length <= 1) {
+    return [...items];
+  }
 
   // Clamp lambda to valid range
   const clampedLambda = Math.max(0, Math.min(1, lambda));
 
   // If lambda is 1, just return sorted by relevance (no diversity penalty)
   if (clampedLambda === 1) {
-    return [...items].sort((a, b) => b.score - a.score);
+    return [...items].toSorted((a, b) => b.score - a.score);
   }
 
   // Pre-tokenize all items for efficiency
@@ -129,7 +141,9 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
   const scoreRange = maxScore - minScore;
 
   const normalizeScore = (score: number): number => {
-    if (scoreRange === 0) return 1; // All scores equal
+    if (scoreRange === 0) {
+      return 1; // All scores equal
+    }
     return (score - minScore) / scoreRange;
   };
 
@@ -175,7 +189,9 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
 export function applyMMRToHybridResults<
   T extends { score: number; snippet: string; path: string; startLine: number },
 >(results: T[], config: Partial<MMRConfig> = {}): T[] {
-  if (results.length === 0) return results;
+  if (results.length === 0) {
+    return results;
+  }
 
   // Create a map from ID to original item for type-safe retrieval
   const itemById = new Map<string, T>();
