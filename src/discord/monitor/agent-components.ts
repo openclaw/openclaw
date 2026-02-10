@@ -323,7 +323,7 @@ export class AgentComponentButton extends Button {
       accountId: this.ctx.accountId,
       guildId: rawGuildId,
       peer: {
-        kind: isDirectMessage ? "dm" : "channel",
+        kind: isDirectMessage ? "direct" : "channel",
         id: isDirectMessage ? userId : channelId,
       },
       parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
@@ -489,7 +489,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       accountId: this.ctx.accountId,
       guildId: rawGuildId,
       peer: {
-        kind: isDirectMessage ? "dm" : "channel",
+        kind: isDirectMessage ? "direct" : "channel",
         id: isDirectMessage ? userId : channelId,
       },
       parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
