@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "./onboarding.js";
@@ -243,6 +243,8 @@ describe("runOnboardingWizard", () => {
     suiteCase = 0;
   });
 
+  beforeEach(() => vi.clearAllMocks());
+
   async function makeCaseDir(prefix: string): Promise<string> {
     const dir = path.join(suiteRoot, `${prefix}${++suiteCase}`);
     await fs.mkdir(dir, { recursive: true });
@@ -371,6 +373,103 @@ describe("runOnboardingWizard", () => {
 
   it("offers TUI hatch even without BOOTSTRAP.md", async () => {
     await runTuiHatchTest({ writeBootstrapFile: false, expectedMessage: undefined });
+  });
+
+  it("validates workspace before writing config or setting up channels", async () => {
+    const eaccesError = Object.assign(
+      new Error("EACCES: permission denied, mkdir '/root/workspace'"),
+      { code: "EACCES" },
+    );
+    ensureWorkspaceAndSessions.mockRejectedValueOnce(eaccesError);
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select: vi.fn(async () => "quickstart"),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      runOnboardingWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          workspace: "/root/workspace",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      ),
+    ).rejects.toThrow("exit:1");
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(setupChannels).not.toHaveBeenCalled();
+  });
+
+  it("shows workspace error message when directory is not writable", async () => {
+    const eaccesError = Object.assign(
+      new Error("EACCES: permission denied, mkdir '/root/workspace'"),
+      { code: "EACCES" },
+    );
+    ensureWorkspaceAndSessions.mockRejectedValueOnce(eaccesError);
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select: vi.fn(async () => "quickstart"),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      runOnboardingWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          workspace: "/root/workspace",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      ),
+    ).rejects.toThrow("exit:1");
+
+    const outroCalls = (prompter.outro as ReturnType<typeof vi.fn>).mock.calls;
+    expect(outroCalls.length).toBe(1);
+    expect(outroCalls[0][0]).toMatch(/workspace/i);
   });
 
   it("shows the web search hint at the end of onboarding", async () => {
