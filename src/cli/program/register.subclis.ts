@@ -239,6 +239,14 @@ const entries: SubCliEntry[] = [
       mod.registerCompletionCli(program);
     },
   },
+  {
+    name: "limits",
+    description: "Rate limiting & cost controls",
+    register: async (program) => {
+      const mod = await import("../limits-cli.js");
+      mod.registerLimitsCli(program);
+    },
+  },
 ];
 
 export function getSubCliEntries(): SubCliEntry[] {

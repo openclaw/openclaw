@@ -44,10 +44,10 @@ export type OpenClawConfig = {
     vars?: Record<string, string>;
     /** Sugar: allow env vars directly under env (string values only). */
     [key: string]:
-      | string
-      | Record<string, string>
-      | { enabled?: boolean; timeoutMs?: number }
-      | undefined;
+    | string
+    | Record<string, string>
+    | { enabled?: boolean; timeoutMs?: number }
+    | undefined;
   };
   wizard?: {
     lastRunAt?: string;
@@ -97,6 +97,27 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  media?: { preserveFilenames?: boolean };
+  limits?: {
+    enabled?: boolean;
+    defaults?: {
+      rpm?: number;
+      tpm?: number;
+      rpd?: number;
+      dailyBudgetUsd?: number;
+      monthlyBudgetUsd?: number;
+    };
+    providers?: Record<string, {
+      rpm?: number;
+      tpm?: number;
+      rpd?: number;
+      dailyBudgetUsd?: number;
+      monthlyBudgetUsd?: number;
+    } | undefined>;
+    queue?: { maxSize?: number; timeoutMs?: number };
+    budgets?: { warningThresholds?: number[]; hardBlock?: boolean };
+    retry?: { attempts?: number; minDelayMs?: number; maxDelayMs?: number; jitter?: number };
+  };
 };
 
 export type ConfigValidationIssue = {

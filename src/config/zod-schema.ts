@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
-import { HexColorSchema, ModelsConfigSchema } from "./zod-schema.core.js";
+import { HexColorSchema, ModelsConfigSchema, RetryConfigSchema } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import {
@@ -592,6 +592,52 @@ export const OpenClawSchema = z
               .strict(),
           )
           .optional(),
+      })
+      .strict()
+      .optional(),
+    limits: z
+      .object({
+        enabled: z.boolean().optional(),
+        defaults: z
+          .object({
+            rpm: z.number().int().positive().optional(),
+            tpm: z.number().int().positive().optional(),
+            rpd: z.number().int().positive().optional(),
+            dailyTokenBudget: z.number().positive().optional(),
+            monthlyTokenBudget: z.number().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        providers: z
+          .record(
+            z.string(),
+            z
+              .object({
+                rpm: z.number().int().positive().optional(),
+                tpm: z.number().int().positive().optional(),
+                rpd: z.number().int().positive().optional(),
+                dailyTokenBudget: z.number().positive().optional(),
+                monthlyTokenBudget: z.number().positive().optional(),
+              })
+              .strict()
+              .optional(),
+          )
+          .optional(),
+        queue: z
+          .object({
+            maxSize: z.number().int().positive().optional(),
+            timeoutMs: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        budgets: z
+          .object({
+            warningThresholds: z.array(z.number().min(0).max(1)).optional(),
+            hardBlock: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        retry: RetryConfigSchema,
       })
       .strict()
       .optional(),
