@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
+const channelPlugins = vi.hoisted((): ChannelPlugin[] => []);
 
 vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: () => [],
+  listChannelPlugins: () => channelPlugins,
 }));
 
 import { noteSecurityWarnings } from "./doctor-security.js";
@@ -19,6 +21,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
   beforeEach(() => {
     note.mockClear();
+    channelPlugins.length = 0;
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -72,5 +75,40 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const message = lastMessage();
     expect(message).toContain("No channel security warnings detected");
     expect(message).not.toContain("Gateway bound");
+  });
+
+  it("checks non-default channel accounts", async () => {
+    channelPlugins.push({
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default", "ops"],
+        defaultAccountId: () => "default",
+        resolveAccount: (_cfg, accountId) => ({ accountId }),
+        isEnabled: () => true,
+        isConfigured: (_account, _cfg) => true,
+      },
+      security: {
+        resolveDmPolicy: ({ accountId }) => ({
+          policy: accountId === "ops" ? "open" : "disabled",
+          allowFrom: accountId === "ops" ? ["*"] : [],
+          policyPath: "channels.whatsapp.accounts.<id>.dmPolicy",
+          allowFromPath: "channels.whatsapp.accounts.<id>.",
+          approveHint: "approve",
+        }),
+      },
+    } as unknown as ChannelPlugin);
+
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("WhatsApp (ops) DMs: OPEN");
   });
 });

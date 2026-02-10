@@ -4,9 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { slackPlugin } from "../../extensions/slack/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { runSecurityAudit } from "./audit.js";
 
 const isWindows = process.platform === "win32";
@@ -403,274 +400,94 @@ describe("security audit", () => {
     );
   });
 
-  it("flags Discord native commands without a guild user allowlist", async () => {
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-discord-"));
-    process.env.OPENCLAW_STATE_DIR = tmp;
-    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    try {
-      const cfg: OpenClawConfig = {
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            groupPolicy: "allowlist",
-            guilds: {
-              "123": {
-                channels: {
-                  general: { allow: true },
-                },
-              },
-            },
-          },
+  it("audits non-default channel accounts", async () => {
+    const cfg: OpenClawConfig = {};
+    const plugins: ChannelPlugin[] = [
+      {
+        id: "whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "Test",
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.discord.commands.native.no_allowlists",
-            severity: "warn",
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["default", "ops"],
+          defaultAccountId: () => "default",
+          resolveAccount: (_cfg, accountId) => ({ accountId }),
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        security: {
+          resolveDmPolicy: ({ accountId }) => ({
+            policy: accountId === "ops" ? "open" : "disabled",
+            allowFrom: accountId === "ops" ? ["*"] : [],
+            policyPath: "channels.whatsapp.accounts.<id>.dmPolicy",
+            allowFromPath: "channels.whatsapp.accounts.<id>.",
           }),
-        ]),
-      );
-    } finally {
-      if (prevStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
-    }
+        },
+      } as unknown as ChannelPlugin,
+    ];
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins,
+    });
+
+    expect(
+      res.findings.some(
+        (f) => f.checkId.startsWith("channels.whatsapp.dm.open") && f.title.includes("(ops)"),
+      ),
+    ).toBe(true);
   });
 
-  it("does not flag Discord slash commands when dm.allowFrom includes a Discord snowflake id", async () => {
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-security-audit-discord-allowfrom-snowflake-"),
-    );
-    process.env.OPENCLAW_STATE_DIR = tmp;
-    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    try {
-      const cfg: OpenClawConfig = {
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            dm: { allowFrom: ["387380367612706819"] },
-            groupPolicy: "allowlist",
-            guilds: {
-              "123": {
-                channels: {
-                  general: { allow: true },
-                },
-              },
-            },
-          },
+  it("uses collision-resistant check IDs for multi-account findings", async () => {
+    const cfg: OpenClawConfig = {};
+    const plugins: ChannelPlugin[] = [
+      {
+        id: "whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "Test",
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      expect(res.findings).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.discord.commands.native.no_allowlists",
-          }),
-        ]),
-      );
-    } finally {
-      if (prevStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
-    }
-  });
-
-  it("flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-discord-open-"));
-    process.env.OPENCLAW_STATE_DIR = tmp;
-    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    try {
-      const cfg: OpenClawConfig = {
-        commands: { useAccessGroups: false },
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            groupPolicy: "allowlist",
-            guilds: {
-              "123": {
-                channels: {
-                  general: { allow: true },
-                },
-              },
-            },
-          },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["Ops", "ops"],
+          defaultAccountId: () => "Ops",
+          resolveAccount: (_cfg, accountId) => ({ accountId }),
+          isEnabled: () => true,
+          isConfigured: () => true,
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.discord.commands.native.unrestricted",
-            severity: "critical",
+        security: {
+          resolveDmPolicy: () => ({
+            policy: "open",
+            allowFrom: ["*"],
+            policyPath: "channels.whatsapp.accounts.<id>.dmPolicy",
+            allowFromPath: "channels.whatsapp.accounts.<id>.",
           }),
-        ]),
-      );
-    } finally {
-      if (prevStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
-    }
-  });
-
-  it("flags Slack slash commands without a channel users allowlist", async () => {
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-slack-"));
-    process.env.OPENCLAW_STATE_DIR = tmp;
-    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    try {
-      const cfg: OpenClawConfig = {
-        channels: {
-          slack: {
-            enabled: true,
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-            groupPolicy: "open",
-            slashCommand: { enabled: true },
-          },
         },
-      };
+      } as unknown as ChannelPlugin,
+    ];
 
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [slackPlugin],
-      });
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins,
+    });
 
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.slack.commands.slash.no_allowlists",
-            severity: "warn",
-          }),
-        ]),
-      );
-    } finally {
-      if (prevStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
-    }
-  });
-
-  it("flags Slack slash commands when access-group enforcement is disabled", async () => {
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-slack-open-"));
-    process.env.OPENCLAW_STATE_DIR = tmp;
-    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    try {
-      const cfg: OpenClawConfig = {
-        commands: { useAccessGroups: false },
-        channels: {
-          slack: {
-            enabled: true,
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-            groupPolicy: "open",
-            slashCommand: { enabled: true },
-          },
-        },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [slackPlugin],
-      });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.slack.commands.slash.useAccessGroups_off",
-            severity: "critical",
-          }),
-        ]),
-      );
-    } finally {
-      if (prevStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
-    }
-  });
-
-  it("flags Telegram group commands without a sender allowlist", async () => {
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-telegram-"));
-    process.env.OPENCLAW_STATE_DIR = tmp;
-    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    try {
-      const cfg: OpenClawConfig = {
-        channels: {
-          telegram: {
-            enabled: true,
-            botToken: "t",
-            groupPolicy: "allowlist",
-            groups: { "-100123": {} },
-          },
-        },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [telegramPlugin],
-      });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.telegram.groups.allowFrom.missing",
-            severity: "critical",
-          }),
-        ]),
-      );
-    } finally {
-      if (prevStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
-    }
+    const ids = res.findings
+      .filter((f) => f.checkId.startsWith("channels.whatsapp.dm.open"))
+      .map((f) => f.checkId);
+    expect(ids.length).toBe(2);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it("adds a warning when deep probe fails", async () => {

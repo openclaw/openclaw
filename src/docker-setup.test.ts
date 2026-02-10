@@ -121,7 +121,7 @@ describe("docker-setup.sh", () => {
     const script = await readFile(join(repoRoot, "docker-setup.sh"), "utf8");
     expect(script).not.toMatch(/^\s*declare -A\b/m);
 
-    const systemBash = "/bin/bash";
+    const systemBash = process.platform === "win32" ? "bash" : "/bin/bash";
     const assocCheck = spawnSync(systemBash, ["-c", "declare -A _t=()"], {
       encoding: "utf8",
     });

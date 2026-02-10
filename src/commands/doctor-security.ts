@@ -133,48 +133,60 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (!plugin.security) {
       continue;
     }
-    const accountIds = plugin.config.listAccountIds(cfg);
+    const discoveredAccountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
       cfg,
-      accountIds,
+      accountIds: discoveredAccountIds,
     });
-    const account = plugin.config.resolveAccount(cfg, defaultAccountId);
-    const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
-    if (!enabled) {
-      continue;
+    const accountIds =
+      discoveredAccountIds.length > 0 ? [...discoveredAccountIds] : [defaultAccountId];
+    if (!accountIds.includes(defaultAccountId)) {
+      accountIds.unshift(defaultAccountId);
     }
-    const configured = plugin.config.isConfigured
-      ? await plugin.config.isConfigured(account, cfg)
-      : true;
-    if (!configured) {
-      continue;
-    }
-    const dmPolicy = plugin.security.resolveDmPolicy?.({
-      cfg,
-      accountId: defaultAccountId,
-      account,
-    });
-    if (dmPolicy) {
-      await warnDmPolicy({
-        label: plugin.meta.label ?? plugin.id,
-        provider: plugin.id,
-        dmPolicy: dmPolicy.policy,
-        allowFrom: dmPolicy.allowFrom,
-        policyPath: dmPolicy.policyPath,
-        allowFromPath: dmPolicy.allowFromPath,
-        approveHint: dmPolicy.approveHint,
-        normalizeEntry: dmPolicy.normalizeEntry,
-      });
-    }
-    if (plugin.security.collectWarnings) {
-      const extra = await plugin.security.collectWarnings({
+    const includeAccountLabel = accountIds.length > 1;
+
+    for (const accountId of accountIds) {
+      const account = plugin.config.resolveAccount(cfg, accountId);
+      const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
+      if (!enabled) {
+        continue;
+      }
+      const configured = plugin.config.isConfigured
+        ? await plugin.config.isConfigured(account, cfg)
+        : true;
+      if (!configured) {
+        continue;
+      }
+
+      const labelBase = plugin.meta.label ?? plugin.id;
+      const label = includeAccountLabel ? `${labelBase} (${accountId})` : labelBase;
+      const dmPolicy = plugin.security.resolveDmPolicy?.({
         cfg,
-        accountId: defaultAccountId,
+        accountId,
         account,
       });
-      if (extra?.length) {
-        warnings.push(...extra);
+      if (dmPolicy) {
+        await warnDmPolicy({
+          label,
+          provider: plugin.id,
+          dmPolicy: dmPolicy.policy,
+          allowFrom: dmPolicy.allowFrom,
+          policyPath: dmPolicy.policyPath,
+          allowFromPath: dmPolicy.allowFromPath,
+          approveHint: dmPolicy.approveHint,
+          normalizeEntry: dmPolicy.normalizeEntry,
+        });
+      }
+      if (plugin.security.collectWarnings) {
+        const extra = await plugin.security.collectWarnings({
+          cfg,
+          accountId,
+          account,
+        });
+        if (extra?.length) {
+          warnings.push(...extra);
+        }
       }
     }
   }
