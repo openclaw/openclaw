@@ -8,9 +8,11 @@ import { markdownTheme, theme } from "../theme/theme.js";
  *
  * Double-newlines (`\n\n`) are left untouched as they already denote paragraph
  * breaks. Lines that already end with two trailing spaces are also left alone.
+ * CRLF (`\r\n`) is normalized to `\n` before conversion.
  */
 export function preserveNewlines(text: string): string {
-  return text.replace(/([^\n])(?<! {2})\n(?!\n)/g, "$1  \n");
+  const normalized = text.replace(/\r\n/g, "\n");
+  return normalized.replace(/([^\n])(?<! {2})\n(?!\n)/g, "$1  \n");
 }
 
 export class AssistantMessageComponent extends Container {

@@ -37,4 +37,12 @@ describe("preserveNewlines", () => {
     // so adding them is harmless for rendering.
     expect(result).toBe("```  \ncode  \nmore code  \n```");
   });
+
+  it("normalizes CRLF to LF before converting", () => {
+    expect(preserveNewlines("line1\r\nline2")).toBe("line1  \nline2");
+  });
+
+  it("normalizes CRLF paragraph breaks", () => {
+    expect(preserveNewlines("para1\r\n\r\npara2")).toBe("para1\n\npara2");
+  });
 });
