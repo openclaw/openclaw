@@ -45,13 +45,26 @@ final class ExecApprovalsGatewayPrompter {
         do {
             let data = try JSONEncoder().encode(payload)
             let request = try JSONDecoder().decode(GatewayApprovalRequest.self, from: data)
-            guard self.shouldPresent(request: request) else {
-                // Auto-approve if not presenting
+            let presentation = self.shouldPresent(request: request)
+            guard presentation.needsApproval else {
+                // Policy says no approval needed – auto-approve
                 try await GatewayConnection.shared.requestVoid(
                     method: .execApprovalResolve,
                     params: [
                         "id": AnyCodable(request.id),
                         "decision": AnyCodable("allow-once"),
+                    ],
+                    timeoutMs: 10000)
+                return
+            }
+            guard presentation.canPresent else {
+                // Can't show prompt – use askFallback policy
+                let decision: String = presentation.askFallback == .full ? "allow-once" : "deny"
+                try await GatewayConnection.shared.requestVoid(
+                    method: .execApprovalResolve,
+                    params: [
+                        "id": AnyCodable(request.id),
+                        "decision": AnyCodable(decision),
                     ],
                     timeoutMs: 10000)
                 return
@@ -80,7 +93,13 @@ final class ExecApprovalsGatewayPrompter {
         }
     }
 
-    private func shouldPresent(request: GatewayApprovalRequest) -> Bool {
+    struct PresentationDecision {
+        var needsApproval: Bool
+        var canPresent: Bool
+        var askFallback: ExecSecurity
+    }
+
+    private func shouldPresent(request: GatewayApprovalRequest) -> PresentationDecision {
         let mode = AppStateStore.shared.connectionMode
         let activeSession = WebChatManager.shared.activeSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         let requestSession = request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -90,19 +109,19 @@ final class ExecApprovalsGatewayPrompter {
         let security = approvals.agent.security
         let ask = approvals.agent.ask
         
-        // Check if approval is needed based on settings
         let needsApproval = Self.needsApproval(security: security, ask: ask)
         
-        if !needsApproval {
-            return false
-        }
-        
-        return Self.shouldPresent(
+        let canPresent = needsApproval && Self.shouldPresent(
             mode: mode,
             activeSession: activeSession,
             requestSession: requestSession,
             lastInputSeconds: Self.lastInputSeconds(),
             thresholdSeconds: 120)
+        
+        return PresentationDecision(
+            needsApproval: needsApproval,
+            canPresent: canPresent,
+            askFallback: approvals.agent.askFallback)
     }
 
     private static func shouldPresent(
