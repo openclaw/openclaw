@@ -1,0 +1,47 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/gpt-5.2",
+        "fallbacks": ["anthropic/claude-sonnet-4-5", "openai/gpt-4o", "google/gemini-2.0-flash"]
+      },
+      "workspace": "/data/.openclaw/workspace",
+      "maxConcurrent": 4
+    },
+    "list": [{ "id": "main", "default": true }]
+  },
+  "auth": {
+    "profiles": {
+      "anthropic:default": { "mode": "token", "provider": "anthropic" },
+      "openai:default": { "mode": "token", "provider": "openai" },
+      "google:default": { "mode": "token", "provider": "google" }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "port": 17568,
+    "trustedProxies": ["127.0.0.1"],
+    "auth": {
+      "mode": "token",
+      "allowTailscale": true
+    },
+    "tailscale": {
+      "mode": "serve",
+      "resetOnExit": true
+    },
+    "nodes": {
+      "denyCommands": [
+        "camera.snap",
+        "camera.clip",
+        "screen.record",
+        "calendar.add",
+        "contacts.add",
+        "reminders.add"
+      ]
+    },
+    "controlUi": {
+      "allowInsecureAuth": true
+    }
+  }
+}

@@ -22,65 +22,36 @@ mkdir -p /data
 chown -R node:node /data || true
 chmod -R 755 /data || true
 
-# Create necessary subdirectories with correct ownership
-# Create workspace directory explicitly - this is where agents store their files
-mkdir -p /data/.openclaw /data/.openclaw/workspace /data/workspace /var/run/tailscale
-chown -R node:node /data/.openclaw /data/workspace || true
-chmod -R 755 /data/.openclaw /data/workspace || true
-# Ensure workspace directory is writable
-chmod 755 /data/.openclaw/workspace || true
-
 # Ensure OPENCLAW_STATE_DIR is set and exported before any commands run
 # This prevents code from defaulting to /root/.openclaw when running as root
-export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-/data}"
+export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-/data/.openclaw}"
 
-# Create symlinks from both root and node user's home .openclaw to /data/.openclaw
+# Create necessary subdirectories with correct ownership
+# Create workspace directory explicitly - this is where agents store their files
+mkdir -p "${OPENCLAW_STATE_DIR}" "${OPENCLAW_STATE_DIR}/workspace" /data/workspace /var/run/tailscale
+chown -R node:node "${OPENCLAW_STATE_DIR}" /data/workspace || true
+chmod -R 755 "${OPENCLAW_STATE_DIR}" /data/workspace || true
+chmod 755 "${OPENCLAW_STATE_DIR}/workspace" || true
+
+# Create symlinks from both root and node user's home .openclaw to OPENCLAW_STATE_DIR
 # This ensures workspace resolution (which uses homedir()) works correctly
 # even if OPENCLAW_STATE_DIR isn't checked by all code paths or if something runs as root
 if [ -d /home/node ] && [ ! -e /home/node/.openclaw ]; then
-  ln -s /data/.openclaw /home/node/.openclaw || true
+  ln -s "${OPENCLAW_STATE_DIR}" /home/node/.openclaw || true
   chown -h node:node /home/node/.openclaw || true
 fi
 # Also create symlink for root user as fallback (in case any code runs as root)
 if [ ! -e /root/.openclaw ]; then
-  ln -s /data/.openclaw /root/.openclaw || true
+  ln -s "${OPENCLAW_STATE_DIR}" /root/.openclaw || true
 fi
 
-# Ensure config file has correct permissions (read/write for node user only)
-# The config file may have been created with root ownership or restrictive permissions
-# Use 600 (rw-------) for security since config contains sensitive tokens/passwords
-if [ -f /data/openclaw.json ]; then
-  chown node:node /data/openclaw.json || true
-  chmod 600 /data/openclaw.json || true
-  
-  # Set browser defaults for containerized environment (headless + noSandbox)
-  # Only set if not already configured to avoid overwriting user preferences
-  if [ -f /app/dist/index.js ] && command -v node >/dev/null 2>&1 && command -v gosu >/dev/null 2>&1; then
-    # Set browser.headless if not already set (run as node user to ensure proper permissions)
-    if ! gosu node node -e "const fs=require('fs'); try { const cfg=JSON.parse(fs.readFileSync('/data/openclaw.json','utf8')); process.exit(cfg.browser?.headless !== undefined ? 0 : 1); } catch { process.exit(1); }" 2>/dev/null; then
-      echo "Setting browser.headless=true for containerized environment..."
-      cd /app && gosu node node dist/index.js config set browser.headless true 2>/dev/null || true
-      chown node:node /data/openclaw.json || true
-      chmod 600 /data/openclaw.json || true
-    fi
-    # Set browser.noSandbox if not already set
-    if ! gosu node node -e "const fs=require('fs'); try { const cfg=JSON.parse(fs.readFileSync('/data/openclaw.json','utf8')); process.exit(cfg.browser?.noSandbox !== undefined ? 0 : 1); } catch { process.exit(1); }" 2>/dev/null; then
-      echo "Setting browser.noSandbox=true for containerized environment..."
-      cd /app && gosu node node dist/index.js config set browser.noSandbox true 2>/dev/null || true
-      chown node:node /data/openclaw.json || true
-      chmod 600 /data/openclaw.json || true
-    fi
-  fi
-  
-  # Try to auto-fix config issues before starting gateway (non-interactive, safe repairs only)
-  # This helps prevent crashes from invalid config
-  if command -v openclaw >/dev/null 2>&1; then
-    echo "Checking config health and attempting auto-repair..."
-    cd /app && gosu node openclaw doctor --non-interactive --repair 2>&1 || {
-      echo "Warning: Config auto-repair had issues (this may be normal if config is already valid)"
-    }
-    
-  fi
+# On first deploy (no config yet), copy default Fly config so the gateway runs without manual onboarding
+CONFIG_PATH="${OPENCLAW_STATE_DIR}/openclaw.json"
+if [ ! -f "${CONFIG_PATH}" ] && [ -f /app/config/fly.default.json ]; then
+  echo "No config found; installing default Fly config from /app/config/fly.default.json"
+  cp /app/config/fly.default.json "${CONFIG_PATH}"
+  chown node:node "${CONFIG_PATH}"
+  chmod 600 "${CONFIG_PATH}"
 fi
 
 # Function to start gateway with config error handling
@@ -90,7 +61,7 @@ start_gateway_safe() {
   echo "Starting OpenClaw gateway: ${cmd[*]}"
   
   # Start gateway in background to monitor for immediate failures
-  gosu node env HOME=/home/node OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-/data}" "${cmd[@]}" &
+  gosu node env HOME=/home/node OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR}" "${cmd[@]}" &
   local gateway_pid=$!
   
   # Wait a few seconds to see if gateway starts successfully or fails immediately
@@ -112,8 +83,8 @@ start_gateway_safe() {
     echo ""
     echo "To fix:"
     echo "  1. SSH into the container: fly ssh console -a <app-name>"
-    echo "  2. Check config: cat /data/openclaw.json"
-    echo "  3. Edit config: nano /data/openclaw.json (or use: openclaw config set <path> <value>)"
+    echo "  2. Check config: cat \${OPENCLAW_STATE_DIR}/openclaw.json"
+    echo "  3. Edit config or use: openclaw config set <path> <value>"
     echo "  4. Run doctor: openclaw doctor --repair"
     echo "  5. Restart the machine: fly machines restart <machine-id> -a <app-name>"
     echo ""
@@ -136,7 +107,7 @@ if [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
   # Set HOME for node user to prevent defaulting to /root
   export HOME=/home/node
   # No Tailscale, start gateway with error handling
-  start_gateway_safe env HOME=/home/node OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-/data}" "$@"
+  start_gateway_safe env HOME=/home/node OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR}" "$@"
 else
   echo "Starting Tailscale..."
   
@@ -193,5 +164,5 @@ else
   
   # Start gateway with error handling
   # If config is invalid, keeps container alive and exits with code 0 to prevent Fly.io restart
-  start_gateway_safe env HOME=/home/node OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-/data}" "$@"
+  start_gateway_safe env HOME=/home/node OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR}" "$@"
 fi
