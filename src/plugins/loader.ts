@@ -662,6 +662,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
   }
 
+  // Restore globalThis.require to a stable base anchored at the project root
+  // so runtime require() calls after loading resolve from a predictable path.
+  globalThis.require = createRequire(import.meta.url);
+
   if (typeof memorySlot === "string" && !memorySlotMatched) {
     registry.diagnostics.push({
       level: "warn",
