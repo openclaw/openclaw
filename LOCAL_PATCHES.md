@@ -2,18 +2,18 @@
 
 This checkout runs a **locally patched** OpenClaw build. These commits are intentionally _not_ upstreamed (at least for now), so we need a durable “why” + “where” record.
 
-Branch convention: `local/<upstream-version>` (currently `local/2026.2.6`).
+Branch convention: `local/<upstream-version>` (currently `local/2026.2.9`).
 
 Quick status:
 
-- Upstream base: `v2026.2.6`
+- Upstream base: `v2026.2.9`
 - Local head: run `git describe --tags --always`
 
 ## Patch list
 
 ### 1) WhatsApp: mark outbound messages as disappearing (7d via config)
 
-- Commit: `1cc973c2a` — `feat(whatsapp): support disappearing outbound messages`
+- Commit: `341653a71` — `feat(whatsapp): support disappearing outbound messages`
 - Why:
   - We want **only outbound messages** to be sent as ephemeral (disappearing) without toggling a chat’s disappearing setting (to avoid WhatsApp system notices like “disappearing messages turned on”).
   - Enforces 7-day expiry via config (`604800` seconds).
@@ -30,39 +30,58 @@ Quick status:
 
 ### 2) Browser (Linux): avoid screenshot hangs
 
-- Commit: `6f8c5c162` — `Browser: avoid screenshot hangs on Linux`
+- Commit: `cfa0bb0fe` — `Browser: avoid screenshot hangs on Linux`
 - Why:
   - Prevents sporadic hangs when taking screenshots on Linux in the browser toolchain.
 - Notes:
   - Keep local unless/until confirmed safe upstream.
 
-### 3) Browser: allow `browser.snapshot` timeout override (fix misleading 20s timeouts)
+### 3) Cron: don’t skip due jobs when reloading store on timer ticks
 
-- Commit: `623234c70` — `fix(browser): honor browser.snapshot timeoutMs`
-- Why:
-  - Subagents (and the main agent) sometimes hit intermittent `browser.snapshot` failures on heavy pages (e.g. Google Maps) with:
-    - `Can't reach the OpenClaw browser control service (timed out after 20000ms)`
-  - This is often **not** a gateway outage; it’s the snapshot operation exceeding a **hard-coded 20s client timeout**.
-  - The browser tool schema already accepted `timeoutMs`, but the snapshot path ignored it, so agents would set `timeoutMs: 60000` and still fail at 20s.
-- What:
-  - Thread `timeoutMs` through `browserSnapshot()` and the `browser` tool’s `action="snapshot"` handler.
-  - Cap override to 120s.
-
-### 4) Cron: don’t skip due jobs when reloading store on timer ticks
-
-- Commit: `bb7123a0f` — `fix(cron): don't skip due jobs on timer reload`
+- Commit: `de3652cab` — `fix(cron): don't skip due jobs on timer reload`
 - Why:
   - A production issue was observed: a cron job scheduled for **02:30 Europe/Rome** did not run, yet `nextRunAtMs` advanced to the next day and no run history was recorded.
   - Root cause: on timer ticks the service reloads the store and recomputed `nextRunAtMs` from “now”, which can jump to the next occurrence and effectively **skip** runs that are already due.
 - What:
   - Preserve persisted `job.state.nextRunAtMs` during store reload; only fill it if missing/invalid.
   - Add regression tests.
-  - Adjust cron next-run computation to treat exact boundaries as due.
+  - Treat exact boundaries as due (Croner edge case).
+
+### 4) Browser: allow `browser.snapshot` timeout override (fix misleading 20s timeouts)
+
+- Commit: `322a40b2f` — `fix(browser): honor browser.snapshot timeoutMs`
+- Why:
+  - We use a “fail fast” browser SOP (e.g. `timeoutMs: 3000` + retry once) so long browser calls don’t stall WhatsApp sessions.
+  - Previously, `browser.snapshot` ignored tool `timeoutMs` and always used a hard-coded **20s** client timeout, causing apparent “stalls” and misleading errors.
+- What:
+  - Thread `timeoutMs` through `browserSnapshot()` and the `browser` tool’s `action="snapshot"` handler.
+  - Clamp override to `[1000ms, 120000ms]`.
+
+### 5) Browser: allow `browser.navigate` timeout override (avoid 20s stalls)
+
+- Commit: `bb80857fb` — `fix(browser): honor browser.navigate timeoutMs`
+- Why:
+  - Same SOP rationale as snapshot: fast failures + one retry beats 20s stalls.
+  - Previously, `browser.navigate` ignored tool `timeoutMs` and always used a hard-coded **20s** client timeout.
+- What:
+  - Thread `timeoutMs` from the browser tool into the browser client.
+  - Clamp override to `[1000ms, 120000ms]`.
+
+### 6) Browser: allow `browser.screenshot` + `browser.act` timeout override
+
+- Commit: `aa6de86d6` — `fix(browser): honor browser.screenshot and browser.act timeoutMs`
+- Why:
+  - `browser.screenshot` and `browser.act` previously ignored tool `timeoutMs` and always used a hard-coded **20s** client timeout.
+  - In WhatsApp sessions this looks like the browser is “down” when in reality the request just exceeded the client-side 20s.
+- What:
+  - Thread tool `timeoutMs` through `action="screenshot"` and `action="act"`.
+  - Apply timeout to the browser client fetch (clamped to `[1000ms, 120000ms]`).
+  - For `act`, also inject `timeoutMs` into the request body when not already present so the server-side Playwright actions respect it.
 
 ## Operating rules
 
 - Treat this file as the **source of truth** for why a local commit exists.
 - When upgrading upstream:
   1. rebase/cherry-pick local patches,
-  2. re-validate key behaviors (WhatsApp ephemeral marking; cron jobs actually run at boundary times),
-  3. update `Local describe:` + commit hashes here.
+  2. re-validate key behaviors (WhatsApp ephemeral marking; cron jobs actually run; browser SOP timeouts actually honored),
+  3. update commit hashes here.
