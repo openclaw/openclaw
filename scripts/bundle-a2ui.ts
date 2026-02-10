@@ -73,11 +73,20 @@ async function main() {
 
   // Run tsc
   console.log("Compiling renderer...");
-  await runCommand("pnpm", ["exec", "tsc", "-p", path.join(A2UI_RENDERER_DIR, "tsconfig.json")]);
+  await runCommand("pnpm", [
+    "exec",
+    "tsc",
+    "-p",
+    `"${path.join(A2UI_RENDERER_DIR, "tsconfig.json")}"`,
+  ]);
 
   // Run rolldown
   console.log("Bundling app...");
-  await runCommand("npx", ["rolldown", "-c", path.join(A2UI_APP_DIR, "rolldown.config.mjs")]);
+  await runCommand("npx", [
+    "rolldown",
+    "-c",
+    `"${path.join(A2UI_APP_DIR, "rolldown.config.mjs")}"`,
+  ]);
 
   writeFileSync(HASH_FILE, currentHash);
   console.log("A2UI bundle built and hash updated.");
