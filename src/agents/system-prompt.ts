@@ -503,10 +503,7 @@ export function buildAgentSystemPrompt(params: {
       : "",
     params.sandboxInfo?.enabled ? "" : "",
     ...buildUserIdentitySection(ownerLine, isMinimal),
-    ...buildTimeSection({
-      userTimezone,
-      userTime: params.userTime,
-    }),
+    // Time section moved to the end for prompt caching optimization
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
@@ -606,6 +603,10 @@ export function buildAgentSystemPrompt(params: {
   }
 
   lines.push(
+    ...buildTimeSection({
+      userTimezone,
+      userTime: params.userTime,
+    }),
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
