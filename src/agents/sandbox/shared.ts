@@ -11,7 +11,9 @@ export function slugifySessionKey(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const base = safe.slice(0, 32) || "session";
+  // 41 keeps phone-number session keys intact with the default 13-char prefix
+  // while staying within Docker's 63-char container-name limit (63 - 13 - 9 = 41).
+  const base = safe.slice(0, 41) || "session";
   return `${base}-${hash}`;
 }
 
