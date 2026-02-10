@@ -1,0 +1,10 @@
+{
+  "description": "Tavily search with no results",
+  "response": {
+    "query": "xyzzy nonexistent query",
+    "results": []
+  },
+  "expect": {
+    "resultsLength": 0
+  }
+}

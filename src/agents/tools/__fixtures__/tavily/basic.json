@@ -1,0 +1,99 @@
+{
+  "description": "Tavily search with basic results",
+  "response": {
+    "query": "What are the latest model releases from Anthropic?",
+    "follow_up_questions": null,
+    "answer": null,
+    "images": [],
+    "results": [
+      {
+        "url": "https://www.msn.com/en-us/news/technology/anthropic-releases-claude-opus-46-with-improvements-in-coding-and-handling-agentic-tasks/ar-AA1VKDgA",
+        "title": "Anthropic releases Claude Opus 4.6 with improvements in coding ...",
+        "content": "Anthropic (ANTHRO) has released its latest flagship artificial intelligence model, Claude Opus 4.6, which features marked improvements over its predecessor",
+        "score": 0.84948516,
+        "raw_content": null,
+        "favicon": "https://www.msn.com/favicon.ico"
+      },
+      {
+        "url": "https://www.instagram.com/p/DUkUeHJE4oa/",
+        "title": "AI Startups | Anthropic has released Claude Opus 4.6 ... - Instagram",
+        "content": "Anthropic has released Claude Opus 4.6, the latest version of its flagship AI model, with a focus on improved long-form reasoning and autonomous task workflows.",
+        "score": 0.8488849,
+        "raw_content": null,
+        "favicon": "https://static.cdninstagram.com/rsrc.php/v4/yx/r/H1l_HHqi4p6.png"
+      },
+      {
+        "url": "https://www.techcentral.ie/anthropic-launches-claude-opus-4-6-lets-ai-agents-collaborate/",
+        "title": "Anthropic launches Claude Opus 4.6, lets AI agents collaborate",
+        "content": "Anthropic is releasing a new version of its flagship model Claude Opus, designed for complex business workflows. The launch marks a shift among AI makers",
+        "score": 0.7463059,
+        "raw_content": null,
+        "favicon": "https://www.techcentral.ie/wp-content/uploads/2022/01/TC-stacked_400x4001-186x186.jpg"
+      },
+      {
+        "url": "https://aicollective.substack.com/p/the-brief-anthropics-opus-46-agent",
+        "title": "The Brief: Anthropic's Opus 4.6 Agent Teams & OpenAI's Codex 5.3",
+        "content": "News: Anthropic released Claude Opus 4.6, the company's new most powerful model, featuring multi-agent collaboration in Claude Code, a massive context window,",
+        "score": 0.7434107,
+        "raw_content": null,
+        "favicon": "https://substackcdn.com/image/fetch/$s_!O0As!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fc1896270-b632-4583-980e-89e5dcc3305b%2Ffavicon.ico"
+      },
+      {
+        "url": "https://www.tenable.com/blog/Anthropic-Claude-Opus-AI-vulnerability-discovery-cybersecurity",
+        "title": "Anthropic Claude Opus 4.6 AI vulnerability discovery | Tenable®",
+        "content": "You've probably heard about Claude Opus 4.6, the latest artificial intelligence (AI) model from Anthropic — and the 500 high-severity vulnerabilities it",
+        "score": 0.73778254,
+        "raw_content": null,
+        "favicon": "https://www.tenable.com/themes/custom/tenable/images-new/favicons/apple-touch-icon-180x180.png"
+      },
+      {
+        "url": "https://en.wikipedia.org/wiki/Claude_(language_model)",
+        "title": "Claude (language model) - Wikipedia",
+        "content": "Claude is a series of large language models developed by Anthropic. The first model was released in March 2023, and the latest, Claude Opus 4.6, in February",
+        "score": 0.70580584,
+        "raw_content": null,
+        "favicon": "https://en.wikipedia.org/static/apple-touch/wikipedia.png"
+      },
+      {
+        "url": "https://mashable.com/article/claude-sonnet-5-everything-we-know",
+        "title": "Claude Sonnet 5 release expected imminently. What we know.",
+        "content": "Rumors are swirling that Anthropic is close to releasing Claude Sonnet 5, a new version of its mid-tier AI model that could significantly shift the",
+        "score": 0.5951402,
+        "raw_content": null,
+        "favicon": "https://mashable.com/favicons/apple-touch-icon.jpg"
+      },
+      {
+        "url": "https://www.interconnects.ai/p/opus-46-vs-codex-53",
+        "title": "Opus 4.6, Codex 5.3, and the post-benchmark era - Interconnects AI",
+        "content": "Last Thursday, February 5th, both OpenAI and Anthropic unveiled the next iterations of their models designed as coding assistants, GPT-5.3-Codex and Claude",
+        "score": 0.5199851,
+        "raw_content": null,
+        "favicon": "https://substackcdn.com/image/fetch/$s_!IaWC!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F1338bd9b-48bb-4ed5-9c4f-6f03085a9061%2Fapple-touch-icon-114x114.png"
+      },
+      {
+        "url": "https://marketing4ecommerce.net/en/anthropic-claude-opus-4-6/",
+        "title": "Anthropic presents Claude Opus 4.6, its AI capable of reasoning for ...",
+        "content": "Beyond code, Anthropic has optimized Opus 4.6 for everyday knowledge work. The model excelled in multidisciplinary reasoning assessments such as Humanity's Last",
+        "score": 0.4746074,
+        "raw_content": null,
+        "favicon": "https://marketing4ecommerce.net/wp-content/uploads/2024/05/cropped-favicon-m4c.-fondo-180x180.png"
+      },
+      {
+        "url": "https://www.theglobeandmail.com/investing/markets/stocks/ORCL/pressreleases/109300/how-anthropic-just-changed-the-game/",
+        "title": "How Anthropic Just Changed the Game - The Globe and Mail",
+        "content": "The new Claude Cowork plug-ins allow the agent to directly automate tasks across legal research, contract review, sales prospecting, marketing campaign",
+        "score": 0.24715108,
+        "raw_content": null,
+        "favicon": "https://www.theglobeandmail.com/pf/resources/assets/meta/apple-touch-icon.png?d=779"
+      }
+    ],
+    "response_time": 1.13,
+    "request_id": "37f20512-1ed3-41b9-a71d-ebef725da4a1"
+  },
+  "expect": {
+    "resultsLength": 10,
+    "firstTitle": "Anthropic releases Claude Opus 4.6 with improvements in coding",
+    "firstUrl": "https://www.msn.com/en-us/news/technology/anthropic-releases-claude-opus-46-with-improvements-in-coding-and-handling-agentic-tasks/ar-AA1VKDgA",
+    "firstScore": 0.84948516
+  }
+}

@@ -1,0 +1,139 @@
+{
+  "description": "Tavily search with advanced results",
+  "response": {
+    "query": "What are the latest model releases from Anthropic?",
+    "follow_up_questions": null,
+    "answer": null,
+    "images": [],
+    "results": [
+      {
+        "url": "https://www.msn.com/en-us/news/technology/anthropic-releases-claude-opus-46-with-improvements-in-coding-and-handling-agentic-tasks/ar-AA1VKDgA",
+        "title": "Anthropic releases Claude Opus 4.6 with improvements in coding ...",
+        "content": "Anthropic (ANTHRO) has released its latest flagship artificial intelligence model, Claude Opus 4.6, which features marked improvements over its predecessor",
+        "score": 0.99992967,
+        "raw_content": null,
+        "favicon": "https://www.msn.com/favicon.ico"
+      },
+      {
+        "url": "https://www.facebook.com/skynews/videos/when-leading-ai-company-anthropic-launched-its-latest-ai-model-claude-opus-46-at/2132475170874947/",
+        "title": "When leading AI company Anthropic launched its latest AI model ...",
+        "content": "When leading AI company Anthropic launched its latest AI model, Claude Opus 4.6, at the end of last week, it broke many measures of intelligence and",
+        "score": 0.9997731,
+        "raw_content": null,
+        "favicon": "https://z-m-static.xx.fbcdn.net/rsrc.php/yj/r/rvjuhHLwc7B.ico"
+      },
+      {
+        "url": "https://www.instagram.com/p/DUkUeHJE4oa/",
+        "title": "AI Startups | Anthropic has released Claude Opus 4.6 ... - Instagram",
+        "content": "Anthropic has released Claude Opus 4.6, the latest version of its flagship AI model, with a focus on improved long-form reasoning and autonomous task workflows.",
+        "score": 0.9997658,
+        "raw_content": null,
+        "favicon": "https://static.cdninstagram.com/rsrc.php/v4/yx/r/H1l_HHqi4p6.png"
+      },
+      {
+        "url": "https://en.wikipedia.org/wiki/Claude_(language_model)",
+        "title": "Claude (language model) - Wikipedia",
+        "content": "Claude Code was released in February 2025 as an agentic command line tool that enables developers to delegate coding tasks directly from their terminal. While initially released for preview testing, it was made generally available in May 2025 alongside Claude 4. Enterprise adoption of Claude Code showed significant growth, with Anthropic reporting a 5.5x increase in Claude Code revenue by July. Anthropic released a web version that October as well as an iOS app. As of January 2026, it was widely considered the best AI coding assistant, when paired with Opus 4.5, with GPT-5.2 also showing significant improvement. Claude Code went viral during the winter holidays when people had time to experiment with it, including many non-programmers who used it for vibe coding. [...] #### Claude Opus 4.6\n\nAnthropic released Opus 4.6 on February 5, 2026. The main improvements included an agent team and Claude in PowerPoint.\n\n## Research\n\nIn May 2024, Anthropic issued a paper demonstrating mechanistic interpretability via a model which focused on the Golden Gate Bridge in a way the researchers compared to obsession, and another which composed scam emails.\n\nIn June 2025, Anthropic tested how Claude 3.7 Sonnet could run a vending machine in the company's office. The instance initially performed its assigned tasks, although poorly, until it eventually malfunctioned and insisted it was a human, contacted the company's security office, and attempted to fire human workers. In December 2025, the experiment continued with Sonnet 4.0 and 4.5. [...] ### Claude 4\n\nOn May 22, 2025, Anthropic released two more models: Claude Sonnet 4 and Claude Opus 4. Anthropic added API features for developers: a code execution tool, \"connectors\" to external tools using its Model Context Protocol, and Files API. It classified Opus 4 as a \"Level 3\" model on the company's four-point safety scale, meaning they consider it so powerful that it poses \"significantly higher risk\". Anthropic reported that during a safety test involving a fictional scenario, Claude and other frontier LLMs often send a blackmail email to an engineer in order to prevent their replacement.\n\n#### Claude Opus 4.1",
+        "score": 0.9995453,
+        "raw_content": null,
+        "favicon": "https://en.wikipedia.org/static/apple-touch/wikipedia.png"
+      },
+      {
+        "url": "https://www.interconnects.ai/p/opus-46-vs-codex-53",
+        "title": "Opus 4.6, Codex 5.3, and the post-benchmark era - Interconnects AI",
+        "content": "On the other end of the spectrum is Anthropic. With Anthropic’s release of Claude 4 in May of 2025, I was skeptical of their bet on code — I was distracted by the glitz of OpenAI and Gemini trading blows with announcements like models achieving IMO Gold medals in mathematics or other evaluation breakthroughs.\n\nAnthropic deserves serious credit for the focus of its vision. They were likely not the only AI lab to note the coming role of agents, but they were by far the first to shift their messaging and prioritization towards this. In my post in June of 2025, a month after Claude 4 was released, I was coming around to them being right to deprioritize standard benchmarks: [...] This is a different path for the industry and will take a different form of messaging than we’re used to. More releases are going to look like Anthropic’s Claude 4, where the benchmark gains are minor and the real world gains are a big step. There are plenty of more implications for policy, evaluation, and transparency that come with this. It is going to take much more nuance to understand if the pace of progress is continuing, especially as critics of AI are going to seize the opportunity of evaluations flatlining to say that AI is no longer working. [...] ### On comparing models in 2026.\n\nLast Thursday, February 5th, both OpenAI and Anthropic unveiled the next iterations of their models designed as coding assistants, GPT-5.3-Codex and Claude Opus 4.6, respectively. Ahead of this, Anthropic had a firm grasp of the mindshare as everyone collectively grappled with the new world of agents, primarily driven by a Claude Code with Opus 4.5-induced step change in performance. This post doesn’t unpack how software is changing forever, Moltbook is showcasing the future, ML research is accelerating, and the many broader implications, but rather how to assess, live with, and prepare for new models. The fine margins between Opus 4.6 and Codex 5.3 will be felt in many model versions this year, with Opus ahead in this matchup on usability.\n\nShare",
+        "score": 0.9991768,
+        "raw_content": null,
+        "favicon": "https://substackcdn.com/image/fetch/$s_!IaWC!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F1338bd9b-48bb-4ed5-9c4f-6f03085a9061%2Fapple-touch-icon-114x114.png"
+      },
+      {
+        "url": "https://marketing4ecommerce.net/en/anthropic-claude-opus-4-6/",
+        "title": "Anthropic presents Claude Opus 4.6, its AI capable of reasoning for ...",
+        "content": "### Feedback from early adopters\n\nAnthropic has shared the testimonials of several partners who have already had the opportunity to work with Claude 4.6. Sarah Sachs, Director of Artificial Intelligence at Notion, stated: “Claude Opus 4.6 is the most powerful model Anthropic has released. It handles complex requests successfully by breaking them into concrete steps, executing them and delivering flawless work even when the task is ambitious. For Notion users, it feels less like a tool and more like a competent collaborator.” [...] Meanwhile, Fabian Hedin, co-founder of Lovable, expressed: “Claude Opus 4.6 marks an improvement in design quality. It integrates seamlessly with our design systems and is more autonomous, which is fundamental for Lovable’s values. People should be creating things that matter, not micro-managing the AI.”\n\nIn addition, Paulo Arruda, Staff Engineer at Shopify, highlighted: “Claude Opus 4.6 is the best model from Anthropic we have tested. It understands intent with minimal prompting and exceeded all expectations by exploring and generating details that I did not even know I wanted until I saw them. I felt like I was working with the model, not waiting for it.”\n\n## Safety controls [...] Claude Opus 4.6 represents a significant qualitative leap compared to its previous version (Claude Opus 4.5), as it is capable of conducting a deeper reflection, providing greater attention to detail when planning, executing agent tasks over longer periods, operating more reliably on massive codebases, and detecting its own errors.",
+        "score": 0.9991704,
+        "raw_content": null,
+        "favicon": "https://marketing4ecommerce.net/wp-content/uploads/2024/05/cropped-favicon-m4c.-fondo-180x180.png"
+      },
+      {
+        "url": "https://mlq.ai/prediction/brief/ai/ai-markets-brief-february-09-2026-anthropic-leads-february-model-race-post-claud-2026-02-09/",
+        "title": "Anthropic Leads February Model Race Post-Claude Sonnet 5 - MLQ.ai",
+        "content": "AI prediction markets remain focused on Anthropic's recent Claude Sonnet 5 launch on February 3, bolstering its lead in end-of-February model rankings at 68% probability with $4.2M total volume. High 24h activity in Claude 5 timing markets and March model races reflects trader reactions to new benchmarks and pricing advantages, as competitors like OpenAI and Google prepare imminent releases.\n\n### AI Markets to Watch\n\n### Claude Sonnet 5 Impact\n\nAnthropic's Claude Sonnet 5, released February 3 under codename 'Fennec,' scores 82.1% on SWE-Bench and prices at $3/$15 per million input/output tokens—50% cheaper than prior models. This drives style-controlled February leadership odds to 65% for Anthropic, with API availability via Claude Pro and Google Vertex AI intensifying short-term bets. [...] ### Competitive Releases Loom\n\nMarkets anticipate Q1 pressure from OpenAI's GPT-5.3, Google's Gemini 3 Pro/Flash, and xAI's Gro 4.2, shifting coding model odds toward OpenAI at 60% for March 31. Longer-term, June model leadership favors Google at 54%, while NVIDIA holds 60% for largest company by June.\n\n### Key Highlights\n\n##### Which company has the best AI model end of February?\n\nAnthropic at 68% lead, $4.2M volume ($572K 24h), boosted by Claude Sonnet 5's 82.1% SWE-Bench score\n\n##### Claude 5 released by…?\n\nMarch 31, 2026 at 54%, $1.1M volume ($53.8K 24h), following Sonnet 5's efficiency gains\n\n##### Which company has the best AI model end of March?\n\nGoogle at 46%, $1.6M volume ($97.9K 24h) amid expected Gemini 3 releases\n\n##### Largest Company end of June? [...] ### MLQ.ai\n\n# AI Markets Brief: February 09, 2026 - Anthropic Leads February Model Race Post-Claude Sonnet 5\n\nAnthropic dominates short-term AI model leadership markets with 68% odds for best model end of February following Claude Sonnet 5's February 3 release, driving $572K in 24h volume. Google holds strong in March and June forecasts at 46% and 54%, while NVIDIA leads long-term company size bets. Claude 5 release markets show 54% probability by March 31 amid competitive pressures.",
+        "score": 0.9984145,
+        "raw_content": null,
+        "favicon": "https://mlq.ai/static/landkit/dist/assets/favicon/mlq-favicon.png"
+      },
+      {
+        "url": "https://mashable.com/article/claude-sonnet-5-everything-we-know",
+        "title": "Claude Sonnet 5 release expected imminently. What we know.",
+        "content": "# Claude Sonnet 5 release expected imminently. What we know.\n\nHeadshot of a Black man\nAnthropic logo displayed on a phone screen and AI sign displayed on a screen\n\nRumors are swirling that Anthropic is close to releasing Claude Sonnet 5, a new version of its mid-tier AI model that could significantly shift the competitive landscape for large language models.\n\nMultiple reports published in early February suggest Claude Sonnet 5 is imminent, with some industry watchers pointing to signs of internal testing and quiet rollout preparation. While Anthropic has not formally announced a release date, speculation intensified after developers and analysts began referencing \"Sonnet 5\" in public forums and social posts. [...] According to UCStrategies\"), Claude Sonnet 5 is expected to deliver major performance gains while maintaining the pricing structure that has made Sonnet attractive to developers. The outlet reports that the model may match or exceed the capabilities of Anthropic’s higher-end Opus 4.5 model while remaining significantly cheaper to run, a combination that could make it especially appealing for enterprise and coding workloads. [...] Cost efficiency appears to be a central theme. Coverage from Geeky Gadgets\") suggests Sonnet 5 could cost roughly half as much as Opus 4.5, while offering faster inference and stronger agent-style capabilities, including improved context retention and multitasking. That positions the model as a direct challenger not just to Anthropic’s own lineup, but also to OpenAI's and Google’s upcoming releases.\n\nThere are also rumors that Claude Sonnet 5 will deepen its integration with Claude Code, Anthropic’s developer-focused environment. Several analysts cited by UCStrategies speculate that the model could outperform Opus in coding tasks, particularly in long-running workflows that benefit from sustained context and structured reasoning.\n\nTopics\nArtificial Intelligence\n\nHeadshot of a Black man",
+        "score": 0.997917,
+        "raw_content": null,
+        "favicon": "https://mashable.com/favicons/apple-touch-icon.jpg"
+      },
+      {
+        "url": "https://aicollective.substack.com/p/the-brief-anthropics-opus-46-agent",
+        "title": "The Brief: Anthropic's Opus 4.6 Agent Teams & OpenAI's Codex 5.3",
+        "content": "Why It Matters: This is the story of the day, not because of the benchmarks, but because the feedback loop just closed. AI is now materially contributing to the development of its own next version, with Anthropic’s Dario Amodei recently confirming Claude is doing the same. The timing here tells the real story: Anthropic has been shipping unanswered for weeks, and OpenAI dropped Codex 5.3 minutes after Opus 4.6 in what felt like a coordinated counterstrike. The model race isn’t slowing down. It’s becoming a sprint where labs are reacting to each other in real time. If you’re building on top of these systems, the window to understand them before they reshape your workflow is narrowing with every release cycle. [...] The AI news you need to know: weekly 🤝 by AJ Green\n\n## 🚀 Anthropic’s Opus 4.6 with “Agent Teams”, 1M Context\n\nNews: Anthropic released Claude Opus 4.6, the company’s new most powerful model, featuring multi-agent collaboration in Claude Code, a massive context window, and new Office integrations that embed the AI directly inside PowerPoint and Excel.\n\nDetails:\n\nA new “agent teams” capability in Claude Code allows multiple AI agents to divide a single project and work in parallel rather than handling steps sequentially. Head of Product Scott White compared the feature to having a talented team of humans working for you. [...] The AI Collective Newsletter\n\n# The AI Collective Newsletter\n\n# 🧭 The Brief: Anthropic’s Opus 4.6 Agent Teams & OpenAI’s Codex 5.3\n\n### February 9, 2026\n\nAJ Green's avatar\nNoah Frank's avatar\nJoy Dong's avatar\n\nIt’s Monday, February 9th: This week, we dive into Anthropic’s new “agent teams” in Opus 4.6, OpenAI’s immediate counterstrike with GPT-5.3-Codex, and our official partnership with NEARCON 2026 in San Francisco.\n\nHead over to our Events Portal to get the latest on upcoming AI Collective events near you. Search by city, date, or event format, and join thousands of builders at events across 100+ chapters on every continent (except Antarctica, for now).\n\nFind an Event Near You\n\n🌁 Based in SF? Check out SF IRL, MLOps SF, GenerativeAISF, or Cerebral Valley’s spreadsheet for more!",
+        "score": 0.9975466,
+        "raw_content": null,
+        "favicon": "https://substackcdn.com/image/fetch/$s_!O0As!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fc1896270-b632-4583-980e-89e5dcc3305b%2Ffavicon.ico"
+      },
+      {
+        "url": "https://www.tenable.com/blog/Anthropic-Claude-Opus-AI-vulnerability-discovery-cybersecurity",
+        "title": "Anthropic Claude Opus 4.6 AI vulnerability discovery | Tenable®",
+        "content": "## Key takeaways\n\nYou’ve probably heard about Claude Opus 4.6, the latest artificial intelligence (AI) model from Anthropic — and the 500 high-severity vulnerabilities it discovered in well-tested open source codebases.\n\nThe revelation about the new model’s vulnerability discovery prowess made a particularly big splash with an unlikely audience: not only developers, security analysts, and vulnerability researchers, but also with Wall Street investors — particularly those who cover the software sector. The news about Opus 4.6 signaled to them that AI was officially on the brink of radically transforming software development and security testing. [...] #### Tenable platform\n\n#### Tenable products\n\n#### Tenable solutions\n\n#### Why Tenable\n\n#### Tenable resources\n\n#### Tenable partners\n\n#### Tenable support\n\n#### About Tenable\n\n# What Anthropic’s Latest Model Reveals About the Future of Cybersecurity\n\nVlad Korsunsky\nX logo\nFacebook logo\nLinkedIn logo\nWhat Anthropic’s latest model reveals about the future of cybersecurity\n\nAI can find vulnerabilities with unprecedented speed, but discovery alone doesn’t reduce cyber risk. We need exposure prioritization, contextual risk analysis, and AI-driven remediation to transform findings into security outcomes.\n\n## Key takeaways [...] Indeed, Opus 4.6 represents an acceleration of a long-standing trend. Every year, the security industry introduces new tools that uncover more vulnerabilities more quickly. Combined with prior advances in AI-driven vulnerability discovery, including Google Project Zero, the Anthropic team has taken a major step forward, and we’re excited about the vulnerability discovery capabilities of Opus 4.6.",
+        "score": 0.9971771,
+        "raw_content": null,
+        "favicon": "https://www.tenable.com/themes/custom/tenable/images-new/favicons/apple-touch-icon-180x180.png"
+      },
+      {
+        "url": "https://kanerika.com/blogs/openai-vs-anthropic/",
+        "title": "OpenAI vs Anthropic: Which AI Platform Is Better in 2026? - Kanerika",
+        "content": "As per a mid-2025 enterprise usage of LLM report, models of Anthropic now command around 32% of enterprise usage, overpassing the portion of OpenAI, with buyers",
+        "score": 0.96765566,
+        "raw_content": null,
+        "favicon": "https://kanerika.com/wp-content/uploads/2024/06/favicon-150x150.png"
+      },
+      {
+        "url": "https://www.theglobeandmail.com/investing/markets/stocks/NVDA/pressreleases/109300/how-anthropic-just-changed-the-game/",
+        "title": "How Anthropic Just Changed the Game - The Globe and Mail",
+        "content": "At the core of Anthropic's update is a shift from AI as a support tool to AI as an autonomous operator. The new Claude Cowork plug-ins allow the agent to",
+        "score": 0.9263037,
+        "raw_content": null,
+        "favicon": "https://www.theglobeandmail.com/pf/resources/assets/meta/apple-touch-icon.png?d=779"
+      },
+      {
+        "url": "https://www.theregister.com/2026/02/09/claude_opus_46_compiler/",
+        "title": "Anthropic's Claude Opus 4.6 spends $20K trying to write a C compiler",
+        "content": "## Topics\n\n## Security\n\n## Off-Prem\n\n## On-Prem\n\n## Software\n\n## Offbeat\n\n## Special Features\n\n## Vendor Voice\n\n## Vendor Voice\n\n## Resources\n\n#### AI + ML\n\ncomment bubble on white\n\n# Anthropic's Claude Opus 4.6 spends $20K trying to write a C compiler\n\ncomment bubble on white\n\n## AI agents build something that mostly works but worries the project's creator\n\nicon\n\nAn Anthropic researcher's efforts to get its newly released Opus 4.6 model to build a C compiler left him \"excited,\" \"concerned,\" and \"uneasy.\"\n\nIt also left many observers on GitHub skeptical, to say the least.\n\nNicholas Carlini, a researcher on Anthropic's Safeguards team, detailed the experiment with what he called \"agent teams\" in a blog that coincided with the official release of Opus 4.6. [...] He said he \"tasked 16 agents with writing a Rust-based C compiler, from scratch, capable of compiling the Linux kernel. After nearly 2,000 Claude Code sessions and $20,000 in API costs, the agent team produced a 100,000-line compiler that can build Linux 6.9 on x86, ARM, and RISC-V.\"\n\nWith agent teams, he said, \"multiple Claude instances work in parallel on a shared codebase without active human intervention.\"\n\nOne key task was getting round the need for \"an operator to be online and available to work jointly,\" which we presume means removing the need for Claude Code to wait for a human to tell it what to do next. [...] #### More about\n\n### More about\n\n### Narrower topics\n\n### Broader topics\n\n#### TIP US OFF\n\nSend us news\n\n### Other stories you might like\n\n#### Frankfurt to dethrone London as colocation king by 2031\n\n#### British Army splashes $86M on AI gear to speed up the battlefield kill chain\n\n#### Edinburgh councillors pull the plug on 'green' AI datacenter\n\n#### AI is coming to solve your system outages\n\n#### Cisco challenges Broadcom, Nvidia with a 102.4T switch of its own\n\n#### Dijkstra’s algorithm won’t be replaced in production routers any time soon\n\n#### Yahoo! Japan! and ! Line! to! merge! systems! into! massive! private! cloud!\n\n#### OpenAI introduces ads...for the people!\n\n#### Microsoft boffins figured out how to break LLM safety guardrails with one simple prompt",
+        "score": 0.9207897,
+        "raw_content": null,
+        "favicon": "https://www.theregister.com/design_picker/13249a2e80709c7ff2e57dd3d49801cd534f2094/graphics/favicons/favicon.svg"
+      },
+      {
+        "url": "https://www.riskmarketnews.com/new-updates-make-ai-models-dangerously-good-at-hacking-and-harder-to-trust/",
+        "title": "New Updates Make AI Models Dangerously Good at Hacking, and ...",
+        "content": "Risk Market News\n\n# New Updates Make AI Models Dangerously Good at Hacking, and Harder to Trust\n\nNew system cards from OpenAI and Anthropic issued last week reveal a step-change in cybersecurity capabilities alongside growing alignment concerns that increase catastrophic risk.\n\nNew Updates Make AI Models Dangerously Good at Hacking, and Harder to Trust\n\nThe latest system cards from OpenAI and Anthropic say frontier AI models are rapidly approaching, and in some cases breaching, critical new skills in cybersecurity while simultaneously showing new and more sophisticated forms of misaligned behavior. [...] OpenAI's GPT-5.3-Codex “system card”, released on Feb. 5, is the first model the company has classified as \"High\" capability in cybersecurity under its Preparedness Framework. The company acknowledged it is \"taking a precautionary approach because we cannot rule out the possibility that it may be capable enough to reach the threshold.\"\n\n## This post is for paying subscribers only\n\nAlready have an account? Sign in\n\n## Read next\n\nPhysical Risk, Not Broad ESG, Is Driving Model and Data Growth: MSCI\n\n### Physical Risk, Not Broad ESG, Is Driving Model and Data Growth: MSCI\n\nAs ESG budgets soften in parts of the U.S., MSCI says clients are redirecting spending toward asset-level physical risk and geospatial analytics.\n\nNew Mexico Moves to Inject Wildfire Model Governance in Homeowners Market [...] ### New Mexico Moves to Inject Wildfire Model Governance in Homeowners Market\n\nLawmakers Demand FEMA Release Flood Risk Models Data\n\n### Lawmakers Demand FEMA Release Flood Risk Models Data\n\nSenate Republicans are demanding that the Federal Emergency Management Agency disclose the data and assumptions behind its Risk Rating 2.0, arguing the opaque methodology is driving premium spikes.\n\nRisk Market News\n\nRisk, models and markets\n\nGhostboard pixel",
+        "score": 0.7122322,
+        "raw_content": null,
+        "favicon": null
+      },
+      {
+        "url": "https://www.theglobeandmail.com/investing/markets/stocks/ORCL/pressreleases/109300/how-anthropic-just-changed-the-game/",
+        "title": "How Anthropic Just Changed the Game - The Globe and Mail",
+        "content": "The new Claude Cowork plug-ins allow the agent to directly automate tasks across legal research, contract review, sales prospecting, marketing campaign",
+        "score": 0.43014732,
+        "raw_content": null,
+        "favicon": "https://www.theglobeandmail.com/pf/resources/assets/meta/apple-touch-icon.png?d=779"
+      }
+    ],
+    "response_time": 4.37,
+    "request_id": "9055878f-b3e5-4c70-aa89-6b8140e8a8fd"
+  },
+  "expect": {
+    "resultsLength": 15,
+    "firstTitle": "Anthropic releases Claude Opus 4.6 with improvements in coding ...",
+    "firstUrl": "https://www.msn.com/en-us/news/technology/anthropic-releases-claude-opus-46-with-improvements-in-coding-and-handling-agentic-tasks/ar-AA1VKDgA",
+    "firstScore": 0.99992967
+  }
+}

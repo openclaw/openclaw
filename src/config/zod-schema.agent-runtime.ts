@@ -7,7 +7,6 @@ import {
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
-import { sensitive } from "./zod-schema.sensitive.js";
 
 export const HeartbeatSchema = z
   .object({
@@ -139,7 +138,6 @@ export const SandboxBrowserSchema = z
     allowHostControl: z.boolean().optional(),
     autoStart: z.boolean().optional(),
     autoStartTimeoutMs: z.number().int().positive().optional(),
-    binds: z.array(z.string()).optional(),
   })
   .strict()
   .optional();
@@ -173,14 +171,16 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
 export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    provider: z.union([z.literal("brave"), z.literal("perplexity"), z.literal("grok")]).optional(),
-    apiKey: z.string().optional().register(sensitive),
+    provider: z
+      .union([z.literal("brave"), z.literal("perplexity"), z.literal("grok"), z.literal("tavily")])
+      .optional(),
+    apiKey: z.string().optional(),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     perplexity: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: z.string().optional(),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -188,8 +188,22 @@ export const ToolsWebSearchSchema = z
       .optional(),
     grok: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: z.string().optional(),
         model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    tavily: z
+      .object({
+        apiKey: z.string().optional(),
+        searchDepth: z
+          .union([
+            z.literal("basic"),
+            z.literal("advanced"),
+            z.literal("fast"),
+            z.literal("ultra-fast"),
+          ])
+          .optional(),
       })
       .strict()
       .optional(),
@@ -333,7 +347,7 @@ export const MemorySearchSchema = z
     remote: z
       .object({
         baseUrl: z.string().optional(),
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
         batch: z
           .object({
