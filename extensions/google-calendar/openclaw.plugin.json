@@ -1,0 +1,26 @@
+{
+  "id": "google-calendar",
+  "name": "Google Calendar",
+  "description": "Query and manage Google Calendar events from your AI assistant.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "credentialsPath": { "type": "string" },
+      "calendarId": { "type": "string" },
+      "accessToken": { "type": "string" }
+    }
+  },
+  "uiHints": {
+    "credentialsPath": {
+      "label": "Service Account Credentials Path",
+      "placeholder": "~/.openclaw/google-calendar-credentials.json"
+    },
+    "calendarId": { "label": "Calendar ID", "placeholder": "primary" },
+    "accessToken": {
+      "label": "Access Token",
+      "sensitive": true,
+      "help": "Direct OAuth2 access token (alternative to service account)"
+    }
+  }
+}
