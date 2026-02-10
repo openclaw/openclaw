@@ -146,14 +146,26 @@ describe("passesAttentionGate", () => {
   });
 
   it("should accept messages with specific information/preferences", () => {
-    expect(passesAttentionGate("I prefer using TypeScript over JavaScript")).toBe(true);
-    expect(passesAttentionGate("My meeting with John is on Thursday")).toBe(true);
-    expect(passesAttentionGate("The project deadline was moved to March")).toBe(true);
+    expect(
+      passesAttentionGate("I strongly prefer using TypeScript over JavaScript for all projects"),
+    ).toBe(true);
+    expect(
+      passesAttentionGate("My important meeting with John is scheduled for Thursday afternoon"),
+    ).toBe(true);
+    expect(
+      passesAttentionGate("The project deadline was moved to March due to client feedback"),
+    ).toBe(true);
   });
 
   it("should accept actionable requests with context", () => {
-    expect(passesAttentionGate("Let's limit the wa-group-monitoring to business hours")).toBe(true);
-    expect(passesAttentionGate("Can you check the error logs on the production server")).toBe(true);
+    expect(
+      passesAttentionGate("Let's limit the wa-group-monitoring cron job to business hours only"),
+    ).toBe(true);
+    expect(
+      passesAttentionGate(
+        "Can you check the error logs on the production server for recent failures",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -1333,6 +1345,84 @@ describe("passesAssistantAttentionGate", () => {
   it("should reject noise patterns", () => {
     expect(passesAssistantAttentionGate("ok")).toBe(false);
     expect(passesAssistantAttentionGate("sounds good")).toBe(false);
+  });
+
+  it("should reject 'Let me...' action narration", () => {
+    expect(
+      passesAssistantAttentionGate(
+        "Let me check the error logs on the production server for recent failures and report back.",
+      ),
+    ).toBe(false);
+    expect(
+      passesAssistantAttentionGate(
+        "Now let me update the dashboard and send the Slack report with today's results:",
+      ),
+    ).toBe(false);
+    expect(
+      passesAssistantAttentionGate(
+        "Let me run the LinkedIn parallel outreach job and start by setting up the search term rotation.",
+      ),
+    ).toBe(false);
+  });
+
+  it("should reject 'I'll...' action narration", () => {
+    expect(
+      passesAssistantAttentionGate(
+        "I'll run the email labeler to classify any unread, unlabeled emails right now.",
+      ),
+    ).toBe(false);
+    expect(
+      passesAssistantAttentionGate(
+        "I'll check for newly accepted LinkedIn connections and update the tracker spreadsheet.",
+      ),
+    ).toBe(false);
+  });
+
+  it("should reject 'Starting/Running/Processing...' status updates", () => {
+    expect(
+      passesAssistantAttentionGate(
+        "Starting LinkedIn outreach for Training category using profile linkedin-3 with isolated browser.",
+      ),
+    ).toBe(false);
+    expect(
+      passesAssistantAttentionGate(
+        "Processing through extraction steadily doing eight at a time against local Qwen model.",
+      ),
+    ).toBe(false);
+  });
+
+  it("should reject 'Good!/Perfect!' opener narration", () => {
+    expect(
+      passesAssistantAttentionGate(
+        "Good! I can see the search results. I've identified several 2nd-degree prospects to connect with.",
+      ),
+    ).toBe(false);
+    expect(
+      passesAssistantAttentionGate(
+        "Perfect! The connection dialog appeared. I'll click Add a note to add the personalized message.",
+      ),
+    ).toBe(false);
+  });
+
+  it("should reject context compaction announcements", () => {
+    expect(
+      passesAssistantAttentionGate(
+        "\u{1F504} **Context Reset** \u{2014} My memory was just compacted. Last thing I remember: setting up Flux 2.",
+      ),
+    ).toBe(false);
+  });
+
+  it("should still accept substantive assistant conclusions", () => {
+    expect(
+      passesAssistantAttentionGate(
+        "The memory-neo4j plugin uses confidence-weighted RRF for search result fusion and a 3-signal hybrid search combining HNSW, BM25, and graph traversal.",
+      ),
+    ).toBe(true);
+    expect(
+      passesAssistantAttentionGate(
+        "Whisper wins accuracy across all tests while SenseVoice wins speed at seventeen to thirty-four times faster processing.",
+      ),
+    ).toBe(true);
   });
 });
 

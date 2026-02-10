@@ -806,6 +806,23 @@ export async function runSleepCycle(
           }
         }
 
+        // Cap the number of LLM-checked pairs to prevent sleep cycle timeouts.
+        // Sort by similarity descending so higher-similarity pairs (more likely
+        // to be duplicates) are checked first.
+        const MAX_SEMANTIC_DEDUP_PAIRS = 50;
+        if (allPairs.length > MAX_SEMANTIC_DEDUP_PAIRS) {
+          allPairs.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
+          const skipped = allPairs.length - MAX_SEMANTIC_DEDUP_PAIRS;
+          allPairs.length = MAX_SEMANTIC_DEDUP_PAIRS;
+          onProgress?.(
+            "semanticDedup",
+            `Capped at ${MAX_SEMANTIC_DEDUP_PAIRS} pairs (${skipped} lower-similarity pairs skipped)`,
+          );
+          logger.info(
+            `memory-neo4j: [sleep] Phase 1b capped to ${MAX_SEMANTIC_DEDUP_PAIRS} pairs (${skipped} skipped)`,
+          );
+        }
+
         // Process pairs in concurrent batches
         const invalidatedIds = new Set<string>();
 
