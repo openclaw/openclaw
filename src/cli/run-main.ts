@@ -53,19 +53,19 @@ export async function runCli(argv: string[] = process.argv) {
   });
 
   const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
-  // Register the primary subcommand if one exists (for lazy-loading)
   const primary = getPrimaryCommand(parseArgv);
-  if (primary) {
-    const { registerSubCliByName } = await import("./program/register.subclis.js");
-    await registerSubCliByName(program, primary);
-  }
-
+  // Register plugin CLI commands before lazy subcli so plugin top-level commands
+  // (e.g. openclaw foundry-openclaw) are on the program before parse; skip only for bare help/version.
   const shouldSkipPluginRegistration = !primary && hasHelpOrVersion(parseArgv);
   if (!shouldSkipPluginRegistration) {
-    // Register plugin CLI commands before parsing
     const { registerPluginCliCommands } = await import("../plugins/cli.js");
     const { loadConfig } = await import("../config/config.js");
     registerPluginCliCommands(program, loadConfig());
+  }
+  // Register the primary subcommand if one exists (for lazy-loading built-in subclis).
+  if (primary) {
+    const { registerSubCliByName } = await import("./program/register.subclis.js");
+    await registerSubCliByName(program, primary);
   }
 
   await program.parseAsync(parseArgv);

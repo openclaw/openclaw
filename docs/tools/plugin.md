@@ -523,6 +523,8 @@ export default function (api) {
 
 ### Register CLI commands
 
+Plugins register CLI subcommands via `api.registerCli()`. These are registered at program build so they appear as top-level commands (e.g. `openclaw mycmd` or `openclaw foundry-openclaw`) without manual binary edits.
+
 ```ts
 export default function (api) {
   api.registerCli(

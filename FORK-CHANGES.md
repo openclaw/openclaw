@@ -58,6 +58,11 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
     - **In-flight job persistence**: anti-zombie recovery scans for stale `runningAtMs` markers, clears them, and marks those jobs due again so mid-flight one-shot `--at` reminders are retried instead of silently dropped. Startup only clears obviously stale `runningAtMs` markers to avoid double-running fresh in-flight work.
     - Troubleshooting docs for "Cron stuck (zombie scheduler)" updated to describe anti-zombie recovery logs and in-flight job persistence.
 
+### Plugin CLI command registration
+
+- **Dynamic subcommand linkage**
+  - Plugin-provided CLI commands (e.g. `openclaw foundry-openclaw`) were failing with "unknown command" despite the plugin being loaded. Plugin CLI registration runs in `run-main` before lazy subcli registration and before parse: `registerPluginCliCommands(program, loadConfig())` is invoked so plugin subcommands are on the root program in time. Built-in commands (e.g. `memory`) are registered during `buildProgram()`, so overlapping plugin commands are skipped and no duplicate-command error occurs. No manual binary edits are required; `openclaw <plugin-cmd>` works when the plugin is enabled and registers a CLI. See `src/cli/run-main.ts`, `src/plugins/cli.ts`, and tests in `src/plugins/cli.test.ts`, `src/cli/program/command-registry.test.ts`.
+
 ### Model / provider integrations
 
 - **Ollama**
