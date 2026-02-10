@@ -97,7 +97,6 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
     maxTurns: params.maxTurns ?? DEFAULT_MAX_TURNS,
     systemPrompt,
     settingSources: ["user", "project", "local"],
-    debugFile: `/tmp/openclaw-sdk-debug-${Date.now()}.log`,
     ...(params.model && { model: params.model }),
     ...(params.env && { env: params.env }),
     ...(params.resume
@@ -108,19 +107,11 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
   };
 
   log.info(
-    `sdk exec: model=${params.model ?? "default"} promptChars=${params.prompt.length} maxTurns=${options.maxTurns} debugFile=${options.debugFile}`,
+    `sdk exec: model=${params.model ?? "default"} promptChars=${params.prompt.length} maxTurns=${options.maxTurns}`,
   );
 
-  const sdkStartedAt = Date.now();
-  let turnCount = 0;
   try {
     for await (const msg of query({ prompt: params.prompt, options })) {
-      // Log every event type to diagnose 64s gap between init and first turn
-      const subtype = "subtype" in msg ? (msg as { subtype?: string }).subtype : undefined;
-      log.info(
-        `sdk event: type=${msg.type}${subtype ? ` subtype=${subtype}` : ""} elapsed=${Date.now() - sdkStartedAt}ms`,
-      );
-
       if (msg.type === "system" && "subtype" in msg && msg.subtype === "init" && "tools" in msg) {
         log.info(
           `sdk init: model=${msg.model} tools=${msg.tools.length} mcp=${msg.mcp_servers.map((s: { name: string; status: string }) => `${s.name}:${s.status}`).join(",")}`,
@@ -136,8 +127,6 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
       }
 
       if (msg.type === "assistant") {
-        turnCount++;
-        log.info(`sdk turn ${turnCount}: elapsed=${Date.now() - sdkStartedAt}ms`);
         const toolUses = msg.message?.content?.filter(
           (b: { type: string }) => b.type === "tool_use",
         ) as Array<{ name: string }> | undefined;

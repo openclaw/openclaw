@@ -78,9 +78,6 @@ export async function getReplyFromConfig(
   });
   let provider = defaultProvider;
   let model = defaultModel;
-  defaultRuntime.error(
-    `[routing] 1 resolveDefaultModel: defaultProvider=${defaultProvider} defaultModel=${defaultModel}`,
-  );
   if (opts?.isHeartbeat) {
     const heartbeatRaw = agentCfg?.heartbeat?.model?.trim() ?? "";
     const heartbeatRef = heartbeatRaw
@@ -93,7 +90,6 @@ export async function getReplyFromConfig(
     if (heartbeatRef) {
       provider = heartbeatRef.ref.provider;
       model = heartbeatRef.ref.model;
-      defaultRuntime.error(`[routing] 2 heartbeat override: provider=${provider} model=${model}`);
     }
   }
 
@@ -238,7 +234,6 @@ export async function getReplyFromConfig(
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
-  defaultRuntime.error(`[routing] 6 post-directive final: provider=${provider} model=${model}`);
 
   const inlineActionResult = await handleInlineActions({
     ctx,

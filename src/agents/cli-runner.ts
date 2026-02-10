@@ -180,10 +180,7 @@ export async function runCliAgent(params: {
   const queueKey = serialize ? backendResolved.id : `${backendResolved.id}:${params.runId}`;
 
   try {
-    const enqueuedAt = Date.now();
-    log.info(`cli enqueue: key=${queueKey}`);
     const output = await enqueueCliRun(queueKey, async (): Promise<CliOutput> => {
-      log.info(`cli dequeue: key=${queueKey} waitMs=${Date.now() - enqueuedAt}`);
       // --- SDK path: claude-cli provider uses Claude Agent SDK directly ---
       if (backendResolved.id === "claude-cli") {
         return runSDKAgentBridge({
