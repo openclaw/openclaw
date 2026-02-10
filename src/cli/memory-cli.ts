@@ -3,19 +3,54 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
-import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-import { setVerbose } from "../globals.js";
-import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
-import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { MemorySearchManagerResult } from "../memory/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatErrorMessage, withManager } from "./cli-utils.js";
-import { withProgress, withProgressTotals } from "./progress.js";
+
+// Heavy deps are lazy-loaded on first action to avoid importing agents,
+// config barrel (Zod/validation), memory subsystem, and progress at module
+// load time. Module-level refs are populated by ensureDeps() before first use.
+let resolveDefaultAgentId: Awaited<typeof import("../agents/agent-scope.js")>["resolveDefaultAgentId"];
+let loadConfig: Awaited<typeof import("../config/config.js")>["loadConfig"];
+let resolveStateDir: Awaited<typeof import("../config/paths.js")>["resolveStateDir"];
+let resolveSessionTranscriptsDirForAgent: Awaited<typeof import("../config/sessions/paths.js")>["resolveSessionTranscriptsDirForAgent"];
+let getMemorySearchManager: Awaited<typeof import("../memory/index.js")>["getMemorySearchManager"];
+let listMemoryFiles: Awaited<typeof import("../memory/internal.js")>["listMemoryFiles"];
+let normalizeExtraMemoryPaths: Awaited<typeof import("../memory/internal.js")>["normalizeExtraMemoryPaths"];
+let setVerbose: Awaited<typeof import("../globals.js")>["setVerbose"];
+let withProgress: Awaited<typeof import("./progress.js")>["withProgress"];
+let withProgressTotals: Awaited<typeof import("./progress.js")>["withProgressTotals"];
+
+let _depsLoaded = false;
+async function ensureDeps() {
+  if (_depsLoaded) return;
+  const [agentScope, configMod, configPaths, sessionPaths, memIdx, memInternal, globals, progress] =
+    await Promise.all([
+      import("../agents/agent-scope.js"),
+      import("../config/config.js"),
+      import("../config/paths.js"),
+      import("../config/sessions/paths.js"),
+      import("../memory/index.js"),
+      import("../memory/internal.js"),
+      import("../globals.js"),
+      import("./progress.js"),
+    ]);
+  resolveDefaultAgentId = agentScope.resolveDefaultAgentId;
+  loadConfig = configMod.loadConfig;
+  resolveStateDir = configPaths.resolveStateDir;
+  resolveSessionTranscriptsDirForAgent = sessionPaths.resolveSessionTranscriptsDirForAgent;
+  getMemorySearchManager = memIdx.getMemorySearchManager;
+  listMemoryFiles = memInternal.listMemoryFiles;
+  normalizeExtraMemoryPaths = memInternal.normalizeExtraMemoryPaths;
+  setVerbose = globals.setVerbose;
+  withProgress = progress.withProgress;
+  withProgressTotals = progress.withProgressTotals;
+  _depsLoaded = true;
+}
 
 type MemoryCommandOptions = {
   agent?: string;
@@ -57,7 +92,7 @@ function formatSourceLabel(source: string, workspaceDir: string, agentId: string
   return source;
 }
 
-function resolveAgent(cfg: ReturnType<typeof loadConfig>, agent?: string) {
+function resolveAgent(cfg: OpenClawConfig, agent?: string) {
   const trimmed = agent?.trim();
   if (trimmed) {
     return trimmed;
@@ -65,7 +100,7 @@ function resolveAgent(cfg: ReturnType<typeof loadConfig>, agent?: string) {
   return resolveDefaultAgentId(cfg);
 }
 
-function resolveAgentIds(cfg: ReturnType<typeof loadConfig>, agent?: string): string[] {
+function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   const trimmed = agent?.trim();
   if (trimmed) {
     return [trimmed];
@@ -241,6 +276,7 @@ async function scanMemorySources(params: {
 }
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
+  await ensureDeps();
   setVerbose(Boolean(opts.verbose));
   const cfg = loadConfig();
   const agentIds = resolveAgentIds(cfg, opts.agent);
@@ -512,6 +548,7 @@ export function registerMemoryCli(program: Command) {
     .option("--force", "Force full reindex", false)
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
+      await ensureDeps();
       setVerbose(Boolean(opts.verbose));
       const cfg = loadConfig();
       const agentIds = resolveAgentIds(cfg, opts.agent);
@@ -659,6 +696,7 @@ export function registerMemoryCli(program: Command) {
           minScore?: number;
         },
       ) => {
+        await ensureDeps();
         const cfg = loadConfig();
         const agentId = resolveAgent(cfg, opts.agent);
         await withManager<MemoryManager>({

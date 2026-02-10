@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../../config/config.js";
-import { isTruthyEnvValue } from "../../infra/env.js";
 import { buildParseArgv, getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { resolveActionArgs } from "./helpers.js";
 
@@ -12,7 +11,8 @@ type SubCliEntry = {
   register: SubCliRegistrar;
 };
 
-const shouldRegisterPrimaryOnly = (argv: string[]) => {
+const shouldRegisterPrimaryOnly = async (argv: string[]) => {
+  const { isTruthyEnvValue } = await import("../../infra/env.js");
   if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS)) {
     return false;
   }
@@ -22,7 +22,8 @@ const shouldRegisterPrimaryOnly = (argv: string[]) => {
   return true;
 };
 
-const shouldEagerRegisterSubcommands = (_argv: string[]) => {
+const shouldEagerRegisterSubcommands = async (_argv: string[]) => {
+  const { isTruthyEnvValue } = await import("../../infra/env.js");
   return isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS);
 };
 
@@ -289,15 +290,15 @@ function registerLazyCommand(program: Command, entry: SubCliEntry) {
   });
 }
 
-export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
-  if (shouldEagerRegisterSubcommands(argv)) {
+export async function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
+  if (await shouldEagerRegisterSubcommands(argv)) {
     for (const entry of entries) {
       void entry.register(program);
     }
     return;
   }
   const primary = getPrimaryCommand(argv);
-  if (primary && shouldRegisterPrimaryOnly(argv)) {
+  if (primary && (await shouldRegisterPrimaryOnly(argv))) {
     const entry = entries.find((candidate) => candidate.name === primary);
     if (entry) {
       registerLazyCommand(program, entry);

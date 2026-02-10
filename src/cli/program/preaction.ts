@@ -1,6 +1,5 @@
 import type { Command } from "commander";
-import { setVerbose } from "../../globals.js";
-import { isTruthyEnvValue } from "../../infra/env.js";
+import { setVerbose, warmLoggerModule } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getCommandPath, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { resolveCliName } from "../cli-name.js";
@@ -29,6 +28,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const commandPath = getCommandPath(argv, 2);
+    const { isTruthyEnvValue } = await import("../../infra/env.js");
     const hideBanner =
       isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
       commandPath[0] === "update" ||
@@ -40,6 +40,8 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     }
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);
+    // Pre-warm logger module so logVerbose/shouldLogVerbose can use it synchronously.
+    await warmLoggerModule();
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }

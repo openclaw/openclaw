@@ -74,7 +74,7 @@ describe("cli program (smoke)", () => {
   });
 
   it("runs message with required options", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(["message", "send", "--target", "+1", "--message", "hi"], {
       from: "user",
     });
@@ -82,7 +82,7 @@ describe("cli program (smoke)", () => {
   });
 
   it("runs message react with signal author fields", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(
       [
         "message",
@@ -104,25 +104,25 @@ describe("cli program (smoke)", () => {
   });
 
   it("runs status command", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(["status"], { from: "user" });
     expect(statusCommand).toHaveBeenCalled();
   });
 
-  it("registers memory command", () => {
-    const program = buildProgram();
+  it("registers memory command", async () => {
+    const program = await buildProgram();
     const names = program.commands.map((command) => command.name());
     expect(names).toContain("memory");
   });
 
   it("runs tui without overriding timeout", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(["tui"], { from: "user" });
     expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
   });
 
   it("runs tui with explicit timeout override", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(["tui", "--timeout-ms", "45000"], {
       from: "user",
     });
@@ -130,27 +130,27 @@ describe("cli program (smoke)", () => {
   });
 
   it("warns and ignores invalid tui timeout override", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(["tui", "--timeout-ms", "nope"], { from: "user" });
     expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
     expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
   });
 
   it("runs config alias as configure", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(["config"], { from: "user" });
     expect(configureCommand).toHaveBeenCalled();
   });
 
   it("runs setup without wizard flags", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(["setup"], { from: "user" });
     expect(setupCommand).toHaveBeenCalled();
     expect(onboardCommand).not.toHaveBeenCalled();
   });
 
   it("runs setup wizard when wizard flags are present", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(["setup", "--remote-url", "ws://example"], {
       from: "user",
     });
@@ -211,7 +211,7 @@ describe("cli program (smoke)", () => {
     ] as const;
 
     for (const entry of cases) {
-      const program = buildProgram();
+      const program = await buildProgram();
       await program.parseAsync(
         ["onboard", "--non-interactive", "--auth-choice", entry.authChoice, entry.flag, entry.key],
         { from: "user" },
@@ -229,7 +229,7 @@ describe("cli program (smoke)", () => {
   });
 
   it("runs channels login", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(["channels", "login", "--account", "work"], {
       from: "user",
     });
@@ -240,7 +240,7 @@ describe("cli program (smoke)", () => {
   });
 
   it("runs channels logout", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     await program.parseAsync(["channels", "logout", "--account", "work"], {
       from: "user",
     });

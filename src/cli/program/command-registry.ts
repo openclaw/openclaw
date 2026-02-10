@@ -30,6 +30,8 @@ const routeHealth: RouteSpec = {
     if (timeoutMs === null) {
       return false;
     }
+    const { defaultRuntime } = await import("../../runtime.js");
+    const { healthCommand } = await import("../../commands/health.js");
     await healthCommand({ json, timeoutMs, verbose }, defaultRuntime);
     return true;
   },
@@ -143,7 +145,7 @@ export const commandRegistry: CommandRegistration[] = [
     id: "message",
     register: async ({ program, ctx }) => {
       const { registerMessageCommands } = await import("./register.message.js");
-      registerMessageCommands(program, ctx);
+      await registerMessageCommands(program, ctx);
     },
   },
   {
@@ -166,7 +168,7 @@ export const commandRegistry: CommandRegistration[] = [
     id: "subclis",
     register: async ({ program, argv }) => {
       const { registerSubCliCommands } = await import("./register.subclis.js");
-      registerSubCliCommands(program, argv);
+      await registerSubCliCommands(program, argv);
     },
   },
   {
@@ -183,7 +185,7 @@ export const commandRegistry: CommandRegistration[] = [
     id: "browser",
     register: async ({ program }) => {
       const { registerBrowserCli } = await import("../browser-cli.js");
-      registerBrowserCli(program);
+      await registerBrowserCli(program);
     },
   },
 ];
@@ -192,8 +194,38 @@ export async function registerProgramCommands(
   program: Command,
   ctx: ProgramContext,
   argv: string[] = process.argv,
+  opts?: { helpOnly?: boolean },
 ) {
-  await Promise.all(commandRegistry.map((entry) => entry.register({ program, ctx, argv })));
+  const helpOnly = opts?.helpOnly ?? false;
+
+  const entries = helpOnly
+    ? commandRegistry.map((entry) => {
+        // For bare --help, stub heavy registrations (message/browser load 20+
+        // sub-modules and take ~2s). The top-level command name & description
+        // is all Commander needs for the help listing.
+        if (entry.id === "message") {
+          return {
+            ...entry,
+            register: async ({ program: p }: CommandRegisterParams) => {
+              p.command("message").description("Send messages and channel actions");
+            },
+          };
+        }
+        if (entry.id === "browser") {
+          return {
+            ...entry,
+            register: async ({ program: p }: CommandRegisterParams) => {
+              p.command("browser").description(
+                "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
+              );
+            },
+          };
+        }
+        return entry;
+      })
+    : commandRegistry;
+
+  await Promise.all(entries.map((entry) => entry.register({ program, ctx, argv })));
 }
 
 export function findRoutedCommand(path: string[]): RouteSpec | null {

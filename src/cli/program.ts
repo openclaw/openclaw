@@ -1,2 +1,2 @@
 export { forceFreePort } from "./ports.js";
-export { buildProgram } from "./program/build-program.js";
+export { buildProgram, buildMinimalHelpProgram } from "./program/build-program.js";

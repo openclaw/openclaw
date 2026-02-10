@@ -2,9 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
 import { tryRouteCli } from "./route.js";
@@ -22,13 +20,6 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
 
 export async function runCli(argv: string[] = process.argv) {
   const normalizedArgv = stripWindowsNodeExec(argv);
-  const { loadDotEnv } = await import("../infra/dotenv.js");
-  loadDotEnv({ quiet: true });
-  normalizeEnv();
-  ensureOpenClawCliOnPath();
-
-  // Enforce the minimum supported runtime before doing any work.
-  assertSupportedRuntime();
 
   // Fast path for --version: resolve version without loading any command modules.
   const isVersionOnly =
@@ -43,7 +34,31 @@ export async function runCli(argv: string[] = process.argv) {
     process.exit(0);
   }
 
+  // Defer heavy env setup (dotenv, normalizeEnv, ensureOpenClawCliOnPath) for
+  // help-only invocations — they pull logging/subsystem → channels/registry →
+  // plugins/runtime which adds hundreds of ms for no benefit when showing help.
+  const isHelpOnly = isHelpFlag && !isVersionOnly;
+  if (!isHelpOnly) {
+    const { loadDotEnv } = await import("../infra/dotenv.js");
+    loadDotEnv({ quiet: true });
+    const { normalizeEnv } = await import("../infra/env.js");
+    normalizeEnv();
+    const { ensureOpenClawCliOnPath } = await import("../infra/path-env.js");
+    ensureOpenClawCliOnPath();
+    assertSupportedRuntime();
+  }
+
   if (await tryRouteCli(normalizedArgv)) {
+    return;
+  }
+
+  // Bare --help (no subcommand) fast path: register lightweight command stubs
+  // instead of loading all 20+ sub-modules from message/browser CLIs.
+  const primary = getPrimaryCommand(normalizedArgv);
+  if (isHelpOnly && !primary) {
+    const { buildMinimalHelpProgram } = await import("./program.js");
+    const program = await buildMinimalHelpProgram();
+    await program.parseAsync(normalizedArgv);
     return;
   }
 
@@ -73,7 +88,6 @@ export async function runCli(argv: string[] = process.argv) {
 
   const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
   // Register the primary subcommand if one exists (for lazy-loading)
-  const primary = getPrimaryCommand(parseArgv);
   if (primary) {
     const { registerSubCliByName } = await import("./program/register.subclis.js");
     await registerSubCliByName(program, primary);

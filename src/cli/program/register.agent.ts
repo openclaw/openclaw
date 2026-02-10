@@ -1,14 +1,16 @@
 import type { Command } from "commander";
-import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
-import { createDefaultDeps } from "../deps.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
+
+// Inlined to avoid eagerly importing channels/registry.js which pulls
+// plugins/runtime.js and the entire plugin infrastructure.
+const DEFAULT_CHAT_CHANNEL = "whatsapp";
 
 export function registerAgentCommands(program: Command, args: { agentChannelOptions: string }) {
   program
@@ -66,7 +68,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .action(async (opts) => {
       const verboseLevel = typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
       setVerbose(verboseLevel === "on");
-      // Build default deps (keeps parity with other commands; future-proofing).
+      const { createDefaultDeps } = await import("../deps.js");
       const deps = createDefaultDeps();
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { agentCliCommand } = await import("../../commands/agent-via-gateway.js");

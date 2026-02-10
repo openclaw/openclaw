@@ -86,7 +86,7 @@ describe("cli program (nodes media)", () => {
       return { ok: true };
     });
 
-    const program = buildProgram();
+    const program = await buildProgram();
     runtime.log.mockClear();
     await program.parseAsync(["nodes", "camera", "snap", "--node", "ios-node"], { from: "user" });
 
@@ -147,7 +147,7 @@ describe("cli program (nodes media)", () => {
       return { ok: true };
     });
 
-    const program = buildProgram();
+    const program = await buildProgram();
     runtime.log.mockClear();
     await program.parseAsync(
       ["nodes", "camera", "clip", "--node", "ios-node", "--duration", "3000"],
@@ -209,7 +209,7 @@ describe("cli program (nodes media)", () => {
       return { ok: true };
     });
 
-    const program = buildProgram();
+    const program = await buildProgram();
     runtime.log.mockClear();
     await program.parseAsync(
       [
@@ -292,7 +292,7 @@ describe("cli program (nodes media)", () => {
       return { ok: true };
     });
 
-    const program = buildProgram();
+    const program = await buildProgram();
     runtime.log.mockClear();
     await program.parseAsync(
       [
@@ -367,7 +367,7 @@ describe("cli program (nodes media)", () => {
       return { ok: true };
     });
 
-    const program = buildProgram();
+    const program = await buildProgram();
     runtime.log.mockClear();
     await program.parseAsync(
       ["nodes", "camera", "clip", "--node", "ios-node", "--duration", "10s"],
@@ -412,7 +412,7 @@ describe("cli program (nodes media)", () => {
       return { ok: true };
     });
 
-    const program = buildProgram();
+    const program = await buildProgram();
     runtime.log.mockClear();
     await program.parseAsync(
       ["nodes", "canvas", "snapshot", "--node", "ios-node", "--format", "png"],
@@ -448,7 +448,7 @@ describe("cli program (nodes media)", () => {
       return { ok: true };
     });
 
-    const program = buildProgram();
+    const program = await buildProgram();
     runtime.error.mockClear();
 
     await expect(
