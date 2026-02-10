@@ -833,4 +833,112 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("bluebubbles");
     expect(call?.params?.to).toBe("bluebubbles:chat_guid:123");
   });
+
+  it("splits collect-mode announces when accountId differs", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-789",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-a",
+      requesterSessionKey: "main",
+      requesterOrigin: { accountId: "acct-a" },
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-b",
+      requesterSessionKey: "main",
+      requesterOrigin: { accountId: "acct-b" },
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(2);
+
+    const accountIds = agentSpy.mock.calls.map(
+      (call) => (call[0] as { params?: Record<string, unknown> }).params?.accountId,
+    );
+    expect(accountIds).toContain("acct-a");
+    expect(accountIds).toContain("acct-b");
+    expect(agentSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns true even when direct-delivery callGateway throws (prevents duplicate announce)", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    // Simulate callGateway throwing AFTER the gateway has already processed the
+    // request (e.g., WebSocket timeout on the response ack). This is the root
+    // cause of #13021: didAnnounce stays false, allowing a second completion path
+    // through finalizeSubagentCleanup's flag reset.
+    agentSpy.mockRejectedValueOnce(new Error("WebSocket timeout after gateway delivery"));
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-dedup-guard",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    // The delivery was attempted (callGateway was called), so even though it threw,
+    // we must report didAnnounce=true to prevent the second completion path from
+    // triggering a duplicate delivery via finalizeSubagentCleanup flag reset.
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("still runs finally-block cleanup when direct-delivery callGateway throws", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    agentSpy.mockRejectedValueOnce(new Error("WebSocket timeout"));
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-cleanup-on-throw",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      label: "test-label",
+    });
+
+    // Even when delivery throws, the finally block should still run session cleanup.
+    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+  });
 });

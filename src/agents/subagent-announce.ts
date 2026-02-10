@@ -589,6 +589,12 @@ export async function runSubagentAnnounceFlow(params: {
     // catches duplicates if this announce is also queued by the gateway-
     // level message queue while the main session is busy (#17122).
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
+    // Mark as announced BEFORE the callGateway attempt.  If the gateway
+    // processes the request but the response ack fails (WebSocket timeout,
+    // etc.), we must NOT reset the cleanup flag — otherwise the second
+    // completion path fires a duplicate delivery.  This aligns with the
+    // queue/steer paths above which also set didAnnounce before delivery.
+    didAnnounce = true;
     await callGateway({
       method: "agent",
       params: {
@@ -607,8 +613,6 @@ export async function runSubagentAnnounceFlow(params: {
       expectFinal: true,
       timeoutMs: 15_000,
     });
-
-    didAnnounce = true;
   } catch (err) {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
