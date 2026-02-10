@@ -29,6 +29,9 @@ describe("chat.send command transcript – user message persistence", () => {
       "utf-8",
     );
 
+    // Ensure no cached modules interfere with our mocks.
+    vi.resetModules();
+
     // Mock loadSessionEntry to point at our temp transcript.
     vi.doMock("../session-utils.js", async (importOriginal) => {
       const original = await importOriginal();
@@ -94,9 +97,20 @@ describe("chat.send command transcript – user message persistence", () => {
     const { chatHandlers } = await import("./chat.js");
 
     const respond = vi.fn();
-    const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
     const logGateway = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+
+    // Use a deferred promise resolved by the broadcast mock to deterministically wait
+    // for the .then() handler to complete instead of relying on timer-based synchronization.
+    let resolveFinished: () => void;
+    const finished = new Promise<void>((resolve) => {
+      resolveFinished = resolve;
+    });
+    const broadcast = vi.fn((_event: string, payload: Record<string, unknown>) => {
+      if (payload.state === "final") {
+        resolveFinished();
+      }
+    });
 
     const context = {
       broadcast,
@@ -123,8 +137,8 @@ describe("chat.send command transcript – user message persistence", () => {
       client: undefined,
     });
 
-    // Wait for the .then() handler to complete (it runs asynchronously after respond).
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Wait for broadcastChatFinal to fire — this happens after transcript writes complete.
+    await finished;
 
     // Read the transcript file and parse all entries.
     const rawContent = fs.readFileSync(transcriptPath, "utf-8");
