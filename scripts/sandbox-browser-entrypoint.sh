@@ -119,6 +119,12 @@ if [[ "${HEADLESS}" == "1" ]]; then
   CHROME_ARGS+=("--headless=new")
 fi
 
+# Add extra args if provided (e.g. --remote-allow-origins=*)
+if [[ -n "${OPENCLAW_BROWSER_EXTRA_ARGS:-}" ]]; then
+  read -ra EXTRA_ARGS <<< "${OPENCLAW_BROWSER_EXTRA_ARGS}"
+  CHROME_ARGS+=("${EXTRA_ARGS[@]}")
+fi
+
 if [[ "${ALLOW_NO_SANDBOX}" == "1" ]]; then
   CHROME_ARGS+=("--no-sandbox" "--disable-setuid-sandbox")
 fi
