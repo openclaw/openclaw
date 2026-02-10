@@ -1,5 +1,5 @@
 import AjvModule, { type ErrorObject } from "ajv";
-import addFormats from "ajv-formats";
+import addFormatsModule from "ajv-formats";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   stripHeartbeatToken,
@@ -12,6 +12,8 @@ const ajv = new (AjvCtor as unknown as new (opts?: object) => import("ajv").defa
   strict: false,
   coerceTypes: false,
 });
+const addFormats = ((addFormatsModule as unknown as { default?: typeof addFormatsModule })
+  .default ?? addFormatsModule) as (ajv: unknown) => void;
 addFormats(ajv);
 
 type DeliveryPayload = {
