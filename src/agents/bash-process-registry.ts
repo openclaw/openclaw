@@ -44,6 +44,7 @@ export interface ProcessSession {
   pendingStderrChars: number;
   aggregated: string;
   tail: string;
+  stderrTail?: string;
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exited: boolean;
@@ -63,6 +64,7 @@ export interface FinishedSession {
   exitSignal?: NodeJS.Signals | number | null;
   aggregated: string;
   tail: string;
+  stderrTail?: string;
   truncated: boolean;
   totalOutputChars: number;
 }
@@ -126,6 +128,11 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
   session.tail = tail(session.aggregated, 2000);
+  if (stream === "stderr") {
+    const existing = session.stderrTail ?? "";
+    const next = existing + chunk;
+    session.stderrTail = tail(next, 2000);
+  }
 }
 
 export function drainSession(session: ProcessSession) {
@@ -172,6 +179,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     exitSignal: session.exitSignal,
     aggregated: session.aggregated,
     tail: session.tail,
+    stderrTail: session.stderrTail,
     truncated: session.truncated,
     totalOutputChars: session.totalOutputChars,
   });

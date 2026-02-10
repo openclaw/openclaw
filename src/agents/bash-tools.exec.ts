@@ -153,6 +153,7 @@ type ExecProcessOutcome = {
   aggregated: string;
   timedOut: boolean;
   reason?: string;
+  stderrTail?: string;
 };
 
 type ExecProcessHandle = {
@@ -418,6 +419,21 @@ function emitExecSystemEvent(text: string, opts: { sessionKey?: string; contextK
   requestHeartbeatNow({ reason: "exec-event" });
 }
 
+function truncateErrorOutput(raw: string | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const maxLines = 50;
+  const maxChars = 2048;
+  const lines = raw.split(/\r?\n/);
+  const sliced = lines.slice(-maxLines);
+  let text = sliced.join("\n");
+  if (text.length > maxChars) {
+    text = text.slice(text.length - maxChars);
+  }
+  return text.trim() || undefined;
+}
+
 async function runExecProcess(opts: {
   command: string;
   workdir: string;
@@ -629,6 +645,7 @@ async function runExecProcess(opts: {
       aggregated,
       timedOut: true,
       reason: aggregated ? `${aggregated}\n\n${reason}` : reason,
+      stderrTail: session.tail,
     });
   };
 
@@ -740,6 +757,7 @@ async function runExecProcess(opts: {
           aggregated,
           timedOut,
           reason: message,
+          stderrTail: session.tail,
         });
         return;
       }
@@ -750,6 +768,7 @@ async function runExecProcess(opts: {
         durationMs,
         aggregated,
         timedOut: false,
+        stderrTail: session.tail,
       });
     };
 
@@ -1599,7 +1618,11 @@ export function createExecTool(
               return;
             }
             if (outcome.status === "failed") {
-              reject(new Error(outcome.reason ?? "Command failed."));
+              const err = new Error(outcome.reason ?? "Command failed.") as Error & {
+                stderr?: string;
+              };
+              err.stderr = truncateErrorOutput(outcome.stderrTail ?? outcome.aggregated);
+              reject(err);
               return;
             }
             resolve({
