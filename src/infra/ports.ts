@@ -4,6 +4,7 @@ import type { PortListener, PortListenerKind, PortUsage, PortUsageStatus } from 
 import { danger, info, shouldLogVerbose, warn } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
+import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { inspectPortUsage } from "./ports-inspect.js";
 
@@ -17,10 +18,6 @@ class PortInUseError extends Error {
     this.port = port;
     this.details = details;
   }
-}
-
-function isErrno(err: unknown): err is NodeJS.ErrnoException {
-  return Boolean(err && typeof err === "object" && "code" in err);
 }
 
 export async function describePortOwner(port: number): Promise<string | undefined> {

@@ -1,8 +1,6 @@
-type PlainObject = Record<string, unknown>;
+import { isPlainObject } from "../utils.js";
 
-function isPlainObject(value: unknown): value is PlainObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+type PlainObject = Record<string, unknown>;
 
 export function applyMergePatch(base: unknown, patch: unknown): unknown {
   if (!isPlainObject(patch)) {

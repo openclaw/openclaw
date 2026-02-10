@@ -42,6 +42,27 @@ export function safeParseJson<T>(raw: string): T | null {
   }
 }
 
+/**
+ * Type guard for plain objects (not arrays, null, Date, RegExp, etc.).
+ * Uses Object.prototype.toString for maximum safety.
+ */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]"
+  );
+}
+
+/**
+ * Type guard for Record<string, unknown> (less strict than isPlainObject).
+ * Accepts any non-null object that isn't an array.
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export type WebChannel = "web";
 
 export function assertWebChannel(input: string): asserts input is WebChannel {

@@ -4,6 +4,7 @@ import type { Duplex } from "node:stream";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
+import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
 
 type CdpCommand = {
@@ -100,19 +101,6 @@ export type ChromeExtensionRelayServer = {
   extensionConnected: () => boolean;
   stop: () => Promise<void>;
 };
-
-function isLoopbackHost(host: string) {
-  const h = host.trim().toLowerCase();
-  return (
-    h === "localhost" ||
-    h === "127.0.0.1" ||
-    h === "0.0.0.0" ||
-    h === "[::1]" ||
-    h === "::1" ||
-    h === "[::]" ||
-    h === "::"
-  );
-}
 
 function isLoopbackAddress(ip: string | undefined): boolean {
   if (!ip) {

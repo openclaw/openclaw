@@ -12,13 +12,9 @@ import {
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { note } from "../terminal/note.js";
-import { resolveHomeDir } from "../utils.js";
+import { isRecord, resolveHomeDir } from "../utils.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
 import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 type UnrecognizedKeysIssue = ZodIssue & {
   code: "unrecognized_keys";

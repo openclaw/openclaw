@@ -1,4 +1,5 @@
 import type { TelegramGroupConfig } from "../config/types.js";
+import { isRecord } from "../utils.js";
 import { makeProxyFetch } from "./proxy.js";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -36,10 +37,6 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timer);
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export function collectTelegramUnmentionedGroupIds(

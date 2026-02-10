@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "./types.js";
+import { isPlainObject } from "../utils.js";
 import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
 
 type OverrideTree = Record<string, unknown>;
@@ -17,15 +18,6 @@ function mergeOverrides(base: unknown, override: unknown): unknown {
     next[key] = mergeOverrides((base as OverrideTree)[key], value);
   }
   return next;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.prototype.toString.call(value) === "[object Object]"
-  );
 }
 
 export function getConfigOverrides(): OverrideTree {
