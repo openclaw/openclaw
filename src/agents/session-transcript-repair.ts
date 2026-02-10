@@ -50,7 +50,10 @@ function makeMissingToolResult(params: {
     content: [
       {
         type: "text",
-        text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+        text:
+          "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair. " +
+          "DO NOT retry this exact call — the result was lost due to a transient error (e.g. rate limit). " +
+          "Instead, inform the user about the error and ask how to proceed.",
       },
     ],
     isError: true,
