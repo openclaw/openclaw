@@ -79,7 +79,7 @@ export function extractThinkingFromMessage(message: unknown): string {
       parts.push(rec.thinking);
     }
   }
-  return parts.join("\n").trim();
+  return sanitizeForDisplay(parts.join("\n").trim());
 }
 
 /**
@@ -102,7 +102,7 @@ export function extractContentFromMessage(message: unknown): string {
     const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
     if (stopReason === "error") {
       const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
-      return formatRawAssistantErrorForUi(errorMessage);
+      return sanitizeForDisplay(formatRawAssistantErrorForUi(errorMessage));
     }
     return "";
   }
@@ -123,7 +123,7 @@ export function extractContentFromMessage(message: unknown): string {
     const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
     if (stopReason === "error") {
       const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
-      return formatRawAssistantErrorForUi(errorMessage);
+      return sanitizeForDisplay(formatRawAssistantErrorForUi(errorMessage));
     }
   }
 
@@ -186,7 +186,7 @@ export function extractTextFromMessage(
   }
 
   const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
-  return formatRawAssistantErrorForUi(errorMessage);
+  return sanitizeForDisplay(formatRawAssistantErrorForUi(errorMessage));
 }
 
 export function isCommandMessage(message: unknown): boolean {

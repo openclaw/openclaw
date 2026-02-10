@@ -74,6 +74,15 @@ describe("extractThinkingFromMessage", () => {
 
     expect(text).toBe("alpha\nbeta");
   });
+
+  it("strips binary data from thinking blocks", () => {
+    const text = extractThinkingFromMessage({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "thought\x00\x01\x80process" }],
+    });
+
+    expect(text).toBe("thoughtprocess");
+  });
 });
 
 describe("extractContentFromMessage", () => {
