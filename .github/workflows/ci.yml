@@ -145,10 +145,10 @@ jobs:
           path: dist/
           retention-days: 1
 
-  # Validate npm pack contents after build.
+  # Validate npm pack contents after build (only on push to main, not PRs).
   release-check:
     needs: [docs-scope, build-artifacts]
-    if: needs.docs-scope.outputs.docs_only != 'true'
+    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
