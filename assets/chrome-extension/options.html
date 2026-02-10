@@ -175,16 +175,25 @@
           </p>
         </div>
 
-        <div class="card">
-          <h2>Relay port</h2>
-          <label for="port">Port</label>
-          <div class="row">
-            <input id="port" inputmode="numeric" pattern="[0-9]*" />
-            <button id="save" type="button">Save</button>
+        <div class="card" style="max-width: 720px; margin: 0 auto; text-align: center;">
+          <h2>Relay Connection</h2>
+          <div class="row" style="justify-content: center; gap: 20px; margin-top: 16px;">
+            <div style="text-align: center;">
+              <label for="host">Host</label>
+              <input id="host" type="text" placeholder="127.0.0.1" style="width: 180px; text-align: center;" />
+            </div>
+            <div style="text-align: center;">
+              <label for="port">Port</label>
+              <input id="port" inputmode="numeric" pattern="[0-9]*" style="width: 180px; text-align: center;" />
+            </div>
           </div>
-          <div class="hint">
-            Default: <code>18792</code>. Extension connects to: <code id="relay-url">http://127.0.0.1:&lt;port&gt;/</code>.
-            Only change this if your OpenClaw profile uses a different <code>cdpUrl</code> port.
+          <div style="margin-top: 24px;">
+            <button id="save" type="button" style="width: 100%; max-width: 240px;">Save</button>
+          </div>
+          <div class="hint" style="margin-top: 24px; line-height: 1.6;">
+            <div>Default: <code>127.0.0.1</code> : <code>18792</code></div>
+            <div>Extension connects to: <code id="relay-url">http://HOST:PORT/</code></div>
+            <div style="margin-top: 8px; opacity: 0.8;">Only change this if your OpenClaw profile uses a different <code>cdpUrl</code> host/port.</div>
           </div>
           <div class="status" id="status"></div>
         </div>

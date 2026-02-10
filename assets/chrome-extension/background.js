@@ -34,6 +34,12 @@ function nowStack() {
   }
 }
 
+async function getRelayHost() {
+  const stored = await chrome.storage.local.get(['relayHost'])
+  const h = String(stored.relayHost || '').trim()
+  return h || '127.0.0.1'
+}
+
 async function getRelayPort() {
   const stored = await chrome.storage.local.get(['relayPort'])
   const raw = stored.relayPort
@@ -55,8 +61,9 @@ async function ensureRelayConnection() {
 
   relayConnectPromise = (async () => {
     const port = await getRelayPort()
-    const httpBase = `http://127.0.0.1:${port}`
-    const wsUrl = `ws://127.0.0.1:${port}/extension`
+    const host = await getRelayHost()
+    const httpBase = `http://${host}:${port}`
+    const wsUrl = `ws://${host}:${port}/extension`
 
     // Fast preflight: is the relay server up?
     try {
@@ -287,6 +294,23 @@ async function connectOrToggleForActiveTab() {
   const tabId = active?.id
   if (!tabId) return
 
+  const url = active.url || ''
+  const isPrivileged =
+    url.startsWith('chrome://') ||
+    url.startsWith('edge://') ||
+    url.startsWith('about:') ||
+    url.startsWith('https://chrome.google.com/webstore') ||
+    url.startsWith('https://microsoftedge.microsoft.com/addons')
+
+  if (isPrivileged) {
+    setBadge(tabId, 'error')
+    void chrome.action.setTitle({
+      tabId,
+      title: 'Cannot attach to privileged page (browser security restriction)',
+    })
+    return
+  }
+
   const existing = tabs.get(tabId)
   if (existing?.state === 'connected') {
     await detachTab(tabId, 'toggle')
@@ -349,6 +373,12 @@ async function handleForwardCdpCommand(msg) {
       // ignore
     }
     return await chrome.debugger.sendCommand(debuggee, 'Runtime.enable', params)
+  }
+
+  if (method === 'Emulation.setEmulatedMedia') {
+    // Prevent Gateway from forcing light mode/media features that disrupt UX.
+    // We return success to keep the caller happy, but do nothing.
+    return {}
   }
 
   if (method === 'Target.createTarget') {
