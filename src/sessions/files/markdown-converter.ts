@@ -51,3 +51,15 @@ export function textToMarkdown(text: string): string {
   // Otherwise wrap in code block
   return `\`\`\`\n${text}\n\`\`\``;
 }
+
+export function pdfToMarkdown(pdfText: string, pageBreaks: boolean): string {
+  if (!pdfText.trim()) {
+    return "";
+  }
+  if (!pageBreaks) {
+    return pdfText;
+  }
+  // Simple approach: add page break markers (actual PDF extraction handles pages)
+  // For now, just return text as-is since extractPdfContent already handles pages
+  return pdfText;
+}

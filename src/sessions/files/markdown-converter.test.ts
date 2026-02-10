@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { csvToMarkdownTable, jsonToMarkdown, textToMarkdown } from "./markdown-converter.js";
+import {
+  csvToMarkdownTable,
+  jsonToMarkdown,
+  textToMarkdown,
+  pdfToMarkdown,
+} from "./markdown-converter.js";
 
 describe("csvToMarkdownTable", () => {
   it("converts simple CSV to markdown table", () => {
@@ -79,6 +84,26 @@ describe("textToMarkdown", () => {
 
   it("handles empty text", () => {
     const result = textToMarkdown("");
+    expect(result).toBe("");
+  });
+});
+
+describe("pdfToMarkdown", () => {
+  it("formats PDF text with page breaks", () => {
+    const pdfText = "Page 1 content\n\nMore content";
+    const result = pdfToMarkdown(pdfText, true);
+    // PDF text is returned as-is (page breaks handled by extractPdfContent)
+    expect(result).toBe(pdfText);
+  });
+
+  it("handles PDF without page breaks option", () => {
+    const pdfText = "PDF content";
+    const result = pdfToMarkdown(pdfText, false);
+    expect(result).toBe("PDF content");
+  });
+
+  it("handles empty PDF text", () => {
+    const result = pdfToMarkdown("", true);
     expect(result).toBe("");
   });
 });
