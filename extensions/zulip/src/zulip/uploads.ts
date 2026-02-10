@@ -12,13 +12,21 @@ export function extractZulipUploadUrls(html: string, baseUrl: string): string[] 
   if (!html) {
     return [];
   }
+  let baseOrigin = "";
+  try {
+    baseOrigin = new URL(baseUrl).origin;
+  } catch {
+    baseOrigin = "";
+  }
   const matches = html.matchAll(/(?:https?:\/\/[^\s"'<>)]+)?\/user_uploads\/[^\s"'<>)]+/g);
   const urls = new Set<string>();
   for (const match of matches) {
     const raw = match[0];
     try {
-      const absolute = new URL(raw, baseUrl).toString();
-      urls.add(absolute);
+      const absolute = new URL(raw, baseUrl);
+      if (baseOrigin && absolute.origin !== baseOrigin) continue;
+      if (!absolute.pathname.includes("/user_uploads/")) continue;
+      urls.add(absolute.toString());
     } catch {
       // ignore malformed URLs
     }
@@ -51,9 +59,15 @@ function resolveFilename(url: string, contentDisposition?: string | null): strin
 
 export async function downloadZulipUpload(
   url: string,
+  baseUrl: string,
   authHeader: string,
   maxBytes: number,
 ): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
+  const baseOrigin = new URL(baseUrl).origin;
+  const target = new URL(url);
+  if (target.origin !== baseOrigin || !target.pathname.includes("/user_uploads/")) {
+    throw new Error("Refusing to download Zulip upload from non-Zulip origin");
+  }
   const res = await fetch(url, {
     headers: {
       Authorization: `Basic ${authHeader}`,

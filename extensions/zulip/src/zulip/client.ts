@@ -279,7 +279,8 @@ export async function registerZulipQueue(
   body.set("event_types", JSON.stringify(eventTypes));
   body.set("event_queue_longpoll_timeout_seconds", "90");
   if (params.streams && params.streams.length > 0 && !params.streams.includes("*")) {
-    const narrow = params.streams.map((stream) => ({ operator: "stream", operand: stream }));
+    // Zulip expects legacy array format for narrow filters.
+    const narrow = params.streams.map((stream) => ["stream", stream]);
     body.set("narrow", JSON.stringify(narrow));
   }
   if (params.streams?.includes("*")) {

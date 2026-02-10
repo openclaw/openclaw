@@ -316,7 +316,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
     if (uploadUrls.length > 0) {
       for (const uploadUrl of uploadUrls) {
         try {
-          const downloaded = await downloadZulipUpload(uploadUrl, client.authHeader, mediaMaxBytes);
+          const downloaded = await downloadZulipUpload(uploadUrl, baseUrl, client.authHeader, mediaMaxBytes);
           const saved = await saveZulipMediaBuffer({
             core,
             buffer: downloaded.buffer,
@@ -768,6 +768,14 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
     pollBackoffMs = 0;
   };
 
+  const processMessage = async (message: ZulipMessage): Promise<void> => {
+    try {
+      await handleMessage(message);
+    } catch (err) {
+      runtime.error?.(`zulip message handler failed: ${String(err)}`);
+    }
+  };
+
   // Long-polling loop
   while (!opts.abortSignal?.aborted) {
     try {
@@ -779,10 +787,10 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       });
 
       if (response.result === "error") {
-        if (
-          response.code === "BAD_EVENT_QUEUE_ID" ||
-          response.msg?.includes("Bad event queue id")
-        ) {
+        const msg = response.msg ?? "";
+        const isBadQueue =
+          response.code === "BAD_EVENT_QUEUE_ID" || msg.toLowerCase().includes("bad event queue");
+        if (isBadQueue) {
           runtime.log?.("zulip: queue expired, re-registering...");
           const newQueue = await registerZulipQueue(client, {
             eventTypes: ["message"],
@@ -790,6 +798,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
           });
           queueId = newQueue.queueId;
           lastEventId = newQueue.lastEventId;
+          runtime.log?.(`zulip event queue re-registered: ${queueId}`);
           resetPollBackoff();
           continue;
         }
@@ -798,7 +807,6 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
 
       const events = response.events ?? [];
       if (events.length > 0) {
-        lastEventId = Number(events[events.length - 1].id);
         opts.statusSink?.({
           connected: true,
           lastConnectedAt: Date.now(),
@@ -813,15 +821,29 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
 
       for (const event of events) {
         if (event.type === "message" && event.message) {
-          // Fire-and-forget: don't block the poll loop while generating replies
-          handleMessage(event.message).catch((err) => {
-            runtime.error?.(`zulip message handler failed: ${String(err)}`);
-          });
+          await processMessage(event.message);
+        }
+        const nextEventId = Number((event as { id?: unknown })?.id);
+        if (!Number.isNaN(nextEventId) && nextEventId > 0) {
+          lastEventId = nextEventId;
         }
       }
     } catch (err) {
       if (opts.abortSignal?.aborted) {
         break;
+      }
+      const errStr = String(err);
+      if (errStr.toLowerCase().includes("bad event queue")) {
+        runtime.log?.("zulip: bad event queue error thrown; re-registering...");
+        const newQueue = await registerZulipQueue(client, {
+          eventTypes: ["message"],
+          streams,
+        });
+        queueId = newQueue.queueId;
+        lastEventId = newQueue.lastEventId;
+        runtime.log?.(`zulip event queue re-registered: ${queueId}`);
+        resetPollBackoff();
+        continue;
       }
       const status = (err as { status?: number })?.status;
       const retryAfterMs = (err as { retryAfterMs?: number })?.retryAfterMs;
