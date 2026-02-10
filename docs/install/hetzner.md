@@ -329,3 +329,25 @@ All long-lived state must survive restarts, rebuilds, and reboots.
 | Node runtime        | Container filesystem              | Docker image           | Rebuilt every image build        |
 | OS packages         | Container filesystem              | Docker image           | Do not install at runtime        |
 | Docker container    | Ephemeral                         | Restartable            | Safe to destroy                  |
+
+---
+
+## Infrastructure as Code (Terraform)
+
+For teams preferring infrastructure-as-code workflows, a community-maintained Terraform setup provides:
+
+- Modular Terraform configuration with remote state management
+- Automated provisioning via cloud-init
+- Deployment scripts (bootstrap, deploy, backup/restore)
+- Security hardening (firewall, UFW, SSH-only access)
+- SSH tunnel configuration for gateway access
+
+**Repositories:**
+- Infrastructure: [openclaw-terraform-hetzner](https://github.com/andreesg/openclaw-terraform-hetzner)
+- Docker config: [openclaw-docker-config](https://github.com/andreesg/openclaw-docker-config)
+
+**Cost:** ~€6/month on Hetzner CX22 (2 vCPU, 4GB RAM)
+
+This approach complements the Docker setup above with reproducible deployments, version-controlled infrastructure, and automated disaster recovery.
+
+> **Note:** Community-maintained. For issues or contributions, see the repository links above.
