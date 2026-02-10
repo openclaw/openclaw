@@ -87,6 +87,7 @@ vi.mock("@opentelemetry/resources", () => ({
     // eslint-disable-next-line @typescript-eslint/no-useless-constructor
     constructor(_value?: unknown) {}
   },
+  resourceFromAttributes: vi.fn(() => ({})),
 }));
 
 vi.mock("@opentelemetry/semantic-conventions", () => ({

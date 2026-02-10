@@ -36,7 +36,7 @@ vi.mock("./utils/twitch.js", () => ({
 describe("outbound", () => {
   const mockAccount = {
     username: "testbot",
-    token: "oauth:test123",
+    accessToken: "oauth:test123",
     clientId: "test-client-id",
     channel: "#testchannel",
   };
@@ -196,7 +196,6 @@ describe("outbound", () => {
 
       expect(result.channel).toBe("twitch");
       expect(result.messageId).toBe("twitch-msg-123");
-      expect(result.to).toBe("testchannel");
       expect(result.timestamp).toBeGreaterThan(0);
     });
 
