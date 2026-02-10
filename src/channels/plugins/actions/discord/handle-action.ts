@@ -185,6 +185,7 @@ export async function handleDiscordMessageAction(
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
     const content = readStringParam(params, "message");
+    const appliedTags = readStringArrayParam(params, "appliedTags");
     const autoArchiveMinutes = readNumberParam(params, "autoArchiveMin", {
       integer: true,
     });
@@ -196,6 +197,7 @@ export async function handleDiscordMessageAction(
         name,
         messageId,
         content,
+        appliedTags,
         autoArchiveMinutes,
       },
       cfg,

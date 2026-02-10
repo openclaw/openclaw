@@ -87,6 +87,27 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("passes applied tags for forum threads", async () => {
+    const { rest, getMock, postMock } = makeRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildForum });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", content: "body", appliedTags: ["t1", "t2"] },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: {
+          name: "thread",
+          message: { content: "body" },
+          applied_tags: ["t1", "t2"],
+        },
+      }),
+    );
+  });
+
   it("creates media threads with provided content", async () => {
     const { rest, getMock, postMock } = makeRest();
     getMock.mockResolvedValue({ type: ChannelType.GuildMedia });

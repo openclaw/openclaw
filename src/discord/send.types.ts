@@ -72,6 +72,7 @@ export type DiscordThreadCreate = {
   name: string;
   autoArchiveMinutes?: number;
   content?: string;
+  appliedTags?: string[];
 };
 
 export type DiscordThreadList = {

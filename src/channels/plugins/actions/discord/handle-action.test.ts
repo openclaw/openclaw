@@ -19,6 +19,7 @@ describe("handleDiscordMessageAction", () => {
         to: "channel:123456789",
         threadName: "Forum thread",
         message: "Initial forum post body",
+        appliedTags: ["tag-1", "tag-2"],
       },
       cfg: {},
     });
@@ -28,6 +29,7 @@ describe("handleDiscordMessageAction", () => {
         channelId: "123456789",
         name: "Forum thread",
         content: "Initial forum post body",
+        appliedTags: ["tag-1", "tag-2"],
       }),
       expect.any(Object),
     );

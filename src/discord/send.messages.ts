@@ -121,6 +121,9 @@ export async function createThreadDiscord(
   if (isForumLike) {
     const starterContent = payload.content?.trim() ? payload.content : payload.name;
     body.message = { content: starterContent };
+    if (payload.appliedTags?.length) {
+      body.applied_tags = payload.appliedTags;
+    }
   }
   const route = payload.messageId
     ? Routes.threads(channelId, payload.messageId)

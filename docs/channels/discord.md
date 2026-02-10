@@ -460,6 +460,7 @@ The agent can call `discord` with actions like:
 - `readMessages`, `sendMessage`, `editMessage`, `deleteMessage`
 - Read/search/pin tool payloads include normalized `timestampMs` (UTC epoch ms) and `timestampUtc` alongside raw Discord `timestamp`.
 - `threadCreate`, `threadList`, `threadReply`
+  - Forum channels require an initial post; pass `message` for the starter content and optional `appliedTags` (tag ids).
 - `pinMessage`, `unpinMessage`, `listPins`
 - `searchMessages`, `memberInfo`, `roleInfo`, `roleAdd`, `roleRemove`, `emojiList`
 - `channelInfo`, `channelList`, `voiceStatus`, `eventList`, `eventCreate`
