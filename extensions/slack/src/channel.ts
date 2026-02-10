@@ -427,7 +427,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
 
       if (action === "emoji-list") {
         return await getSlackRuntime().channel.slack.handleSlackAction(
-          { action: "emojiList", accountId: accountId ?? undefined },
+          { action: "emojiList", limit: params.limit, accountId: accountId ?? undefined },
           cfg,
         );
       }
