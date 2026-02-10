@@ -49,6 +49,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     guildHistories,
     historyLimit,
     mediaMaxBytes,
+    proxyFetch,
     textLimit,
     replyToMode,
     ackReactionScope,
@@ -83,7 +84,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     commandAuthorized,
   } = ctx;
 
-  const mediaList = await resolveMediaList(message, mediaMaxBytes);
+  const mediaList = await resolveMediaList(message, mediaMaxBytes, proxyFetch);
   const text = messageText;
   if (!text) {
     logVerbose(`discord: drop message ${message.id} (empty content)`);

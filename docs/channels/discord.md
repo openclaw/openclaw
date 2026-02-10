@@ -413,6 +413,66 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
   channels: {
     discord: {
       configWrites: false,
+      enabled: true,
+      token: "abc.123",
+      proxy: "http://your-proxy:port", // optional HTTP(S) proxy for media downloads
+      groupPolicy: "allowlist",
+      guilds: {
+        "*": {
+          channels: {
+            general: { allow: true },
+          },
+        },
+      },
+      mediaMaxMb: 8,
+      actions: {
+        reactions: true,
+        stickers: true,
+        emojiUploads: true,
+        stickerUploads: true,
+        polls: true,
+        permissions: true,
+        messages: true,
+        threads: true,
+        pins: true,
+        search: true,
+        memberInfo: true,
+        roleInfo: true,
+        roles: false,
+        channelInfo: true,
+        channels: true,
+        voiceStatus: true,
+        events: true,
+        moderation: false,
+        presence: false,
+      },
+      replyToMode: "off",
+      dm: {
+        enabled: true,
+        policy: "pairing", // pairing | allowlist | open | disabled
+        allowFrom: ["123456789012345678", "steipete"],
+        groupEnabled: false,
+        groupChannels: ["openclaw-dm"],
+      },
+      guilds: {
+        "*": { requireMention: true },
+        "123456789012345678": {
+          slug: "friends-of-openclaw",
+          requireMention: false,
+          reactionNotifications: "own",
+          users: ["987654321098765432", "steipete"],
+          channels: {
+            general: { allow: true },
+            help: {
+              allow: true,
+              requireMention: true,
+              users: ["987654321098765432"],
+              skills: ["search", "docs"],
+              systemPrompt: "Keep answers short.",
+            },
+          },
+        },
+      },
     },
   },
 }
@@ -453,6 +513,61 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
   <Accordion title="PluralKit support">
     Enable PluralKit resolution to map proxied messages to system member identity:
+
+- `dm.enabled`: set `false` to ignore all DMs (default `true`).
+- `dm.policy`: DM access control (`pairing` recommended). `"open"` requires `dm.allowFrom=["*"]`.
+- `dm.allowFrom`: DM allowlist (user ids or names). Used by `dm.policy="allowlist"` and for `dm.policy="open"` validation. The wizard accepts usernames and resolves them to ids when the bot can search members.
+- `dm.groupEnabled`: enable group DMs (default `false`).
+- `dm.groupChannels`: optional allowlist for group DM channel ids or slugs.
+- `groupPolicy`: controls guild channel handling (`open|disabled|allowlist`); `allowlist` requires channel allowlists.
+- `guilds`: per-guild rules keyed by guild id (preferred) or slug.
+- `guilds."*"`: default per-guild settings applied when no explicit entry exists.
+- `guilds.<id>.slug`: optional friendly slug used for display names.
+- `guilds.<id>.users`: optional per-guild user allowlist (ids or names).
+- `guilds.<id>.tools`: optional per-guild tool policy overrides (`allow`/`deny`/`alsoAllow`) used when the channel override is missing.
+- `guilds.<id>.toolsBySender`: optional per-sender tool policy overrides at the guild level (applies when the channel override is missing; `"*"` wildcard supported).
+- `guilds.<id>.channels.<channel>.allow`: allow/deny the channel when `groupPolicy="allowlist"`.
+- `guilds.<id>.channels.<channel>.requireMention`: mention gating for the channel.
+- `guilds.<id>.channels.<channel>.tools`: optional per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
+- `guilds.<id>.channels.<channel>.toolsBySender`: optional per-sender tool policy overrides within the channel (`"*"` wildcard supported).
+- `guilds.<id>.channels.<channel>.users`: optional per-channel user allowlist.
+- `guilds.<id>.channels.<channel>.skills`: skill filter (omit = all skills, empty = none).
+- `guilds.<id>.channels.<channel>.systemPrompt`: extra system prompt for the channel. Discord channel topics are injected as **untrusted** context (not system prompt).
+- `guilds.<id>.channels.<channel>.enabled`: set `false` to disable the channel.
+- `guilds.<id>.channels`: channel rules (keys are channel slugs or ids).
+- `guilds.<id>.requireMention`: per-guild mention requirement (overridable per channel).
+- `guilds.<id>.reactionNotifications`: reaction system event mode (`off`, `own`, `all`, `allowlist`).
+- `textChunkLimit`: outbound text chunk size (chars). Default: 2000.
+- `chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
+- `maxLinesPerMessage`: soft max line count per message. Default: 17.
+- `mediaMaxMb`: clamp inbound media saved to disk.
+- `proxy`: HTTP(S) proxy URL for outbound Discord requests (media downloads). Uses undici `ProxyAgent` to bypass Node.js 22+ native fetch limitations with `global-agent`.
+- `historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20; falls back to `messages.groupChat.historyLimit`; `0` disables).
+- `dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `dms["<user_id>"].historyLimit`.
+- `retry`: retry policy for outbound Discord API calls (attempts, minDelayMs, maxDelayMs, jitter).
+- `pluralkit`: resolve PluralKit proxied messages so system members appear as distinct senders.
+- `actions`: per-action tool gates; omit to allow all (set `false` to disable).
+  - `reactions` (covers react + read reactions)
+  - `stickers`, `emojiUploads`, `stickerUploads`, `polls`, `permissions`, `messages`, `threads`, `pins`, `search`
+  - `memberInfo`, `roleInfo`, `channelInfo`, `voiceStatus`, `events`
+  - `channels` (create/edit/delete channels + categories + permissions)
+  - `roles` (role add/remove, default `false`)
+  - `moderation` (timeout/kick/ban, default `false`)
+  - `presence` (bot status/activity, default `false`)
+- `execApprovals`: Discord-only exec approval DMs (button UI). Supports `enabled`, `approvers`, `agentFilter`, `sessionFilter`, `cleanupAfterResolve`.
+
+Reaction notifications use `guilds.<id>.reactionNotifications`:
+
+- `off`: no reaction events.
+- `own`: reactions on the bot's own messages (default).
+- `all`: all reactions on all messages.
+- `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
+
+### PluralKit (PK) support
+
+Enable PK lookups so proxied messages resolve to the underlying system + member.
+When enabled, OpenClaw uses the member identity for allowlists and labels the
+sender as `Member (PK:System)` to avoid accidental Discord pings.
 
 ```json5
 {

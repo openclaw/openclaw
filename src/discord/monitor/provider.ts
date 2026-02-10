@@ -28,6 +28,7 @@ import {
 import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { makeProxyFetch } from "../../infra/net/proxy.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -200,6 +201,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
   let allowFrom = discordCfg.allowFrom ?? dmConfig?.allowFrom;
   const mediaMaxBytes = (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? 8) * 1024 * 1024;
+  const proxyFetch = discordCfg.proxy ? makeProxyFetch(discordCfg.proxy) : undefined;
   const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
     fallbackLimit: 2000,
   });
@@ -540,6 +542,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     guildHistories,
     historyLimit,
     mediaMaxBytes,
+    proxyFetch,
     textLimit,
     replyToMode,
     dmEnabled,

@@ -255,6 +255,7 @@ Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
     discord: {
       enabled: true,
       token: "abc.123",
+      proxy: "http://your-proxy:port", // 可选，用于媒体下载的 HTTP(S) 代理
       groupPolicy: "allowlist",
       guilds: {
         "*": {
@@ -345,6 +346,7 @@ Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
 - `chunkMode`：`length`（默认）仅在超过 `textChunkLimit` 时分割；`newline` 在空行（段落边界）处分割，然后再进行长度分块。
 - `maxLinesPerMessage`：每条消息的软最大行数。默认：17。
 - `mediaMaxMb`：限制保存到磁盘的入站媒体大小。
+- `proxy`：用于出站 Discord 请求（媒体下载）的 HTTP(S) 代理 URL。使用 undici `ProxyAgent` 绕过 Node.js 22+ 原生 fetch 与 `global-agent` 的兼容性问题。
 - `historyLimit`：回复提及时作为上下文包含的最近服务器消息数量（默认 20；回退到 `messages.groupChat.historyLimit`；`0` 禁用）。
 - `dmHistoryLimit`：私信历史限制（用户轮次）。每用户覆盖：`dms["<user_id>"].historyLimit`。
 - `retry`：出站 Discord API 调用的重试策略（attempts、minDelayMs、maxDelayMs、jitter）。

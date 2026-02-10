@@ -609,6 +609,7 @@ export async function preflightDiscordMessage(
     guildHistories: params.guildHistories,
     historyLimit: params.historyLimit,
     mediaMaxBytes: params.mediaMaxBytes,
+    proxyFetch: params.proxyFetch,
     textLimit: params.textLimit,
     replyToMode: params.replyToMode,
     ackReactionScope: params.ackReactionScope,

@@ -26,6 +26,7 @@ export type DiscordMessagePreflightContext = {
   guildHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
   mediaMaxBytes: number;
+  proxyFetch?: typeof fetch;
   textLimit: number;
   replyToMode: ReplyToMode;
   ackReactionScope: "all" | "direct" | "group-all" | "group-mentions";
@@ -91,6 +92,7 @@ export type DiscordMessagePreflightParams = {
   guildHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
   mediaMaxBytes: number;
+  proxyFetch?: typeof fetch;
   textLimit: number;
   replyToMode: ReplyToMode;
   dmEnabled: boolean;
