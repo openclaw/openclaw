@@ -125,6 +125,13 @@ export function isPrivateIpAddress(address: string): boolean {
       return isPrivateIpv4(ipv4);
     }
   }
+  if (normalized.startsWith("::")) {
+    const compatible = normalized.slice("::".length);
+    const ipv4 = parseIpv4FromMappedIpv6(compatible);
+    if (ipv4) {
+      return isPrivateIpv4(ipv4);
+    }
+  }
 
   if (normalized.includes(":")) {
     if (normalized === "::" || normalized === "::1") {
