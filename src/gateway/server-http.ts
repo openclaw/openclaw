@@ -19,7 +19,12 @@ import {
 } from "../canvas-host/a2ui.js";
 import { loadConfig } from "../config/config.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
-import { authorizeGatewayConnect, isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeGatewayConnect,
+  isLocalDirectRequest,
+  safeEqual,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -147,17 +152,16 @@ export function createHooksRequestHandler(
       return false;
     }
 
-    if (url.searchParams.has("token")) {
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end(
-        "Hook token must be provided via Authorization: Bearer <token> or X-OpenClaw-Token header (query parameters are not allowed).",
-      );
-      return true;
-    }
-
-    const token = extractHookToken(req);
-    if (!token || token !== hooksConfig.token) {
+    const { token, fromQuery } = extractHookToken(req, url);
+    if (!token || !safeEqual(token, hooksConfig.token)) {
+      if (fromQuery) {
+        res.statusCode = 400;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end(
+          "Hook token must be provided via Authorization: Bearer <token> or X-OpenClaw-Token header (query parameters are not allowed).",
+        );
+        return true;
+      }
       res.statusCode = 401;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Unauthorized");

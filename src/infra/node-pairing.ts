@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -53,6 +53,13 @@ type NodePairingStateFile = {
 };
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
+
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 function resolvePaths(baseDir?: string) {
   const root = baseDir ?? resolveStateDir();
@@ -274,7 +281,7 @@ export async function verifyNodeToken(
   if (!node) {
     return { ok: false };
   }
-  return node.token === token ? { ok: true, node } : { ok: false };
+  return safeEqual(node.token, token) ? { ok: true, node } : { ok: false };
 }
 
 export async function updatePairedNodeMetadata(
