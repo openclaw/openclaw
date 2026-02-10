@@ -659,36 +659,48 @@ export const registerTelegramHandlers = ({
       const msg = ctx.message;
       if (!msg) {
         return;
-        // fast native /aff status (no model)
-const t = (msg.text ?? "").trim();
-const base = t.split(/\s+/)[0].split("@")[0];
-if (base === "/aff") {
-await ctx.reply("[native aff tracer v3]");
-return;
-const ws =
-cfg?.agents?.defaults?.workspace ??
-process.env.OPENCLAW_WORKSPACE ??
-"/home/node/.openclaw/workspace";
-const statePath = path.join(ws, "affection", "state.json");
-try {
-const state = JSON.parse(await fs.promises.readFile(statePath, "utf8"));
-const out =
-`Affection (V3b — skill/state)\n\n` +
-`- label: ${state.label} | aff: ${state.aff}\n` +
-`- closeness: ${Number(state.closeness).toFixed(3)}\n` +
-`- trust: ${Number(state.trust).toFixed(3)}\n` +
-`- reliabilityTrust: ${Number(state.reliabilityTrust).toFixed(3)}\n` +
-`- irritation: ${Number(state.irritation).toFixed(3)}\n` +
-`- cooldown: ${state.cooldownUntil ? state.cooldownUntil : "none"}\n` +
-`- today affGain: ${state.today?.affGain ?? 0}/12\n` +
-`- lastMessageAt: ${state.lastMessageAt}`;
-await ctx.reply(out);
-} catch (e: any) {
-await ctx.reply(`/aff status failed: ${String(e?.message ?? e)}`);
-}
-return;
-}
       }
+
+      // fast native /aff (no model)
+      try {
+        const t = (msg.text ?? "").trim();
+        const [base, sub] = t.split(/\s+/);
+        const cmd = (base ?? "").split("@")[0];
+        if (cmd === "/aff") {
+          const ws =
+            cfg?.agents?.defaults?.workspace ??
+            process.env.OPENCLAW_WORKSPACE ??
+            "/home/node/.openclaw/workspace";
+
+          const { formatAffStatus, loadOrInitState, sorry } = await import(
+            "../affection/v3b-engine.js"
+          );
+
+          if (sub === "debug") {
+            const state = await loadOrInitState(ws);
+            await ctx.reply(JSON.stringify(state, null, 2));
+            return;
+          }
+
+          if (sub === "sorry") {
+            const state = await sorry(ws, `telegram:${msg.from?.id ?? ""}`);
+            await ctx.reply("ok. (self-repair applied)\n\n" + formatAffStatus(state));
+            return;
+          }
+
+          const state = await loadOrInitState(ws);
+          await ctx.reply(formatAffStatus(state));
+          return;
+        }
+      } catch (e: any) {
+        // keep failures local; don't break normal message flow
+        try {
+          await ctx.reply(`/aff failed: ${String(e?.message ?? e)}`);
+        } catch {
+          // ignore
+        }
+      }
+
       // openVB3: aff auto-touch for Boss (Telegram)
 // Deterministic + non-blocking: keeps affection/lastMessageAt fresh without involving the model.
 try {
