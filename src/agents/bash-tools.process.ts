@@ -41,6 +41,21 @@ const processSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Log length" })),
 });
 
+function truncateErrorOutput(raw: string | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const maxLines = 50;
+  const maxChars = 2048;
+  const lines = raw.split(/\r?\n/);
+  const sliced = lines.slice(-maxLines);
+  let text = sliced.join("\n");
+  if (text.length > maxChars) {
+    text = text.slice(text.length - maxChars);
+  }
+  return text.trim() || undefined;
+}
+
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -97,6 +112,7 @@ export function createProcessTool(
             name: deriveSessionName(s.command),
             tail: s.tail,
             truncated: s.truncated,
+            stderr: truncateErrorOutput(s.stderrTail),
           }));
         const finished = listFinishedSessions()
           .filter((s) => isInScope(s))
@@ -111,6 +127,7 @@ export function createProcessTool(
             name: deriveSessionName(s.command),
             tail: s.tail,
             truncated: s.truncated,
+            stderr: truncateErrorOutput(s.stderrTail),
             exitCode: s.exitCode ?? undefined,
             exitSignal: s.exitSignal ?? undefined,
           }));
@@ -212,6 +229,7 @@ export function createProcessTool(
               : "failed"
             : "running";
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const stderrTail = truncateErrorOutput(scopedSession.stderrTail ?? stderr);
           return {
             content: [
               {
@@ -231,6 +249,7 @@ export function createProcessTool(
               exitCode: exited ? exitCode : undefined,
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
+              stderr: stderrTail,
             },
           };
         }
@@ -263,6 +282,7 @@ export function createProcessTool(
                 totalChars,
                 truncated: scopedSession.truncated,
                 name: deriveSessionName(scopedSession.command),
+                stderr: truncateErrorOutput(scopedSession.stderrTail),
               },
             };
           }
@@ -282,6 +302,7 @@ export function createProcessTool(
                 totalLines,
                 totalChars,
                 truncated: scopedFinished.truncated,
+                stderr: truncateErrorOutput(scopedFinished.stderrTail),
                 exitCode: scopedFinished.exitCode ?? undefined,
                 exitSignal: scopedFinished.exitSignal ?? undefined,
                 name: deriveSessionName(scopedFinished.command),

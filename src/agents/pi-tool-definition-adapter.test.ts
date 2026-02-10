@@ -45,4 +45,37 @@ describe("pi tool definition adapter", () => {
       error: "nope",
     });
   });
+
+  it("includes truncated stderr when provided by the tool error", async () => {
+    const longStderr =
+      Array.from({ length: 100 }, (_, i) => `line-${i + 1}`).join("\n") + "\ntrailing";
+    const tool = {
+      name: "exec",
+      label: "Exec",
+      description: "fails with stderr",
+      parameters: {},
+      execute: async () => {
+        const err = new Error("Command exited with code 1") as Error & { stderr?: string };
+        err.stderr = longStderr;
+        throw err;
+      },
+    } satisfies AgentTool<unknown, unknown>;
+
+    const defs = toToolDefinitions([tool]);
+    const result = await defs[0].execute("call3", {}, undefined, undefined);
+
+    const details = result.details as {
+      status: string;
+      tool: string;
+      error: string;
+      stderr?: string;
+    };
+    expect(details.status).toBe("error");
+    expect(details.tool).toBe("exec");
+    expect(details.error).toBe("Command exited with code 1");
+    expect(details.stderr).toBeDefined();
+    // Should contain the last line and not all 100 original lines.
+    expect(details.stderr).toContain("trailing");
+    expect(details.stderr?.split("\n").length).toBeLessThanOrEqual(50);
+  });
 });

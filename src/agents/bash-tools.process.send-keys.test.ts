@@ -76,3 +76,54 @@ test("process submit sends Enter for pty sessions", async () => {
 
   throw new Error("PTY session did not exit after submit");
 });
+
+test("process list/poll/log expose truncated stderr in details", async () => {
+  const execTool = createExecTool({ allowBackground: true, backgroundMs: 0 });
+  const processTool = createProcessTool();
+
+  const result = await execTool.execute("toolcall", {
+    command: "bash -lc 'for i in $(seq 1 80); do echo \"err-$i\" 1>&2; done; exit 3'",
+    background: true,
+  });
+
+  expect(result.details.status).toBe("running");
+  const sessionId = result.details.sessionId;
+  expect(sessionId).toBeTruthy();
+
+  // Wait for process to finish.
+  const deadline = Date.now() + 8000;
+  let finishedDetails: { status?: string; aggregated?: string; stderr?: string } | undefined;
+  while (Date.now() < deadline) {
+    const poll = await processTool.execute("toolcall", { action: "poll", sessionId });
+    const details = poll.details as { status?: string; aggregated?: string; stderr?: string };
+    if (details.status !== "running") {
+      finishedDetails = details;
+      break;
+    }
+    await sleep(50);
+  }
+
+  expect(finishedDetails).toBeDefined();
+  expect(finishedDetails?.status).toBe("failed");
+  // stderr may be missing or empty on some platforms, but when present it
+  // should be truncated to at most 50 lines.
+  if (finishedDetails?.stderr) {
+    expect(finishedDetails.stderr.split("\n").length).toBeLessThanOrEqual(50);
+  }
+
+  // Check list/log also surface stderr field.
+  const list = await processTool.execute("toolcall", { action: "list" });
+  const listDetails = list.details as { sessions: Array<{ stderr?: string }> };
+  expect(listDetails.sessions.length).toBeGreaterThan(0);
+  const listed = listDetails.sessions.find((s) => s.stderr);
+  expect(listed?.stderr).toBeDefined();
+  expect(listed?.stderr?.split("\n").length ?? 0).toBeLessThanOrEqual(50);
+
+  const log = await processTool.execute("toolcall", {
+    action: "log",
+    sessionId,
+  });
+  const logDetails = log.details as { stderr?: string };
+  expect(logDetails.stderr).toBeDefined();
+  expect(logDetails.stderr?.split("\n").length ?? 0).toBeLessThanOrEqual(50);
+});

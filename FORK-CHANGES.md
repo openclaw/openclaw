@@ -16,6 +16,12 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
   - Root [README.md](README.md): “About this repository” section describing the fork, ClawdBot-Next integration, [docs/MAINTENANCE.md](docs/MAINTENANCE.md) link, and sync workflow link.
   - This file: explicit listing of fork changes and commit history.
   - [.agent/workflows/update_clawdbot.md](.agent/workflows/update_clawdbot.md): push policy and link to this file.
+- **Gateway tools: stderr piping**
+  - Exec/process tools now surface **truncated stderr** in tool results for better self-correction:
+    - `exec` synchronous failures attach a `stderr` field on the tool error (last 50 lines, max ~2KB), which is then exposed in the JSON tool result returned to the model.
+    - Background exec sessions tracked via the `process` tool include a truncated `stderr` tail in `details` for `list`, `poll`, and `log` actions when available.
+  - Implementation lives in `src/agents/bash-tools.exec.ts`, `src/agents/bash-tools.process.ts`, `src/agents/bash-process-registry.ts`, and the generic adapter `src/agents/pi-tool-definition-adapter.ts`.
+  - Tests: `src/agents/pi-tool-definition-adapter.test.ts`, `src/agents/bash-tools.exec.background-abort.test.ts`, and `src/agents/bash-tools.process.send-keys.test.ts` cover stderr truncation and wiring.
 - **Ollama** — Support `OLLAMA_HOST` for cloud/remote discovery and requests (`8cb58d65d`). When `OLLAMA_HOST` is set, discovery uses a 15s timeout (vs 5s for local) to reduce timeouts on VPS/remote.
 - **Build** — Copy `src/agents/prompt-engine/data/skills.json` to `dist/data/` and `dist/agents/prompt-engine/data/` during build via `scripts/copy-skills-data.ts` (tsdown does not copy non-TS assets; without this, the Skills Registry hits ENOENT at runtime). When the gateway runs as `node dist/index.js`, the loader resolves `dist/data/skills.json` first so it works with the bundled layout.
 - **Build race (skills ENOENT)** — Avoid empty-`dist/` window during `pnpm build`: (1) `tsdown.config.ts` sets `clean: false` so the output dir is not wiped and `dist/data/` persists; (2) gateway eager-loads `SkillsLoader.loadLibrary()` at boot and caches in RAM so cron/agent turns never read disk during a build; (3) loader retries on ENOENT for a short window. See [MAINTENANCE.md](docs/MAINTENANCE.md) “Build-phase race”.

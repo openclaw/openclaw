@@ -144,3 +144,28 @@ test("yielded background exec still times out", async () => {
     }
   }
 });
+
+test("synchronous exec failures attach stderr for tool adapter", async () => {
+  const tool = createExecTool({ allowBackground: false });
+  let capturedError: unknown;
+  try {
+    await tool.execute(
+      "toolcall",
+      {
+        // This should fail quickly and write to stderr (unknown option).
+        command: "bash -lc 'ls --definitely-not-a-real-flag'",
+        timeout: 2,
+      },
+      undefined,
+    );
+  } catch (err) {
+    capturedError = err;
+  }
+
+  expect(capturedError).toBeDefined();
+  const errWithStderr = capturedError as { message?: string; stderr?: string };
+  expect(errWithStderr.message ?? "").toContain("Command exited with code");
+  expect(
+    typeof errWithStderr.stderr === "string" ? errWithStderr.stderr.length : 0,
+  ).toBeGreaterThan(0);
+});

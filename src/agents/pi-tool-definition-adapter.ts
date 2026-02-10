@@ -43,15 +43,38 @@ function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteA
   return isAbortSignal(third) || typeof fourth === "function";
 }
 
+function truncateErrorOutput(raw: string | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const maxLines = 50;
+  const maxChars = 2048;
+  const lines = raw.split(/\r?\n/);
+  const sliced = lines.slice(-maxLines);
+  let text = sliced.join("\n");
+  if (text.length > maxChars) {
+    text = text.slice(text.length - maxChars);
+  }
+  return text.trim() || undefined;
+}
+
 function describeToolExecutionError(err: unknown): {
   message: string;
   stack?: string;
+  stderr?: string;
 } {
+  let stderr: string | undefined;
+  if (err && typeof err === "object" && "stderr" in err) {
+    const value = (err as { stderr?: unknown }).stderr;
+    if (typeof value === "string") {
+      stderr = truncateErrorOutput(value);
+    }
+  }
   if (err instanceof Error) {
     const message = err.message?.trim() ? err.message : String(err);
-    return { message, stack: err.stack };
+    return { message, stack: err.stack, stderr };
   }
-  return { message: String(err) };
+  return { message: String(err), stderr };
 }
 
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
@@ -107,11 +130,15 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
           logError(`[tools] ${normalizedName} failed: ${described.message}`);
-          return jsonResult({
+          const payload: Record<string, unknown> = {
             status: "error",
             tool: normalizedName,
             error: described.message,
-          });
+          };
+          if (described.stderr) {
+            payload.stderr = described.stderr;
+          }
+          return jsonResult(payload);
         }
       },
     } satisfies ToolDefinition;
