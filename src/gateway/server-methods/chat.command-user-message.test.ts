@@ -145,7 +145,16 @@ describe("chat.send command transcript – user message persistence", () => {
       },
       respond,
       context,
-      client: undefined,
+      // Provide a minimal stub matching GatewayClient so the handler exercises
+      // the optional-chaining paths (connect, connId, caps) under realistic conditions.
+      client: {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "test", version: "1.0.0", platform: "test", mode: "test" },
+        },
+        connId: "test-conn",
+      },
     });
 
     // Wait for broadcastChatFinal to fire — this happens after transcript writes complete.
