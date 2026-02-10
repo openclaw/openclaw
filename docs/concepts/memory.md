@@ -132,10 +132,13 @@ out to QMD for retrieval. Key points:
   (plus default workspace memory files), then `qmd update` + `qmd embed` run
   on boot and on a configurable interval (`memory.qmd.update.interval`,
   default 5 m).
+- The gateway now initializes the QMD manager on startup, so periodic update
+  timers are armed even before the first `memory_search` call.
 - Boot refresh now runs in the background by default so chat startup is not
   blocked; set `memory.qmd.update.waitForBootSync = true` to keep the previous
   blocking behavior.
-- Searches run via `qmd query --json`. If QMD fails or the binary is missing,
+- Searches run via `qmd query --json`, scoped to OpenClaw-managed collections.
+  If QMD fails or the binary is missing,
   OpenClaw automatically falls back to the builtin SQLite manager so memory tools
   keep working.
 - OpenClaw does not expose QMD embed batch-size tuning today; batch behavior is
@@ -302,9 +305,9 @@ Fallbacks:
 - `memorySearch.fallback` can be `openai`, `gemini`, `local`, or `none`.
 - The fallback provider is only used when the primary embedding provider fails.
 
-Batch indexing (OpenAI + Gemini):
+Batch indexing (OpenAI + Gemini + Voyage):
 
-- Enabled by default for OpenAI and Gemini embeddings. Set `agents.defaults.memorySearch.remote.batch.enabled = false` to disable.
+- Disabled by default. Set `agents.defaults.memorySearch.remote.batch.enabled = true` to enable for large-corpus indexing (OpenAI, Gemini, and Voyage).
 - Default behavior waits for batch completion; tune `remote.batch.wait`, `remote.batch.pollIntervalMs`, and `remote.batch.timeoutMinutes` if needed.
 - Set `remote.batch.concurrency` to control how many batch jobs we submit in parallel (default: 2).
 - Batch mode applies when `memorySearch.provider = "openai"` or `"gemini"` and uses the corresponding API key.

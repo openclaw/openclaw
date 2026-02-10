@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { pathExists } from "../utils.js";
 import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis.js";
 
 const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
@@ -83,15 +84,6 @@ async function writeCompletionCache(params: {
     const script = getCompletionScript(shell, params.program);
     const targetPath = resolveCompletionCachePath(shell, params.binName);
     await fs.writeFile(targetPath, script, "utf-8");
-  }
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
   }
 }
 

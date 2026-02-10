@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
+      docs_changed: ${{ steps.check.outputs.docs_changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,7 +26,7 @@ jobs:
 
       - name: Detect docs-only changes
         id: check
-        uses: ./.github/actions/detect-docs-only
+        uses: ./.github/actions/detect-docs-changes
 
   # Detect which heavy areas are touched so PRs can skip unrelated expensive jobs.
   # Push to main keeps broad coverage.
@@ -120,7 +121,7 @@ jobs:
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
-    needs: [docs-scope, changed-scope, code-size, check-lint]
+    needs: [docs-scope, changed-scope, code-analysis, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
@@ -144,9 +145,10 @@ jobs:
           path: dist/
           retention-days: 1
 
-  install-check:
-    needs: [docs-scope, changed-scope, code-size, check-lint]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+  # Validate npm pack contents after build (only on push to main, not PRs).
+  release-check:
+    needs: [docs-scope, build-artifacts]
+    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -159,8 +161,17 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Check release contents
+        run: pnpm release:check
+
   checks:
-    needs: [docs-scope, changed-scope, code-size, check-lint]
+    needs: [docs-scope, changed-scope, code-analysis, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
@@ -188,9 +199,11 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
-  # Format check — cheapest gate (~43s). Always runs, even on docs-only changes.
-  check-format:
-    name: "check: format"
+  # Types, lint, and format check.
+  check:
+    name: "check"
+    needs: [docs-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -201,31 +214,30 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
 
-      - name: Check formatting
-        run: pnpm format:check
-
-  # Lint check — runs after format passes for cleaner output.
-  check-lint:
-    name: "check: lint"
-    needs: [check-format]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-
-      - name: Check types and lint
+      - name: Check types and lint and oxfmt
         run: pnpm check
+
+  # Validate docs (format, lint, broken links) only when docs files changed.
+  check-docs:
+    needs: [docs-scope]
+    if: needs.docs-scope.outputs.docs_changed == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+
+      - name: Check docs
+        run: pnpm check:docs
 
   # Check for files that grew past LOC threshold in this PR (delta-only).
   # On push events, all steps are skipped and the job passes (no-op).
   # Heavy downstream jobs depend on this to fail fast on violations.
-  code-size:
-    needs: [check-format]
+  code-analysis:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -279,7 +291,7 @@ jobs:
           fi
 
   checks-windows:
-    needs: [docs-scope, changed-scope, build-artifacts, code-size, check-lint]
+    needs: [docs-scope, changed-scope, build-artifacts, code-analysis, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-4vcpu-windows-2025
     env:
@@ -327,19 +339,6 @@ jobs:
           } catch {
             Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
           }
-
-      - name: Checkout submodules (retry)
-        run: |
-          set -euo pipefail
-          git submodule sync --recursive
-          for attempt in 1 2 3 4 5; do
-            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
-              exit 0
-            fi
-            echo "Submodule update failed (attempt $attempt/5). Retrying…"
-            sleep $((attempt * 10))
-          done
-          exit 1
 
       - name: Download dist artifact (lint lane)
         if: matrix.task == 'lint'
@@ -400,7 +399,7 @@ jobs:
   # running 4 separate jobs per PR (as before) starved the queue. One job
   # per PR allows 5 PRs to run macOS checks simultaneously.
   macos:
-    needs: [docs-scope, changed-scope, code-size, check-lint]
+    needs: [docs-scope, changed-scope, code-analysis, check]
     if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_macos == 'true'
     runs-on: macos-latest
     steps:
@@ -480,19 +479,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
-
-      - name: Checkout submodules (retry)
-        run: |
-          set -euo pipefail
-          git submodule sync --recursive
-          for attempt in 1 2 3 4 5; do
-            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
-              exit 0
-            fi
-            echo "Submodule update failed (attempt $attempt/5). Retrying…"
-            sleep $((attempt * 10))
-          done
-          exit 1
 
       - name: Select Xcode 26.1
         run: |
@@ -646,7 +632,7 @@ jobs:
           PY
 
   android:
-    needs: [docs-scope, changed-scope, code-size, check-lint]
+    needs: [docs-scope, changed-scope, code-analysis, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_android == 'true')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
@@ -662,19 +648,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
-
-      - name: Checkout submodules (retry)
-        run: |
-          set -euo pipefail
-          git submodule sync --recursive
-          for attempt in 1 2 3 4 5; do
-            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
-              exit 0
-            fi
-            echo "Submodule update failed (attempt $attempt/5). Retrying…"
-            sleep $((attempt * 10))
-          done
-          exit 1
 
       - name: Setup Java
         uses: actions/setup-java@v4

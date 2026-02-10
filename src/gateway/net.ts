@@ -244,7 +244,7 @@ export async function resolveGatewayListenHosts(
  * @param host - The string to validate
  * @returns True if valid IPv4 format
  */
-function isValidIPv4(host: string): boolean {
+export function isValidIPv4(host: string): boolean {
   const parts = host.split(".");
   if (parts.length !== 4) {
     return false;
