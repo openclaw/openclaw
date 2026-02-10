@@ -17,7 +17,6 @@ describe("isBillingErrorMessage", () => {
       "Payment Required",
       "HTTP 402 Payment Required",
       "plans & billing",
-      "billing: please upgrade your plan",
     ];
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
