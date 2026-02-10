@@ -1,74 +1,74 @@
----
-name: imsg
-description: iMessage/SMS CLI for listing chats, history, watch, and sending.
-homepage: https://imsg.to
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "📨",
-        "os": ["darwin"],
-        "requires": { "bins": ["imsg"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "steipete/tap/imsg",
-              "bins": ["imsg"],
-              "label": "Install imsg (brew)",
-            },
-          ],
-      },
-  }
----
-
-# imsg Actions
-
-## Overview
-
-Use `imsg` to read and send Messages.app iMessage/SMS on macOS.
-
-Requirements: Messages.app signed in, Full Disk Access for your terminal, and Automation permission to control Messages.app for sending.
-
-## Inputs to collect
-
-- Recipient handle (phone/email) for `send`
-- `chatId` for history/watch (from `imsg chats --limit 10 --json`)
-- `text` and optional `file` path for sends
-
-## Actions
-
-### List chats
-
-```bash
-imsg chats --limit 10 --json
-```
-
-### Fetch chat history
-
-```bash
-imsg history --chat-id 1 --limit 20 --attachments --json
-```
-
-### Watch a chat
-
-```bash
-imsg watch --chat-id 1 --attachments
-```
-
-### Send a message
-
-```bash
-imsg send --to "+14155551212" --text "hi" --file /path/pic.jpg
-```
-
-## Notes
-
-- `--service imessage|sms|auto` controls delivery.
-- Confirm recipient + message before sending.
-
-## Ideas to try
-
-- Use `imsg chats --limit 10 --json` to discover chat ids.
-- Watch a high-signal chat to stream incoming messages.
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+name: imsg（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+description: iMessage/SMS CLI for listing chats, history, watch, and sending.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+homepage: https://imsg.to（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+metadata:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    "openclaw":（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "emoji": "📨",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "os": ["darwin"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "requires": { "bins": ["imsg"] },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "install":（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          [（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "id": "brew",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "kind": "brew",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "formula": "steipete/tap/imsg",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "bins": ["imsg"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "label": "Install imsg (brew)",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          ],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  }（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# imsg Actions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Overview（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Use `imsg` to read and send Messages.app iMessage/SMS on macOS.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Requirements: Messages.app signed in, Full Disk Access for your terminal, and Automation permission to control Messages.app for sending.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Inputs to collect（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Recipient handle (phone/email) for `send`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `chatId` for history/watch (from `imsg chats --limit 10 --json`)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `text` and optional `file` path for sends（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Actions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### List chats（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+imsg chats --limit 10 --json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Fetch chat history（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+imsg history --chat-id 1 --limit 20 --attachments --json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Watch a chat（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+imsg watch --chat-id 1 --attachments（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Send a message（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+imsg send --to "+14155551212" --text "hi" --file /path/pic.jpg（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Notes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `--service imessage|sms|auto` controls delivery.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Confirm recipient + message before sending.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Ideas to try（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Use `imsg chats --limit 10 --json` to discover chat ids.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Watch a high-signal chat to stream incoming messages.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

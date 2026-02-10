@@ -1,113 +1,113 @@
-# Changelog
-
-## 2026.2.6-3
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.2.6-2
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.2.6
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.2.4
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.2.2
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.31
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.30
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.29
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.23
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.22
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.21
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.20
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.17-1
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.17
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.16
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.15
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.14
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 0.1.0
-
-### Features
-
-- Zalo Bot API channel plugin with token-based auth (env/config/file).
-- Direct message support (DMs only) with pairing/allowlist/open/disabled policies.
-- Polling and webhook delivery modes.
-- Text + image messaging with 2000-char chunking and media size caps.
-- Multi-account support with per-account config.
+# Changelog（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.2.6-3（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.2.6-2（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.2.6（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.2.4（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.2.2（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.31（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.30（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.29（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.23（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.22（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.21（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.20（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.17-1（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.17（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.16（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.15（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.14（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 0.1.0（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Features（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Zalo Bot API channel plugin with token-based auth (env/config/file).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Direct message support (DMs only) with pairing/allowlist/open/disabled policies.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Polling and webhook delivery modes.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Text + image messaging with 2000-char chunking and media size caps.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Multi-account support with per-account config.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

@@ -1,34 +1,34 @@
----
-name: Bug report
-about: Report a problem or unexpected behavior in Clawdbot.
-title: "[Bug]: "
-labels: bug
----
-
-## Summary
-
-What went wrong?
-
-## Steps to reproduce
-
-1.
-2.
-3.
-
-## Expected behavior
-
-What did you expect to happen?
-
-## Actual behavior
-
-What actually happened?
-
-## Environment
-
-- Clawdbot version:
-- OS:
-- Install method (pnpm/npx/docker/etc):
-
-## Logs or screenshots
-
-Paste relevant logs or add screenshots (redact secrets).
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+name: Bug report（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+about: Report a problem or unexpected behavior in Clawdbot.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: "[Bug]: "（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+labels: bug（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+What went wrong?（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Steps to reproduce（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+3.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Expected behavior（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+What did you expect to happen?（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Actual behavior（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+What actually happened?（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Environment（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Clawdbot version:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- OS:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Install method (pnpm/npx/docker/etc):（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Logs or screenshots（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Paste relevant logs or add screenshots (redact secrets).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

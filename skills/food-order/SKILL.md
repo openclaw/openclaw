@@ -1,48 +1,48 @@
----
-name: food-order
-description: Reorder Foodora orders + track ETA/status with ordercli. Never confirm without explicit user approval. Triggers: order food, reorder, track ETA.
-homepage: https://ordercli.sh
-metadata: {"openclaw":{"emoji":"🥡","requires":{"bins":["ordercli"]},"install":[{"id":"go","kind":"go","module":"github.com/steipete/ordercli/cmd/ordercli@latest","bins":["ordercli"],"label":"Install ordercli (go)"}]}}
----
-
-# Food order (Foodora via ordercli)
-
-Goal: reorder a previous Foodora order safely (preview first; confirm only on explicit user “yes/confirm/place the order”).
-
-Hard safety rules
-
-- Never run `ordercli foodora reorder ... --confirm` unless user explicitly confirms placing the order.
-- Prefer preview-only steps first; show what will happen; ask for confirmation.
-- If user is unsure: stop at preview and ask questions.
-
-Setup (once)
-
-- Country: `ordercli foodora countries` → `ordercli foodora config set --country AT`
-- Login (password): `ordercli foodora login --email you@example.com --password-stdin`
-- Login (no password, preferred): `ordercli foodora session chrome --url https://www.foodora.at/ --profile "Default"`
-
-Find what to reorder
-
-- Recent list: `ordercli foodora history --limit 10`
-- Details: `ordercli foodora history show <orderCode>`
-- If needed (machine-readable): `ordercli foodora history show <orderCode> --json`
-
-Preview reorder (no cart changes)
-
-- `ordercli foodora reorder <orderCode>`
-
-Place reorder (cart change; explicit confirmation required)
-
-- Confirm first, then run: `ordercli foodora reorder <orderCode> --confirm`
-- Multiple addresses? Ask user for the right `--address-id` (take from their Foodora account / prior order data) and run:
-  - `ordercli foodora reorder <orderCode> --confirm --address-id <id>`
-
-Track the order
-
-- ETA/status (active list): `ordercli foodora orders`
-- Live updates: `ordercli foodora orders --watch`
-- Single order detail: `ordercli foodora order <orderCode>`
-
-Debug / safe testing
-
-- Use a throwaway config: `ordercli --config /tmp/ordercli.json ...`
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+name: food-order（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+description: Reorder Foodora orders + track ETA/status with ordercli. Never confirm without explicit user approval. Triggers: order food, reorder, track ETA.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+homepage: https://ordercli.sh（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+metadata: {"openclaw":{"emoji":"🥡","requires":{"bins":["ordercli"]},"install":[{"id":"go","kind":"go","module":"github.com/steipete/ordercli/cmd/ordercli@latest","bins":["ordercli"],"label":"Install ordercli (go)"}]}}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Food order (Foodora via ordercli)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Goal: reorder a previous Foodora order safely (preview first; confirm only on explicit user “yes/confirm/place the order”).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Hard safety rules（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Never run `ordercli foodora reorder ... --confirm` unless user explicitly confirms placing the order.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Prefer preview-only steps first; show what will happen; ask for confirmation.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- If user is unsure: stop at preview and ask questions.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Setup (once)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Country: `ordercli foodora countries` → `ordercli foodora config set --country AT`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Login (password): `ordercli foodora login --email you@example.com --password-stdin`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Login (no password, preferred): `ordercli foodora session chrome --url https://www.foodora.at/ --profile "Default"`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Find what to reorder（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Recent list: `ordercli foodora history --limit 10`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Details: `ordercli foodora history show <orderCode>`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- If needed (machine-readable): `ordercli foodora history show <orderCode> --json`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Preview reorder (no cart changes)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `ordercli foodora reorder <orderCode>`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Place reorder (cart change; explicit confirmation required)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Confirm first, then run: `ordercli foodora reorder <orderCode> --confirm`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Multiple addresses? Ask user for the right `--address-id` (take from their Foodora account / prior order data) and run:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `ordercli foodora reorder <orderCode> --confirm --address-id <id>`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Track the order（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- ETA/status (active list): `ordercli foodora orders`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Live updates: `ordercli foodora orders --watch`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Single order detail: `ordercli foodora order <orderCode>`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Debug / safe testing（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Use a throwaway config: `ordercli --config /tmp/ordercli.json ...`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

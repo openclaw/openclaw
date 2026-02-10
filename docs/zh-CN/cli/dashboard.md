@@ -1,23 +1,23 @@
----
-read_when:
-  - 想要使用当前令牌打开控制界面
-  - 想要打印 URL 而不启动浏览器
-summary: "`openclaw dashboard` 的 CLI 参考（打开控制界面）"
-title: dashboard
-x-i18n:
-  generated_at: "2026-02-01T19:58:50Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 242a3b35ea43149be12ee2b8f2bc81b6dc24cea546a15f422dcfd0cf2e7724db
-  source_path: cli/dashboard.md
-  workflow: 14
----
-
-# `openclaw dashboard`
-
-使用当前认证信息打开控制界面。
-
-```bash
-openclaw dashboard
-openclaw dashboard --no-open
-```
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 想要使用当前令牌打开控制界面（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 想要打印 URL 而不启动浏览器（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: "`openclaw dashboard` 的 CLI 参考（打开控制界面）"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: dashboard（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+x-i18n:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  generated_at: "2026-02-01T19:58:50Z"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  model: claude-opus-4-5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  provider: pi（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_hash: 242a3b35ea43149be12ee2b8f2bc81b6dc24cea546a15f422dcfd0cf2e7724db（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_path: cli/dashboard.md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workflow: 14（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# `openclaw dashboard`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+使用当前认证信息打开控制界面。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw dashboard（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw dashboard --no-open（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

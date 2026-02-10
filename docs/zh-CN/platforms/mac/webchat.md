@@ -1,43 +1,43 @@
----
-read_when:
-  - 调试 macOS WebChat 视图或 loopback 端口
-summary: macOS 应用如何嵌入 Gateway 网关 WebChat 以及如何调试
-title: WebChat
-x-i18n:
-  generated_at: "2026-02-03T07:52:46Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 04ff448758e530098e2004625f33e42fc3dbe31137cd3beec2d55590e507de08
-  source_path: platforms/mac/webchat.md
-  workflow: 15
----
-
-# WebChat（macOS 应用）
-
-macOS 菜单栏应用将 WebChat UI 嵌入为原生 SwiftUI 视图。它连接到 Gateway 网关，默认使用所选智能体的**主会话**（带有会话切换器用于其他会话）。
-
-- **本地模式**：直接连接到本地 Gateway 网关 WebSocket。
-- **远程模式**：通过 SSH 转发 Gateway 网关控制端口，并使用该隧道作为数据平面。
-
-## 启动和调试
-
-- 手动：Lobster 菜单 → "Open Chat"。
-- 测试时自动打开：
-  ```bash
-  dist/OpenClaw.app/Contents/MacOS/OpenClaw --webchat
-  ```
-- 日志：`./scripts/clawlog.sh`（子系统 `bot.molt`，类别 `WebChatSwiftUI`）。
-
-## 工作原理
-
-- 数据平面：Gateway 网关 WS 方法 `chat.history`、`chat.send`、`chat.abort`、`chat.inject` 和事件 `chat`、`agent`、`presence`、`tick`、`health`。
-- 会话：默认为主会话（`main`，或当范围为全局时为 `global`）。UI 可以在会话之间切换。
-- 新手引导使用专用会话，以将首次运行设置分开。
-
-## 安全面
-
-- 远程模式仅通过 SSH 转发 Gateway 网关 WebSocket 控制端口。
-
-## 已知限制
-
-- UI 针对聊天会话优化（不是完整的浏览器沙箱）。
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 调试 macOS WebChat 视图或 loopback 端口（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: macOS 应用如何嵌入 Gateway 网关 WebChat 以及如何调试（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: WebChat（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+x-i18n:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  generated_at: "2026-02-03T07:52:46Z"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  model: claude-opus-4-5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  provider: pi（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_hash: 04ff448758e530098e2004625f33e42fc3dbe31137cd3beec2d55590e507de08（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_path: platforms/mac/webchat.md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workflow: 15（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# WebChat（macOS 应用）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+macOS 菜单栏应用将 WebChat UI 嵌入为原生 SwiftUI 视图。它连接到 Gateway 网关，默认使用所选智能体的**主会话**（带有会话切换器用于其他会话）。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- **本地模式**：直接连接到本地 Gateway 网关 WebSocket。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- **远程模式**：通过 SSH 转发 Gateway 网关控制端口，并使用该隧道作为数据平面。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 启动和调试（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 手动：Lobster 菜单 → "Open Chat"。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 测试时自动打开：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  ```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  dist/OpenClaw.app/Contents/MacOS/OpenClaw --webchat（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  ```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 日志：`./scripts/clawlog.sh`（子系统 `bot.molt`，类别 `WebChatSwiftUI`）。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 工作原理（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 数据平面：Gateway 网关 WS 方法 `chat.history`、`chat.send`、`chat.abort`、`chat.inject` 和事件 `chat`、`agent`、`presence`、`tick`、`health`。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 会话：默认为主会话（`main`，或当范围为全局时为 `global`）。UI 可以在会话之间切换。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 新手引导使用专用会话，以将首次运行设置分开。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 安全面（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 远程模式仅通过 SSH 转发 Gateway 网关 WebSocket 控制端口。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 已知限制（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- UI 针对聊天会话优化（不是完整的浏览器沙箱）。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

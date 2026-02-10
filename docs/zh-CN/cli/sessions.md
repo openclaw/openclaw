@@ -1,23 +1,23 @@
----
-read_when:
-  - 你想列出已存储的会话并查看近期活动
-summary: "`openclaw sessions`（列出已存储的会话及使用情况）的 CLI 参考"
-title: sessions
-x-i18n:
-  generated_at: "2026-02-01T20:21:25Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: d8866ef166c0dea5e8d691bb62171298694935ae0771a46fada537774dadfb32
-  source_path: cli/sessions.md
-  workflow: 14
----
-
-# `openclaw sessions`
-
-列出已存储的对话会话。
-
-```bash
-openclaw sessions
-openclaw sessions --active 120
-openclaw sessions --json
-```
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你想列出已存储的会话并查看近期活动（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: "`openclaw sessions`（列出已存储的会话及使用情况）的 CLI 参考"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: sessions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+x-i18n:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  generated_at: "2026-02-01T20:21:25Z"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  model: claude-opus-4-5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  provider: pi（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_hash: d8866ef166c0dea5e8d691bb62171298694935ae0771a46fada537774dadfb32（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_path: cli/sessions.md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workflow: 14（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# `openclaw sessions`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+列出已存储的对话会话。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw sessions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw sessions --active 120（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw sessions --json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

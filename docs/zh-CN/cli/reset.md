@@ -1,24 +1,24 @@
----
-read_when:
-  - 你想在保留 CLI 安装的同时清除本地状态
-  - 你想预览哪些内容会被移除
-summary: "`openclaw reset`（重置本地状态/配置）的 CLI 参考"
-title: reset
-x-i18n:
-  generated_at: "2026-02-01T20:21:22Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 08afed5830f892e07d6e2e167f09aaf2d79fd5b2ba2a26a65dca857ebdbf873c
-  source_path: cli/reset.md
-  workflow: 14
----
-
-# `openclaw reset`
-
-重置本地配置/状态（保留 CLI 安装）。
-
-```bash
-openclaw reset
-openclaw reset --dry-run
-openclaw reset --scope config+creds+sessions --yes --non-interactive
-```
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你想在保留 CLI 安装的同时清除本地状态（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你想预览哪些内容会被移除（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: "`openclaw reset`（重置本地状态/配置）的 CLI 参考"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: reset（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+x-i18n:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  generated_at: "2026-02-01T20:21:22Z"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  model: claude-opus-4-5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  provider: pi（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_hash: 08afed5830f892e07d6e2e167f09aaf2d79fd5b2ba2a26a65dca857ebdbf873c（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_path: cli/reset.md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workflow: 14（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# `openclaw reset`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+重置本地配置/状态（保留 CLI 安装）。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw reset（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw reset --dry-run（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw reset --scope config+creds+sessions --yes --non-interactive（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

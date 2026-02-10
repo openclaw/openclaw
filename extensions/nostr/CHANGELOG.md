@@ -1,98 +1,98 @@
-# Changelog
-
-## 2026.2.6-3
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.2.6-2
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.2.6
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.2.4
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.2.2
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.31
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.30
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.29
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.23
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.22
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.21
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.20
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.19-1
-
-Initial release.
-
-### Features
-
-- NIP-04 encrypted DM support (kind:4 events)
-- Key validation (hex and nsec formats)
-- Multi-relay support with sequential fallback
-- Event signature verification
-- TTL-based deduplication (24h)
-- Access control via dmPolicy (pairing, allowlist, open, disabled)
-- Pubkey normalization (hex/npub)
-
-### Protocol Support
-
-- NIP-01: Basic event structure
-- NIP-04: Encrypted direct messages
-
-### Planned for v2
-
-- NIP-17: Gift-wrapped DMs
-- NIP-44: Versioned encryption
-- Media attachments
+# Changelog（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.2.6-3（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.2.6-2（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.2.6（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.2.4（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.2.2（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.31（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.30（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.29（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.23（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.22（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.21（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.20（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Version alignment with core OpenClaw release numbers.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 2026.1.19-1（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Initial release.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Features（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- NIP-04 encrypted DM support (kind:4 events)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Key validation (hex and nsec formats)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Multi-relay support with sequential fallback（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Event signature verification（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- TTL-based deduplication (24h)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Access control via dmPolicy (pairing, allowlist, open, disabled)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Pubkey normalization (hex/npub)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Protocol Support（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- NIP-01: Basic event structure（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- NIP-04: Encrypted direct messages（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Planned for v2（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- NIP-17: Gift-wrapped DMs（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- NIP-44: Versioned encryption（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Media attachments（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

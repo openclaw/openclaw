@@ -1,50 +1,50 @@
-# @openclaw/zalo
-
-Zalo channel plugin for OpenClaw (Bot API).
-
-## Install (local checkout)
-
-```bash
-openclaw plugins install ./extensions/zalo
-```
-
-## Install (npm)
-
-```bash
-openclaw plugins install @openclaw/zalo
-```
-
-Onboarding: select Zalo and confirm the install prompt to fetch the plugin automatically.
-
-## Config
-
-```json5
-{
-  channels: {
-    zalo: {
-      enabled: true,
-      botToken: "12345689:abc-xyz",
-      dmPolicy: "pairing",
-      proxy: "http://proxy.local:8080",
-    },
-  },
-}
-```
-
-## Webhook mode
-
-```json5
-{
-  channels: {
-    zalo: {
-      webhookUrl: "https://example.com/zalo-webhook",
-      webhookSecret: "your-secret-8-plus-chars",
-      webhookPath: "/zalo-webhook",
-    },
-  },
-}
-```
-
-If `webhookPath` is omitted, the plugin uses the webhook URL path.
-
-Restart the gateway after config changes.
+# @openclaw/zalo（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Zalo channel plugin for OpenClaw (Bot API).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Install (local checkout)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw plugins install ./extensions/zalo（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Install (npm)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw plugins install @openclaw/zalo（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Onboarding: select Zalo and confirm the install prompt to fetch the plugin automatically.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Config（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    zalo: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      botToken: "12345689:abc-xyz",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      dmPolicy: "pairing",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      proxy: "http://proxy.local:8080",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Webhook mode（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    zalo: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      webhookUrl: "https://example.com/zalo-webhook",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      webhookSecret: "your-secret-8-plus-chars",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      webhookPath: "/zalo-webhook",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If `webhookPath` is omitted, the plugin uses the webhook URL path.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Restart the gateway after config changes.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

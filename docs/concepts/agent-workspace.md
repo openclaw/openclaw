@@ -1,233 +1,233 @@
----
-summary: "Agent workspace: location, layout, and backup strategy"
-read_when:
-  - You need to explain the agent workspace or its file layout
-  - You want to back up or migrate an agent workspace
-title: "Agent Workspace"
----
-
-# Agent workspace
-
-The workspace is the agent's home. It is the only working directory used for
-file tools and for workspace context. Keep it private and treat it as memory.
-
-This is separate from `~/.openclaw/`, which stores config, credentials, and
-sessions.
-
-**Important:** the workspace is the **default cwd**, not a hard sandbox. Tools
-resolve relative paths against the workspace, but absolute paths can still reach
-elsewhere on the host unless sandboxing is enabled. If you need isolation, use
-[`agents.defaults.sandbox`](/gateway/sandboxing) (and/or per‑agent sandbox config).
-When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate
-inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspace.
-
-## Default location
-
-- Default: `~/.openclaw/workspace`
-- If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes
-  `~/.openclaw/workspace-<profile>`.
-- Override in `~/.openclaw/openclaw.json`:
-
-```json5
-{
-  agent: {
-    workspace: "~/.openclaw/workspace",
-  },
-}
-```
-
-`openclaw onboard`, `openclaw configure`, or `openclaw setup` will create the
-workspace and seed the bootstrap files if they are missing.
-
-If you already manage the workspace files yourself, you can disable bootstrap
-file creation:
-
-```json5
-{ agent: { skipBootstrap: true } }
-```
-
-## Extra workspace folders
-
-Older installs may have created `~/openclaw`. Keeping multiple workspace
-directories around can cause confusing auth or state drift, because only one
-workspace is active at a time.
-
-**Recommendation:** keep a single active workspace. If you no longer use the
-extra folders, archive or move them to Trash (for example `trash ~/openclaw`).
-If you intentionally keep multiple workspaces, make sure
-`agents.defaults.workspace` points to the active one.
-
-`openclaw doctor` warns when it detects extra workspace directories.
-
-## Workspace file map (what each file means)
-
-These are the standard files OpenClaw expects inside the workspace:
-
-- `AGENTS.md`
-  - Operating instructions for the agent and how it should use memory.
-  - Loaded at the start of every session.
-  - Good place for rules, priorities, and "how to behave" details.
-
-- `SOUL.md`
-  - Persona, tone, and boundaries.
-  - Loaded every session.
-
-- `USER.md`
-  - Who the user is and how to address them.
-  - Loaded every session.
-
-- `IDENTITY.md`
-  - The agent's name, vibe, and emoji.
-  - Created/updated during the bootstrap ritual.
-
-- `TOOLS.md`
-  - Notes about your local tools and conventions.
-  - Does not control tool availability; it is only guidance.
-
-- `HEARTBEAT.md`
-  - Optional tiny checklist for heartbeat runs.
-  - Keep it short to avoid token burn.
-
-- `BOOT.md`
-  - Optional startup checklist executed on gateway restart when internal hooks are enabled.
-  - Keep it short; use the message tool for outbound sends.
-
-- `BOOTSTRAP.md`
-  - One-time first-run ritual.
-  - Only created for a brand-new workspace.
-  - Delete it after the ritual is complete.
-
-- `memory/YYYY-MM-DD.md`
-  - Daily memory log (one file per day).
-  - Recommended to read today + yesterday on session start.
-
-- `MEMORY.md` (optional)
-  - Curated long-term memory.
-  - Only load in the main, private session (not shared/group contexts).
-
-See [Memory](/concepts/memory) for the workflow and automatic memory flush.
-
-- `skills/` (optional)
-  - Workspace-specific skills.
-  - Overrides managed/bundled skills when names collide.
-
-- `canvas/` (optional)
-  - Canvas UI files for node displays (for example `canvas/index.html`).
-
-If any bootstrap file is missing, OpenClaw injects a "missing file" marker into
-the session and continues. Large bootstrap files are truncated when injected;
-adjust the limit with `agents.defaults.bootstrapMaxChars` (default: 20000).
-`openclaw setup` can recreate missing defaults without overwriting existing
-files.
-
-## What is NOT in the workspace
-
-These live under `~/.openclaw/` and should NOT be committed to the workspace repo:
-
-- `~/.openclaw/openclaw.json` (config)
-- `~/.openclaw/credentials/` (OAuth tokens, API keys)
-- `~/.openclaw/agents/<agentId>/sessions/` (session transcripts + metadata)
-- `~/.openclaw/skills/` (managed skills)
-
-If you need to migrate sessions or config, copy them separately and keep them
-out of version control.
-
-## Git backup (recommended, private)
-
-Treat the workspace as private memory. Put it in a **private** git repo so it is
-backed up and recoverable.
-
-Run these steps on the machine where the Gateway runs (that is where the
-workspace lives).
-
-### 1) Initialize the repo
-
-If git is installed, brand-new workspaces are initialized automatically. If this
-workspace is not already a repo, run:
-
-```bash
-cd ~/.openclaw/workspace
-git init
-git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
-git commit -m "Add agent workspace"
-```
-
-### 2) Add a private remote (beginner-friendly options)
-
-Option A: GitHub web UI
-
-1. Create a new **private** repository on GitHub.
-2. Do not initialize with a README (avoids merge conflicts).
-3. Copy the HTTPS remote URL.
-4. Add the remote and push:
-
-```bash
-git branch -M main
-git remote add origin <https-url>
-git push -u origin main
-```
-
-Option B: GitHub CLI (`gh`)
-
-```bash
-gh auth login
-gh repo create openclaw-workspace --private --source . --remote origin --push
-```
-
-Option C: GitLab web UI
-
-1. Create a new **private** repository on GitLab.
-2. Do not initialize with a README (avoids merge conflicts).
-3. Copy the HTTPS remote URL.
-4. Add the remote and push:
-
-```bash
-git branch -M main
-git remote add origin <https-url>
-git push -u origin main
-```
-
-### 3) Ongoing updates
-
-```bash
-git status
-git add .
-git commit -m "Update memory"
-git push
-```
-
-## Do not commit secrets
-
-Even in a private repo, avoid storing secrets in the workspace:
-
-- API keys, OAuth tokens, passwords, or private credentials.
-- Anything under `~/.openclaw/`.
-- Raw dumps of chats or sensitive attachments.
-
-If you must store sensitive references, use placeholders and keep the real
-secret elsewhere (password manager, environment variables, or `~/.openclaw/`).
-
-Suggested `.gitignore` starter:
-
-```gitignore
-.DS_Store
-.env
-**/*.key
-**/*.pem
-**/secrets*
-```
-
-## Moving the workspace to a new machine
-
-1. Clone the repo to the desired path (default `~/.openclaw/workspace`).
-2. Set `agents.defaults.workspace` to that path in `~/.openclaw/openclaw.json`.
-3. Run `openclaw setup --workspace <path>` to seed any missing files.
-4. If you need sessions, copy `~/.openclaw/agents/<agentId>/sessions/` from the
-   old machine separately.
-
-## Advanced notes
-
-- Multi-agent routing can use different workspaces per agent. See
-  [Channel routing](/channels/channel-routing) for routing configuration.
-- If `agents.defaults.sandbox` is enabled, non-main sessions can use per-session sandbox
-  workspaces under `agents.defaults.sandbox.workspaceRoot`.
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: "Agent workspace: location, layout, and backup strategy"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - You need to explain the agent workspace or its file layout（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - You want to back up or migrate an agent workspace（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: "Agent Workspace"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Agent workspace（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+The workspace is the agent's home. It is the only working directory used for（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+file tools and for workspace context. Keep it private and treat it as memory.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+This is separate from `~/.openclaw/`, which stores config, credentials, and（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+sessions.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Important:** the workspace is the **default cwd**, not a hard sandbox. Tools（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+resolve relative paths against the workspace, but absolute paths can still reach（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+elsewhere on the host unless sandboxing is enabled. If you need isolation, use（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+[`agents.defaults.sandbox`](/gateway/sandboxing) (and/or per‑agent sandbox config).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspace.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Default location（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Default: `~/.openclaw/workspace`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  `~/.openclaw/workspace-<profile>`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Override in `~/.openclaw/openclaw.json`:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  agent: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    workspace: "~/.openclaw/workspace",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+`openclaw onboard`, `openclaw configure`, or `openclaw setup` will create the（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+workspace and seed the bootstrap files if they are missing.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you already manage the workspace files yourself, you can disable bootstrap（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+file creation:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{ agent: { skipBootstrap: true } }（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Extra workspace folders（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Older installs may have created `~/openclaw`. Keeping multiple workspace（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+directories around can cause confusing auth or state drift, because only one（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+workspace is active at a time.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Recommendation:** keep a single active workspace. If you no longer use the（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+extra folders, archive or move them to Trash (for example `trash ~/openclaw`).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you intentionally keep multiple workspaces, make sure（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+`agents.defaults.workspace` points to the active one.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+`openclaw doctor` warns when it detects extra workspace directories.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Workspace file map (what each file means)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+These are the standard files OpenClaw expects inside the workspace:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `AGENTS.md`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Operating instructions for the agent and how it should use memory.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Loaded at the start of every session.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Good place for rules, priorities, and "how to behave" details.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `SOUL.md`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Persona, tone, and boundaries.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Loaded every session.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `USER.md`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Who the user is and how to address them.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Loaded every session.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `IDENTITY.md`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - The agent's name, vibe, and emoji.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Created/updated during the bootstrap ritual.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `TOOLS.md`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Notes about your local tools and conventions.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Does not control tool availability; it is only guidance.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `HEARTBEAT.md`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Optional tiny checklist for heartbeat runs.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Keep it short to avoid token burn.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `BOOT.md`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Optional startup checklist executed on gateway restart when internal hooks are enabled.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Keep it short; use the message tool for outbound sends.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `BOOTSTRAP.md`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - One-time first-run ritual.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Only created for a brand-new workspace.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Delete it after the ritual is complete.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `memory/YYYY-MM-DD.md`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Daily memory log (one file per day).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Recommended to read today + yesterday on session start.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `MEMORY.md` (optional)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Curated long-term memory.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Only load in the main, private session (not shared/group contexts).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+See [Memory](/concepts/memory) for the workflow and automatic memory flush.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `skills/` (optional)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Workspace-specific skills.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Overrides managed/bundled skills when names collide.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `canvas/` (optional)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Canvas UI files for node displays (for example `canvas/index.html`).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If any bootstrap file is missing, OpenClaw injects a "missing file" marker into（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+the session and continues. Large bootstrap files are truncated when injected;（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+adjust the limit with `agents.defaults.bootstrapMaxChars` (default: 20000).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+`openclaw setup` can recreate missing defaults without overwriting existing（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+files.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## What is NOT in the workspace（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+These live under `~/.openclaw/` and should NOT be committed to the workspace repo:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `~/.openclaw/openclaw.json` (config)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `~/.openclaw/credentials/` (OAuth tokens, API keys)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `~/.openclaw/agents/<agentId>/sessions/` (session transcripts + metadata)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `~/.openclaw/skills/` (managed skills)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you need to migrate sessions or config, copy them separately and keep them（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+out of version control.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Git backup (recommended, private)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Treat the workspace as private memory. Put it in a **private** git repo so it is（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backed up and recoverable.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Run these steps on the machine where the Gateway runs (that is where the（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+workspace lives).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 1) Initialize the repo（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If git is installed, brand-new workspaces are initialized automatically. If this（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+workspace is not already a repo, run:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+cd ~/.openclaw/workspace（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git init（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git commit -m "Add agent workspace"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 2) Add a private remote (beginner-friendly options)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Option A: GitHub web UI（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1. Create a new **private** repository on GitHub.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2. Do not initialize with a README (avoids merge conflicts).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+3. Copy the HTTPS remote URL.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+4. Add the remote and push:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git branch -M main（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git remote add origin <https-url>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git push -u origin main（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Option B: GitHub CLI (`gh`)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+gh auth login（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+gh repo create openclaw-workspace --private --source . --remote origin --push（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Option C: GitLab web UI（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1. Create a new **private** repository on GitLab.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2. Do not initialize with a README (avoids merge conflicts).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+3. Copy the HTTPS remote URL.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+4. Add the remote and push:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git branch -M main（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git remote add origin <https-url>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git push -u origin main（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 3) Ongoing updates（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git status（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git add .（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git commit -m "Update memory"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git push（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Do not commit secrets（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Even in a private repo, avoid storing secrets in the workspace:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- API keys, OAuth tokens, passwords, or private credentials.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Anything under `~/.openclaw/`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Raw dumps of chats or sensitive attachments.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you must store sensitive references, use placeholders and keep the real（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+secret elsewhere (password manager, environment variables, or `~/.openclaw/`).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Suggested `.gitignore` starter:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```gitignore（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+.DS_Store（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+.env（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**/*.key（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**/*.pem（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**/secrets*（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Moving the workspace to a new machine（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1. Clone the repo to the desired path (default `~/.openclaw/workspace`).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2. Set `agents.defaults.workspace` to that path in `~/.openclaw/openclaw.json`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+3. Run `openclaw setup --workspace <path>` to seed any missing files.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+4. If you need sessions, copy `~/.openclaw/agents/<agentId>/sessions/` from the（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+   old machine separately.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Advanced notes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Multi-agent routing can use different workspaces per agent. See（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  [Channel routing](/channels/channel-routing) for routing configuration.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- If `agents.defaults.sandbox` is enabled, non-main sessions can use per-session sandbox（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workspaces under `agents.defaults.sandbox.workspaceRoot`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

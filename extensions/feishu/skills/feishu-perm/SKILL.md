@@ -1,119 +1,119 @@
----
-name: feishu-perm
-description: |
-  Feishu permission management for documents and files. Activate when user mentions sharing, permissions, collaborators.
----
-
-# Feishu Permission Tool
-
-Single tool `feishu_perm` for managing file/document permissions.
-
-## Actions
-
-### List Collaborators
-
-```json
-{ "action": "list", "token": "ABC123", "type": "docx" }
-```
-
-Returns: members with member_type, member_id, perm, name.
-
-### Add Collaborator
-
-```json
-{
-  "action": "add",
-  "token": "ABC123",
-  "type": "docx",
-  "member_type": "email",
-  "member_id": "user@example.com",
-  "perm": "edit"
-}
-```
-
-### Remove Collaborator
-
-```json
-{
-  "action": "remove",
-  "token": "ABC123",
-  "type": "docx",
-  "member_type": "email",
-  "member_id": "user@example.com"
-}
-```
-
-## Token Types
-
-| Type       | Description             |
-| ---------- | ----------------------- |
-| `doc`      | Old format document     |
-| `docx`     | New format document     |
-| `sheet`    | Spreadsheet             |
-| `bitable`  | Multi-dimensional table |
-| `folder`   | Folder                  |
-| `file`     | Uploaded file           |
-| `wiki`     | Wiki node               |
-| `mindnote` | Mind map                |
-
-## Member Types
-
-| Type               | Description        |
-| ------------------ | ------------------ |
-| `email`            | Email address      |
-| `openid`           | User open_id       |
-| `userid`           | User user_id       |
-| `unionid`          | User union_id      |
-| `openchat`         | Group chat open_id |
-| `opendepartmentid` | Department open_id |
-
-## Permission Levels
-
-| Perm          | Description                          |
-| ------------- | ------------------------------------ |
-| `view`        | View only                            |
-| `edit`        | Can edit                             |
-| `full_access` | Full access (can manage permissions) |
-
-## Examples
-
-Share document with email:
-
-```json
-{
-  "action": "add",
-  "token": "doxcnXXX",
-  "type": "docx",
-  "member_type": "email",
-  "member_id": "alice@company.com",
-  "perm": "edit"
-}
-```
-
-Share folder with group:
-
-```json
-{
-  "action": "add",
-  "token": "fldcnXXX",
-  "type": "folder",
-  "member_type": "openchat",
-  "member_id": "oc_xxx",
-  "perm": "view"
-}
-```
-
-## Configuration
-
-```yaml
-channels:
-  feishu:
-    tools:
-      perm: true # default: false (disabled)
-```
-
-**Note:** This tool is disabled by default because permission management is a sensitive operation. Enable explicitly if needed.
-
-## Permissions
-
-Required: `drive:permission`
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+name: feishu-perm（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+description: |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  Feishu permission management for documents and files. Activate when user mentions sharing, permissions, collaborators.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Feishu Permission Tool（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Single tool `feishu_perm` for managing file/document permissions.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Actions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### List Collaborators（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{ "action": "list", "token": "ABC123", "type": "docx" }（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Returns: members with member_type, member_id, perm, name.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Add Collaborator（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "add",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "token": "ABC123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "type": "docx",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "member_type": "email",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "member_id": "user@example.com",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "perm": "edit"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Remove Collaborator（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "remove",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "token": "ABC123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "type": "docx",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "member_type": "email",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "member_id": "user@example.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Token Types（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| Type       | Description             |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| ---------- | ----------------------- |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `doc`      | Old format document     |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `docx`     | New format document     |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `sheet`    | Spreadsheet             |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `bitable`  | Multi-dimensional table |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `folder`   | Folder                  |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `file`     | Uploaded file           |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `wiki`     | Wiki node               |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `mindnote` | Mind map                |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Member Types（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| Type               | Description        |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| ------------------ | ------------------ |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `email`            | Email address      |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `openid`           | User open_id       |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `userid`           | User user_id       |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `unionid`          | User union_id      |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `openchat`         | Group chat open_id |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `opendepartmentid` | Department open_id |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Permission Levels（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| Perm          | Description                          |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| ------------- | ------------------------------------ |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `view`        | View only                            |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `edit`        | Can edit                             |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| `full_access` | Full access (can manage permissions) |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Examples（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Share document with email:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "add",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "token": "doxcnXXX",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "type": "docx",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "member_type": "email",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "member_id": "alice@company.com",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "perm": "edit"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Share folder with group:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "add",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "token": "fldcnXXX",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "type": "folder",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "member_type": "openchat",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "member_id": "oc_xxx",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "perm": "view"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Configuration（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```yaml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+channels:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  feishu:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    tools:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      perm: true # default: false (disabled)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Note:** This tool is disabled by default because permission management is a sensitive operation. Enable explicitly if needed.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Permissions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Required: `drive:permission`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

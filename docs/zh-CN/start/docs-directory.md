@@ -1,70 +1,70 @@
----
-read_when:
-  - 你想快速访问关键文档页面
-summary: 精选的常用 OpenClaw 文档链接。
-title: 文档目录
-x-i18n:
-  generated_at: "2026-02-04T17:53:20Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 489085dae583ba0690b1b972f037610313973df95813283069c95a06bdc949fa
-  source_path: start/docs-directory.md
-  workflow: 15
----
-
-<Note>
-如需查看完整的文档地图，请参阅[文档中心](/start/hubs)。
-</Note>
-
-## 从这里开始
-
-- [文档中心（所有页面链接）](/start/hubs)
-- [帮助](/help)
-- [配置](/gateway/configuration)
-- [配置示例](/gateway/configuration-examples)
-- [斜杠命令](/tools/slash-commands)
-- [多智能体路由](/concepts/multi-agent)
-- [更新与回滚](/install/updating)
-- [配对（私信和节点）](/channels/pairing)
-- [Nix 模式](/install/nix)
-- [OpenClaw 助手设置](/start/openclaw)
-- [Skills](/tools/skills)
-- [Skills 配置](/tools/skills-config)
-- [工作区模板](/reference/templates/AGENTS)
-- [RPC 适配器](/reference/rpc)
-- [Gateway 网关运维手册](/gateway)
-- [节点（iOS 和 Android）](/nodes)
-- [Web 界面（控制面板 UI）](/web)
-- [设备发现与传输协议](/gateway/discovery)
-- [远程访问](/gateway/remote)
-
-## 提供商与用户体验
-
-- [WebChat](/web/webchat)
-- [控制面板 UI（浏览器）](/web/control-ui)
-- [Telegram](/channels/telegram)
-- [Discord](/channels/discord)
-- [Mattermost（插件）](/channels/mattermost)
-- [BlueBubbles (iMessage)](/channels/bluebubbles)
-- [iMessage（旧版）](/channels/imessage)
-- [群组](/channels/groups)
-- [WhatsApp 群消息](/channels/group-messages)
-- [媒体图片](/nodes/images)
-- [媒体音频](/nodes/audio)
-
-## 配套应用
-
-- [macOS 应用](/platforms/macos)
-- [iOS 应用](/platforms/ios)
-- [Android 应用](/platforms/android)
-- [Windows (WSL2)](/platforms/windows)
-- [Linux 应用](/platforms/linux)
-
-## 运维与安全
-
-- [会话](/concepts/session)
-- [定时任务](/automation/cron-jobs)
-- [Webhooks](/automation/webhook)
-- [Gmail 钩子（Pub/Sub）](/automation/gmail-pubsub)
-- [安全](/gateway/security)
-- [故障排除](/gateway/troubleshooting)
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你想快速访问关键文档页面（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: 精选的常用 OpenClaw 文档链接。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: 文档目录（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+x-i18n:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  generated_at: "2026-02-04T17:53:20Z"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  model: claude-opus-4-5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  provider: pi（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_hash: 489085dae583ba0690b1b972f037610313973df95813283069c95a06bdc949fa（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_path: start/docs-directory.md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workflow: 15（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+<Note>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+如需查看完整的文档地图，请参阅[文档中心](/start/hubs)。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+</Note>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 从这里开始（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [文档中心（所有页面链接）](/start/hubs)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [帮助](/help)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [配置](/gateway/configuration)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [配置示例](/gateway/configuration-examples)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [斜杠命令](/tools/slash-commands)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [多智能体路由](/concepts/multi-agent)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [更新与回滚](/install/updating)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [配对（私信和节点）](/channels/pairing)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Nix 模式](/install/nix)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [OpenClaw 助手设置](/start/openclaw)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Skills](/tools/skills)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Skills 配置](/tools/skills-config)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [工作区模板](/reference/templates/AGENTS)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [RPC 适配器](/reference/rpc)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Gateway 网关运维手册](/gateway)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [节点（iOS 和 Android）](/nodes)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Web 界面（控制面板 UI）](/web)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [设备发现与传输协议](/gateway/discovery)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [远程访问](/gateway/remote)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 提供商与用户体验（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [WebChat](/web/webchat)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [控制面板 UI（浏览器）](/web/control-ui)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Telegram](/channels/telegram)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Discord](/channels/discord)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Mattermost（插件）](/channels/mattermost)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [BlueBubbles (iMessage)](/channels/bluebubbles)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [iMessage（旧版）](/channels/imessage)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [群组](/channels/groups)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [WhatsApp 群消息](/channels/group-messages)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [媒体图片](/nodes/images)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [媒体音频](/nodes/audio)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 配套应用（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [macOS 应用](/platforms/macos)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [iOS 应用](/platforms/ios)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Android 应用](/platforms/android)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Windows (WSL2)](/platforms/windows)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Linux 应用](/platforms/linux)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 运维与安全（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [会话](/concepts/session)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [定时任务](/automation/cron-jobs)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Webhooks](/automation/webhook)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Gmail 钩子（Pub/Sub）](/automation/gmail-pubsub)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [安全](/gateway/security)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [故障排除](/gateway/troubleshooting)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

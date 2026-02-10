@@ -1,398 +1,398 @@
----
-summary: "How to submit a high signal PR"
-title: "Submitting a PR"
----
-
-Good PRs are easy to review: reviewers should quickly know the intent, verify behavior, and land changes safely. This guide covers concise, high-signal submissions for human and LLM review.
-
-## What makes a good PR
-
-- [ ] Explain the problem, why it matters, and the change.
-- [ ] Keep changes focused. Avoid broad refactors.
-- [ ] Summarize user-visible/config/default changes.
-- [ ] List test coverage, skips, and reasons.
-- [ ] Add evidence: logs, screenshots, or recordings (UI/UX).
-- [ ] Code word: put “lobster-biscuit” in the PR description if you read this guide.
-- [ ] Run/fix relevant `pnpm` commands before creating PR.
-- [ ] Search codebase and GitHub for related functionality/issues/fixes.
-- [ ] Base claims on evidence or observation.
-- [ ] Good title: verb + scope + outcome (e.g., `Docs: add PR and issue templates`).
-
-Be concise; concise review > grammar. Omit any non-applicable sections.
-
-### Baseline validation commands (run/fix failures for your change)
-
-- `pnpm lint`
-- `pnpm check`
-- `pnpm build`
-- `pnpm test`
-- Protocol changes: `pnpm protocol:check`
-
-## Progressive disclosure
-
-- Top: summary/intent
-- Next: changes/risks
-- Next: test/verification
-- Last: implementation/evidence
-
-## Common PR types: specifics
-
-- [ ] Fix: Add repro, root cause, verification.
-- [ ] Feature: Add use cases, behavior/demos/screenshots (UI).
-- [ ] Refactor: State "no behavior change", list what moved/simplified.
-- [ ] Chore: State why (e.g., build time, CI, dependencies).
-- [ ] Docs: Before/after context, link updated page, run `pnpm format`.
-- [ ] Test: What gap is covered; how it prevents regressions.
-- [ ] Perf: Add before/after metrics, and how measured.
-- [ ] UX/UI: Screenshots/video, note accessibility impact.
-- [ ] Infra/Build: Environments/validation.
-- [ ] Security: Summarize risk, repro, verification, no sensitive data. Grounded claims only.
-
-## Checklist
-
-- [ ] Clear problem/intent
-- [ ] Focused scope
-- [ ] List behavior changes
-- [ ] List and result of tests
-- [ ] Manual test steps (when applicable)
-- [ ] No secrets/private data
-- [ ] Evidence-based
-
-## General PR Template
-
-```md
-#### Summary
-
-#### Behavior Changes
-
-#### Codebase and GitHub Search
-
-#### Tests
-
-#### Manual Testing (omit if N/A)
-
-### Prerequisites
-
--
-
-### Steps
-
-1.
-2.
-
-#### Evidence (omit if N/A)
-
-**Sign-Off**
-
-- Models used:
-- Submitter effort (self-reported):
-- Agent notes (optional, cite evidence):
-```
-
-## PR Type templates (replace with your type)
-
-### Fix
-
-```md
-#### Summary
-
-#### Repro Steps
-
-#### Root Cause
-
-#### Behavior Changes
-
-#### Tests
-
-#### Manual Testing (omit if N/A)
-
-### Prerequisites
-
--
-
-### Steps
-
-1.
-2.
-
-#### Evidence (omit if N/A)
-
-**Sign-Off**
-
-- Models used:
-- Submitter effort:
-- Agent notes:
-```
-
-### Feature
-
-```md
-#### Summary
-
-#### Use Cases
-
-#### Behavior Changes
-
-#### Existing Functionality Check
-
-- [ ] I searched the codebase for existing functionality.
-      Searches performed (1-3 bullets):
-  -
-  -
-
-#### Tests
-
-#### Manual Testing (omit if N/A)
-
-### Prerequisites
-
--
-
-### Steps
-
-1.
-2.
-
-#### Evidence (omit if N/A)
-
-**Sign-Off**
-
-- Models used:
-- Submitter effort:
-- Agent notes:
-```
-
-### Refactor
-
-```md
-#### Summary
-
-#### Scope
-
-#### No Behavior Change Statement
-
-#### Tests
-
-#### Manual Testing (omit if N/A)
-
-### Prerequisites
-
--
-
-### Steps
-
-1.
-2.
-
-#### Evidence (omit if N/A)
-
-**Sign-Off**
-
-- Models used:
-- Submitter effort:
-- Agent notes:
-```
-
-### Chore/Maintenance
-
-```md
-#### Summary
-
-#### Why This Matters
-
-#### Tests
-
-#### Manual Testing (omit if N/A)
-
-### Prerequisites
-
--
-
-### Steps
-
-1.
-2.
-
-#### Evidence (omit if N/A)
-
-**Sign-Off**
-
-- Models used:
-- Submitter effort:
-- Agent notes:
-```
-
-### Docs
-
-```md
-#### Summary
-
-#### Pages Updated
-
-#### Before/After
-
-#### Formatting
-
-pnpm format
-
-#### Evidence (omit if N/A)
-
-**Sign-Off**
-
-- Models used:
-- Submitter effort:
-- Agent notes:
-```
-
-### Test
-
-```md
-#### Summary
-
-#### Gap Covered
-
-#### Tests
-
-#### Manual Testing (omit if N/A)
-
-### Prerequisites
-
--
-
-### Steps
-
-1.
-2.
-
-#### Evidence (omit if N/A)
-
-**Sign-Off**
-
-- Models used:
-- Submitter effort:
-- Agent notes:
-```
-
-### Perf
-
-```md
-#### Summary
-
-#### Baseline
-
-#### After
-
-#### Measurement Method
-
-#### Tests
-
-#### Manual Testing (omit if N/A)
-
-### Prerequisites
-
--
-
-### Steps
-
-1.
-2.
-
-#### Evidence (omit if N/A)
-
-**Sign-Off**
-
-- Models used:
-- Submitter effort:
-- Agent notes:
-```
-
-### UX/UI
-
-```md
-#### Summary
-
-#### Screenshots or Video
-
-#### Accessibility Impact
-
-#### Tests
-
-#### Manual Testing
-
-### Prerequisites
-
--
-
-### Steps
-
-1.
-2. **Sign-Off**
-
-- Models used:
-- Submitter effort:
-- Agent notes:
-```
-
-### Infra/Build
-
-```md
-#### Summary
-
-#### Environments Affected
-
-#### Validation Steps
-
-#### Manual Testing (omit if N/A)
-
-### Prerequisites
-
--
-
-### Steps
-
-1.
-2.
-
-#### Evidence (omit if N/A)
-
-**Sign-Off**
-
-- Models used:
-- Submitter effort:
-- Agent notes:
-```
-
-### Security
-
-```md
-#### Summary
-
-#### Risk Summary
-
-#### Repro Steps
-
-#### Mitigation or Fix
-
-#### Verification
-
-#### Tests
-
-#### Manual Testing (omit if N/A)
-
-### Prerequisites
-
--
-
-### Steps
-
-1.
-2.
-
-#### Evidence (omit if N/A)
-
-**Sign-Off**
-
-- Models used:
-- Submitter effort:
-- Agent notes:
-```
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: "How to submit a high signal PR"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: "Submitting a PR"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Good PRs are easy to review: reviewers should quickly know the intent, verify behavior, and land changes safely. This guide covers concise, high-signal submissions for human and LLM review.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## What makes a good PR（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Explain the problem, why it matters, and the change.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Keep changes focused. Avoid broad refactors.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Summarize user-visible/config/default changes.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] List test coverage, skips, and reasons.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Add evidence: logs, screenshots, or recordings (UI/UX).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Code word: put “lobster-biscuit” in the PR description if you read this guide.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Run/fix relevant `pnpm` commands before creating PR.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Search codebase and GitHub for related functionality/issues/fixes.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Base claims on evidence or observation.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Good title: verb + scope + outcome (e.g., `Docs: add PR and issue templates`).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Be concise; concise review > grammar. Omit any non-applicable sections.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Baseline validation commands (run/fix failures for your change)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `pnpm lint`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `pnpm check`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `pnpm build`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `pnpm test`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Protocol changes: `pnpm protocol:check`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Progressive disclosure（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Top: summary/intent（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Next: changes/risks（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Next: test/verification（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Last: implementation/evidence（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Common PR types: specifics（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Fix: Add repro, root cause, verification.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Feature: Add use cases, behavior/demos/screenshots (UI).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Refactor: State "no behavior change", list what moved/simplified.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Chore: State why (e.g., build time, CI, dependencies).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Docs: Before/after context, link updated page, run `pnpm format`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Test: What gap is covered; how it prevents regressions.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Perf: Add before/after metrics, and how measured.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] UX/UI: Screenshots/video, note accessibility impact.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Infra/Build: Environments/validation.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Security: Summarize risk, repro, verification, no sensitive data. Grounded claims only.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Checklist（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Clear problem/intent（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Focused scope（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] List behavior changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] List and result of tests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Manual test steps (when applicable)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] No secrets/private data（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Evidence-based（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## General PR Template（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Behavior Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Codebase and GitHub Search（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Tests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Manual Testing (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Prerequisites（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+-（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Evidence (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort (self-reported):（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes (optional, cite evidence):（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## PR Type templates (replace with your type)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Fix（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Repro Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Root Cause（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Behavior Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Tests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Manual Testing (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Prerequisites（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+-（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Evidence (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Feature（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Use Cases（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Behavior Changes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Existing Functionality Check（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] I searched the codebase for existing functionality.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      Searches performed (1-3 bullets):（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  -（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  -（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Tests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Manual Testing (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Prerequisites（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+-（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Evidence (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Refactor（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Scope（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### No Behavior Change Statement（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Tests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Manual Testing (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Prerequisites（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+-（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Evidence (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Chore/Maintenance（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Why This Matters（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Tests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Manual Testing (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Prerequisites（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+-（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Evidence (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Docs（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Pages Updated（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Before/After（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Formatting（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+pnpm format（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Evidence (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Test（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Gap Covered（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Tests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Manual Testing (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Prerequisites（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+-（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Evidence (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Perf（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Baseline（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### After（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Measurement Method（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Tests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Manual Testing (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Prerequisites（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+-（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Evidence (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### UX/UI（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Screenshots or Video（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Accessibility Impact（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Tests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Manual Testing（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Prerequisites（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+-（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2. **Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Infra/Build（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Environments Affected（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Validation Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Manual Testing (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Prerequisites（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+-（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Evidence (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Security（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Risk Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Repro Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Mitigation or Fix（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Verification（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Tests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Manual Testing (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Prerequisites（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+-（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Evidence (omit if N/A)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Sign-Off**（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Models used:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Submitter effort:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Agent notes:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

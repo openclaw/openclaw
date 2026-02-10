@@ -1,587 +1,587 @@
----
-read_when:
-  - 学习如何配置 OpenClaw
-  - 寻找配置示例
-  - 首次设置 OpenClaw
-summary: 符合模式的常见 OpenClaw 设置配置示例
-title: 配置示例
-x-i18n:
-  generated_at: "2026-02-03T07:48:39Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 00e9286722653f2748137d5bc641d528b160de16a58015ca7674a3a302f4b2c3
-  source_path: gateway/configuration-examples.md
-  workflow: 15
----
-
-# 配置示例
-
-以下示例与当前配置模式一致。有关详尽的参考和每个字段的说明，请参阅[配置](/gateway/configuration)。
-
-## 快速开始
-
-### 绝对最小配置
-
-```json5
-{
-  agent: { workspace: "~/.openclaw/workspace" },
-  channels: { whatsapp: { allowFrom: ["+15555550123"] } },
-}
-```
-
-保存到 `~/.openclaw/openclaw.json`，你就可以从该号码私信机器人了。
-
-### 推荐的入门配置
-
-```json5
-{
-  identity: {
-    name: "Clawd",
-    theme: "helpful assistant",
-    emoji: "🦞",
-  },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: { primary: "anthropic/claude-sonnet-4-5" },
-  },
-  channels: {
-    whatsapp: {
-      allowFrom: ["+15555550123"],
-      groups: { "*": { requireMention: true } },
-    },
-  },
-}
-```
-
-## 扩展示例（主要选项）
-
-> JSON5 允许你使用注释和尾随逗号。普通 JSON 也可以使用。
-
-```json5
-{
-  // 环境 + shell
-  env: {
-    OPENROUTER_API_KEY: "sk-or-...",
-    vars: {
-      GROQ_API_KEY: "gsk-...",
-    },
-    shellEnv: {
-      enabled: true,
-      timeoutMs: 15000,
-    },
-  },
-
-  // 认证配置文件元数据（密钥存储在 auth-profiles.json 中）
-  auth: {
-    profiles: {
-      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
-      "anthropic:work": { provider: "anthropic", mode: "api_key" },
-      "openai:default": { provider: "openai", mode: "api_key" },
-      "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
-    },
-    order: {
-      anthropic: ["anthropic:me@example.com", "anthropic:work"],
-      openai: ["openai:default"],
-      "openai-codex": ["openai-codex:default"],
-    },
-  },
-
-  // 身份
-  identity: {
-    name: "Samantha",
-    theme: "helpful sloth",
-    emoji: "🦥",
-  },
-
-  // 日志
-  logging: {
-    level: "info",
-    file: "/tmp/openclaw/openclaw.log",
-    consoleLevel: "info",
-    consoleStyle: "pretty",
-    redactSensitive: "tools",
-  },
-
-  // 消息格式
-  messages: {
-    messagePrefix: "[openclaw]",
-    responsePrefix: ">",
-    ackReaction: "👀",
-    ackReactionScope: "group-mentions",
-  },
-
-  // 路由 + 队列
-  routing: {
-    groupChat: {
-      mentionPatterns: ["@openclaw", "openclaw"],
-      historyLimit: 50,
-    },
-    queue: {
-      mode: "collect",
-      debounceMs: 1000,
-      cap: 20,
-      drop: "summarize",
-      byChannel: {
-        whatsapp: "collect",
-        telegram: "collect",
-        discord: "collect",
-        slack: "collect",
-        signal: "collect",
-        imessage: "collect",
-        webchat: "collect",
-      },
-    },
-  },
-
-  // 工具
-  tools: {
-    media: {
-      audio: {
-        enabled: true,
-        maxBytes: 20971520,
-        models: [
-          { provider: "openai", model: "gpt-4o-mini-transcribe" },
-          // 可选的 CLI 回退（Whisper 二进制）：
-          // { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] }
-        ],
-        timeoutSeconds: 120,
-      },
-      video: {
-        enabled: true,
-        maxBytes: 52428800,
-        models: [{ provider: "google", model: "gemini-3-flash-preview" }],
-      },
-    },
-  },
-
-  // 会话行为
-  session: {
-    scope: "per-sender",
-    reset: {
-      mode: "daily",
-      atHour: 4,
-      idleMinutes: 60,
-    },
-    resetByChannel: {
-      discord: { mode: "idle", idleMinutes: 10080 },
-    },
-    resetTriggers: ["/new", "/reset"],
-    store: "~/.openclaw/agents/default/sessions/sessions.json",
-    typingIntervalSeconds: 5,
-    sendPolicy: {
-      default: "allow",
-      rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
-    },
-  },
-
-  // 渠道
-  channels: {
-    whatsapp: {
-      dmPolicy: "pairing",
-      allowFrom: ["+15555550123"],
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+15555550123"],
-      groups: { "*": { requireMention: true } },
-    },
-
-    telegram: {
-      enabled: true,
-      botToken: "YOUR_TELEGRAM_BOT_TOKEN",
-      allowFrom: ["123456789"],
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["123456789"],
-      groups: { "*": { requireMention: true } },
-    },
-
-    discord: {
-      enabled: true,
-      token: "YOUR_DISCORD_BOT_TOKEN",
-      dm: { enabled: true, allowFrom: ["steipete"] },
-      guilds: {
-        "123456789012345678": {
-          slug: "friends-of-openclaw",
-          requireMention: false,
-          channels: {
-            general: { allow: true },
-            help: { allow: true, requireMention: true },
-          },
-        },
-      },
-    },
-
-    slack: {
-      enabled: true,
-      botToken: "xoxb-REPLACE_ME",
-      appToken: "xapp-REPLACE_ME",
-      channels: {
-        "#general": { allow: true, requireMention: true },
-      },
-      dm: { enabled: true, allowFrom: ["U123"] },
-      slashCommand: {
-        enabled: true,
-        name: "openclaw",
-        sessionPrefix: "slack:slash",
-        ephemeral: true,
-      },
-    },
-  },
-
-  // 智能体运行时
-  agents: {
-    defaults: {
-      workspace: "~/.openclaw/workspace",
-      userTimezone: "America/Chicago",
-      model: {
-        primary: "anthropic/claude-sonnet-4-5",
-        fallbacks: ["anthropic/claude-opus-4-5", "openai/gpt-5.2"],
-      },
-      imageModel: {
-        primary: "openrouter/anthropic/claude-sonnet-4-5",
-      },
-      models: {
-        "anthropic/claude-opus-4-5": { alias: "opus" },
-        "anthropic/claude-sonnet-4-5": { alias: "sonnet" },
-        "openai/gpt-5.2": { alias: "gpt" },
-      },
-      thinkingDefault: "low",
-      verboseDefault: "off",
-      elevatedDefault: "on",
-      blockStreamingDefault: "off",
-      blockStreamingBreak: "text_end",
-      blockStreamingChunk: {
-        minChars: 800,
-        maxChars: 1200,
-        breakPreference: "paragraph",
-      },
-      blockStreamingCoalesce: {
-        idleMs: 1000,
-      },
-      humanDelay: {
-        mode: "natural",
-      },
-      timeoutSeconds: 600,
-      mediaMaxMb: 5,
-      typingIntervalSeconds: 5,
-      maxConcurrent: 3,
-      heartbeat: {
-        every: "30m",
-        model: "anthropic/claude-sonnet-4-5",
-        target: "last",
-        to: "+15555550123",
-        prompt: "HEARTBEAT",
-        ackMaxChars: 300,
-      },
-      memorySearch: {
-        provider: "gemini",
-        model: "gemini-embedding-001",
-        remote: {
-          apiKey: "${GEMINI_API_KEY}",
-        },
-        extraPaths: ["../team-docs", "/srv/shared-notes"],
-      },
-      sandbox: {
-        mode: "non-main",
-        perSession: true,
-        workspaceRoot: "~/.openclaw/sandboxes",
-        docker: {
-          image: "openclaw-sandbox:bookworm-slim",
-          workdir: "/workspace",
-          readOnlyRoot: true,
-          tmpfs: ["/tmp", "/var/tmp", "/run"],
-          network: "none",
-          user: "1000:1000",
-        },
-        browser: {
-          enabled: false,
-        },
-      },
-    },
-  },
-
-  tools: {
-    allow: ["exec", "process", "read", "write", "edit", "apply_patch"],
-    deny: ["browser", "canvas"],
-    exec: {
-      backgroundMs: 10000,
-      timeoutSec: 1800,
-      cleanupMs: 1800000,
-    },
-    elevated: {
-      enabled: true,
-      allowFrom: {
-        whatsapp: ["+15555550123"],
-        telegram: ["123456789"],
-        discord: ["steipete"],
-        slack: ["U123"],
-        signal: ["+15555550123"],
-        imessage: ["user@example.com"],
-        webchat: ["session:demo"],
-      },
-    },
-  },
-
-  // 自定义模型提供商
-  models: {
-    mode: "merge",
-    providers: {
-      "custom-proxy": {
-        baseUrl: "http://localhost:4000/v1",
-        apiKey: "LITELLM_KEY",
-        api: "openai-responses",
-        authHeader: true,
-        headers: { "X-Proxy-Region": "us-west" },
-        models: [
-          {
-            id: "llama-3.1-8b",
-            name: "Llama 3.1 8B",
-            api: "openai-responses",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128000,
-            maxTokens: 32000,
-          },
-        ],
-      },
-    },
-  },
-
-  // Cron 作业
-  cron: {
-    enabled: true,
-    store: "~/.openclaw/cron/cron.json",
-    maxConcurrentRuns: 2,
-  },
-
-  // Webhooks
-  hooks: {
-    enabled: true,
-    path: "/hooks",
-    token: "shared-secret",
-    presets: ["gmail"],
-    transformsDir: "~/.openclaw/hooks",
-    mappings: [
-      {
-        id: "gmail-hook",
-        match: { path: "gmail" },
-        action: "agent",
-        wakeMode: "now",
-        name: "Gmail",
-        sessionKey: "hook:gmail:{{messages[0].id}}",
-        messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}",
-        textTemplate: "{{messages[0].snippet}}",
-        deliver: true,
-        channel: "last",
-        to: "+15555550123",
-        thinking: "low",
-        timeoutSeconds: 300,
-        transform: { module: "./transforms/gmail.js", export: "transformGmail" },
-      },
-    ],
-    gmail: {
-      account: "openclaw@gmail.com",
-      label: "INBOX",
-      topic: "projects/<project-id>/topics/gog-gmail-watch",
-      subscription: "gog-gmail-watch-push",
-      pushToken: "shared-push-token",
-      hookUrl: "http://127.0.0.1:18789/hooks/gmail",
-      includeBody: true,
-      maxBytes: 20000,
-      renewEveryMinutes: 720,
-      serve: { bind: "127.0.0.1", port: 8788, path: "/" },
-      tailscale: { mode: "funnel", path: "/gmail-pubsub" },
-    },
-  },
-
-  // Gateway 网关 + 网络
-  gateway: {
-    mode: "local",
-    port: 18789,
-    bind: "loopback",
-    controlUi: { enabled: true, basePath: "/openclaw" },
-    auth: {
-      mode: "token",
-      token: "gateway-token",
-      allowTailscale: true,
-    },
-    tailscale: { mode: "serve", resetOnExit: false },
-    remote: { url: "ws://gateway.tailnet:18789", token: "remote-token" },
-    reload: { mode: "hybrid", debounceMs: 300 },
-  },
-
-  skills: {
-    allowBundled: ["gemini", "peekaboo"],
-    load: {
-      extraDirs: ["~/Projects/agent-scripts/skills"],
-    },
-    install: {
-      preferBrew: true,
-      nodeManager: "npm",
-    },
-    entries: {
-      "nano-banana-pro": {
-        enabled: true,
-        apiKey: "GEMINI_KEY_HERE",
-        env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
-      },
-      peekaboo: { enabled: true },
-    },
-  },
-}
-```
-
-## 常见模式
-
-### 多平台设置
-
-```json5
-{
-  agent: { workspace: "~/.openclaw/workspace" },
-  channels: {
-    whatsapp: { allowFrom: ["+15555550123"] },
-    telegram: {
-      enabled: true,
-      botToken: "YOUR_TOKEN",
-      allowFrom: ["123456789"],
-    },
-    discord: {
-      enabled: true,
-      token: "YOUR_TOKEN",
-      dm: { allowFrom: ["yourname"] },
-    },
-  },
-}
-```
-
-### OAuth 带 API 密钥回退
-
-```json5
-{
-  auth: {
-    profiles: {
-      "anthropic:subscription": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "me@example.com",
-      },
-      "anthropic:api": {
-        provider: "anthropic",
-        mode: "api_key",
-      },
-    },
-    order: {
-      anthropic: ["anthropic:subscription", "anthropic:api"],
-    },
-  },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: {
-      primary: "anthropic/claude-sonnet-4-5",
-      fallbacks: ["anthropic/claude-opus-4-5"],
-    },
-  },
-}
-```
-
-### Anthropic 订阅 + API 密钥，MiniMax 回退
-
-```json5
-{
-  auth: {
-    profiles: {
-      "anthropic:subscription": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "user@example.com",
-      },
-      "anthropic:api": {
-        provider: "anthropic",
-        mode: "api_key",
-      },
-    },
-    order: {
-      anthropic: ["anthropic:subscription", "anthropic:api"],
-    },
-  },
-  models: {
-    providers: {
-      minimax: {
-        baseUrl: "https://api.minimax.io/anthropic",
-        api: "anthropic-messages",
-        apiKey: "${MINIMAX_API_KEY}",
-      },
-    },
-  },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: {
-      primary: "anthropic/claude-opus-4-5",
-      fallbacks: ["minimax/MiniMax-M2.1"],
-    },
-  },
-}
-```
-
-### 工作机器人（受限访问）
-
-```json5
-{
-  identity: {
-    name: "WorkBot",
-    theme: "professional assistant",
-  },
-  agent: {
-    workspace: "~/work-openclaw",
-    elevated: { enabled: false },
-  },
-  channels: {
-    slack: {
-      enabled: true,
-      botToken: "xoxb-...",
-      channels: {
-        "#engineering": { allow: true, requireMention: true },
-        "#general": { allow: true, requireMention: true },
-      },
-    },
-  },
-}
-```
-
-### 仅本地模型
-
-```json5
-{
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: { primary: "lmstudio/minimax-m2.1-gs32" },
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      lmstudio: {
-        baseUrl: "http://127.0.0.1:1234/v1",
-        apiKey: "lmstudio",
-        api: "openai-responses",
-        models: [
-          {
-            id: "minimax-m2.1-gs32",
-            name: "MiniMax M2.1 GS32",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 196608,
-            maxTokens: 8192,
-          },
-        ],
-      },
-    },
-  },
-}
-```
-
-## 提示
-
-- 如果你设置 `dmPolicy: "open"`，匹配的 `allowFrom` 列表必须包含 `"*"`。
-- 提供商 ID 各不相同（电话号码、用户 ID、频道 ID）。使用提供商文档确认格式。
-- 稍后添加的可选部分：`web`、`browser`、`ui`、`discovery`、`canvasHost`、`talk`、`signal`、`imessage`。
-- 参阅[提供商](/channels/whatsapp)和[故障排除](/gateway/troubleshooting)了解更深入的设置说明。
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 学习如何配置 OpenClaw（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 寻找配置示例（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 首次设置 OpenClaw（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: 符合模式的常见 OpenClaw 设置配置示例（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: 配置示例（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+x-i18n:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  generated_at: "2026-02-03T07:48:39Z"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  model: claude-opus-4-5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  provider: pi（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_hash: 00e9286722653f2748137d5bc641d528b160de16a58015ca7674a3a302f4b2c3（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_path: gateway/configuration-examples.md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workflow: 15（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# 配置示例（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+以下示例与当前配置模式一致。有关详尽的参考和每个字段的说明，请参阅[配置](/gateway/configuration)。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 快速开始（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 绝对最小配置（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  agent: { workspace: "~/.openclaw/workspace" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channels: { whatsapp: { allowFrom: ["+15555550123"] } },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+保存到 `~/.openclaw/openclaw.json`，你就可以从该号码私信机器人了。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 推荐的入门配置（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  identity: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    name: "Clawd",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    theme: "helpful assistant",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    emoji: "🦞",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  agent: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    workspace: "~/.openclaw/workspace",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    model: { primary: "anthropic/claude-sonnet-4-5" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    whatsapp: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      allowFrom: ["+15555550123"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      groups: { "*": { requireMention: true } },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 扩展示例（主要选项）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+> JSON5 允许你使用注释和尾随逗号。普通 JSON 也可以使用。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 环境 + shell（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  env: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    OPENROUTER_API_KEY: "sk-or-...",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    vars: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      GROQ_API_KEY: "gsk-...",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    shellEnv: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      timeoutMs: 15000,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 认证配置文件元数据（密钥存储在 auth-profiles.json 中）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  auth: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    profiles: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "anthropic:work": { provider: "anthropic", mode: "api_key" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "openai:default": { provider: "openai", mode: "api_key" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "openai-codex:default": { provider: "openai-codex", mode: "oauth" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    order: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      anthropic: ["anthropic:me@example.com", "anthropic:work"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      openai: ["openai:default"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "openai-codex": ["openai-codex:default"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 身份（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  identity: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    name: "Samantha",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    theme: "helpful sloth",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    emoji: "🦥",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 日志（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  logging: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    level: "info",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    file: "/tmp/openclaw/openclaw.log",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    consoleLevel: "info",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    consoleStyle: "pretty",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    redactSensitive: "tools",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 消息格式（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  messages: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    messagePrefix: "[openclaw]",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    responsePrefix: ">",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ackReaction: "👀",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ackReactionScope: "group-mentions",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 路由 + 队列（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  routing: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    groupChat: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      mentionPatterns: ["@openclaw", "openclaw"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      historyLimit: 50,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    queue: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      mode: "collect",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      debounceMs: 1000,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      cap: 20,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      drop: "summarize",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      byChannel: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        whatsapp: "collect",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        telegram: "collect",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        discord: "collect",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        slack: "collect",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        signal: "collect",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        imessage: "collect",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        webchat: "collect",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 工具（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  tools: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    media: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      audio: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        maxBytes: 20971520,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        models: [（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          { provider: "openai", model: "gpt-4o-mini-transcribe" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          // 可选的 CLI 回退（Whisper 二进制）：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          // { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] }（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        ],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        timeoutSeconds: 120,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      video: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        maxBytes: 52428800,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        models: [{ provider: "google", model: "gemini-3-flash-preview" }],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 会话行为（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  session: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    scope: "per-sender",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    reset: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      mode: "daily",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      atHour: 4,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      idleMinutes: 60,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    resetByChannel: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      discord: { mode: "idle", idleMinutes: 10080 },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    resetTriggers: ["/new", "/reset"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    store: "~/.openclaw/agents/default/sessions/sessions.json",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    typingIntervalSeconds: 5,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    sendPolicy: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      default: "allow",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 渠道（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    whatsapp: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      dmPolicy: "pairing",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      allowFrom: ["+15555550123"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      groupPolicy: "allowlist",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      groupAllowFrom: ["+15555550123"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      groups: { "*": { requireMention: true } },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    telegram: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      botToken: "YOUR_TELEGRAM_BOT_TOKEN",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      allowFrom: ["123456789"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      groupPolicy: "allowlist",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      groupAllowFrom: ["123456789"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      groups: { "*": { requireMention: true } },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    discord: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      token: "YOUR_DISCORD_BOT_TOKEN",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      dm: { enabled: true, allowFrom: ["steipete"] },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      guilds: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "123456789012345678": {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          slug: "friends-of-openclaw",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          requireMention: false,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            general: { allow: true },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            help: { allow: true, requireMention: true },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    slack: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      botToken: "xoxb-REPLACE_ME",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      appToken: "xapp-REPLACE_ME",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "#general": { allow: true, requireMention: true },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      dm: { enabled: true, allowFrom: ["U123"] },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      slashCommand: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        name: "openclaw",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        sessionPrefix: "slack:slash",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        ephemeral: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 智能体运行时（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  agents: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    defaults: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      workspace: "~/.openclaw/workspace",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      userTimezone: "America/Chicago",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      model: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        primary: "anthropic/claude-sonnet-4-5",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        fallbacks: ["anthropic/claude-opus-4-5", "openai/gpt-5.2"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      imageModel: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        primary: "openrouter/anthropic/claude-sonnet-4-5",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      models: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "anthropic/claude-opus-4-5": { alias: "opus" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "anthropic/claude-sonnet-4-5": { alias: "sonnet" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "openai/gpt-5.2": { alias: "gpt" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      thinkingDefault: "low",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      verboseDefault: "off",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      elevatedDefault: "on",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      blockStreamingDefault: "off",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      blockStreamingBreak: "text_end",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      blockStreamingChunk: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        minChars: 800,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        maxChars: 1200,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        breakPreference: "paragraph",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      blockStreamingCoalesce: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        idleMs: 1000,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      humanDelay: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        mode: "natural",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      timeoutSeconds: 600,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      mediaMaxMb: 5,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      typingIntervalSeconds: 5,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      maxConcurrent: 3,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      heartbeat: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        every: "30m",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        model: "anthropic/claude-sonnet-4-5",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        target: "last",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        to: "+15555550123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        prompt: "HEARTBEAT",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        ackMaxChars: 300,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      memorySearch: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        provider: "gemini",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        model: "gemini-embedding-001",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        remote: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          apiKey: "${GEMINI_API_KEY}",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        extraPaths: ["../team-docs", "/srv/shared-notes"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      sandbox: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        mode: "non-main",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        perSession: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        workspaceRoot: "~/.openclaw/sandboxes",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        docker: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          image: "openclaw-sandbox:bookworm-slim",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          workdir: "/workspace",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          readOnlyRoot: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          tmpfs: ["/tmp", "/var/tmp", "/run"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          network: "none",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          user: "1000:1000",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        browser: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          enabled: false,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  tools: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    allow: ["exec", "process", "read", "write", "edit", "apply_patch"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    deny: ["browser", "canvas"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    exec: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      backgroundMs: 10000,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      timeoutSec: 1800,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      cleanupMs: 1800000,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    elevated: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      allowFrom: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        whatsapp: ["+15555550123"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        telegram: ["123456789"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        discord: ["steipete"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        slack: ["U123"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        signal: ["+15555550123"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        imessage: ["user@example.com"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        webchat: ["session:demo"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // 自定义模型提供商（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  models: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    mode: "merge",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    providers: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "custom-proxy": {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        baseUrl: "http://localhost:4000/v1",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        apiKey: "LITELLM_KEY",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        api: "openai-responses",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        authHeader: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        headers: { "X-Proxy-Region": "us-west" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        models: [（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            id: "llama-3.1-8b",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            name: "Llama 3.1 8B",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            api: "openai-responses",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            reasoning: false,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            input: ["text"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            contextWindow: 128000,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            maxTokens: 32000,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        ],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // Cron 作业（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  cron: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    store: "~/.openclaw/cron/cron.json",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    maxConcurrentRuns: 2,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // Webhooks（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  hooks: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    path: "/hooks",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    token: "shared-secret",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    presets: ["gmail"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    transformsDir: "~/.openclaw/hooks",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    mappings: [（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        id: "gmail-hook",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        match: { path: "gmail" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        action: "agent",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        wakeMode: "now",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        name: "Gmail",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        sessionKey: "hook:gmail:{{messages[0].id}}",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        textTemplate: "{{messages[0].snippet}}",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        deliver: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        channel: "last",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        to: "+15555550123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        thinking: "low",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        timeoutSeconds: 300,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        transform: { module: "./transforms/gmail.js", export: "transformGmail" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    gmail: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      account: "openclaw@gmail.com",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      label: "INBOX",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      topic: "projects/<project-id>/topics/gog-gmail-watch",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      subscription: "gog-gmail-watch-push",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      pushToken: "shared-push-token",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      hookUrl: "http://127.0.0.1:18789/hooks/gmail",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      includeBody: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      maxBytes: 20000,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      renewEveryMinutes: 720,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      serve: { bind: "127.0.0.1", port: 8788, path: "/" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      tailscale: { mode: "funnel", path: "/gmail-pubsub" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  // Gateway 网关 + 网络（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  gateway: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    mode: "local",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    port: 18789,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    bind: "loopback",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    controlUi: { enabled: true, basePath: "/openclaw" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    auth: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      mode: "token",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      token: "gateway-token",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      allowTailscale: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    tailscale: { mode: "serve", resetOnExit: false },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    remote: { url: "ws://gateway.tailnet:18789", token: "remote-token" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    reload: { mode: "hybrid", debounceMs: 300 },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  skills: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    allowBundled: ["gemini", "peekaboo"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    load: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      extraDirs: ["~/Projects/agent-scripts/skills"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    install: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      preferBrew: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      nodeManager: "npm",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    entries: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "nano-banana-pro": {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        apiKey: "GEMINI_KEY_HERE",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      peekaboo: { enabled: true },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 常见模式（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 多平台设置（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  agent: { workspace: "~/.openclaw/workspace" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    whatsapp: { allowFrom: ["+15555550123"] },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    telegram: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      botToken: "YOUR_TOKEN",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      allowFrom: ["123456789"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    discord: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      token: "YOUR_TOKEN",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      dm: { allowFrom: ["yourname"] },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### OAuth 带 API 密钥回退（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  auth: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    profiles: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "anthropic:subscription": {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        provider: "anthropic",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        mode: "oauth",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        email: "me@example.com",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "anthropic:api": {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        provider: "anthropic",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        mode: "api_key",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    order: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      anthropic: ["anthropic:subscription", "anthropic:api"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  agent: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    workspace: "~/.openclaw/workspace",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    model: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      primary: "anthropic/claude-sonnet-4-5",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      fallbacks: ["anthropic/claude-opus-4-5"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Anthropic 订阅 + API 密钥，MiniMax 回退（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  auth: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    profiles: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "anthropic:subscription": {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        provider: "anthropic",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        mode: "oauth",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        email: "user@example.com",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "anthropic:api": {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        provider: "anthropic",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        mode: "api_key",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    order: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      anthropic: ["anthropic:subscription", "anthropic:api"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  models: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    providers: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      minimax: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        baseUrl: "https://api.minimax.io/anthropic",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        api: "anthropic-messages",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        apiKey: "${MINIMAX_API_KEY}",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  agent: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    workspace: "~/.openclaw/workspace",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    model: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      primary: "anthropic/claude-opus-4-5",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      fallbacks: ["minimax/MiniMax-M2.1"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 工作机器人（受限访问）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  identity: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    name: "WorkBot",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    theme: "professional assistant",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  agent: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    workspace: "~/work-openclaw",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    elevated: { enabled: false },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    slack: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      botToken: "xoxb-...",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "#engineering": { allow: true, requireMention: true },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "#general": { allow: true, requireMention: true },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 仅本地模型（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  agent: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    workspace: "~/.openclaw/workspace",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    model: { primary: "lmstudio/minimax-m2.1-gs32" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  models: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    mode: "merge",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    providers: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      lmstudio: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        baseUrl: "http://127.0.0.1:1234/v1",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        apiKey: "lmstudio",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        api: "openai-responses",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        models: [（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            id: "minimax-m2.1-gs32",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            name: "MiniMax M2.1 GS32",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            reasoning: false,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            input: ["text"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            contextWindow: 196608,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            maxTokens: 8192,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        ],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 提示（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 如果你设置 `dmPolicy: "open"`，匹配的 `allowFrom` 列表必须包含 `"*"`。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 提供商 ID 各不相同（电话号码、用户 ID、频道 ID）。使用提供商文档确认格式。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 稍后添加的可选部分：`web`、`browser`、`ui`、`discovery`、`canvasHost`、`talk`、`signal`、`imessage`。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 参阅[提供商](/channels/whatsapp)和[故障排除](/gateway/troubleshooting)了解更深入的设置说明。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

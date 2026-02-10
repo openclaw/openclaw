@@ -1,43 +1,43 @@
----
-name: gemini
-description: Gemini CLI for one-shot Q&A, summaries, and generation.
-homepage: https://ai.google.dev/
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "♊️",
-        "requires": { "bins": ["gemini"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "gemini-cli",
-              "bins": ["gemini"],
-              "label": "Install Gemini CLI (brew)",
-            },
-          ],
-      },
-  }
----
-
-# Gemini CLI
-
-Use Gemini in one-shot mode with a positional prompt (avoid interactive mode).
-
-Quick start
-
-- `gemini "Answer this question..."`
-- `gemini --model <name> "Prompt..."`
-- `gemini --output-format json "Return JSON"`
-
-Extensions
-
-- List: `gemini --list-extensions`
-- Manage: `gemini extensions <command>`
-
-Notes
-
-- If auth is required, run `gemini` once interactively and follow the login flow.
-- Avoid `--yolo` for safety.
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+name: gemini（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+description: Gemini CLI for one-shot Q&A, summaries, and generation.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+homepage: https://ai.google.dev/（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+metadata:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    "openclaw":（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "emoji": "♊️",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "requires": { "bins": ["gemini"] },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "install":（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          [（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "id": "brew",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "kind": "brew",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "formula": "gemini-cli",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "bins": ["gemini"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "label": "Install Gemini CLI (brew)",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          ],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  }（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Gemini CLI（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Use Gemini in one-shot mode with a positional prompt (avoid interactive mode).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Quick start（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `gemini "Answer this question..."`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `gemini --model <name> "Prompt..."`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `gemini --output-format json "Return JSON"`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Extensions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- List: `gemini --list-extensions`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Manage: `gemini extensions <command>`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Notes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- If auth is required, run `gemini` once interactively and follow the login flow.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Avoid `--yolo` for safety.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

@@ -1,250 +1,250 @@
----
-read_when:
-  - 你想从 OpenClaw 发起出站语音通话
-  - 你正在配置或开发 voice-call 插件
-summary: Voice Call 插件：通过 Twilio/Telnyx/Plivo 进行出站 + 入站通话（插件安装 + 配置 + CLI）
-title: Voice Call 插件
-x-i18n:
-  generated_at: "2026-02-03T07:53:40Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: d731c63bf52781cc49262db550d0507d7fc33e5e7ce5d87efaf5d44aedcafef7
-  source_path: plugins/voice-call.md
-  workflow: 15
----
-
-# Voice Call（插件）
-
-通过插件为 OpenClaw 提供语音通话。支持出站通知和带有入站策略的多轮对话。
-
-当前提供商：
-
-- `twilio`（Programmable Voice + Media Streams）
-- `telnyx`（Call Control v2）
-- `plivo`（Voice API + XML transfer + GetInput speech）
-- `mock`（开发/无网络）
-
-快速心智模型：
-
-- 安装插件
-- 重启 Gateway 网关
-- 在 `plugins.entries.voice-call.config` 下配置
-- 使用 `openclaw voicecall ...` 或 `voice_call` 工具
-
-## 运行位置（本地 vs 远程）
-
-Voice Call 插件运行在 **Gateway 网关进程内部**。
-
-如果你使用远程 Gateway 网关，在**运行 Gateway 网关的机器**上安装/配置插件，然后重启 Gateway 网关以加载它。
-
-## 安装
-
-### 选项 A：从 npm 安装（推荐）
-
-```bash
-openclaw plugins install @openclaw/voice-call
-```
-
-之后重启 Gateway 网关。
-
-### 选项 B：从本地文件夹安装（开发，不复制）
-
-```bash
-openclaw plugins install ./extensions/voice-call
-cd ./extensions/voice-call && pnpm install
-```
-
-之后重启 Gateway 网关。
-
-## 配置
-
-在 `plugins.entries.voice-call.config` 下设置配置：
-
-```json5
-{
-  plugins: {
-    entries: {
-      "voice-call": {
-        enabled: true,
-        config: {
-          provider: "twilio", // 或 "telnyx" | "plivo" | "mock"
-          fromNumber: "+15550001234",
-          toNumber: "+15550005678",
-
-          twilio: {
-            accountSid: "ACxxxxxxxx",
-            authToken: "...",
-          },
-
-          plivo: {
-            authId: "MAxxxxxxxxxxxxxxxxxxxx",
-            authToken: "...",
-          },
-
-          // Webhook 服务器
-          serve: {
-            port: 3334,
-            path: "/voice/webhook",
-          },
-
-          // 公开暴露（选一个）
-          // publicUrl: "https://example.ngrok.app/voice/webhook",
-          // tunnel: { provider: "ngrok" },
-          // tailscale: { mode: "funnel", path: "/voice/webhook" }
-
-          outbound: {
-            defaultMode: "notify", // notify | conversation
-          },
-
-          streaming: {
-            enabled: true,
-            streamPath: "/voice/stream",
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-注意事项：
-
-- Twilio/Telnyx 需要**可公开访问**的 webhook URL。
-- Plivo 需要**可公开访问**的 webhook URL。
-- `mock` 是本地开发提供商（无网络调用）。
-- `skipSignatureVerification` 仅用于本地测试。
-- 如果你使用 ngrok 免费版，将 `publicUrl` 设置为确切的 ngrok URL；签名验证始终强制执行。
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` 允许带有无效签名的 Twilio webhooks，**仅当** `tunnel.provider="ngrok"` 且 `serve.bind` 是 loopback（ngrok 本地代理）时。仅用于本地开发。
-- Ngrok 免费版 URL 可能会更改或添加中间页面行为；如果 `publicUrl` 漂移，Twilio 签名将失败。对于生产环境，优先使用稳定域名或 Tailscale funnel。
-
-## 通话的 TTS
-
-Voice Call 使用核心 `messages.tts` 配置（OpenAI 或 ElevenLabs）进行通话中的流式语音。你可以在插件配置下使用**相同的结构**覆盖它——它会与 `messages.tts` 深度合并。
-
-```json5
-{
-  tts: {
-    provider: "elevenlabs",
-    elevenlabs: {
-      voiceId: "pMsXgVXv3BLzUgSXRplE",
-      modelId: "eleven_multilingual_v2",
-    },
-  },
-}
-```
-
-注意事项：
-
-- **语音通话忽略 Edge TTS**（电话音频需要 PCM；Edge 输出不可靠）。
-- 当启用 Twilio 媒体流时使用核心 TTS；否则通话回退到提供商原生语音。
-
-### 更多示例
-
-仅使用核心 TTS（无覆盖）：
-
-```json5
-{
-  messages: {
-    tts: {
-      provider: "openai",
-      openai: { voice: "alloy" },
-    },
-  },
-}
-```
-
-仅为通话覆盖为 ElevenLabs（其他地方保持核心默认）：
-
-```json5
-{
-  plugins: {
-    entries: {
-      "voice-call": {
-        config: {
-          tts: {
-            provider: "elevenlabs",
-            elevenlabs: {
-              apiKey: "elevenlabs_key",
-              voiceId: "pMsXgVXv3BLzUgSXRplE",
-              modelId: "eleven_multilingual_v2",
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-仅为通话覆盖 OpenAI 模型（深度合并示例）：
-
-```json5
-{
-  plugins: {
-    entries: {
-      "voice-call": {
-        config: {
-          tts: {
-            openai: {
-              model: "gpt-4o-mini-tts",
-              voice: "marin",
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-## 入站通话
-
-入站策略默认为 `disabled`。要启用入站通话，设置：
-
-```json5
-{
-  inboundPolicy: "allowlist",
-  allowFrom: ["+15550001234"],
-  inboundGreeting: "Hello! How can I help?",
-}
-```
-
-自动响应使用智能体系统。通过以下方式调整：
-
-- `responseModel`
-- `responseSystemPrompt`
-- `responseTimeoutMs`
-
-## CLI
-
-```bash
-openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
-openclaw voicecall continue --call-id <id> --message "Any questions?"
-openclaw voicecall speak --call-id <id> --message "One moment"
-openclaw voicecall end --call-id <id>
-openclaw voicecall status --call-id <id>
-openclaw voicecall tail
-openclaw voicecall expose --mode funnel
-```
-
-## 智能体工具
-
-工具名称：`voice_call`
-
-操作：
-
-- `initiate_call`（message、to?、mode?）
-- `continue_call`（callId、message）
-- `speak_to_user`（callId、message）
-- `end_call`（callId）
-- `get_status`（callId）
-
-此仓库在 `skills/voice-call/SKILL.md` 提供了配套的 skill 文档。
-
-## Gateway 网关 RPC
-
-- `voicecall.initiate`（`to?`、`message`、`mode?`）
-- `voicecall.continue`（`callId`、`message`）
-- `voicecall.speak`（`callId`、`message`）
-- `voicecall.end`（`callId`）
-- `voicecall.status`（`callId`）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你想从 OpenClaw 发起出站语音通话（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你正在配置或开发 voice-call 插件（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: Voice Call 插件：通过 Twilio/Telnyx/Plivo 进行出站 + 入站通话（插件安装 + 配置 + CLI）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: Voice Call 插件（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+x-i18n:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  generated_at: "2026-02-03T07:53:40Z"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  model: claude-opus-4-5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  provider: pi（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_hash: d731c63bf52781cc49262db550d0507d7fc33e5e7ce5d87efaf5d44aedcafef7（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_path: plugins/voice-call.md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workflow: 15（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Voice Call（插件）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+通过插件为 OpenClaw 提供语音通话。支持出站通知和带有入站策略的多轮对话。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+当前提供商：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `twilio`（Programmable Voice + Media Streams）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `telnyx`（Call Control v2）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `plivo`（Voice API + XML transfer + GetInput speech）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `mock`（开发/无网络）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+快速心智模型：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 安装插件（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 重启 Gateway 网关（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 在 `plugins.entries.voice-call.config` 下配置（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 使用 `openclaw voicecall ...` 或 `voice_call` 工具（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 运行位置（本地 vs 远程）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Voice Call 插件运行在 **Gateway 网关进程内部**。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+如果你使用远程 Gateway 网关，在**运行 Gateway 网关的机器**上安装/配置插件，然后重启 Gateway 网关以加载它。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 安装（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 选项 A：从 npm 安装（推荐）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw plugins install @openclaw/voice-call（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+之后重启 Gateway 网关。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 选项 B：从本地文件夹安装（开发，不复制）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw plugins install ./extensions/voice-call（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+cd ./extensions/voice-call && pnpm install（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+之后重启 Gateway 网关。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 配置（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+在 `plugins.entries.voice-call.config` 下设置配置：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  plugins: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    entries: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "voice-call": {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        config: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          provider: "twilio", // 或 "telnyx" | "plivo" | "mock"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          fromNumber: "+15550001234",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          toNumber: "+15550005678",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          twilio: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            accountSid: "ACxxxxxxxx",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            authToken: "...",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          plivo: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            authId: "MAxxxxxxxxxxxxxxxxxxxx",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            authToken: "...",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          // Webhook 服务器（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          serve: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            port: 3334,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            path: "/voice/webhook",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          // 公开暴露（选一个）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          // publicUrl: "https://example.ngrok.app/voice/webhook",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          // tunnel: { provider: "ngrok" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          // tailscale: { mode: "funnel", path: "/voice/webhook" }（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          outbound: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            defaultMode: "notify", // notify | conversation（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          streaming: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            streamPath: "/voice/stream",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+注意事项：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Twilio/Telnyx 需要**可公开访问**的 webhook URL。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Plivo 需要**可公开访问**的 webhook URL。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `mock` 是本地开发提供商（无网络调用）。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `skipSignatureVerification` 仅用于本地测试。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 如果你使用 ngrok 免费版，将 `publicUrl` 设置为确切的 ngrok URL；签名验证始终强制执行。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` 允许带有无效签名的 Twilio webhooks，**仅当** `tunnel.provider="ngrok"` 且 `serve.bind` 是 loopback（ngrok 本地代理）时。仅用于本地开发。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Ngrok 免费版 URL 可能会更改或添加中间页面行为；如果 `publicUrl` 漂移，Twilio 签名将失败。对于生产环境，优先使用稳定域名或 Tailscale funnel。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 通话的 TTS（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Voice Call 使用核心 `messages.tts` 配置（OpenAI 或 ElevenLabs）进行通话中的流式语音。你可以在插件配置下使用**相同的结构**覆盖它——它会与 `messages.tts` 深度合并。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  tts: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    provider: "elevenlabs",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    elevenlabs: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      voiceId: "pMsXgVXv3BLzUgSXRplE",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      modelId: "eleven_multilingual_v2",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+注意事项：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- **语音通话忽略 Edge TTS**（电话音频需要 PCM；Edge 输出不可靠）。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 当启用 Twilio 媒体流时使用核心 TTS；否则通话回退到提供商原生语音。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 更多示例（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+仅使用核心 TTS（无覆盖）：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  messages: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    tts: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      provider: "openai",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      openai: { voice: "alloy" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+仅为通话覆盖为 ElevenLabs（其他地方保持核心默认）：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  plugins: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    entries: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "voice-call": {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        config: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          tts: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            provider: "elevenlabs",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            elevenlabs: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              apiKey: "elevenlabs_key",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              voiceId: "pMsXgVXv3BLzUgSXRplE",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              modelId: "eleven_multilingual_v2",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+仅为通话覆盖 OpenAI 模型（深度合并示例）：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  plugins: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    entries: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      "voice-call": {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        config: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          tts: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            openai: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              model: "gpt-4o-mini-tts",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              voice: "marin",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 入站通话（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+入站策略默认为 `disabled`。要启用入站通话，设置：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  inboundPolicy: "allowlist",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  allowFrom: ["+15550001234"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  inboundGreeting: "Hello! How can I help?",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+自动响应使用智能体系统。通过以下方式调整：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `responseModel`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `responseSystemPrompt`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `responseTimeoutMs`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## CLI（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw voicecall continue --call-id <id> --message "Any questions?"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw voicecall speak --call-id <id> --message "One moment"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw voicecall end --call-id <id>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw voicecall status --call-id <id>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw voicecall tail（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw voicecall expose --mode funnel（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 智能体工具（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+工具名称：`voice_call`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+操作：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `initiate_call`（message、to?、mode?）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `continue_call`（callId、message）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `speak_to_user`（callId、message）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `end_call`（callId）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `get_status`（callId）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+此仓库在 `skills/voice-call/SKILL.md` 提供了配套的 skill 文档。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Gateway 网关 RPC（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `voicecall.initiate`（`to?`、`message`、`mode?`）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `voicecall.continue`（`callId`、`message`）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `voicecall.speak`（`callId`、`message`）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `voicecall.end`（`callId`）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `voicecall.status`（`callId`）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

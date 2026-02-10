@@ -1,81 +1,81 @@
----
-summary: "Menu bar status logic and what is surfaced to users"
-read_when:
-  - Tweaking mac menu UI or status logic
-title: "Menu Bar"
----
-
-# Menu Bar Status Logic
-
-## What is shown
-
-- We surface the current agent work state in the menu bar icon and in the first status row of the menu.
-- Health status is hidden while work is active; it returns when all sessions are idle.
-- The “Nodes” block in the menu lists **devices** only (paired nodes via `node.list`), not client/presence entries.
-- A “Usage” section appears under Context when provider usage snapshots are available.
-
-## State model
-
-- Sessions: events arrive with `runId` (per-run) plus `sessionKey` in the payload. The “main” session is the key `main`; if absent, we fall back to the most recently updated session.
-- Priority: main always wins. If main is active, its state is shown immediately. If main is idle, the most recently active non‑main session is shown. We do not flip‑flop mid‑activity; we only switch when the current session goes idle or main becomes active.
-- Activity kinds:
-  - `job`: high‑level command execution (`state: started|streaming|done|error`).
-  - `tool`: `phase: start|result` with `toolName` and `meta/args`.
-
-## IconState enum (Swift)
-
-- `idle`
-- `workingMain(ActivityKind)`
-- `workingOther(ActivityKind)`
-- `overridden(ActivityKind)` (debug override)
-
-### ActivityKind → glyph
-
-- `exec` → 💻
-- `read` → 📄
-- `write` → ✍️
-- `edit` → 📝
-- `attach` → 📎
-- default → 🛠️
-
-### Visual mapping
-
-- `idle`: normal critter.
-- `workingMain`: badge with glyph, full tint, leg “working” animation.
-- `workingOther`: badge with glyph, muted tint, no scurry.
-- `overridden`: uses the chosen glyph/tint regardless of activity.
-
-## Status row text (menu)
-
-- While work is active: `<Session role> · <activity label>`
-  - Examples: `Main · exec: pnpm test`, `Other · read: apps/macos/Sources/OpenClaw/AppState.swift`.
-- When idle: falls back to the health summary.
-
-## Event ingestion
-
-- Source: control‑channel `agent` events (`ControlChannel.handleAgentEvent`).
-- Parsed fields:
-  - `stream: "job"` with `data.state` for start/stop.
-  - `stream: "tool"` with `data.phase`, `name`, optional `meta`/`args`.
-- Labels:
-  - `exec`: first line of `args.command`.
-  - `read`/`write`: shortened path.
-  - `edit`: path plus inferred change kind from `meta`/diff counts.
-  - fallback: tool name.
-
-## Debug override
-
-- Settings ▸ Debug ▸ “Icon override” picker:
-  - `System (auto)` (default)
-  - `Working: main` (per tool kind)
-  - `Working: other` (per tool kind)
-  - `Idle`
-- Stored via `@AppStorage("iconOverride")`; mapped to `IconState.overridden`.
-
-## Testing checklist
-
-- Trigger main session job: verify icon switches immediately and status row shows main label.
-- Trigger non‑main session job while main idle: icon/status shows non‑main; stays stable until it finishes.
-- Start main while other active: icon flips to main instantly.
-- Rapid tool bursts: ensure badge does not flicker (TTL grace on tool results).
-- Health row reappears once all sessions idle.
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: "Menu bar status logic and what is surfaced to users"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Tweaking mac menu UI or status logic（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: "Menu Bar"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Menu Bar Status Logic（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## What is shown（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- We surface the current agent work state in the menu bar icon and in the first status row of the menu.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Health status is hidden while work is active; it returns when all sessions are idle.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- The “Nodes” block in the menu lists **devices** only (paired nodes via `node.list`), not client/presence entries.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- A “Usage” section appears under Context when provider usage snapshots are available.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## State model（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Sessions: events arrive with `runId` (per-run) plus `sessionKey` in the payload. The “main” session is the key `main`; if absent, we fall back to the most recently updated session.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Priority: main always wins. If main is active, its state is shown immediately. If main is idle, the most recently active non‑main session is shown. We do not flip‑flop mid‑activity; we only switch when the current session goes idle or main becomes active.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Activity kinds:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `job`: high‑level command execution (`state: started|streaming|done|error`).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `tool`: `phase: start|result` with `toolName` and `meta/args`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## IconState enum (Swift)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `idle`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `workingMain(ActivityKind)`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `workingOther(ActivityKind)`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `overridden(ActivityKind)` (debug override)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### ActivityKind → glyph（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `exec` → 💻（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `read` → 📄（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `write` → ✍️（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `edit` → 📝（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `attach` → 📎（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- default → 🛠️（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Visual mapping（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `idle`: normal critter.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `workingMain`: badge with glyph, full tint, leg “working” animation.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `workingOther`: badge with glyph, muted tint, no scurry.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `overridden`: uses the chosen glyph/tint regardless of activity.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Status row text (menu)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- While work is active: `<Session role> · <activity label>`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - Examples: `Main · exec: pnpm test`, `Other · read: apps/macos/Sources/OpenClaw/AppState.swift`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- When idle: falls back to the health summary.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Event ingestion（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Source: control‑channel `agent` events (`ControlChannel.handleAgentEvent`).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Parsed fields:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `stream: "job"` with `data.state` for start/stop.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `stream: "tool"` with `data.phase`, `name`, optional `meta`/`args`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Labels:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `exec`: first line of `args.command`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `read`/`write`: shortened path.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `edit`: path plus inferred change kind from `meta`/diff counts.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - fallback: tool name.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Debug override（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Settings ▸ Debug ▸ “Icon override” picker:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `System (auto)` (default)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `Working: main` (per tool kind)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `Working: other` (per tool kind)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - `Idle`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Stored via `@AppStorage("iconOverride")`; mapped to `IconState.overridden`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Testing checklist（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Trigger main session job: verify icon switches immediately and status row shows main label.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Trigger non‑main session job while main idle: icon/status shows non‑main; stays stable until it finishes.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Start main while other active: icon flips to main instantly.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Rapid tool bursts: ensure badge does not flicker (TTL grace on tool results).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Health row reappears once all sessions idle.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

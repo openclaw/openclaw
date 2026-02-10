@@ -1,180 +1,180 @@
----
-read_when:
-  - 你想将 OpenClaw 连接到 LINE
-  - 你需要配置 LINE webhook + 凭证
-  - 你想了解 LINE 特有的消息选项
-summary: LINE Messaging API 插件的配置、设置和使用方法
-title: LINE
-x-i18n:
-  generated_at: "2026-02-03T07:43:38Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 8fbac126786f95b9454f3cc61906c2798393a8d7914e787d3755c020c7ab2da6
-  source_path: channels/line.md
-  workflow: 15
----
-
-# LINE（插件）
-
-LINE 通过 LINE Messaging API 连接到 OpenClaw。该插件作为 webhook 接收器在 Gateway 网关上运行，使用你的 channel access token + channel secret 进行身份验证。
-
-状态：通过插件支持。支持私信、群聊、媒体、位置、Flex 消息、模板消息和快捷回复。不支持表情回应和话题回复。
-
-## 需要安装插件
-
-安装 LINE 插件：
-
-```bash
-openclaw plugins install @openclaw/line
-```
-
-本地检出（从 git 仓库运行时）：
-
-```bash
-openclaw plugins install ./extensions/line
-```
-
-## 配置步骤
-
-1. 创建 LINE Developers 账户并打开控制台：
-   https://developers.line.biz/console/
-2. 创建（或选择）一个 Provider 并添加 **Messaging API** 渠道。
-3. 从渠道设置中复制 **Channel access token** 和 **Channel secret**。
-4. 在 Messaging API 设置中启用 **Use webhook**。
-5. 将 webhook URL 设置为你的 Gateway 网关端点（必须使用 HTTPS）：
-
-```
-https://gateway-host/line/webhook
-```
-
-Gateway 网关会响应 LINE 的 webhook 验证（GET）和入站事件（POST）。如果你需要自定义路径，请设置 `channels.line.webhookPath` 或 `channels.line.accounts.<id>.webhookPath` 并相应更新 URL。
-
-## 配置
-
-最小配置：
-
-```json5
-{
-  channels: {
-    line: {
-      enabled: true,
-      channelAccessToken: "LINE_CHANNEL_ACCESS_TOKEN",
-      channelSecret: "LINE_CHANNEL_SECRET",
-      dmPolicy: "pairing",
-    },
-  },
-}
-```
-
-环境变量（仅限默认账户）：
-
-- `LINE_CHANNEL_ACCESS_TOKEN`
-- `LINE_CHANNEL_SECRET`
-
-Token/secret 文件：
-
-```json5
-{
-  channels: {
-    line: {
-      tokenFile: "/path/to/line-token.txt",
-      secretFile: "/path/to/line-secret.txt",
-    },
-  },
-}
-```
-
-多账户配置：
-
-```json5
-{
-  channels: {
-    line: {
-      accounts: {
-        marketing: {
-          channelAccessToken: "...",
-          channelSecret: "...",
-          webhookPath: "/line/marketing",
-        },
-      },
-    },
-  },
-}
-```
-
-## 访问控制
-
-私信默认使用配对模式。未知发送者会收到配对码，其消息在获得批准前会被忽略。
-
-```bash
-openclaw pairing list line
-openclaw pairing approve line <CODE>
-```
-
-允许列表和策略：
-
-- `channels.line.dmPolicy`：`pairing | allowlist | open | disabled`
-- `channels.line.allowFrom`：私信的允许列表 LINE 用户 ID
-- `channels.line.groupPolicy`：`allowlist | open | disabled`
-- `channels.line.groupAllowFrom`：群组的允许列表 LINE 用户 ID
-- 单群组覆盖：`channels.line.groups.<groupId>.allowFrom`
-
-LINE ID 区分大小写。有效 ID 格式如下：
-
-- 用户：`U` + 32 位十六进制字符
-- 群组：`C` + 32 位十六进制字符
-- 房间：`R` + 32 位十六进制字符
-
-## 消息行为
-
-- 文本按 5000 字符分块。
-- Markdown 格式会被移除；代码块和表格会尽可能转换为 Flex 卡片。
-- 流式响应会被缓冲；智能体处理时，LINE 会收到完整分块并显示加载动画。
-- 媒体下载受 `channels.line.mediaMaxMb` 限制（默认 10）。
-
-## 渠道数据（富消息）
-
-使用 `channelData.line` 发送快捷回复、位置、Flex 卡片或模板消息。
-
-```json5
-{
-  text: "Here you go",
-  channelData: {
-    line: {
-      quickReplies: ["Status", "Help"],
-      location: {
-        title: "Office",
-        address: "123 Main St",
-        latitude: 35.681236,
-        longitude: 139.767125,
-      },
-      flexMessage: {
-        altText: "Status card",
-        contents: {
-          /* Flex payload */
-        },
-      },
-      templateMessage: {
-        type: "confirm",
-        text: "Proceed?",
-        confirmLabel: "Yes",
-        confirmData: "yes",
-        cancelLabel: "No",
-        cancelData: "no",
-      },
-    },
-  },
-}
-```
-
-LINE 插件还提供 `/card` 命令用于 Flex 消息预设：
-
-```
-/card info "Welcome" "Thanks for joining!"
-```
-
-## 故障排除
-
-- **Webhook 验证失败：** 确保 webhook URL 使用 HTTPS 且 `channelSecret` 与 LINE 控制台中的一致。
-- **没有入站事件：** 确认 webhook 路径与 `channels.line.webhookPath` 匹配，且 Gateway 网关可从 LINE 访问。
-- **媒体下载错误：** 如果媒体超过默认限制，请提高 `channels.line.mediaMaxMb`。
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你想将 OpenClaw 连接到 LINE（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你需要配置 LINE webhook + 凭证（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你想了解 LINE 特有的消息选项（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: LINE Messaging API 插件的配置、设置和使用方法（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: LINE（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+x-i18n:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  generated_at: "2026-02-03T07:43:38Z"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  model: claude-opus-4-5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  provider: pi（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_hash: 8fbac126786f95b9454f3cc61906c2798393a8d7914e787d3755c020c7ab2da6（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_path: channels/line.md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workflow: 15（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# LINE（插件）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+LINE 通过 LINE Messaging API 连接到 OpenClaw。该插件作为 webhook 接收器在 Gateway 网关上运行，使用你的 channel access token + channel secret 进行身份验证。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+状态：通过插件支持。支持私信、群聊、媒体、位置、Flex 消息、模板消息和快捷回复。不支持表情回应和话题回复。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 需要安装插件（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+安装 LINE 插件：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw plugins install @openclaw/line（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+本地检出（从 git 仓库运行时）：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw plugins install ./extensions/line（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 配置步骤（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1. 创建 LINE Developers 账户并打开控制台：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+   https://developers.line.biz/console/（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2. 创建（或选择）一个 Provider 并添加 **Messaging API** 渠道。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+3. 从渠道设置中复制 **Channel access token** 和 **Channel secret**。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+4. 在 Messaging API 设置中启用 **Use webhook**。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+5. 将 webhook URL 设置为你的 Gateway 网关端点（必须使用 HTTPS）：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+https://gateway-host/line/webhook（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Gateway 网关会响应 LINE 的 webhook 验证（GET）和入站事件（POST）。如果你需要自定义路径，请设置 `channels.line.webhookPath` 或 `channels.line.accounts.<id>.webhookPath` 并相应更新 URL。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 配置（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+最小配置：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    line: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      enabled: true,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      channelAccessToken: "LINE_CHANNEL_ACCESS_TOKEN",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      channelSecret: "LINE_CHANNEL_SECRET",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      dmPolicy: "pairing",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+环境变量（仅限默认账户）：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `LINE_CHANNEL_ACCESS_TOKEN`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `LINE_CHANNEL_SECRET`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Token/secret 文件：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    line: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      tokenFile: "/path/to/line-token.txt",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      secretFile: "/path/to/line-secret.txt",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+多账户配置：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channels: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    line: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      accounts: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        marketing: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          channelAccessToken: "...",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          channelSecret: "...",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          webhookPath: "/line/marketing",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 访问控制（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+私信默认使用配对模式。未知发送者会收到配对码，其消息在获得批准前会被忽略。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw pairing list line（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw pairing approve line <CODE>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+允许列表和策略：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `channels.line.dmPolicy`：`pairing | allowlist | open | disabled`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `channels.line.allowFrom`：私信的允许列表 LINE 用户 ID（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `channels.line.groupPolicy`：`allowlist | open | disabled`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `channels.line.groupAllowFrom`：群组的允许列表 LINE 用户 ID（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 单群组覆盖：`channels.line.groups.<groupId>.allowFrom`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+LINE ID 区分大小写。有效 ID 格式如下：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 用户：`U` + 32 位十六进制字符（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 群组：`C` + 32 位十六进制字符（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 房间：`R` + 32 位十六进制字符（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 消息行为（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 文本按 5000 字符分块。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Markdown 格式会被移除；代码块和表格会尽可能转换为 Flex 卡片。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 流式响应会被缓冲；智能体处理时，LINE 会收到完整分块并显示加载动画。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- 媒体下载受 `channels.line.mediaMaxMb` 限制（默认 10）。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 渠道数据（富消息）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+使用 `channelData.line` 发送快捷回复、位置、Flex 卡片或模板消息。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  text: "Here you go",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  channelData: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    line: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      quickReplies: ["Status", "Help"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      location: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        title: "Office",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        address: "123 Main St",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        latitude: 35.681236,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        longitude: 139.767125,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      flexMessage: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        altText: "Status card",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        contents: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          /* Flex payload */（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      templateMessage: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        type: "confirm",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        text: "Proceed?",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        confirmLabel: "Yes",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        confirmData: "yes",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        cancelLabel: "No",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        cancelData: "no",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+LINE 插件还提供 `/card` 命令用于 Flex 消息预设：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+/card info "Welcome" "Thanks for joining!"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 故障排除（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- **Webhook 验证失败：** 确保 webhook URL 使用 HTTPS 且 `channelSecret` 与 LINE 控制台中的一致。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- **没有入站事件：** 确认 webhook 路径与 `channels.line.webhookPath` 匹配，且 Gateway 网关可从 LINE 访问。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- **媒体下载错误：** 如果媒体超过默认限制，请提高 `channels.line.mediaMaxMb`。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

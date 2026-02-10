@@ -1,99 +1,99 @@
----
-summary: "Write agent tools in a plugin (schemas, optional tools, allowlists)"
-read_when:
-  - You want to add a new agent tool in a plugin
-  - You need to make a tool opt-in via allowlists
-title: "Plugin Agent Tools"
----
-
-# Plugin agent tools
-
-OpenClaw plugins can register **agent tools** (JSON‑schema functions) that are exposed
-to the LLM during agent runs. Tools can be **required** (always available) or
-**optional** (opt‑in).
-
-Agent tools are configured under `tools` in the main config, or per‑agent under
-`agents.list[].tools`. The allowlist/denylist policy controls which tools the agent
-can call.
-
-## Basic tool
-
-```ts
-import { Type } from "@sinclair/typebox";
-
-export default function (api) {
-  api.registerTool({
-    name: "my_tool",
-    description: "Do a thing",
-    parameters: Type.Object({
-      input: Type.String(),
-    }),
-    async execute(_id, params) {
-      return { content: [{ type: "text", text: params.input }] };
-    },
-  });
-}
-```
-
-## Optional tool (opt‑in)
-
-Optional tools are **never** auto‑enabled. Users must add them to an agent
-allowlist.
-
-```ts
-export default function (api) {
-  api.registerTool(
-    {
-      name: "workflow_tool",
-      description: "Run a local workflow",
-      parameters: {
-        type: "object",
-        properties: {
-          pipeline: { type: "string" },
-        },
-        required: ["pipeline"],
-      },
-      async execute(_id, params) {
-        return { content: [{ type: "text", text: params.pipeline }] };
-      },
-    },
-    { optional: true },
-  );
-}
-```
-
-Enable optional tools in `agents.list[].tools.allow` (or global `tools.allow`):
-
-```json5
-{
-  agents: {
-    list: [
-      {
-        id: "main",
-        tools: {
-          allow: [
-            "workflow_tool", // specific tool name
-            "workflow", // plugin id (enables all tools from that plugin)
-            "group:plugins", // all plugin tools
-          ],
-        },
-      },
-    ],
-  },
-}
-```
-
-Other config knobs that affect tool availability:
-
-- Allowlists that only name plugin tools are treated as plugin opt-ins; core tools remain
-  enabled unless you also include core tools or groups in the allowlist.
-- `tools.profile` / `agents.list[].tools.profile` (base allowlist)
-- `tools.byProvider` / `agents.list[].tools.byProvider` (provider‑specific allow/deny)
-- `tools.sandbox.tools.*` (sandbox tool policy when sandboxed)
-
-## Rules + tips
-
-- Tool names must **not** clash with core tool names; conflicting tools are skipped.
-- Plugin ids used in allowlists must not clash with core tool names.
-- Prefer `optional: true` for tools that trigger side effects or require extra
-  binaries/credentials.
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: "Write agent tools in a plugin (schemas, optional tools, allowlists)"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - You want to add a new agent tool in a plugin（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - You need to make a tool opt-in via allowlists（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: "Plugin Agent Tools"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Plugin agent tools（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+OpenClaw plugins can register **agent tools** (JSON‑schema functions) that are exposed（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+to the LLM during agent runs. Tools can be **required** (always available) or（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**optional** (opt‑in).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Agent tools are configured under `tools` in the main config, or per‑agent under（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+`agents.list[].tools`. The allowlist/denylist policy controls which tools the agent（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+can call.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Basic tool（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```ts（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+import { Type } from "@sinclair/typebox";（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+export default function (api) {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  api.registerTool({（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    name: "my_tool",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    description: "Do a thing",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    parameters: Type.Object({（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      input: Type.String(),（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    }),（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    async execute(_id, params) {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      return { content: [{ type: "text", text: params.input }] };（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  });（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Optional tool (opt‑in)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Optional tools are **never** auto‑enabled. Users must add them to an agent（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+allowlist.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```ts（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+export default function (api) {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  api.registerTool(（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      name: "workflow_tool",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      description: "Run a local workflow",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      parameters: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        type: "object",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        properties: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          pipeline: { type: "string" },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        required: ["pipeline"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      async execute(_id, params) {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        return { content: [{ type: "text", text: params.pipeline }] };（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    { optional: true },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  );（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Enable optional tools in `agents.list[].tools.allow` (or global `tools.allow`):（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  agents: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    list: [（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        id: "main",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        tools: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          allow: [（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            "workflow_tool", // specific tool name（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            "workflow", // plugin id (enables all tools from that plugin)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            "group:plugins", // all plugin tools（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          ],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Other config knobs that affect tool availability:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Allowlists that only name plugin tools are treated as plugin opt-ins; core tools remain（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  enabled unless you also include core tools or groups in the allowlist.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `tools.profile` / `agents.list[].tools.profile` (base allowlist)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `tools.byProvider` / `agents.list[].tools.byProvider` (provider‑specific allow/deny)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `tools.sandbox.tools.*` (sandbox tool policy when sandboxed)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Rules + tips（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Tool names must **not** clash with core tool names; conflicting tools are skipped.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Plugin ids used in allowlists must not clash with core tool names.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Prefer `optional: true` for tools that trigger side effects or require extra（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  binaries/credentials.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

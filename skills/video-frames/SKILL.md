@@ -1,46 +1,46 @@
----
-name: video-frames
-description: Extract frames or short clips from videos using ffmpeg.
-homepage: https://ffmpeg.org
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🎞️",
-        "requires": { "bins": ["ffmpeg"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "ffmpeg",
-              "bins": ["ffmpeg"],
-              "label": "Install ffmpeg (brew)",
-            },
-          ],
-      },
-  }
----
-
-# Video Frames (ffmpeg)
-
-Extract a single frame from a video, or create quick thumbnails for inspection.
-
-## Quick start
-
-First frame:
-
-```bash
-{baseDir}/scripts/frame.sh /path/to/video.mp4 --out /tmp/frame.jpg
-```
-
-At a timestamp:
-
-```bash
-{baseDir}/scripts/frame.sh /path/to/video.mp4 --time 00:00:10 --out /tmp/frame-10s.jpg
-```
-
-## Notes
-
-- Prefer `--time` for “what is happening around here?”.
-- Use a `.jpg` for quick share; use `.png` for crisp UI frames.
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+name: video-frames（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+description: Extract frames or short clips from videos using ffmpeg.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+homepage: https://ffmpeg.org（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+metadata:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    "openclaw":（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "emoji": "🎞️",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "requires": { "bins": ["ffmpeg"] },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "install":（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          [（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "id": "brew",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "kind": "brew",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "formula": "ffmpeg",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "bins": ["ffmpeg"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "label": "Install ffmpeg (brew)",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          ],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  }（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Video Frames (ffmpeg)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Extract a single frame from a video, or create quick thumbnails for inspection.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Quick start（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+First frame:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{baseDir}/scripts/frame.sh /path/to/video.mp4 --out /tmp/frame.jpg（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+At a timestamp:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{baseDir}/scripts/frame.sh /path/to/video.mp4 --time 00:00:10 --out /tmp/frame-10s.jpg（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Notes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Prefer `--time` for “what is happening around here?”.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Use a `.jpg` for quick share; use `.png` for crisp UI frames.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

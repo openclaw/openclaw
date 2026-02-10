@@ -1,144 +1,144 @@
----
-name: slack
-description: Use when you need to control Slack from OpenClaw via the slack tool, including reacting to messages or pinning/unpinning items in Slack channels or DMs.
-metadata: { "openclaw": { "emoji": "💬", "requires": { "config": ["channels.slack"] } } }
----
-
-# Slack Actions
-
-## Overview
-
-Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info. The tool uses the bot token configured for OpenClaw.
-
-## Inputs to collect
-
-- `channelId` and `messageId` (Slack message timestamp, e.g. `1712023032.1234`).
-- For reactions, an `emoji` (Unicode or `:name:`).
-- For message sends, a `to` target (`channel:<id>` or `user:<id>`) and `content`.
-
-Message context lines include `slack message id` and `channel` fields you can reuse directly.
-
-## Actions
-
-### Action groups
-
-| Action group | Default | Notes                  |
-| ------------ | ------- | ---------------------- |
-| reactions    | enabled | React + list reactions |
-| messages     | enabled | Read/send/edit/delete  |
-| pins         | enabled | Pin/unpin/list         |
-| memberInfo   | enabled | Member info            |
-| emojiList    | enabled | Custom emoji list      |
-
-### React to a message
-
-```json
-{
-  "action": "react",
-  "channelId": "C123",
-  "messageId": "1712023032.1234",
-  "emoji": "✅"
-}
-```
-
-### List reactions
-
-```json
-{
-  "action": "reactions",
-  "channelId": "C123",
-  "messageId": "1712023032.1234"
-}
-```
-
-### Send a message
-
-```json
-{
-  "action": "sendMessage",
-  "to": "channel:C123",
-  "content": "Hello from OpenClaw"
-}
-```
-
-### Edit a message
-
-```json
-{
-  "action": "editMessage",
-  "channelId": "C123",
-  "messageId": "1712023032.1234",
-  "content": "Updated text"
-}
-```
-
-### Delete a message
-
-```json
-{
-  "action": "deleteMessage",
-  "channelId": "C123",
-  "messageId": "1712023032.1234"
-}
-```
-
-### Read recent messages
-
-```json
-{
-  "action": "readMessages",
-  "channelId": "C123",
-  "limit": 20
-}
-```
-
-### Pin a message
-
-```json
-{
-  "action": "pinMessage",
-  "channelId": "C123",
-  "messageId": "1712023032.1234"
-}
-```
-
-### Unpin a message
-
-```json
-{
-  "action": "unpinMessage",
-  "channelId": "C123",
-  "messageId": "1712023032.1234"
-}
-```
-
-### List pinned items
-
-```json
-{
-  "action": "listPins",
-  "channelId": "C123"
-}
-```
-
-### Member info
-
-```json
-{
-  "action": "memberInfo",
-  "userId": "U123"
-}
-```
-
-### Emoji list
-
-```json
-{
-  "action": "emojiList"
-}
-```
-
-## Ideas to try
-
-- React with ✅ to mark completed tasks.
-- Pin key decisions or weekly status updates.
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+name: slack（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+description: Use when you need to control Slack from OpenClaw via the slack tool, including reacting to messages or pinning/unpinning items in Slack channels or DMs.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+metadata: { "openclaw": { "emoji": "💬", "requires": { "config": ["channels.slack"] } } }（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Slack Actions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Overview（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info. The tool uses the bot token configured for OpenClaw.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Inputs to collect（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `channelId` and `messageId` (Slack message timestamp, e.g. `1712023032.1234`).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- For reactions, an `emoji` (Unicode or `:name:`).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- For message sends, a `to` target (`channel:<id>` or `user:<id>`) and `content`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Message context lines include `slack message id` and `channel` fields you can reuse directly.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Actions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Action groups（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| Action group | Default | Notes                  |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| ------------ | ------- | ---------------------- |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| reactions    | enabled | React + list reactions |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| messages     | enabled | Read/send/edit/delete  |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| pins         | enabled | Pin/unpin/list         |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| memberInfo   | enabled | Member info            |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| emojiList    | enabled | Custom emoji list      |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### React to a message（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "react",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "channelId": "C123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "messageId": "1712023032.1234",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "emoji": "✅"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### List reactions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "reactions",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "channelId": "C123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "messageId": "1712023032.1234"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Send a message（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "sendMessage",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "to": "channel:C123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "content": "Hello from OpenClaw"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Edit a message（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "editMessage",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "channelId": "C123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "messageId": "1712023032.1234",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "content": "Updated text"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Delete a message（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "deleteMessage",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "channelId": "C123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "messageId": "1712023032.1234"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Read recent messages（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "readMessages",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "channelId": "C123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "limit": 20（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Pin a message（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "pinMessage",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "channelId": "C123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "messageId": "1712023032.1234"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Unpin a message（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "unpinMessage",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "channelId": "C123",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "messageId": "1712023032.1234"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### List pinned items（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "listPins",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "channelId": "C123"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Member info（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "memberInfo",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "userId": "U123"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Emoji list（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  "action": "emojiList"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Ideas to try（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- React with ✅ to mark completed tasks.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Pin key decisions or weekly status updates.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

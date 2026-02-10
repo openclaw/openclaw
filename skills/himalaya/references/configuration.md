@@ -1,184 +1,184 @@
-# Himalaya Configuration Reference
-
-Configuration file location: `~/.config/himalaya/config.toml`
-
-## Minimal IMAP + SMTP Setup
-
-```toml
-[accounts.default]
-email = "user@example.com"
-display-name = "Your Name"
-default = true
-
-# IMAP backend for reading emails
-backend.type = "imap"
-backend.host = "imap.example.com"
-backend.port = 993
-backend.encryption.type = "tls"
-backend.login = "user@example.com"
-backend.auth.type = "password"
-backend.auth.raw = "your-password"
-
-# SMTP backend for sending emails
-message.send.backend.type = "smtp"
-message.send.backend.host = "smtp.example.com"
-message.send.backend.port = 587
-message.send.backend.encryption.type = "start-tls"
-message.send.backend.login = "user@example.com"
-message.send.backend.auth.type = "password"
-message.send.backend.auth.raw = "your-password"
-```
-
-## Password Options
-
-### Raw password (testing only, not recommended)
-
-```toml
-backend.auth.raw = "your-password"
-```
-
-### Password from command (recommended)
-
-```toml
-backend.auth.cmd = "pass show email/imap"
-# backend.auth.cmd = "security find-generic-password -a user@example.com -s imap -w"
-```
-
-### System keyring (requires keyring feature)
-
-```toml
-backend.auth.keyring = "imap-example"
-```
-
-Then run `himalaya account configure <account>` to store the password.
-
-## Gmail Configuration
-
-```toml
-[accounts.gmail]
-email = "you@gmail.com"
-display-name = "Your Name"
-default = true
-
-backend.type = "imap"
-backend.host = "imap.gmail.com"
-backend.port = 993
-backend.encryption.type = "tls"
-backend.login = "you@gmail.com"
-backend.auth.type = "password"
-backend.auth.cmd = "pass show google/app-password"
-
-message.send.backend.type = "smtp"
-message.send.backend.host = "smtp.gmail.com"
-message.send.backend.port = 587
-message.send.backend.encryption.type = "start-tls"
-message.send.backend.login = "you@gmail.com"
-message.send.backend.auth.type = "password"
-message.send.backend.auth.cmd = "pass show google/app-password"
-```
-
-**Note:** Gmail requires an App Password if 2FA is enabled.
-
-## iCloud Configuration
-
-```toml
-[accounts.icloud]
-email = "you@icloud.com"
-display-name = "Your Name"
-
-backend.type = "imap"
-backend.host = "imap.mail.me.com"
-backend.port = 993
-backend.encryption.type = "tls"
-backend.login = "you@icloud.com"
-backend.auth.type = "password"
-backend.auth.cmd = "pass show icloud/app-password"
-
-message.send.backend.type = "smtp"
-message.send.backend.host = "smtp.mail.me.com"
-message.send.backend.port = 587
-message.send.backend.encryption.type = "start-tls"
-message.send.backend.login = "you@icloud.com"
-message.send.backend.auth.type = "password"
-message.send.backend.auth.cmd = "pass show icloud/app-password"
-```
-
-**Note:** Generate an app-specific password at appleid.apple.com
-
-## Folder Aliases
-
-Map custom folder names:
-
-```toml
-[accounts.default.folder.alias]
-inbox = "INBOX"
-sent = "Sent"
-drafts = "Drafts"
-trash = "Trash"
-```
-
-## Multiple Accounts
-
-```toml
-[accounts.personal]
-email = "personal@example.com"
-default = true
-# ... backend config ...
-
-[accounts.work]
-email = "work@company.com"
-# ... backend config ...
-```
-
-Switch accounts with `--account`:
-
-```bash
-himalaya --account work envelope list
-```
-
-## Notmuch Backend (local mail)
-
-```toml
-[accounts.local]
-email = "user@example.com"
-
-backend.type = "notmuch"
-backend.db-path = "~/.mail/.notmuch"
-```
-
-## OAuth2 Authentication (for providers that support it)
-
-```toml
-backend.auth.type = "oauth2"
-backend.auth.client-id = "your-client-id"
-backend.auth.client-secret.cmd = "pass show oauth/client-secret"
-backend.auth.access-token.cmd = "pass show oauth/access-token"
-backend.auth.refresh-token.cmd = "pass show oauth/refresh-token"
-backend.auth.auth-url = "https://provider.com/oauth/authorize"
-backend.auth.token-url = "https://provider.com/oauth/token"
-```
-
-## Additional Options
-
-### Signature
-
-```toml
-[accounts.default]
-signature = "Best regards,\nYour Name"
-signature-delim = "-- \n"
-```
-
-### Downloads directory
-
-```toml
-[accounts.default]
-downloads-dir = "~/Downloads/himalaya"
-```
-
-### Editor for composing
-
-Set via environment variable:
-
-```bash
-export EDITOR="vim"
-```
+# Himalaya Configuration Reference（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Configuration file location: `~/.config/himalaya/config.toml`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Minimal IMAP + SMTP Setup（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+[accounts.default]（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+email = "user@example.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+display-name = "Your Name"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+default = true（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# IMAP backend for reading emails（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.type = "imap"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.host = "imap.example.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.port = 993（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.encryption.type = "tls"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.login = "user@example.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.type = "password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.raw = "your-password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# SMTP backend for sending emails（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.type = "smtp"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.host = "smtp.example.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.port = 587（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.encryption.type = "start-tls"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.login = "user@example.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.auth.type = "password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.auth.raw = "your-password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Password Options（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Raw password (testing only, not recommended)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.raw = "your-password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Password from command (recommended)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.cmd = "pass show email/imap"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# backend.auth.cmd = "security find-generic-password -a user@example.com -s imap -w"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### System keyring (requires keyring feature)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.keyring = "imap-example"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Then run `himalaya account configure <account>` to store the password.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Gmail Configuration（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+[accounts.gmail]（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+email = "you@gmail.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+display-name = "Your Name"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+default = true（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.type = "imap"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.host = "imap.gmail.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.port = 993（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.encryption.type = "tls"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.login = "you@gmail.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.type = "password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.cmd = "pass show google/app-password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.type = "smtp"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.host = "smtp.gmail.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.port = 587（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.encryption.type = "start-tls"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.login = "you@gmail.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.auth.type = "password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.auth.cmd = "pass show google/app-password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Note:** Gmail requires an App Password if 2FA is enabled.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## iCloud Configuration（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+[accounts.icloud]（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+email = "you@icloud.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+display-name = "Your Name"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.type = "imap"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.host = "imap.mail.me.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.port = 993（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.encryption.type = "tls"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.login = "you@icloud.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.type = "password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.cmd = "pass show icloud/app-password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.type = "smtp"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.host = "smtp.mail.me.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.port = 587（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.encryption.type = "start-tls"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.login = "you@icloud.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.auth.type = "password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+message.send.backend.auth.cmd = "pass show icloud/app-password"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+**Note:** Generate an app-specific password at appleid.apple.com（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Folder Aliases（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Map custom folder names:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+[accounts.default.folder.alias]（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+inbox = "INBOX"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+sent = "Sent"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+drafts = "Drafts"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+trash = "Trash"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Multiple Accounts（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+[accounts.personal]（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+email = "personal@example.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+default = true（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# ... backend config ...（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+[accounts.work]（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+email = "work@company.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# ... backend config ...（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Switch accounts with `--account`:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+himalaya --account work envelope list（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Notmuch Backend (local mail)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+[accounts.local]（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+email = "user@example.com"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.type = "notmuch"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.db-path = "~/.mail/.notmuch"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## OAuth2 Authentication (for providers that support it)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.type = "oauth2"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.client-id = "your-client-id"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.client-secret.cmd = "pass show oauth/client-secret"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.access-token.cmd = "pass show oauth/access-token"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.refresh-token.cmd = "pass show oauth/refresh-token"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.auth-url = "https://provider.com/oauth/authorize"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+backend.auth.token-url = "https://provider.com/oauth/token"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Additional Options（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Signature（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+[accounts.default]（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+signature = "Best regards,\nYour Name"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+signature-delim = "-- \n"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Downloads directory（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```toml（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+[accounts.default]（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+downloads-dir = "~/Downloads/himalaya"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Editor for composing（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Set via environment variable:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+export EDITOR="vim"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

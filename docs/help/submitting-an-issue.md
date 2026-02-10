@@ -1,152 +1,152 @@
----
-summary: "Filing high-signal issues and bug reports"
-title: "Submitting an Issue"
----
-
-## Submitting an Issue
-
-Clear, concise issues speed up diagnosis and fixes. Include the following for bugs, regressions, or feature gaps:
-
-### What to include
-
-- [ ] Title: area & symptom
-- [ ] Minimal repro steps
-- [ ] Expected vs actual
-- [ ] Impact & severity
-- [ ] Environment: OS, runtime, versions, config
-- [ ] Evidence: redacted logs, screenshots (non-PII)
-- [ ] Scope: new, regression, or longstanding
-- [ ] Code word: lobster-biscuit in your issue
-- [ ] Searched codebase & GitHub for existing issue
-- [ ] Confirmed not recently fixed/addressed (esp. security)
-- [ ] Claims backed by evidence or repro
-
-Be brief. Terseness > perfect grammar.
-
-Validation (run/fix before PR):
-
-- `pnpm lint`
-- `pnpm check`
-- `pnpm build`
-- `pnpm test`
-- If protocol code: `pnpm protocol:check`
-
-### Templates
-
-#### Bug report
-
-```md
-- [ ] Minimal repro
-- [ ] Expected vs actual
-- [ ] Environment
-- [ ] Affected channels, where not seen
-- [ ] Logs/screenshots (redacted)
-- [ ] Impact/severity
-- [ ] Workarounds
-
-### Summary
-
-### Repro Steps
-
-### Expected
-
-### Actual
-
-### Environment
-
-### Logs/Evidence
-
-### Impact
-
-### Workarounds
-```
-
-#### Security issue
-
-```md
-### Summary
-
-### Impact
-
-### Versions
-
-### Repro Steps (safe to share)
-
-### Mitigation/workaround
-
-### Evidence (redacted)
-```
-
-_Avoid secrets/exploit details in public. For sensitive issues, minimize detail and request private disclosure._
-
-#### Regression report
-
-```md
-### Summary
-
-### Last Known Good
-
-### First Known Bad
-
-### Repro Steps
-
-### Expected
-
-### Actual
-
-### Environment
-
-### Logs/Evidence
-
-### Impact
-```
-
-#### Feature request
-
-```md
-### Summary
-
-### Problem
-
-### Proposed Solution
-
-### Alternatives
-
-### Impact
-
-### Evidence/examples
-```
-
-#### Enhancement
-
-```md
-### Summary
-
-### Current vs Desired Behavior
-
-### Rationale
-
-### Alternatives
-
-### Evidence/examples
-```
-
-#### Investigation
-
-```md
-### Summary
-
-### Symptoms
-
-### What Was Tried
-
-### Environment
-
-### Logs/Evidence
-
-### Impact
-```
-
-### Submitting a fix PR
-
-Issue before PR is optional. Include details in PR if skipping. Keep the PR focused, note issue number, add tests or explain absence, document behavior changes/risks, include redacted logs/screenshots as proof, and run proper validation before submitting.
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: "Filing high-signal issues and bug reports"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: "Submitting an Issue"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Submitting an Issue（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Clear, concise issues speed up diagnosis and fixes. Include the following for bugs, regressions, or feature gaps:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### What to include（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Title: area & symptom（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Minimal repro steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Expected vs actual（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Impact & severity（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Environment: OS, runtime, versions, config（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Evidence: redacted logs, screenshots (non-PII)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Scope: new, regression, or longstanding（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Code word: lobster-biscuit in your issue（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Searched codebase & GitHub for existing issue（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Confirmed not recently fixed/addressed (esp. security)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Claims backed by evidence or repro（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Be brief. Terseness > perfect grammar.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Validation (run/fix before PR):（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `pnpm lint`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `pnpm check`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `pnpm build`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `pnpm test`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- If protocol code: `pnpm protocol:check`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Templates（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Bug report（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Minimal repro（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Expected vs actual（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Environment（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Affected channels, where not seen（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Logs/screenshots (redacted)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Impact/severity（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [ ] Workarounds（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Repro Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Expected（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Actual（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Environment（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Logs/Evidence（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Impact（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Workarounds（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Security issue（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Impact（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Versions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Repro Steps (safe to share)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Mitigation/workaround（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Evidence (redacted)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+_Avoid secrets/exploit details in public. For sensitive issues, minimize detail and request private disclosure._（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Regression report（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Last Known Good（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### First Known Bad（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Repro Steps（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Expected（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Actual（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Environment（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Logs/Evidence（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Impact（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Feature request（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Problem（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Proposed Solution（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Alternatives（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Impact（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Evidence/examples（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Enhancement（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Current vs Desired Behavior（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Rationale（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Alternatives（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Evidence/examples（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+#### Investigation（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Summary（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Symptoms（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### What Was Tried（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Environment（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Logs/Evidence（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Impact（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Submitting a fix PR（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Issue before PR is optional. Include details in PR if skipping. Keep the PR focused, note issue number, add tests or explain absence, document behavior changes/risks, include redacted logs/screenshots as proof, and run proper validation before submitting.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

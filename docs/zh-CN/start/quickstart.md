@@ -1,88 +1,88 @@
----
-read_when:
-  - 你希望以最快的方式从安装到运行一个可用的 Gateway 网关
-summary: 安装 OpenClaw，完成 Gateway 网关新手引导，并配对你的第一个渠道。
-title: 快速开始
-x-i18n:
-  generated_at: "2026-02-04T17:53:21Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 3c5da65996f89913cd115279ae21dcab794eadd14595951b676d8f7864fbbe2d
-  source_path: start/quickstart.md
-  workflow: 15
----
-
-<Note>
-OpenClaw 需要 Node 22 或更新版本。
-</Note>
-
-## 安装
-
-<Tabs>
-  <Tab title="npm">
-    ```bash
-    npm install -g openclaw@latest
-    ```
-  </Tab>
-  <Tab title="pnpm">
-    ```bash
-    pnpm add -g openclaw@latest
-    ```
-  </Tab>
-</Tabs>
-
-## 新手引导并运行 Gateway 网关
-
-<Steps>
-  <Step title="新手引导并安装服务">
-    ```bash
-    openclaw onboard --install-daemon
-    ```
-  </Step>
-  <Step title="配对 WhatsApp">
-    ```bash
-    openclaw channels login
-    ```
-  </Step>
-  <Step title="启动 Gateway 网关">
-    ```bash
-    openclaw gateway --port 18789
-    ```
-  </Step>
-</Steps>
-
-完成新手引导后，Gateway 网关将通过用户服务运行。你也可以使用 `openclaw gateway` 手动启动。
-
-<Info>
-之后在 npm 安装和 git 安装之间切换非常简单。安装另一种方式后，运行
-`openclaw doctor` 即可更新 Gateway 网关服务入口点。
-</Info>
-
-## 从源码安装（开发）
-
-```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
-pnpm install
-pnpm ui:build # 首次运行时会自动安装 UI 依赖
-pnpm build
-openclaw onboard --install-daemon
-```
-
-如果你还没有全局安装，可以在仓库目录中通过 `pnpm openclaw ...` 运行新手引导。
-
-## 多实例快速开始（可选）
-
-```bash
-OPENCLAW_CONFIG_PATH=~/.openclaw/a.json \
-OPENCLAW_STATE_DIR=~/.openclaw-a \
-openclaw gateway --port 19001
-```
-
-## 发送测试消息
-
-需要一个正在运行的 Gateway 网关。
-
-```bash
-openclaw message send --target +15555550123 --message "Hello from OpenClaw"
-```
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你希望以最快的方式从安装到运行一个可用的 Gateway 网关（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: 安装 OpenClaw，完成 Gateway 网关新手引导，并配对你的第一个渠道。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: 快速开始（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+x-i18n:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  generated_at: "2026-02-04T17:53:21Z"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  model: claude-opus-4-5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  provider: pi（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_hash: 3c5da65996f89913cd115279ae21dcab794eadd14595951b676d8f7864fbbe2d（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_path: start/quickstart.md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workflow: 15（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+<Note>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+OpenClaw 需要 Node 22 或更新版本。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+</Note>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 安装（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+<Tabs>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  <Tab title="npm">（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    npm install -g openclaw@latest（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  </Tab>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  <Tab title="pnpm">（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    pnpm add -g openclaw@latest（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  </Tab>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+</Tabs>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 新手引导并运行 Gateway 网关（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+<Steps>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  <Step title="新手引导并安装服务">（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    openclaw onboard --install-daemon（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  </Step>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  <Step title="配对 WhatsApp">（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    openclaw channels login（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  </Step>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  <Step title="启动 Gateway 网关">（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    openclaw gateway --port 18789（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    ```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  </Step>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+</Steps>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+完成新手引导后，Gateway 网关将通过用户服务运行。你也可以使用 `openclaw gateway` 手动启动。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+<Info>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+之后在 npm 安装和 git 安装之间切换非常简单。安装另一种方式后，运行（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+`openclaw doctor` 即可更新 Gateway 网关服务入口点。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+</Info>（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 从源码安装（开发）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+git clone https://github.com/openclaw/openclaw.git（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+cd openclaw（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+pnpm install（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+pnpm ui:build # 首次运行时会自动安装 UI 依赖（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+pnpm build（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw onboard --install-daemon（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+如果你还没有全局安装，可以在仓库目录中通过 `pnpm openclaw ...` 运行新手引导。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 多实例快速开始（可选）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+OPENCLAW_CONFIG_PATH=~/.openclaw/a.json \（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+OPENCLAW_STATE_DIR=~/.openclaw-a \（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw gateway --port 19001（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 发送测试消息（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+需要一个正在运行的 Gateway 网关。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw message send --target +15555550123 --message "Hello from OpenClaw"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

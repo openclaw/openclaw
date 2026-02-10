@@ -1,48 +1,48 @@
----
-read_when:
-  - 你想使用 Brave Search 进行 web_search
-  - 你需要 BRAVE_API_KEY 或套餐详情
-summary: 用于 web_search 的 Brave Search API 设置
-title: Brave Search
-x-i18n:
-  generated_at: "2026-02-03T07:43:09Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: cdcb037b092b8a10609f02acf062b4164cb826ac22bdb3fb2909c842a1405341
-  source_path: brave-search.md
-  workflow: 15
----
-
-# Brave Search API
-
-OpenClaw 使用 Brave Search 作为 `web_search` 的默认提供商。
-
-## 获取 API 密钥
-
-1. 在 https://brave.com/search/api/ 创建 Brave Search API 账户
-2. 在控制面板中，选择 **Data for Search** 套餐并生成 API 密钥。
-3. 将密钥存储在配置中（推荐），或在 Gateway 网关环境中设置 `BRAVE_API_KEY`。
-
-## 配置示例
-
-```json5
-{
-  tools: {
-    web: {
-      search: {
-        provider: "brave",
-        apiKey: "BRAVE_API_KEY_HERE",
-        maxResults: 5,
-        timeoutSeconds: 30,
-      },
-    },
-  },
-}
-```
-
-## 注意事项
-
-- Data for AI 套餐与 `web_search` **不**兼容。
-- Brave 提供免费层级和付费套餐；请查看 Brave API 门户了解当前限制。
-
-请参阅 [Web 工具](/tools/web) 了解完整的 web_search 配置。
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你想使用 Brave Search 进行 web_search（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - 你需要 BRAVE_API_KEY 或套餐详情（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: 用于 web_search 的 Brave Search API 设置（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: Brave Search（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+x-i18n:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  generated_at: "2026-02-03T07:43:09Z"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  model: claude-opus-4-5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  provider: pi（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_hash: cdcb037b092b8a10609f02acf062b4164cb826ac22bdb3fb2909c842a1405341（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  source_path: brave-search.md（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  workflow: 15（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Brave Search API（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+OpenClaw 使用 Brave Search 作为 `web_search` 的默认提供商。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 获取 API 密钥（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+1. 在 https://brave.com/search/api/ 创建 Brave Search API 账户（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2. 在控制面板中，选择 **Data for Search** 套餐并生成 API 密钥。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+3. 将密钥存储在配置中（推荐），或在 Gateway 网关环境中设置 `BRAVE_API_KEY`。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 配置示例（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```json5（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+{（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  tools: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    web: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      search: {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        provider: "brave",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        apiKey: "BRAVE_API_KEY_HERE",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        maxResults: 5,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        timeoutSeconds: 30,（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+}（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 注意事项（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Data for AI 套餐与 `web_search` **不**兼容。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Brave 提供免费层级和付费套餐；请查看 Brave API 门户了解当前限制。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+请参阅 [Web 工具](/tools/web) 了解完整的 web_search 配置。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

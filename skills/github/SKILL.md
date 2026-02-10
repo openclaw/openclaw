@@ -1,77 +1,77 @@
----
-name: github
-description: "Interact with GitHub using the `gh` CLI. Use `gh issue`, `gh pr`, `gh run`, and `gh api` for issues, PRs, CI runs, and advanced queries."
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🐙",
-        "requires": { "bins": ["gh"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "gh",
-              "bins": ["gh"],
-              "label": "Install GitHub CLI (brew)",
-            },
-            {
-              "id": "apt",
-              "kind": "apt",
-              "package": "gh",
-              "bins": ["gh"],
-              "label": "Install GitHub CLI (apt)",
-            },
-          ],
-      },
-  }
----
-
-# GitHub Skill
-
-Use the `gh` CLI to interact with GitHub. Always specify `--repo owner/repo` when not in a git directory, or use URLs directly.
-
-## Pull Requests
-
-Check CI status on a PR:
-
-```bash
-gh pr checks 55 --repo owner/repo
-```
-
-List recent workflow runs:
-
-```bash
-gh run list --repo owner/repo --limit 10
-```
-
-View a run and see which steps failed:
-
-```bash
-gh run view <run-id> --repo owner/repo
-```
-
-View logs for failed steps only:
-
-```bash
-gh run view <run-id> --repo owner/repo --log-failed
-```
-
-## API for Advanced Queries
-
-The `gh api` command is useful for accessing data not available through other subcommands.
-
-Get PR with specific fields:
-
-```bash
-gh api repos/owner/repo/pulls/55 --jq '.title, .state, .user.login'
-```
-
-## JSON Output
-
-Most commands support `--json` for structured output. You can use `--jq` to filter:
-
-```bash
-gh issue list --repo owner/repo --json number,title --jq '.[] | "\(.number): \(.title)"'
-```
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+name: github（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+description: "Interact with GitHub using the `gh` CLI. Use `gh issue`, `gh pr`, `gh run`, and `gh api` for issues, PRs, CI runs, and advanced queries."（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+metadata:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+    "openclaw":（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "emoji": "🐙",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "requires": { "bins": ["gh"] },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+        "install":（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          [（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "id": "brew",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "kind": "brew",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "formula": "gh",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "bins": ["gh"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "label": "Install GitHub CLI (brew)",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            {（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "id": "apt",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "kind": "apt",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "package": "gh",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "bins": ["gh"],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+              "label": "Install GitHub CLI (apt)",（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+            },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+          ],（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+      },（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  }（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# GitHub Skill（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Use the `gh` CLI to interact with GitHub. Always specify `--repo owner/repo` when not in a git directory, or use URLs directly.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Pull Requests（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Check CI status on a PR:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+gh pr checks 55 --repo owner/repo（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+List recent workflow runs:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+gh run list --repo owner/repo --limit 10（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+View a run and see which steps failed:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+gh run view <run-id> --repo owner/repo（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+View logs for failed steps only:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+gh run view <run-id> --repo owner/repo --log-failed（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## API for Advanced Queries（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+The `gh api` command is useful for accessing data not available through other subcommands.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Get PR with specific fields:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+gh api repos/owner/repo/pulls/55 --jq '.title, .state, .user.login'（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## JSON Output（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Most commands support `--json` for structured output. You can use `--jq` to filter:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+gh issue list --repo owner/repo --json number,title --jq '.[] | "\(.number): \(.title)"'（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

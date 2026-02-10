@@ -1,192 +1,192 @@
----
-summary: "Move (migrate) a OpenClaw install from one machine to another"
-read_when:
-  - You are moving OpenClaw to a new laptop/server
-  - You want to preserve sessions, auth, and channel logins (WhatsApp, etc.)
-title: "Migration Guide"
----
-
-# Migrating OpenClaw to a new machine
-
-This guide migrates a OpenClaw Gateway from one machine to another **without redoing onboarding**.
-
-The migration is simple conceptually:
-
-- Copy the **state directory** (`$OPENCLAW_STATE_DIR`, default: `~/.openclaw/`) — this includes config, auth, sessions, and channel state.
-- Copy your **workspace** (`~/.openclaw/workspace/` by default) — this includes your agent files (memory, prompts, etc.).
-
-But there are common footguns around **profiles**, **permissions**, and **partial copies**.
-
-## Before you start (what you are migrating)
-
-### 1) Identify your state directory
-
-Most installs use the default:
-
-- **State dir:** `~/.openclaw/`
-
-But it may be different if you use:
-
-- `--profile <name>` (often becomes `~/.openclaw-<profile>/`)
-- `OPENCLAW_STATE_DIR=/some/path`
-
-If you’re not sure, run on the **old** machine:
-
-```bash
-openclaw status
-```
-
-Look for mentions of `OPENCLAW_STATE_DIR` / profile in the output. If you run multiple gateways, repeat for each profile.
-
-### 2) Identify your workspace
-
-Common defaults:
-
-- `~/.openclaw/workspace/` (recommended workspace)
-- a custom folder you created
-
-Your workspace is where files like `MEMORY.md`, `USER.md`, and `memory/*.md` live.
-
-### 3) Understand what you will preserve
-
-If you copy **both** the state dir and workspace, you keep:
-
-- Gateway configuration (`openclaw.json`)
-- Auth profiles / API keys / OAuth tokens
-- Session history + agent state
-- Channel state (e.g. WhatsApp login/session)
-- Your workspace files (memory, skills notes, etc.)
-
-If you copy **only** the workspace (e.g., via Git), you do **not** preserve:
-
-- sessions
-- credentials
-- channel logins
-
-Those live under `$OPENCLAW_STATE_DIR`.
-
-## Migration steps (recommended)
-
-### Step 0 — Make a backup (old machine)
-
-On the **old** machine, stop the gateway first so files aren’t changing mid-copy:
-
-```bash
-openclaw gateway stop
-```
-
-(Optional but recommended) archive the state dir and workspace:
-
-```bash
-# Adjust paths if you use a profile or custom locations
-cd ~
-tar -czf openclaw-state.tgz .openclaw
-
-tar -czf openclaw-workspace.tgz .openclaw/workspace
-```
-
-If you have multiple profiles/state dirs (e.g. `~/.openclaw-main`, `~/.openclaw-work`), archive each.
-
-### Step 1 — Install OpenClaw on the new machine
-
-On the **new** machine, install the CLI (and Node if needed):
-
-- See: [Install](/install)
-
-At this stage, it’s OK if onboarding creates a fresh `~/.openclaw/` — you will overwrite it in the next step.
-
-### Step 2 — Copy the state dir + workspace to the new machine
-
-Copy **both**:
-
-- `$OPENCLAW_STATE_DIR` (default `~/.openclaw/`)
-- your workspace (default `~/.openclaw/workspace/`)
-
-Common approaches:
-
-- `scp` the tarballs and extract
-- `rsync -a` over SSH
-- external drive
-
-After copying, ensure:
-
-- Hidden directories were included (e.g. `.openclaw/`)
-- File ownership is correct for the user running the gateway
-
-### Step 3 — Run Doctor (migrations + service repair)
-
-On the **new** machine:
-
-```bash
-openclaw doctor
-```
-
-Doctor is the “safe boring” command. It repairs services, applies config migrations, and warns about mismatches.
-
-Then:
-
-```bash
-openclaw gateway restart
-openclaw status
-```
-
-## Common footguns (and how to avoid them)
-
-### Footgun: profile / state-dir mismatch
-
-If you ran the old gateway with a profile (or `OPENCLAW_STATE_DIR`), and the new gateway uses a different one, you’ll see symptoms like:
-
-- config changes not taking effect
-- channels missing / logged out
-- empty session history
-
-Fix: run the gateway/service using the **same** profile/state dir you migrated, then rerun:
-
-```bash
-openclaw doctor
-```
-
-### Footgun: copying only `openclaw.json`
-
-`openclaw.json` is not enough. Many providers store state under:
-
-- `$OPENCLAW_STATE_DIR/credentials/`
-- `$OPENCLAW_STATE_DIR/agents/<agentId>/...`
-
-Always migrate the entire `$OPENCLAW_STATE_DIR` folder.
-
-### Footgun: permissions / ownership
-
-If you copied as root or changed users, the gateway may fail to read credentials/sessions.
-
-Fix: ensure the state dir + workspace are owned by the user running the gateway.
-
-### Footgun: migrating between remote/local modes
-
-- If your UI (WebUI/TUI) points at a **remote** gateway, the remote host owns the session store + workspace.
-- Migrating your laptop won’t move the remote gateway’s state.
-
-If you’re in remote mode, migrate the **gateway host**.
-
-### Footgun: secrets in backups
-
-`$OPENCLAW_STATE_DIR` contains secrets (API keys, OAuth tokens, WhatsApp creds). Treat backups like production secrets:
-
-- store encrypted
-- avoid sharing over insecure channels
-- rotate keys if you suspect exposure
-
-## Verification checklist
-
-On the new machine, confirm:
-
-- `openclaw status` shows the gateway running
-- Your channels are still connected (e.g. WhatsApp doesn’t require re-pair)
-- The dashboard opens and shows existing sessions
-- Your workspace files (memory, configs) are present
-
-## Related
-
-- [Doctor](/gateway/doctor)
-- [Gateway troubleshooting](/gateway/troubleshooting)
-- [Where does OpenClaw store its data?](/help/faq#where-does-openclaw-store-its-data)
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+summary: "Move (migrate) a OpenClaw install from one machine to another"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+read_when:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - You are moving OpenClaw to a new laptop/server（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+  - You want to preserve sessions, auth, and channel logins (WhatsApp, etc.)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+title: "Migration Guide"（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Migrating OpenClaw to a new machine（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+This guide migrates a OpenClaw Gateway from one machine to another **without redoing onboarding**.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+The migration is simple conceptually:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Copy the **state directory** (`$OPENCLAW_STATE_DIR`, default: `~/.openclaw/`) — this includes config, auth, sessions, and channel state.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Copy your **workspace** (`~/.openclaw/workspace/` by default) — this includes your agent files (memory, prompts, etc.).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+But there are common footguns around **profiles**, **permissions**, and **partial copies**.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Before you start (what you are migrating)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 1) Identify your state directory（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Most installs use the default:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- **State dir:** `~/.openclaw/`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+But it may be different if you use:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `--profile <name>` (often becomes `~/.openclaw-<profile>/`)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `OPENCLAW_STATE_DIR=/some/path`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you’re not sure, run on the **old** machine:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw status（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Look for mentions of `OPENCLAW_STATE_DIR` / profile in the output. If you run multiple gateways, repeat for each profile.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 2) Identify your workspace（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Common defaults:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `~/.openclaw/workspace/` (recommended workspace)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- a custom folder you created（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Your workspace is where files like `MEMORY.md`, `USER.md`, and `memory/*.md` live.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### 3) Understand what you will preserve（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you copy **both** the state dir and workspace, you keep:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Gateway configuration (`openclaw.json`)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Auth profiles / API keys / OAuth tokens（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Session history + agent state（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Channel state (e.g. WhatsApp login/session)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Your workspace files (memory, skills notes, etc.)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you copy **only** the workspace (e.g., via Git), you do **not** preserve:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- sessions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- credentials（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- channel logins（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Those live under `$OPENCLAW_STATE_DIR`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Migration steps (recommended)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Step 0 — Make a backup (old machine)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+On the **old** machine, stop the gateway first so files aren’t changing mid-copy:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw gateway stop（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+(Optional but recommended) archive the state dir and workspace:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+# Adjust paths if you use a profile or custom locations（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+cd ~（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+tar -czf openclaw-state.tgz .openclaw（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+tar -czf openclaw-workspace.tgz .openclaw/workspace（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you have multiple profiles/state dirs (e.g. `~/.openclaw-main`, `~/.openclaw-work`), archive each.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Step 1 — Install OpenClaw on the new machine（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+On the **new** machine, install the CLI (and Node if needed):（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- See: [Install](/install)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+At this stage, it’s OK if onboarding creates a fresh `~/.openclaw/` — you will overwrite it in the next step.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Step 2 — Copy the state dir + workspace to the new machine（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Copy **both**:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `$OPENCLAW_STATE_DIR` (default `~/.openclaw/`)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- your workspace (default `~/.openclaw/workspace/`)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Common approaches:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `scp` the tarballs and extract（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `rsync -a` over SSH（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- external drive（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+After copying, ensure:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Hidden directories were included (e.g. `.openclaw/`)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- File ownership is correct for the user running the gateway（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Step 3 — Run Doctor (migrations + service repair)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+On the **new** machine:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw doctor（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Doctor is the “safe boring” command. It repairs services, applies config migrations, and warns about mismatches.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Then:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw gateway restart（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw status（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Common footguns (and how to avoid them)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Footgun: profile / state-dir mismatch（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you ran the old gateway with a profile (or `OPENCLAW_STATE_DIR`), and the new gateway uses a different one, you’ll see symptoms like:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- config changes not taking effect（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- channels missing / logged out（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- empty session history（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Fix: run the gateway/service using the **same** profile/state dir you migrated, then rerun:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```bash（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+openclaw doctor（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Footgun: copying only `openclaw.json`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+`openclaw.json` is not enough. Many providers store state under:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `$OPENCLAW_STATE_DIR/credentials/`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `$OPENCLAW_STATE_DIR/agents/<agentId>/...`（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Always migrate the entire `$OPENCLAW_STATE_DIR` folder.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Footgun: permissions / ownership（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you copied as root or changed users, the gateway may fail to read credentials/sessions.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Fix: ensure the state dir + workspace are owned by the user running the gateway.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Footgun: migrating between remote/local modes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- If your UI (WebUI/TUI) points at a **remote** gateway, the remote host owns the session store + workspace.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Migrating your laptop won’t move the remote gateway’s state.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+If you’re in remote mode, migrate the **gateway host**.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+### Footgun: secrets in backups（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+`$OPENCLAW_STATE_DIR` contains secrets (API keys, OAuth tokens, WhatsApp creds). Treat backups like production secrets:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- store encrypted（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- avoid sharing over insecure channels（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- rotate keys if you suspect exposure（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Verification checklist（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+On the new machine, confirm:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `openclaw status` shows the gateway running（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Your channels are still connected (e.g. WhatsApp doesn’t require re-pair)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- The dashboard opens and shows existing sessions（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Your workspace files (memory, configs) are present（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Related（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Doctor](/gateway/doctor)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Gateway troubleshooting](/gateway/troubleshooting)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- [Where does OpenClaw store its data?](/help/faq#where-does-openclaw-store-its-data)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
