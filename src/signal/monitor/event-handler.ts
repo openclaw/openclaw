@@ -54,6 +54,7 @@ import {
   checkRequireMention,
   loadSignalMediaCache,
   preCacheGroupMedia,
+  hasNativeSignalMention,
   stripMentionPlaceholders,
   type SignalEnhancementDeps,
 } from "./signal-enhancements.js";
@@ -568,7 +569,10 @@ export function createSignalEventHandler(
       },
     });
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
-    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    // Detect both text-based mention patterns AND Signal native @mentions
+    const nativeMention = isGroup && eDeps && hasNativeSignalMention(dataMessage, deps.account);
+    const wasMentioned =
+      isGroup && (matchesMentionPatterns(messageText, mentionRegexes) || Boolean(nativeMention));
     const requireMention =
       isGroup &&
       resolveChannelGroupRequireMention({

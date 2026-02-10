@@ -674,3 +674,33 @@ export async function buildEnhancedMessage(params: {
 export function stripMentionPlaceholders(text: string): string {
   return text.replace(/\uFFFC/g, "").trim();
 }
+
+/**
+ * Check if the bot is natively @mentioned in a Signal message.
+ *
+ * Signal native mentions insert U+FFFC in the message text and store the
+ * mentioned person's UUID / phone number in `dataMessage.mentions[]`.
+ * Text-based `matchesMentionPatterns` cannot detect these because the
+ * name is replaced by U+FFFC.  This helper inspects the structured
+ * mention data instead.
+ */
+export function hasNativeSignalMention(
+  dataMessage: SignalDataMessage,
+  botAccount: string | null | undefined,
+): boolean {
+  if (!botAccount) {
+    return false;
+  }
+  const enhanced = asEnhanced(dataMessage);
+  if (!enhanced?.mentions?.length) {
+    return false;
+  }
+  // Normalize bot account for comparison (strip non-digit prefixes etc.)
+  const normalizedBot = botAccount.replace(/[^+\d]/g, "");
+  return enhanced.mentions.some((m) => {
+    if (m.number) {
+      return m.number.replace(/[^+\d]/g, "") === normalizedBot;
+    }
+    return false;
+  });
+}
