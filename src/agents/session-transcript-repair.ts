@@ -70,6 +70,42 @@ function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>)
   return null;
 }
 
+// NEW: Remove orphaned tool_result blocks from user message content
+function removeOrphanedToolResultsFromUserMessage(
+  msg: Extract<AgentMessage, { role: "user" }>,
+  validToolUseIds: Set<string>,
+): { message: AgentMessage; removedCount: number } {
+  const content = msg.content;
+  if (!Array.isArray(content)) {
+    return { message: msg, removedCount: 0 };
+  }
+
+  const filteredContent = [];
+  let removedCount = 0;
+
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      filteredContent.push(block);
+      continue;
+    }
+    const rec = block as { type?: unknown; tool_use_id?: unknown };
+    if (rec.type === "tool_result" && typeof rec.tool_use_id === "string") {
+      if (validToolUseIds.has(rec.tool_use_id)) {
+        filteredContent.push(block);
+      } else {
+        removedCount++;
+      }
+    } else {
+      filteredContent.push(block);
+    }
+  }
+
+  if (removedCount > 0) {
+    return { message: { ...msg, content: filteredContent }, removedCount };
+  }
+  return { message: msg, removedCount: 0 };
+}
+
 function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
@@ -170,6 +206,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
   // - moving matching toolResult messages directly after their assistant toolCall turn
   // - inserting synthetic error toolResults for missing ids
   // - dropping duplicate toolResults for the same id (anywhere in the transcript)
+  // - NEW: removing orphaned tool_result blocks from user message content arrays
   const out: AgentMessage[] = [];
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const seenToolResultIds = new Set<string>();
@@ -177,6 +214,28 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
   let droppedOrphanCount = 0;
   let moved = false;
   let changed = false;
+
+  // First pass: collect all valid tool_use IDs from assistant messages
+  const validToolUseIds = new Set<string>();
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    if ((msg as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    const stopReason = (assistant as { stopReason?: string }).stopReason;
+    if (stopReason === "error" || stopReason === "aborted") {
+      continue;
+    }
+
+    const toolCalls = extractToolCallsFromAssistant(assistant);
+    for (const call of toolCalls) {
+      validToolUseIds.add(call.id);
+    }
+  }
 
   const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);
@@ -199,6 +258,22 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     const role = (msg as { role?: unknown }).role;
+
+    // NEW: Handle user messages with tool_result blocks
+    if (role === "user") {
+      const userMsg = msg as Extract<AgentMessage, { role: "user" }>;
+      const { message: cleanedMsg, removedCount } = removeOrphanedToolResultsFromUserMessage(
+        userMsg,
+        validToolUseIds,
+      );
+      if (removedCount > 0) {
+        droppedOrphanCount += removedCount;
+        changed = true;
+      }
+      out.push(cleanedMsg);
+      continue;
+    }
+
     if (role !== "assistant") {
       // Tool results must only appear directly after the matching assistant tool call turn.
       // Any "free-floating" toolResult entries in session history can make strict providers
