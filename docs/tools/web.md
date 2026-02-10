@@ -37,7 +37,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 | **Perplexity**      | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
 | **baidu**           | Fast, structured results, high qulaity       | Traditional search results               | `BAIDU_SEARCH_API_KEY`                       |
 
-See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
+See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) and [Baidu Search](/baidu-search) for provider-specific details.
 
 Set the provider in config:
 
