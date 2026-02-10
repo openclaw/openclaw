@@ -57,6 +57,7 @@ export const SessionSchema = z
         z.literal("per-account-channel-peer"),
       ])
       .optional(),
+    groupScope: z.union([z.literal("main"), z.literal("per-peer")]).optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),

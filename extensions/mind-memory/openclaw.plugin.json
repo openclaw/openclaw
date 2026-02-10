@@ -44,6 +44,5 @@
   },
   "openclaw": {
     "extensions": ["../../dist/plugins/mind-memory/index.js"]
-  },
-  "skills": ["./skills/recall"]
+  }
 }

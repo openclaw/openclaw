@@ -4,6 +4,7 @@ export type ReplyMode = "text" | "command";
 export type TypingMode = "never" | "instant" | "thinking" | "message";
 export type SessionScope = "per-sender" | "global";
 export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+export type GroupScope = "main" | "per-peer";
 export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
@@ -82,6 +83,8 @@ export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
   dmScope?: DmScope;
+  /** Group/Channel session scoping (default: "per-peer"). */
+  groupScope?: GroupScope;
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];

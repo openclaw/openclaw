@@ -435,3 +435,31 @@ describe("backward compatibility: peer.kind dm → direct", () => {
     expect(route.matchedBy).toBe("binding.peer");
   });
 });
+
+describe("groupScope", () => {
+  test("groupScope=main collapses group sessions into the main agent session", () => {
+    const cfg: OpenClawConfig = {
+      session: { groupScope: "main" },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "tasks",
+      peer: { kind: "group", id: "-10012345678" },
+    });
+    expect(route.sessionKey).toBe("agent:main:main");
+  });
+
+  test("groupScope=per-peer isolates group sessions (default behavior)", () => {
+    const cfg: OpenClawConfig = {
+      session: { groupScope: "per-peer" },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "tasks",
+      peer: { kind: "group", id: "-10012345678" },
+    });
+    expect(route.sessionKey).toBe("agent:main:telegram:group:-10012345678");
+  });
+});

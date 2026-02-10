@@ -1,5 +1,0 @@
-
-> openclaw@2026.2.6-3 lint /Users/johju/Documents/dev/mindbot
-> oxlint --type-aware --format JSON
-
- ELIFECYCLE  Command failed with exit code 1.
