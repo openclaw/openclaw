@@ -172,6 +172,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
   // - dropping duplicate toolResults for the same id (anywhere in the transcript)
   const out: AgentMessage[] = [];
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
+  const seenToolUseIds = new Set<string>();
   const seenToolResultIds = new Set<string>();
   let droppedDuplicateCount = 0;
   let droppedOrphanCount = 0;
@@ -191,6 +192,18 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     out.push(msg);
   };
 
+  // First pass: collect all valid tool_use IDs from assistant messages
+  for (const msg of messages) {
+    if ((msg as { role?: unknown }).role === "assistant") {
+      const toolCalls = extractToolCallsFromAssistant(
+        msg as Extract<AgentMessage, { role: "assistant" }>,
+      );
+      for (const call of toolCalls) {
+        seenToolUseIds.add(call.id);
+      }
+    }
+  }
+
   for (let i = 0; i < messages.length; i += 1) {
     const msg = messages[i];
     if (!msg || typeof msg !== "object") {
@@ -199,6 +212,38 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     const role = (msg as { role?: unknown }).role;
+
+    // Handle user messages that might contain embedded toolResult blocks
+    if (role === "user") {
+      const userMsg = msg as { content?: unknown; role: "user" };
+      if (Array.isArray(userMsg.content)) {
+        const newContent: unknown[] = [];
+        let contentChanged = false;
+
+        for (const block of userMsg.content) {
+          // Check if this is a toolResult block
+          if (block && typeof block === "object" && (block as any).type === "toolResult") {
+            const toolCallId = (block as any).toolCallId || (block as any).toolUseId;
+            // If we haven't seen the corresponding tool_use, drop this block
+            if (typeof toolCallId === "string" && !seenToolUseIds.has(toolCallId)) {
+              droppedOrphanCount += 1;
+              contentChanged = true;
+              changed = true;
+              continue;
+            }
+          }
+          newContent.push(block);
+        }
+
+        if (contentChanged) {
+          out.push({ ...userMsg, content: newContent } as any);
+          continue;
+        }
+      }
+      out.push(msg);
+      continue;
+    }
+
     if (role !== "assistant") {
       // Tool results must only appear directly after the matching assistant tool call turn.
       // Any "free-floating" toolResult entries in session history can make strict providers
@@ -206,6 +251,13 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
       if (role !== "toolResult") {
         out.push(msg);
       } else {
+        // Check if this toolResult matches a valid tool_use we've seen
+        // If it does, we might want to keep it?
+        // Logic below handles "floating" toolResults by calculating if they are "next" to assistant.
+        // But if we are here, we are NOT assistant.
+        // We generally drop floating toolResults unless they are handled by the assistant look-ahead.
+        // However, the look-ahead only grabs results following the assistant.
+        // So any toolResult reaching here is indeed free-floating/orphaned.
         droppedOrphanCount += 1;
         changed = true;
       }
