@@ -58,7 +58,8 @@
     "defaultProfile": "docker",
     "profiles": {
       "docker": {
-        "cdpUrl": "http://openclaw-browser:9222"
+        "cdpUrl": "http://host.docker.internal:9222",
+        "color": "#00AA00"
       }
     }
   },
