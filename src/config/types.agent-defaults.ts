@@ -132,6 +132,8 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Anthropic prompt caching configuration. */
+  promptCaching?: AgentPromptCachingConfig;
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
@@ -254,6 +256,11 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+};
+
+export type AgentPromptCachingConfig = {
+  /** Enable Anthropic prompt caching breakpoints (default: true). */
+  enabled?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

@@ -105,6 +105,12 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    promptCaching: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),

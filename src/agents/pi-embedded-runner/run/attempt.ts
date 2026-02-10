@@ -44,6 +44,7 @@ import {
 } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools } from "../../pi-tools.js";
+import { createPromptCachingWrapper, resolvePromptCachingConfig } from "../../prompt-caching.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -524,6 +525,15 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
       );
+
+      // Apply Anthropic prompt caching breakpoints
+      const promptCachingConfig = resolvePromptCachingConfig(params.config);
+      if (promptCachingConfig.enabled) {
+        activeSession.agent.streamFn = createPromptCachingWrapper(
+          activeSession.agent.streamFn,
+          promptCachingConfig,
+        );
+      }
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
