@@ -605,7 +605,7 @@ export const SignalAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
-    verified: ChannelVerifiedSchema.default(true),
+    verified: ChannelVerifiedSchema,
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
@@ -768,7 +768,7 @@ export const IMessageAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
-    verified: ChannelVerifiedSchema.default(true),
+    verified: ChannelVerifiedSchema,
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),

@@ -17,7 +17,7 @@ export const WhatsAppAccountSchema = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
-    verified: ChannelVerifiedSchema.default(true),
+    verified: ChannelVerifiedSchema,
     markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
     enabled: z.boolean().optional(),

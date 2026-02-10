@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import { resolveChannelDMToolsPolicy } from "./group-policy.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 describe("resolveChannelDMToolsPolicy", () => {
   it("applies sender-specific DM policies on verified channels", () => {
@@ -65,6 +66,36 @@ describe("resolveChannelDMToolsPolicy", () => {
         senderE164: "+14155550101",
       }),
     ).toEqual({ deny: ["*"] });
+  });
+
+  it("inherits channel-level verified setting when account-level verified is omitted", () => {
+    const cfg = OpenClawSchema.parse({
+      channels: {
+        whatsapp: {
+          verified: false,
+          toolsBySender: {
+            "*": { deny: ["*"] },
+          },
+          accounts: {
+            work: {
+              toolsBySender: {
+                "+14155550101": { allow: ["exec"] },
+                "*": { allow: ["read"] },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      resolveChannelDMToolsPolicy({
+        cfg,
+        channel: "whatsapp",
+        accountId: "work",
+        senderE164: "+14155550101",
+      }),
+    ).toEqual({ allow: ["read"] });
   });
 
   it("uses account-level DM policies and verified overrides", () => {
