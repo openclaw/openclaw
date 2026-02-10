@@ -178,26 +178,127 @@ export function resolveContextWindowInfo(params: {
   };
 }
 
+/**
+ * Result of evaluating context window guard conditions.
+ * Includes intelligent warnings and recommendations.
+ */
 export type ContextWindowGuardResult = ContextWindowInfo & {
+  /** Whether a warning should be shown to the user */
   shouldWarn: boolean;
+  /** Whether operations should be blocked due to insufficient context */
   shouldBlock: boolean;
+  /** Urgency level based on available space */
+  urgencyLevel: "ok" | "notice" | "warning" | "critical";
+  /** Recommended maximum input tokens for safe operation */
+  recommendedMaxInput: number;
+  /** Recommended minimum free space to maintain */
+  recommendedFreeSpace: number;
+  /** Human-readable recommendation message */
+  recommendation: string;
 };
 
+/**
+ * Evaluates context window constraints and returns guard result with recommendations.
+ * Provides intelligent warnings based on the configured thresholds.
+ *
+ * @param params - Evaluation parameters
+ * @returns ContextWindowGuardResult with warnings and recommendations
+ */
 export function evaluateContextWindowGuard(params: {
   info: ContextWindowInfo;
   warnBelowTokens?: number;
   hardMinTokens?: number;
+  usedTokens?: number;
 }): ContextWindowGuardResult {
+  // Validate and normalize thresholds
   const warnBelow = Math.max(
     1,
-    Math.floor(params.warnBelowTokens ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS),
+    Math.floor(normalizePositiveInt(params.warnBelowTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS),
   );
-  const hardMin = Math.max(1, Math.floor(params.hardMinTokens ?? CONTEXT_WINDOW_HARD_MIN_TOKENS));
-  const tokens = Math.max(0, Math.floor(params.info.tokens));
+  const hardMin = Math.max(
+    1,
+    Math.floor(normalizePositiveInt(params.hardMinTokens) ?? CONTEXT_WINDOW_HARD_MIN_TOKENS),
+  );
+
+  // Ensure tokens are valid
+  const tokens = Math.max(0, Math.floor(normalizePositiveInt(params.info.tokens) ?? 0));
+  const usedTokens = Math.max(0, normalizePositiveInt(params.usedTokens) ?? 0);
+
+  // Calculate urgency based on available space
+  const urgencyLevel = calculateSpaceUrgency(usedTokens, tokens);
+
+  // Determine warnings and blocks
+  const shouldWarn = tokens > 0 && tokens < warnBelow;
+  const shouldBlock = tokens > 0 && tokens < hardMin;
+
+  // Calculate recommendations
+  const recommendedMaxInput = calculateSafeInputSize(tokens);
+  const recommendedFreeSpace = Math.floor(tokens * MIN_FREE_SPACE_RATIO);
+
+  // Generate human-readable recommendation
+  const recommendation = generateRecommendation({
+    tokens,
+    usedTokens,
+    shouldBlock,
+    shouldWarn,
+    urgencyLevel,
+    recommendedMaxInput,
+    recommendedFreeSpace,
+  });
+
   return {
     ...params.info,
     tokens,
-    shouldWarn: tokens > 0 && tokens < warnBelow,
-    shouldBlock: tokens > 0 && tokens < hardMin,
+    shouldWarn,
+    shouldBlock,
+    urgencyLevel,
+    recommendedMaxInput,
+    recommendedFreeSpace,
+    recommendation,
   };
+}
+
+/**
+ * Generates a human-readable recommendation message based on context window status.
+ */
+function generateRecommendation(params: {
+  tokens: number;
+  usedTokens: number;
+  shouldBlock: boolean;
+  shouldWarn: boolean;
+  urgencyLevel: string;
+  recommendedMaxInput: number;
+  recommendedFreeSpace: number;
+}): string {
+  if (params.shouldBlock) {
+    return (
+      `Context window (${params.tokens.toLocaleString()} tokens) is below minimum ` +
+      `(${CONTEXT_WINDOW_HARD_MIN_TOKENS.toLocaleString()} tokens). ` +
+      `Operation blocked. Consider using a model with larger context window.`
+    );
+  }
+
+  if (params.urgencyLevel === "critical") {
+    return (
+      `Context nearly full (${params.usedTokens.toLocaleString()}/${params.tokens.toLocaleString()} tokens). ` +
+      `Immediate action recommended: compact history or use larger context model.`
+    );
+  }
+
+  if (params.shouldWarn) {
+    return (
+      `Context window (${params.tokens.toLocaleString()} tokens) is limited. ` +
+      `Recommended max input: ${params.recommendedMaxInput.toLocaleString()} tokens. ` +
+      `Maintain at least ${params.recommendedFreeSpace.toLocaleString()} tokens free.`
+    );
+  }
+
+  if (params.urgencyLevel === "notice") {
+    return (
+      `Context usage at ${Math.round((params.usedTokens / params.tokens) * 100)}%. ` +
+      `Consider monitoring as conversation grows.`
+    );
+  }
+
+  return `Context window healthy (${params.tokens.toLocaleString()} tokens available).`;
 }
