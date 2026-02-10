@@ -1,4 +1,9 @@
-import type { AuthProfileCredential, AuthProfileStore, OAuthCredential, TokenCredential } from "./types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+  TokenCredential,
+} from "./types.js";
 import {
   readClaudeCliCredentialsCached,
   readQwenCliCredentialsCached,
@@ -54,7 +59,11 @@ function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: nu
   if (cred.type !== "oauth" && cred.type !== "token") {
     return false;
   }
-  if (cred.provider !== "anthropic" && cred.provider !== "qwen-portal" && cred.provider !== "minimax-portal") {
+  if (
+    cred.provider !== "anthropic" &&
+    cred.provider !== "qwen-portal" &&
+    cred.provider !== "minimax-portal"
+  ) {
     return false;
   }
   if (typeof cred.expires !== "number") {

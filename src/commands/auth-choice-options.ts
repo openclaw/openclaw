@@ -1,7 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import type { AuthChoice } from "./onboard-types.js";
 import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
-import type { AuthChoice } from "./onboard-types.js";
 
 export type AuthChoiceOption = {
   value: AuthChoice;

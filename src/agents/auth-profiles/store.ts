@@ -198,7 +198,8 @@ export function loadAuthProfileStore(): AuthProfileStore {
   const asStore = coerceAuthStore(raw);
   if (asStore) {
     // Sync from external CLI tools on every load
-    const synced = syncExternalCliCredentials(asStore);
+    // Explicitly disable Keychain prompts for non-auth read paths
+    const synced = syncExternalCliCredentials(asStore, { allowKeychainPrompt: false });
     if (synced) {
       saveJsonFile(authPath, asStore);
     }
@@ -243,12 +244,12 @@ export function loadAuthProfileStore(): AuthProfileStore {
         };
       }
     }
-    syncExternalCliCredentials(store);
+    syncExternalCliCredentials(store, { allowKeychainPrompt: false });
     return store;
   }
 
   const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
-  syncExternalCliCredentials(store);
+  syncExternalCliCredentials(store, { allowKeychainPrompt: false });
   return store;
 }
 
