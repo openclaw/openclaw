@@ -243,15 +243,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       // Build explicit delivery context from request parameters (for cron/subagent announce).
       // Only treat as explicit when a recipient is provided (not just channel), to avoid
       // overwriting session routing from CLI calls that always include channel.
-      const deriveExplicitTo = (): string | undefined => {
-        const replyTo =
-          typeof request.replyTo === "string" ? request.replyTo.trim() : "";
-        if (replyTo) return replyTo;
-        const to = typeof request.to === "string" ? request.to.trim() : "";
-        return to || undefined;
-      };
-      const explicitToRaw = deriveExplicitTo();
-
+      const explicitToRaw =
+        typeof request.replyTo === "string" && request.replyTo.trim()
+          ? request.replyTo.trim()
+          : typeof request.to === "string" && request.to.trim()
+            ? request.to.trim()
+            : undefined;
       // Use the same effective channel/accountId as delivery routing
       // (replyChannel/replyAccountId override base channel/accountId).
       const explicitChannel =
@@ -259,9 +256,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           ? normalizeMessageChannel(request.replyChannel)
           : request.channel;
       const explicitAccountId =
-        request.replyAccountId !== undefined
-          ? request.replyAccountId
-          : request.accountId;
+        request.replyAccountId !== undefined ? request.replyAccountId : request.accountId;
 
       const explicitDeliveryContext =
         explicitToRaw !== undefined
