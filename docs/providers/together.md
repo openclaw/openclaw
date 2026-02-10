@@ -27,7 +27,7 @@ openclaw onboard --auth-choice together-api-key
 {
   agents: {
     defaults: {
-      model: { primary: "together/zai-org/GLM-4.7" },
+      model: { primary: "together/moonshotai/Kimi-K2.5" },
     },
   },
 }
@@ -42,7 +42,7 @@ openclaw onboard --non-interactive \
   --together-api-key "$TOGETHER_API_KEY"
 ```
 
-This will set `together/zai-org/GLM-4.7` as the default model.
+This will set `together/moonshotai/Kimi-K2.5` as the default model.
 
 ## Environment note
 
