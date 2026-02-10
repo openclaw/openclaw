@@ -128,7 +128,7 @@ export function renderMessageGroup(
   });
 
   return html`
-    <div class="chat-group ${roleClass}${group.messages.some(m => isArabic(extractTextCached(m.message) || '')) ? ' chat-group--rtl' : ''}">
+    <div class="chat-group ${roleClass}${group.messages.some((m) => isArabic(extractTextCached(m.message) || "")) ? " chat-group--rtl" : ""}">
       ${renderAvatar(group.role, {
         name: assistantName,
         avatar: opts.assistantAvatar ?? null,
@@ -247,9 +247,7 @@ function renderGroupedMessage(
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
-  
-  // RTL Detection
-  const isRtl = markdown && isArabic(markdown);
+
   const bubbleClasses = [
     "chat-bubble",
     canCopyMarkdown ? "has-copy" : "",

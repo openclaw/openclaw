@@ -112,8 +112,8 @@ img.chat-avatar {
   word-wrap: break-word;
 }
 
-/* RTL Copy Button Adjustment */
-.chat-group--rtl .chat-copy-btn {
+/* Copy Button - Global Base */
+.chat-copy-btn {
   position: absolute;
   top: 6px;
   inset-inline-end: 8px;
