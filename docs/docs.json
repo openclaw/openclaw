@@ -863,6 +863,7 @@
                   "channels/telegram",
                   "channels/grammy",
                   "channels/discord",
+                  "channels/irc",
                   "channels/slack",
                   "channels/feishu",
                   "channels/googlechat",

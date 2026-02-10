@@ -9,6 +9,11 @@
           - "src/discord/**"
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+"channel: irc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/irc/**"
+          - "docs/channels/irc.md"
 "channel: feishu":
   - changed-files:
       - any-glob-to-any-file:
