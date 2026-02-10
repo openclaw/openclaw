@@ -68,6 +68,8 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "shellgate") {
+    next.kind = "shellGate";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
