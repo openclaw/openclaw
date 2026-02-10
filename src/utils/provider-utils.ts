@@ -49,7 +49,7 @@ export function isLocalProviderUrl(baseUrl: string | undefined | null): boolean 
     const host = url.hostname.toLowerCase();
     return (
       host === "localhost" ||
-      host === "127.0.0.1" ||
+      host.startsWith("127.") ||
       host === "[::1]" ||
       host === "::1" ||
       host === "0.0.0.0" ||

@@ -22,8 +22,10 @@ describe("isLocalProviderUrl", () => {
     expect(isLocalProviderUrl("http://localhost:11434/v1")).toBe(true);
   });
 
-  it("returns true for 127.0.0.1", () => {
+  it("returns true for 127.0.0.0/8 loopback range", () => {
     expect(isLocalProviderUrl("http://127.0.0.1:11434")).toBe(true);
+    expect(isLocalProviderUrl("http://127.0.0.2:11434")).toBe(true);
+    expect(isLocalProviderUrl("http://127.1.1.1:8080")).toBe(true);
   });
 
   it("returns true for ::1 (IPv6 loopback)", () => {
