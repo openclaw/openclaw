@@ -138,6 +138,7 @@ Docs: https://docs.openclaw.ai
 - Cron: deliver announce runs directly, honor delivery mode, and respect wakeMode for summaries. (#8540) Thanks @tyler6204.
 - Telegram: include forward_from_chat metadata in forwarded messages and harden cron delivery target checks. (#8392) Thanks @Glucksberg.
 - macOS: fix cron payload summary rendering and ISO 8601 formatter concurrency safety.
+- Discord: enforce DM allowlists for agent components (buttons/select menus), honoring pairing store approvals and tag matches. (#11254) Thanks @thedudeabidesai.
 
 ## 2026.2.2-3
 
