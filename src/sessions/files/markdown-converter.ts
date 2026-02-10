@@ -63,3 +63,26 @@ export function pdfToMarkdown(pdfText: string, pageBreaks: boolean): string {
   // For now, just return text as-is since extractPdfContent already handles pages
   return pdfText;
 }
+
+import type { SessionFileType } from "./types.js";
+
+export async function convertToMarkdown(
+  buffer: Buffer,
+  type: SessionFileType,
+  _filename: string,
+): Promise<string> {
+  const text = buffer.toString("utf-8");
+
+  switch (type) {
+    case "csv":
+      return csvToMarkdownTable(text);
+    case "json":
+      return jsonToMarkdown(text);
+    case "text":
+      return textToMarkdown(text);
+    case "pdf":
+      return pdfToMarkdown(text, false); // PDF text already extracted
+    default:
+      return text;
+  }
+}

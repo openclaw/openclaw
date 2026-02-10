@@ -4,6 +4,7 @@ import {
   jsonToMarkdown,
   textToMarkdown,
   pdfToMarkdown,
+  convertToMarkdown,
 } from "./markdown-converter.js";
 
 describe("csvToMarkdownTable", () => {
@@ -105,5 +106,31 @@ describe("pdfToMarkdown", () => {
   it("handles empty PDF text", () => {
     const result = pdfToMarkdown("", true);
     expect(result).toBe("");
+  });
+});
+
+describe("convertToMarkdown", () => {
+  it("converts CSV buffer to markdown", async () => {
+    const buffer = Buffer.from("id,name\n1,Test", "utf-8");
+    const result = await convertToMarkdown(buffer, "csv", "test.csv");
+    expect(result).toContain("| id | name |");
+  });
+
+  it("converts JSON buffer to markdown", async () => {
+    const buffer = Buffer.from('{"key":"value"}', "utf-8");
+    const result = await convertToMarkdown(buffer, "json", "test.json");
+    expect(result).toContain("```json");
+  });
+
+  it("converts text buffer to markdown", async () => {
+    const buffer = Buffer.from("Plain text", "utf-8");
+    const result = await convertToMarkdown(buffer, "text", "test.txt");
+    expect(result).toContain("```");
+  });
+
+  it("converts PDF buffer to markdown", async () => {
+    const buffer = Buffer.from("PDF content", "utf-8");
+    const result = await convertToMarkdown(buffer, "pdf", "test.pdf");
+    expect(result).toBe("PDF content");
   });
 });
