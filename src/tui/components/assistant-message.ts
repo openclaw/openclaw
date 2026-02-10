@@ -7,12 +7,11 @@ import { markdownTheme, theme } from "../theme/theme.js";
  * instead of collapsing them into spaces (CommonMark "soft break" behaviour).
  *
  * Double-newlines (`\n\n`) are left untouched as they already denote paragraph
- * breaks. Lines that already end with two trailing spaces are also left alone.
- * CRLF (`\r\n`) is normalized to `\n` before conversion.
+ * breaks. CRLF (`\r\n`) is normalized to `\n` before conversion.
  */
 export function preserveNewlines(text: string): string {
   const normalized = text.replace(/\r\n/g, "\n");
-  return normalized.replace(/([^\n])(?<! {2})\n(?!\n)/g, "$1  \n");
+  return normalized.replace(/([^\n])\n(?!\n)/g, "$1  \n");
 }
 
 export class AssistantMessageComponent extends Container {
