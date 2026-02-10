@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -75,6 +76,26 @@ export function resolveSessionKeyForRequest(opts: {
     );
     if (foundKey) {
       sessionKey = foundKey;
+    }
+  }
+
+  // When sessionId was provided but not found in the primary store, search all agent stores.
+  // Sessions created under a specific agent live in that agent's store file; the primary
+  // store (derived from the default agent) won't contain them.
+  if (!sessionKey && opts.sessionId && !explicitSessionKey) {
+    const allAgentIds = listAgentIds(opts.cfg);
+    for (const agentId of allAgentIds) {
+      if (agentId === storeAgentId) {
+        continue;
+      }
+      const altStorePath = resolveStorePath(sessionCfg?.store, { agentId });
+      const altStore = loadSessionStore(altStorePath);
+      const foundKey = Object.keys(altStore).find(
+        (key) => altStore[key]?.sessionId === opts.sessionId,
+      );
+      if (foundKey) {
+        return { sessionKey: foundKey, sessionStore: altStore, storePath: altStorePath };
+      }
     }
   }
 
