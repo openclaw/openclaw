@@ -84,55 +84,56 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
 
 const MARKER_IGNORED_CHARS = new Set(["\u200B", "\u200C", "\u200D", "\uFEFF", "\u00AD"]);
 const MARKER_STRIP_PATTERN = /[\p{Cf}\p{M}]/u;
+const MARKER_LETTER_WILDCARD = "\uE000";
+const MARKER_OPEN_DELIMITER_WILDCARD = "\uE001";
+const MARKER_CLOSE_DELIMITER_WILDCARD = "\uE002";
+const MARKER_NON_ASCII_LETTER_PATTERN = /\p{L}/u;
+const MARKER_OPEN_DELIMITER_PATTERN = /[\p{Ps}\p{Pi}]/u;
+const MARKER_CLOSE_DELIMITER_PATTERN = /[\p{Pe}\p{Pf}]/u;
 
-/**
- * Marker-specific confusable skeleton fold for Greek/Cyrillic lookalikes.
- * This intentionally focuses on letters used by EXTERNAL_UNTRUSTED_CONTENT markers.
- */
-const MARKER_CONFUSABLE_SKELETON: Record<string, string> = {
-  "\u0391": "A",
-  "\u03B1": "A",
-  "\u0410": "A",
-  "\u0430": "A",
-  "\u03F9": "C",
-  "\u03F2": "C",
-  "\u0421": "C",
-  "\u0441": "C",
-  "\u0500": "D",
-  "\u0501": "D",
-  "\u0395": "E",
-  "\u03B5": "E",
-  "\u0415": "E",
-  "\u0435": "E",
-  "\u0401": "E",
-  "\u0451": "E",
-  "\u04C0": "L",
-  "\u04CF": "L",
-  "\u039D": "N",
-  "\u03BD": "N",
-  "\u039F": "O",
-  "\u03BF": "O",
-  "\u041E": "O",
-  "\u043E": "O",
-  "\u042F": "R",
-  "\u044F": "R",
-  "\u0405": "S",
-  "\u0455": "S",
-  "\u03DA": "S",
-  "\u03DB": "S",
-  "\u03A4": "T",
-  "\u03C4": "T",
-  "\u0422": "T",
-  "\u0442": "T",
-  "\u03A5": "U",
-  "\u03C5": "U",
-  "\u04AE": "U",
-  "\u04AF": "U",
-  "\u03A7": "X",
-  "\u03C7": "X",
-  "\u0425": "X",
-  "\u0445": "X",
-};
+function buildMarkerRegex(marker: string): RegExp {
+  let pattern = "";
+  for (const char of marker) {
+    if (char >= "A" && char <= "Z") {
+      pattern += `[${char}${MARKER_LETTER_WILDCARD}]`;
+      continue;
+    }
+    if (char === "<") {
+      pattern += `[<${MARKER_OPEN_DELIMITER_WILDCARD}]`;
+      continue;
+    }
+    if (char === ">") {
+      pattern += `[>${MARKER_CLOSE_DELIMITER_WILDCARD}]`;
+      continue;
+    }
+    pattern += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(pattern, "gu");
+}
+
+const MARKER_REPLACEMENTS: Array<{ regex: RegExp; value: string }> = [
+  { regex: buildMarkerRegex(EXTERNAL_CONTENT_START), value: "[[MARKER_SANITIZED]]" },
+  { regex: buildMarkerRegex(EXTERNAL_CONTENT_END), value: "[[END_MARKER_SANITIZED]]" },
+];
+
+function foldMarkerSkeletonChar(char: string): string {
+  if (char >= "a" && char <= "z") {
+    return char.toUpperCase();
+  }
+  if ((char >= "A" && char <= "Z") || char === "_" || char === "<" || char === ">") {
+    return char;
+  }
+  if (MARKER_NON_ASCII_LETTER_PATTERN.test(char)) {
+    return MARKER_LETTER_WILDCARD;
+  }
+  if (MARKER_OPEN_DELIMITER_PATTERN.test(char)) {
+    return MARKER_OPEN_DELIMITER_WILDCARD;
+  }
+  if (MARKER_CLOSE_DELIMITER_PATTERN.test(char)) {
+    return MARKER_CLOSE_DELIMITER_WILDCARD;
+  }
+  return char;
+}
 
 function foldMarkerText(input: string): { text: string; starts: number[]; ends: number[] } {
   let text = "";
@@ -149,10 +150,9 @@ function foldMarkerText(input: string): { text: string; starts: number[]; ends: 
         continue;
       }
 
-      const skeleton = MARKER_CONFUSABLE_SKELETON[normalizedChar] ?? normalizedChar;
-      const folded = skeleton.normalize("NFKC");
-      text += folded;
-      for (let i = 0; i < folded.length; i++) {
+      const skeleton = foldMarkerSkeletonChar(normalizedChar.normalize("NFKC"));
+      text += skeleton;
+      for (let i = 0; i < skeleton.length; i++) {
         starts.push(sourceStart);
         ends.push(offset);
       }
@@ -164,16 +164,15 @@ function foldMarkerText(input: string): { text: string; starts: number[]; ends: 
 
 function replaceMarkers(content: string): string {
   const folded = foldMarkerText(content);
-  if (!/external_untrusted_content/iu.test(folded.text)) {
+  if (
+    !/(external_untrusted_content|end_external_untrusted_content|[\uE000\uE001\uE002])/iu.test(
+      folded.text,
+    )
+  ) {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
-  const patterns: Array<{ regex: RegExp; value: string }> = [
-    { regex: /<<<EXTERNAL_UNTRUSTED_CONTENT>>>/giu, value: "[[MARKER_SANITIZED]]" },
-    { regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>/giu, value: "[[END_MARKER_SANITIZED]]" },
-  ];
-
-  for (const pattern of patterns) {
+  for (const pattern of MARKER_REPLACEMENTS) {
     pattern.regex.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.regex.exec(folded.text)) !== null) {
