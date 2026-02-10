@@ -94,7 +94,7 @@ describe("Telegram file upload - real flow simulation", () => {
       .catch(() => false);
     expect(rawExists).toBe(false);
 
-    // Content should be markdown table format
+    // Content should be raw CSV (not markdown table)
     const { buffer } = await getFile({
       sessionId,
       agentId: "main",
@@ -102,8 +102,11 @@ describe("Telegram file upload - real flow simulation", () => {
       filesDir: testFilesDir,
     });
     const content = buffer.toString("utf-8");
-    expect(content).toContain("|");
-    expect(content).toContain("---");
+    // Should contain raw CSV content (comma-separated values)
+    expect(content).toContain(",");
+    // Should NOT contain markdown table markers
+    expect(content).not.toContain("|");
+    expect(content).not.toContain("---");
   });
 
   it("verifies file is saved as .md with correct filename format", async () => {
@@ -129,9 +132,12 @@ describe("Telegram file upload - real flow simulation", () => {
     const fileBase = `${fileId}-${files[0].filename}`;
     const mdPath = path.join(testFilesDir, `${fileBase}.md`);
 
-    // Verify .md file exists and has correct content
+    // Verify .md file exists and has raw CSV content
     const mdContent = await fs.readFile(mdPath, "utf-8");
-    expect(mdContent).toContain("|");
+    // Should contain raw CSV content (comma-separated values)
+    expect(mdContent).toContain(",");
+    // Should NOT contain markdown table markers
+    expect(mdContent).not.toContain("|");
 
     // Verify filename preserves original extension in the stored filename
     // The stored filename should be something like "bot knowledge test.csv"
