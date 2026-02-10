@@ -125,7 +125,8 @@ describe("docker-setup.sh", () => {
     const assocCheck = spawnSync(systemBash, ["-c", "declare -A _t=()"], {
       encoding: "utf8",
     });
-    if (assocCheck.status === 0) {
+    // Skip when /bin/bash is unavailable (e.g. Windows CI) or supports associative arrays (Bash 4+).
+    if (assocCheck.status === null || assocCheck.status === 0) {
       return;
     }
 

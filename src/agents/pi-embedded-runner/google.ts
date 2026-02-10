@@ -96,11 +96,13 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
         contentChanged = true;
         continue;
       }
-      if (rec.thinkingSignature !== candidate) {
+      if (rec.thinkingSignature !== candidate || rec.signature !== candidate) {
+        const rawBlock = block as unknown as Record<string, unknown>;
         const nextBlock = {
-          ...(block as unknown as Record<string, unknown>),
+          ...rawBlock,
           thinkingSignature: candidate,
-        } as AssistantContentBlock;
+          signature: candidate,
+        } as unknown as AssistantContentBlock;
         nextContent.push(nextBlock);
         contentChanged = true;
       } else {

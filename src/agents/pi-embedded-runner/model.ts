@@ -75,7 +75,7 @@ function resolveAnthropicOpus46ForwardCompatModel(
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  if (normalizedProvider !== "anthropic") {
+  if (normalizedProvider !== "anthropic" && normalizedProvider !== "google-antigravity") {
     return undefined;
   }
 
@@ -90,17 +90,21 @@ function resolveAnthropicOpus46ForwardCompatModel(
     return undefined;
   }
 
+  // Fix: Provider mismatch. Templates are registered under 'anthropic', not 'google-antigravity'.
+  const templateProvider =
+    normalizedProvider === "google-antigravity" ? "anthropic" : normalizedProvider;
+
   const templateIds: string[] = [];
-  if (lower.startsWith(ANTHROPIC_OPUS_46_MODEL_ID)) {
-    templateIds.push(lower.replace(ANTHROPIC_OPUS_46_MODEL_ID, "claude-opus-4-5"));
-  }
-  if (lower.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID)) {
-    templateIds.push(lower.replace(ANTHROPIC_OPUS_46_DOT_MODEL_ID, "claude-opus-4.5"));
+  // Fix: Casing mismatch. Preserve original casing for case-sensitive registries.
+  // Replace "4.6" or "4-6" with "4.5" or "4-5" respectively.
+  const versionRegex = /4([-.])6/;
+  if (versionRegex.test(trimmedModelId)) {
+    templateIds.push(trimmedModelId.replace(versionRegex, "4$15"));
   }
   templateIds.push(...ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS);
 
   for (const templateId of [...new Set(templateIds)].filter(Boolean)) {
-    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    const template = modelRegistry.find(templateProvider, templateId) as Model<Api> | null;
     if (!template) {
       continue;
     }
