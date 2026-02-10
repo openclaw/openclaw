@@ -102,9 +102,9 @@ export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: str
   // If the remote address is in trustedProxies and there are no forwarding headers,
   // treat it as a local connection (the Docker bridge is acting as our "localhost").
   const hasForwarded = Boolean(
-    req.headers?.["x-forwarded-for"] ||
-    req.headers?.["x-real-ip"] ||
-    req.headers?.["x-forwarded-host"],
+    headerValue(req.headers?.["x-forwarded-for"]) ||
+    headerValue(req.headers?.["x-real-ip"]) ||
+    headerValue(req.headers?.["x-forwarded-host"]),
   );
   const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
   const isTrustedDirectConnection = remoteIsTrustedProxy && !hasForwarded;
