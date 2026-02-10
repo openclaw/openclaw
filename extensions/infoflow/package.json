@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/infoflow",
+  "version": "2026.2.6-3",
+  "description": "OpenClaw Infoflow channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "infoflow",
+      "label": "Infoflow",
+      "selectionLabel": "Infoflow (如流)",
+      "docsPath": "/channels/infoflow",
+      "blurb": "Baidu Infoflow messaging platform.",
+      "order": 40
+    },
+    "install": {
+      "npmSpec": "@openclaw/infoflow",
+      "localPath": "extensions/infoflow",
+      "defaultChoice": "npm"
+    }
+  }
+}
