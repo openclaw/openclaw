@@ -35,6 +35,14 @@ import { requireAriConfig, type AriConfig, type CallState, type CoreSttSession }
 import { buildEndpoint, makeEvent, nowMs } from "./utils.js";
 
 export class AsteriskAriProvider implements VoiceCallProvider {
+  private markEndedOnce(callId: string, providerCallId: string | undefined): boolean {
+    if (this.endedCallIds.has(callId)) return false;
+    if (providerCallId && this.endedProviderCallIds.has(providerCallId)) return false;
+    this.endedCallIds.add(callId);
+    if (providerCallId) this.endedProviderCallIds.add(providerCallId);
+    return true;
+  }
+
   readonly name = "asterisk-ari" as const;
 
   private readonly cfg: AriConfig;
@@ -50,6 +58,13 @@ export class AsteriskAriProvider implements VoiceCallProvider {
   private readonly calls = new Map<string, CallState>();
   private readonly pendingInboundChannels = new Set<string>();
   private readonly autoResponseQueue = new Map<string, Promise<void>>();
+
+  // Provider-local idempotency guard for call.ended.
+  // We can receive StasisEnd while cleanup() is in-progress (after the call is removed from `calls` but
+  // before the manager transitions the call to a terminal state), which can otherwise produce
+  // duplicate call.ended emissions.
+  private readonly endedProviderCallIds = new Set<string>();
+  private readonly endedCallIds = new Set<string>();
 
   constructor(params: {
     config: VoiceCallConfig;
@@ -323,15 +338,19 @@ export class AsteriskAriProvider implements VoiceCallProvider {
         const call = this.manager.getCallByProviderCallId(chId);
         // cleanup() is the single source of truth for call.ended.
         // This fallback is only for cases where we never tracked the call state in this provider.
+        // It must be idempotent because we can race with cleanup() which removes local state before
+        // the manager has transitioned the call to a terminal state.
         if (call && !TerminalStates.has(call.state)) {
-          this.manager.processEvent(
-            makeEvent({
-              type: "call.ended",
-              callId: call.callId,
-              providerCallId: call.providerCallId,
-              reason: "hangup-user",
-            }),
-          );
+          if (this.markEndedOnce(call.callId, call.providerCallId)) {
+            this.manager.processEvent(
+              makeEvent({
+                type: "call.ended",
+                callId: call.callId,
+                providerCallId: call.providerCallId,
+                reason: "hangup-user",
+              }),
+            );
+          }
         }
       }
     }
@@ -853,6 +872,10 @@ export class AsteriskAriProvider implements VoiceCallProvider {
     const state = this.calls.get(providerCallId);
     if (!state) return;
 
+    // Mark ended immediately (before the first await) to prevent StasisEnd fallback from emitting
+    // a duplicate call.ended while cleanup is in-flight.
+    const shouldEmitEnded = this.markEndedOnce(state.callId, state.providerCallId);
+
     this.calls.delete(providerCallId);
     this.autoResponseQueue.delete(providerCallId);
 
@@ -882,13 +905,15 @@ export class AsteriskAriProvider implements VoiceCallProvider {
       state.stt = undefined;
     }
 
-    this.manager.processEvent(
-      makeEvent({
-        type: "call.ended",
-        callId: state.callId,
-        providerCallId: state.providerCallId,
-        reason,
-      }),
-    );
+    if (shouldEmitEnded) {
+      this.manager.processEvent(
+        makeEvent({
+          type: "call.ended",
+          callId: state.callId,
+          providerCallId: state.providerCallId,
+          reason,
+        }),
+      );
+    }
   }
 }

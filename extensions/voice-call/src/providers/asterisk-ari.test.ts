@@ -82,6 +82,62 @@ describe("AsteriskAriProvider", () => {
       }),
     );
   });
+
+  it("guards against duplicate call.ended when StasisEnd races with cleanup", async () => {
+    const { provider, managerStub } = createProvider();
+    const anyProvider = provider as any;
+
+    const deferred: { resolve: () => void; promise: Promise<void> } = (() => {
+      let resolve!: () => void;
+      const promise = new Promise<void>((r) => {
+        resolve = r;
+      });
+      return { resolve, promise };
+    })();
+
+    anyProvider.client.safeHangupChannel = vi.fn(() => deferred.promise);
+
+    // Simulate an inbound call where providerCallId === sipChannelId.
+    anyProvider.calls.set("sip-1", {
+      callId: "internal-1",
+      providerCallId: "sip-1",
+      sipChannelId: "sip-1",
+      speaking: false,
+    });
+
+    managerStub.getCallByProviderCallId = vi.fn(() => ({
+      callId: "internal-1",
+      providerCallId: "sip-1",
+      state: "active",
+    }));
+
+    // Start cleanup, but block at the first await.
+    const cleanupPromise = anyProvider.cleanup("sip-1", "hangup-user");
+    await Promise.resolve();
+
+    // StasisEnd arrives while cleanup() is in-flight, after local state was removed.
+    await anyProvider.onAriEvent({
+      type: "StasisEnd",
+      channel: { id: "sip-1" },
+    });
+
+    deferred.resolve();
+    await cleanupPromise;
+
+    const endedEvents = managerStub.processEvent.mock.calls
+      .map((c: any[]) => c[0])
+      .filter((e: any) => e?.type === "call.ended");
+
+    expect(endedEvents).toHaveLength(1);
+    expect(endedEvents[0]).toEqual(
+      expect.objectContaining({
+        type: "call.ended",
+        callId: "internal-1",
+        providerCallId: "sip-1",
+        reason: "hangup-user",
+      }),
+    );
+  });
 });
 
 describe("asterisk-ari buildEndpoint", () => {
