@@ -117,46 +117,33 @@ jobs:
           test -f dist/entry.js || (echo "ERROR: dist/entry.js not found" && exit 1)
           echo "Build verification complete"
 
-      - name: Prepare production dependencies
+      - name: Deploy production bundle with pnpm
         shell: bash
         run: |
-          echo "Installing production dependencies only..."
-          # Remove dev dependencies and reinstall only production
-          rm -rf node_modules
-          pnpm install --prod --frozen-lockfile --ignore-scripts=false
-          echo "Production dependencies installed"
-
-      - name: Create bundled tarball with node_modules
-        shell: bash
-        run: |
-          mkdir -p ./artifacts
+          mkdir -p ./deploy-temp
           VERSION=$(node -p "require('./package.json').version")
           TARBALL_NAME="openclaw-${VERSION}.tgz"
 
-          echo "Creating bundled tarball: $TARBALL_NAME"
-          echo "Bundling node_modules ($(du -sh node_modules 2>/dev/null | cut -f1) total)..."
+          echo "Deploying production bundle with pnpm deploy..."
+          echo "This resolves all symlinks and creates a standalone package"
 
-          # Create tarball directly without intermediate copy (much faster)
-          tar -czf "./artifacts/${TARBALL_NAME}" \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='node_modules/.cache' \
-            dist/ \
-            node_modules/ \
-            extensions/ \
-            skills/ \
-            package.json \
-            openclaw.mjs \
-            $(test -d assets && echo "assets/") \
-            $(test -d docs && echo "docs/") \
-            $(test -f README.md && echo "README.md") \
-            $(test -f LICENSE && echo "LICENSE") \
-            $(test -f CHANGELOG.md && echo "CHANGELOG.md") \
-            2>/dev/null || true
+          # Use pnpm deploy to create a standalone directory with all deps resolved
+          pnpm deploy --prod --filter=openclaw ./deploy-temp
+
+          echo "Deploy complete. Creating tarball..."
+          mkdir -p ./artifacts
+
+          # Create tarball from deployed directory
+          cd deploy-temp
+          tar -czf "../artifacts/${TARBALL_NAME}" .
+          cd ..
 
           echo "Tarball created successfully"
           ls -lh ./artifacts/
           echo "Tarball size: $(du -h ./artifacts/${TARBALL_NAME} | cut -f1)"
+
+          # Cleanup
+          rm -rf ./deploy-temp
 
       - name: Set artifact name
         id: artifact
