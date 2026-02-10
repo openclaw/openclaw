@@ -512,6 +512,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
+    // Anchor require() resolution to the plugin's directory so its CJS
+    // dependencies resolve packages from the plugin's own node_modules.
+    globalThis.require = createRequire(candidate.source);
+
     let mod: OpenClawPluginModule | null = null;
     try {
       mod = getJiti()(candidate.source) as OpenClawPluginModule;
