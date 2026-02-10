@@ -141,8 +141,8 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
 export function buildCortecsModelDefinition(): ModelDefinitionConfig {
   return {
     id: CORTECS_DEFAULT_MODEL_ID,
-    name: "gpt-oss-120b",
-    reasoning: false,
+    name: "GPT Oss 120b",
+    reasoning: true,
     input: ["text"],
     cost: CORTECS_DEFAULT_COST,
     contextWindow: CORTECS_DEFAULT_CONTEXT_WINDOW,

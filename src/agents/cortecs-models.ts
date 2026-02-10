@@ -6,9 +6,8 @@ import type { ModelDefinitionConfig } from "../config/types.js";
  * ---------------------------------------------------------------------------
  */
 
-//TODO FIX::::::
 export const CORTECS_BASE_URL = "https://api.cortecs.ai/v1/";
-export const CORTECS_MODELS_URL = `${CORTECS_BASE_URL}models`;
+export const CORTECS_MODELS_URL = `${CORTECS_BASE_URL}models?tag=Instruct`;
 
 export const CORTECS_DEFAULT_MODEL_ID = "gpt-oss-120b";
 export const CORTECS_DEFAULT_MODEL_REF = `cortecs/${CORTECS_DEFAULT_MODEL_ID}`;
@@ -27,9 +26,7 @@ export const CORTECS_DEFAULT_COST = {
  * ---------------------------------------------------------------------------
  */
 interface CortecsPricing {
-  /** Cost per 1M input tokens (as returned by Cortecs). */
   input_token: number;
-  /** Cost per 1M output tokens (as returned by Cortecs). */
   output_token: number;
   currency: string;
 }
@@ -43,6 +40,7 @@ interface CortecsModel {
   pricing?: CortecsPricing;
   context_size?: number;
   tags?: string[];
+  max_tokens?: number;
 }
 
 interface CortecsModelsResponse {
@@ -55,7 +53,7 @@ interface CortecsModelsResponse {
  * Default Cortecs model definition (fallback)
  * ---------------------------------------------------------------------------
  */
-export function buildCortecsModelDefinition(): ModelDefinitionConfig {
+function getDefaultCortecsModel(): ModelDefinitionConfig {
   return {
     id: CORTECS_DEFAULT_MODEL_ID,
     name: "GPT Oss 120b",
@@ -75,7 +73,7 @@ export function buildCortecsModelDefinition(): ModelDefinitionConfig {
 export async function discoverCortecsModels(): Promise<ModelDefinitionConfig[]> {
   // Skip API discovery in test environment
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
-    return [buildCortecsModelDefinition()];
+    return [getDefaultCortecsModel()];
   }
 
   try {
@@ -87,14 +85,14 @@ export async function discoverCortecsModels(): Promise<ModelDefinitionConfig[]> 
       console.warn(
         `[cortecs-models] Failed to discover models: HTTP ${res.status}, using default model`,
       );
-      return [buildCortecsModelDefinition()];
+      return [getDefaultCortecsModel()];
     }
 
     const payload = (await res.json()) as CortecsModelsResponse;
 
     if (!Array.isArray(payload.data) || payload.data.length === 0) {
       console.warn("[cortecs-models] No models found from catalog, using default model");
-      return [buildCortecsModelDefinition()];
+      return [getDefaultCortecsModel()];
     }
 
     const models: ModelDefinitionConfig[] = payload.data.map((m) => {
@@ -110,30 +108,18 @@ export async function discoverCortecsModels(): Promise<ModelDefinitionConfig[]> 
         reasoning,
         input: hasVision ? ["text", "image"] : ["text"],
         cost: {
-          // Cortecs already returns per-1M-token pricing in numeric form.
-          input: Number.isFinite(m.pricing?.input_token as number)
-            ? (m.pricing!.input_token ?? 0)
-            : 0,
-          output: Number.isFinite(m.pricing?.output_token as number)
-            ? (m.pricing!.output_token ?? 0)
-            : 0,
+          input: Number.isFinite(m.pricing?.input_token) ? (m.pricing?.input_token ?? 0) : 0,
+          output: Number.isFinite(m.pricing?.output_token) ? (m.pricing?.output_token ?? 0) : 0,
           cacheRead: 0,
           cacheWrite: 0,
         },
         contextWindow: m.context_size ?? CORTECS_DEFAULT_CONTEXT_WINDOW,
-
-        /**
-         * Cortecs /v1/models does not provide a separate "max output tokens".
-         * Many systems cap maxTokens separately from contextWindow.
-         *
-         * We choose a conservative default unless you later add a field.
-         */
-        maxTokens: CORTECS_DEFAULT_MAX_TOKENS,
-      };
+        maxTokens: m.max_tokens ?? CORTECS_DEFAULT_MAX_TOKENS,
+      } satisfies ModelDefinitionConfig;
     });
-    return models.length > 0 ? models : [buildCortecsModelDefinition()];
+    return models.length > 0 ? models : [getDefaultCortecsModel()];
   } catch (error) {
     console.warn(`[cortecs-models] Discovery failed: ${String(error)}, using default model`);
-    return [buildCortecsModelDefinition()];
+    return [getDefaultCortecsModel()];
   }
 }

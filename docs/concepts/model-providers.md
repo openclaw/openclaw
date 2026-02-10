@@ -226,6 +226,27 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 }
 ```
 
+### Cortecs Gateway
+
+Cortecs is an LLM Router compliant with Europe's data privacy laws. It supports most European providers offering GDPR compliance and data privacy.
+
+- Provider: `cortecs`
+- Auth: `CORTECS_API_KEY`
+- Example model: `cortecs/gpt-oss-120b`
+- CLI: `clawdbot onboard --auth-choice cortecs-api-key`
+
+Models are auto-discovered from the Cortecs catalog. The recommended model is `gpt-oss-120b`, a 120 billion parameter model.
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "cortecs/gpt-oss-120b" } },
+  },
+}
+```
+
+The provider is automatically configured when `CORTECS_API_KEY` is set. See [/providers/cortecs](/providers/cortecs) for setup and configuration details.
+
 ### MiniMax
 
 MiniMax is configured via `models.providers` because it uses custom endpoints:
