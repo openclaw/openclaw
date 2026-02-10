@@ -160,7 +160,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const passwordRaw = toOptionString(opts.password);
   const tokenRaw = toOptionString(opts.token);
 
-  const snapshot = await readConfigFileSnapshot().catch(() => null);
+  const snapshot = await readConfigFileSnapshot().catch((err: unknown) => {
+    console.warn(
+      `[config] Failed to read config snapshot: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  });
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const mode = cfg.gateway?.mode;
