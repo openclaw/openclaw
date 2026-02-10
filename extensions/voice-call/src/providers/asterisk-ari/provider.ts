@@ -599,7 +599,7 @@ export class AsteriskAriProvider implements VoiceCallProvider {
         }
 
         try {
-          const { generateVoiceResponse } = await import("../response-generator.js");
+          const { generateVoiceResponse } = await import("../../response-generator.js");
           const result = await generateVoiceResponse({
             voiceConfig: this.voiceConfig,
             coreConfig: this.coreConfig,

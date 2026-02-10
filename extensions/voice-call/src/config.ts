@@ -300,15 +300,15 @@ export type VoiceCallStreamingConfig = z.infer<typeof VoiceCallStreamingConfigSc
 export const AsteriskAriConfigSchema = z
   .object({
     /** ARI base URL, e.g. http://10.8.0.1:8088 */
-    baseUrl: z.string().min(1),
-    username: z.string().min(1),
-    password: z.string().min(1),
+    baseUrl: z.string().min(1).optional(),
+    username: z.string().min(1).optional(),
+    password: z.string().min(1).optional(),
     /** Stasis app name */
-    app: z.string().min(1),
+    app: z.string().min(1).optional(),
     /** Trunk name for outbound dialing, e.g. gsmtrunk (optional; omit to dial PJSIP/<to> directly) */
     trunk: z.string().min(1).optional(),
     /** Where Asterisk should send RTP for ExternalMedia */
-    rtpHost: z.string().min(1),
+    rtpHost: z.string().min(1).optional(),
     /** Local UDP port to receive RTP from Asterisk */
     rtpPort: z.number().int().min(1024).max(65535).default(12000),
     /** RTP payload codec; use ulaw for PCMU */

@@ -5,6 +5,24 @@ import type { MediaGraph } from "./ari-media.js";
 type AriConfigInner = NonNullable<VoiceCallConfig["asteriskAri"]>;
 export type AriConfig = AriConfigInner;
 
+// Minimal ARI REST types we use
+export type AriChannel = {
+  id: string;
+  name?: string;
+  state?: string;
+  dialplan?: { app_name?: string; app_data?: string };
+  caller?: { number?: string; name?: string };
+};
+
+export type AriBridge = {
+  id: string;
+  channels?: string[];
+};
+
+export type AriEndpointState = {
+  state: string;
+};
+
 export type CoreSttSession = {
   onAudio: (mulaw: Buffer) => void;
   close: () => void;
