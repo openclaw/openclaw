@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { buildMessagingTarget, ensureTargetId, requireTargetKind } from "./targets.js";
+import {
+  buildMessagingTarget,
+  ensureTargetId,
+  normalizeTargetId,
+  requireTargetKind,
+} from "./targets.js";
+
+describe("normalizeTargetId", () => {
+  it("preserves target id case while normalizing kind prefix", () => {
+    expect(normalizeTargetId("channel", "C0ADKTLND7U")).toBe("channel:C0ADKTLND7U");
+  });
+});
 
 describe("ensureTargetId", () => {
   it("returns the candidate when it matches", () => {

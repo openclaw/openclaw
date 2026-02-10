@@ -281,6 +281,23 @@ describe("runMessageAction context isolation", () => {
     expect(result.channel).toBe("slack");
   });
 
+  it("treats slack channel ids passed as channel param as target in slack context", async () => {
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "C0ADKTLND7U",
+        message: "hi",
+      },
+      toolContext: { currentChannelProvider: "slack", currentChannelId: "C0ADKTLND7U" },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(result.channel).toBe("slack");
+    expect(result.to).toBe("C0ADKTLND7U");
+  });
+
   it("blocks cross-provider sends by default", async () => {
     await expect(
       runMessageAction({
