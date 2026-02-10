@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob } from "../types.js";
 import type { CronEvent, CronServiceState } from "./state.js";
@@ -445,6 +446,50 @@ async function executeJobCore(
       state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
       return { status: "ok", summary: text };
     }
+  }
+
+  if (job.payload.kind === "shellGate") {
+    const { command, timeoutMs, onOutput } = job.payload;
+    const shellTimeoutMs = timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
+
+    const shellResult = await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
+      (resolve) => {
+        const child = execFile(
+          "/bin/sh",
+          ["-c", command],
+          { timeout: shellTimeoutMs, maxBuffer: 1024 * 1024 },
+          (err, stdout, stderr) => {
+            resolve({
+              stdout: stdout ?? "",
+              stderr: stderr ?? "",
+              exitCode: err && "code" in err ? ((err.code as number) ?? 1) : (child.exitCode ?? 0),
+            });
+          },
+        );
+      },
+    );
+
+    state.deps.log.info(
+      { jobId: job.id, exitCode: shellResult.exitCode, stdoutLen: shellResult.stdout.length },
+      "cron: shellGate command finished",
+    );
+
+    if (shellResult.exitCode !== 0) {
+      const errMsg = (shellResult.stderr || shellResult.stdout).slice(0, 500);
+      return { status: "error", error: `shell exit ${shellResult.exitCode}: ${errMsg}` };
+    }
+
+    // Gate passed — inject output into onOutput message and enqueue as system event
+    const output = (shellResult.stdout || shellResult.stderr).slice(0, 4000);
+    const messageText = onOutput.message.replace("{{output}}", output);
+    const systemText = `[shellGate:${job.name}] ${messageText}`;
+
+    state.deps.enqueueSystemEvent(systemText, { agentId: job.agentId });
+    if (job.wakeMode === "now") {
+      state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+    }
+
+    return { status: "ok", summary: systemText.slice(0, 200) };
   }
 
   if (job.payload.kind !== "agentTurn") {

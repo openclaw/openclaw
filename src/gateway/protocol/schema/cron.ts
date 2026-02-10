@@ -27,6 +27,17 @@ export const CronScheduleSchema = Type.Union([
   ),
 ]);
 
+const ShellGateOnOutputSchema = Type.Object(
+  {
+    kind: Type.Literal("agentTurn"),
+    message: NonEmptyString,
+    model: Type.Optional(Type.String()),
+    thinking: Type.Optional(Type.String()),
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
 export const CronPayloadSchema = Type.Union([
   Type.Object(
     {
@@ -50,7 +61,27 @@ export const CronPayloadSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
+  Type.Object(
+    {
+      kind: Type.Literal("shellGate"),
+      command: NonEmptyString,
+      timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+      onOutput: ShellGateOnOutputSchema,
+    },
+    { additionalProperties: false },
+  ),
 ]);
+
+const ShellGateOnOutputPatchSchema = Type.Object(
+  {
+    kind: Type.Literal("agentTurn"),
+    message: Type.Optional(NonEmptyString),
+    model: Type.Optional(Type.String()),
+    thinking: Type.Optional(Type.String()),
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
 
 export const CronPayloadPatchSchema = Type.Union([
   Type.Object(
@@ -72,6 +103,15 @@ export const CronPayloadPatchSchema = Type.Union([
       channel: Type.Optional(Type.String()),
       to: Type.Optional(Type.String()),
       bestEffortDeliver: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("shellGate"),
+      command: Type.Optional(NonEmptyString),
+      timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+      onOutput: Type.Optional(ShellGateOnOutputPatchSchema),
     },
     { additionalProperties: false },
   ),
