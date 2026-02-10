@@ -26,7 +26,7 @@ describe("sanitizeUserFacingText", () => {
   it("sanitizes direct context-overflow errors", () => {
     expect(
       sanitizeUserFacingText(
-        "Context overflow: prompt too large for the model. Try again with less input or a larger-context model.",
+        "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
         { errorContext: true },
       ),
     ).toContain("Context overflow: prompt too large for the model.");
@@ -37,7 +37,7 @@ describe("sanitizeUserFacingText", () => {
 
   it("does not swallow assistant text that quotes the canonical context-overflow string", () => {
     const text =
-      "Changelog note: we fixed false positives for `Context overflow: prompt too large for the model. Try again with less input or a larger-context model.` in 2026.2.9";
+      "Changelog note: we fixed false positives for `Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.` in 2026.2.9";
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
