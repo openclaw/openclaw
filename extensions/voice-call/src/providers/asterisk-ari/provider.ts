@@ -18,14 +18,12 @@ import type {
   NormalizedEvent,
 } from "../../types.js";
 import type { VoiceCallProvider } from "../base.js";
+import type { AriConfig, CallState, CoreSttSession } from "./types.js";
 import { loadCoreAgentDeps } from "../../core-bridge.js";
 import { chunkAudio } from "../../telephony-audio.js";
 import { TerminalStates } from "../../types.js";
 import { AriClient, type AriEvent } from "./ari-client.js";
 import { AriMedia, type MediaGraph } from "./ari-media.js";
-import { buildEndpoint, makeEvent, nowMs } from "./utils.js";
-import type { AriConfig, CallState, CoreSttSession } from "./types.js";
-import { reconcileLingeringCalls } from "./reconcile.js";
 import {
   buildWavFromPcm,
   computeRms,
@@ -33,6 +31,8 @@ import {
   mulawToAlawBuffer,
   pcmDurationMsFromBytes,
 } from "./audio-utils.js";
+import { reconcileLingeringCalls } from "./reconcile.js";
+import { buildEndpoint, makeEvent, nowMs } from "./utils.js";
 
 export class AsteriskAriProvider implements VoiceCallProvider {
   readonly name = "asterisk-ari" as const;
@@ -526,14 +526,6 @@ export class AsteriskAriProvider implements VoiceCallProvider {
     if (pkt.length <= headerLen) return Buffer.alloc(0);
     return pkt.subarray(headerLen);
   }
-
-
-
-
-
-
-
-
 
   private async loadCoreDeps() {
     if (!this.coreConfig) return null;

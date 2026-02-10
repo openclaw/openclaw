@@ -425,7 +425,10 @@ const voiceCallPlugin = {
                 if (!callId) {
                   throw new Error("callId required");
                 }
-                const durationMs = Math.max(200, Math.min(60000, Number(params.durationMs || 5000)));
+                const durationMs = Math.max(
+                  200,
+                  Math.min(60000, Number(params.durationMs || 5000)),
+                );
                 const before = Date.now();
                 await new Promise((r) => setTimeout(r, durationMs));
                 const call =

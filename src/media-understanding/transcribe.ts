@@ -10,6 +10,7 @@ import type {
 import type { MediaUnderstandingDecision, MediaUnderstandingProvider } from "./types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { DEFAULT_AUDIO_MODELS, DEFAULT_TIMEOUT_SECONDS } from "./defaults.js";
+import { resolveProviderQuery } from "./provider-query.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./providers/index.js";
 import {
   resolveMaxBytes,
@@ -24,7 +25,6 @@ import {
   normalizeMediaAttachments,
   runCapability,
 } from "./runner.js";
-import { resolveProviderQuery } from "./provider-query.js";
 
 export type CoreAudioTranscriptionResult = {
   text: string | null;

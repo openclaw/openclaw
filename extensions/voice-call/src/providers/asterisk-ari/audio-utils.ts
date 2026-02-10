@@ -1,7 +1,10 @@
 import type { VoiceCallConfig } from "../../config.js";
 import { alawToLinear, linearToAlaw, mulawToLinear } from "../../audio/g711.js";
 
-export function g711ToPcm16Buffer(payload: Buffer, codec: NonNullable<VoiceCallConfig["asteriskAri"]>["codec"]): Buffer {
+export function g711ToPcm16Buffer(
+  payload: Buffer,
+  codec: NonNullable<VoiceCallConfig["asteriskAri"]>["codec"],
+): Buffer {
   const pcm = Buffer.allocUnsafe(payload.length * 2);
   if (codec === "alaw") {
     for (let i = 0; i < payload.length; i++) {
