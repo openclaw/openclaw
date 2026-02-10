@@ -168,9 +168,6 @@ jobs:
       matrix:
         include:
           - runtime: node
-            task: tsgo
-            command: pnpm tsgo
-          - runtime: node
             task: test
             command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
@@ -205,7 +202,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
 
       - name: Check formatting
-        run: pnpm format
+        run: pnpm format:check
 
   # Lint check — runs after format passes for cleaner output.
   check-lint:
@@ -221,8 +218,8 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
 
-      - name: Check lint
-        run: pnpm lint
+      - name: Check types and lint
+        run: pnpm check
 
   # Check for files that grew past LOC threshold in this PR (delta-only).
   # On push events, all steps are skipped and the job passes (no-op).
