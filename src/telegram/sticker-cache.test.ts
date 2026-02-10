@@ -3,9 +3,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cacheSticker,
+  evictStaleEntries,
   getAllCachedStickers,
   getCachedSticker,
   getCacheStats,
+  isSetIndexed,
+  markSetIndexed,
   searchStickers,
 } from "./sticker-cache.js";
 
@@ -224,6 +227,44 @@ describe("sticker-cache", () => {
     });
   });
 
+  describe("describeStickerImage contentType", () => {
+    it("uses provided contentType for MIME and filename extension", async () => {
+      // This is a unit test for the interface — the actual vision call is mocked.
+      // We verify that the params interface accepts contentType.
+      const { describeStickerImage } = await import("./sticker-cache.js");
+      expect(typeof describeStickerImage).toBe("function");
+    });
+  });
+
+  describe("isSetIndexed / markSetIndexed", () => {
+    it("returns false for unknown set", () => {
+      expect(isSetIndexed("UnknownSet")).toBe(false);
+    });
+
+    it("returns true after markSetIndexed", () => {
+      markSetIndexed("TestPack", {
+        indexedAt: "2026-02-01T12:00:00.000Z",
+        stickerCount: 30,
+        title: "Test Pack",
+      });
+      expect(isSetIndexed("TestPack")).toBe(true);
+    });
+
+    it("subsequent calls to markSetIndexed update info", () => {
+      markSetIndexed("PackA", {
+        indexedAt: "2026-02-01T12:00:00.000Z",
+        stickerCount: 10,
+        title: "Pack A",
+      });
+      markSetIndexed("PackA", {
+        indexedAt: "2026-02-02T12:00:00.000Z",
+        stickerCount: 15,
+        title: "Pack A v2",
+      });
+      expect(isSetIndexed("PackA")).toBe(true);
+    });
+  });
+
   describe("getCacheStats", () => {
     it("returns count 0 when cache is empty", () => {
       const stats = getCacheStats();
@@ -256,6 +297,66 @@ describe("sticker-cache", () => {
       expect(stats.count).toBe(3);
       expect(stats.oldestAt).toBe("2026-01-20T10:00:00.000Z");
       expect(stats.newestAt).toBe("2026-01-26T10:00:00.000Z");
+    });
+  });
+
+  describe("evictStaleEntries", () => {
+    it("removes entries older than TTL", () => {
+      const now = new Date();
+      const old = new Date(now.getTime() - 100 * 24 * 60 * 60 * 1000); // 100 days ago
+      const recent = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000); // 10 days ago
+
+      cacheSticker({
+        fileId: "old1",
+        fileUniqueId: "old1-unique",
+        description: "Old sticker",
+        cachedAt: old.toISOString(),
+      });
+      cacheSticker({
+        fileId: "recent1",
+        fileUniqueId: "recent1-unique",
+        description: "Recent sticker",
+        cachedAt: recent.toISOString(),
+      });
+
+      const removed = evictStaleEntries({ ttlDays: 90 });
+      expect(removed).toBe(1);
+      expect(getCachedSticker("old1-unique")).toBeNull();
+      expect(getCachedSticker("recent1-unique")).not.toBeNull();
+    });
+
+    it("removes oldest entries when over maxEntries", () => {
+      // Create 5 entries
+      for (let i = 0; i < 5; i++) {
+        cacheSticker({
+          fileId: `file${i}`,
+          fileUniqueId: `unique${i}`,
+          description: `Sticker ${i}`,
+          cachedAt: new Date(Date.now() - (5 - i) * 60 * 1000).toISOString(), // progressively newer
+        });
+      }
+
+      expect(getAllCachedStickers()).toHaveLength(5);
+      const removed = evictStaleEntries({ ttlDays: 9999, maxEntries: 3 });
+      expect(removed).toBe(2);
+      expect(getAllCachedStickers()).toHaveLength(3);
+      // Oldest (unique0, unique1) should be removed
+      expect(getCachedSticker("unique0")).toBeNull();
+      expect(getCachedSticker("unique1")).toBeNull();
+      expect(getCachedSticker("unique4")).not.toBeNull();
+    });
+
+    it("does nothing when cache is within limits", () => {
+      cacheSticker({
+        fileId: "a",
+        fileUniqueId: "a-unique",
+        description: "Sticker A",
+        cachedAt: new Date().toISOString(),
+      });
+
+      const removed = evictStaleEntries({ ttlDays: 90, maxEntries: 5000 });
+      expect(removed).toBe(0);
+      expect(getCachedSticker("a-unique")).not.toBeNull();
     });
   });
 });

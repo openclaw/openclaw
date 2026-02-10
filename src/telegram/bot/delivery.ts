@@ -1,8 +1,11 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import type { TelegramInlineButtons } from "../button-types.js";
+import type { StickerMetadata, TelegramContext } from "./types.js";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { danger, logVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
@@ -10,10 +13,8 @@ import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
-import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
@@ -30,7 +31,6 @@ import {
   resolveTelegramReplyId,
   type TelegramThreadSpec,
 } from "./helpers.js";
-import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
@@ -95,7 +95,8 @@ export async function deliverReplies(params: {
   };
   for (const reply of replies) {
     const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
-    if (!reply?.text && !hasMedia) {
+    const hasSticker = Boolean(reply?.stickerId);
+    if (!reply?.text && !hasMedia && !hasSticker) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
@@ -104,6 +105,28 @@ export async function deliverReplies(params: {
       continue;
     }
     const replyToId = replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+
+    // Handle sticker delivery before text/media
+    if (hasSticker) {
+      const stickerReplyToId =
+        replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
+      await withTelegramApiErrorLogging({
+        operation: "sendSticker",
+        runtime,
+        fn: () =>
+          bot.api.sendSticker(chatId, reply.stickerId!, {
+            ...buildTelegramSendParams({ replyToMessageId: stickerReplyToId, thread }),
+          }),
+      });
+      markDelivered();
+      if (replyToId && !hasReplied) {
+        hasReplied = true;
+      }
+      // If there's no text or media, we're done with this reply
+      if (!reply.text && !hasMedia) {
+        continue;
+      }
+    }
     const replyToMessageIdForPayload =
       replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
     const mediaList = reply.mediaUrls?.length
@@ -324,40 +347,73 @@ export async function resolveMedia(
     return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
   };
 
-  // Handle stickers separately - only static stickers (WEBP) are supported
+  // Handle stickers — supports static (WEBP), animated (TGS), and video (WEBM).
+  // For non-static stickers we download the thumbnail (static WEBP/JPEG ~320x320)
+  // instead of the full animation/video, which unlocks the vision+cache pipeline.
   if (msg.sticker) {
     const sticker = msg.sticker;
-    // Skip animated (TGS) and video (WEBM) stickers - only static WEBP supported
-    if (sticker.is_animated || sticker.is_video) {
-      logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
-      return null;
-    }
     if (!sticker.file_id) {
       return null;
     }
 
+    const isNonStatic = Boolean(sticker.is_animated || sticker.is_video);
+
+    // Check sticker cache first (applies to all sticker types)
+    const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+
     try {
-      const file = await ctx.getFile();
-      if (!file.file_path) {
-        logVerbose("telegram: getFile returned no file_path for sticker");
-        return null;
-      }
       const fetchImpl = proxyFetch ?? globalThis.fetch;
       if (!fetchImpl) {
         logVerbose("telegram: fetch not available for sticker download");
         return null;
       }
-      const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
+      let saved: { path: string; contentType?: string } | null = null;
 
-      // Check sticker cache for existing description
-      const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+      if (isNonStatic) {
+        // Animated/video stickers: download the static thumbnail
+        const thumbResult = await downloadStickerThumbnail(sticker, token, fetchImpl, maxBytes);
+        if (thumbResult) {
+          saved = thumbResult;
+        } else if (cached) {
+          // No thumbnail available but we have a cached description — still useful
+          logVerbose(
+            `telegram: no thumbnail for ${sticker.is_video ? "video" : "animated"} sticker, using cache`,
+          );
+        } else {
+          logVerbose(
+            `telegram: no thumbnail and no cache for ${sticker.is_video ? "video" : "animated"} sticker; skipping`,
+          );
+          return null;
+        }
+      } else {
+        // Static WEBP stickers: download the full file (existing behavior)
+        const file = await ctx.getFile();
+        if (!file.file_path) {
+          logVerbose("telegram: getFile returned no file_path for sticker");
+          return null;
+        }
+        const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+        const fetched = await fetchRemoteMedia({
+          url,
+          fetchImpl,
+          filePathHint: file.file_path,
+        });
+        const originalName = fetched.fileName ?? file.file_path;
+        saved = await saveMediaBuffer(
+          fetched.buffer,
+          fetched.contentType,
+          "inbound",
+          maxBytes,
+          originalName,
+        );
+      }
+
       if (cached) {
         logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
         const fileId = sticker.file_id ?? cached.fileId;
         const emoji = sticker.emoji ?? cached.emoji;
         const setName = sticker.set_name ?? cached.setName;
         if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
-          // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
           cacheSticker({
             ...cached,
             fileId,
@@ -366,8 +422,8 @@ export async function resolveMedia(
           });
         }
         return {
-          path: saved.path,
-          contentType: saved.contentType,
+          path: saved?.path ?? "",
+          contentType: saved?.contentType,
           placeholder: "<media:sticker>",
           stickerMetadata: {
             emoji,
@@ -375,11 +431,16 @@ export async function resolveMedia(
             fileId,
             fileUniqueId: sticker.file_unique_id,
             cachedDescription: cached.description,
+            isVideo: sticker.is_video || undefined,
+            isAnimated: sticker.is_animated || undefined,
           },
         };
       }
 
-      // Cache miss - return metadata for vision processing
+      // Cache miss — return metadata for vision processing
+      if (!saved) {
+        return null;
+      }
       return {
         path: saved.path,
         contentType: saved.contentType,
@@ -389,6 +450,8 @@ export async function resolveMedia(
           setName: sticker.set_name ?? undefined,
           fileId: sticker.file_id,
           fileUniqueId: sticker.file_unique_id,
+          isVideo: sticker.is_video || undefined,
+          isAnimated: sticker.is_animated || undefined,
         },
       };
     } catch (err) {
@@ -579,5 +642,51 @@ async function sendTelegramText(
       return res.message_id;
     }
     throw err;
+  }
+}
+
+/**
+ * Download the static thumbnail for an animated/video sticker.
+ * Returns saved file info or null if no thumbnail is available.
+ */
+async function downloadStickerThumbnail(
+  sticker: { thumbnail?: { file_id: string }; is_video?: boolean; is_animated?: boolean },
+  token: string,
+  fetchImpl: typeof fetch,
+  maxBytes: number,
+): Promise<{ path: string; contentType?: string } | null> {
+  const thumb = sticker.thumbnail;
+  if (!thumb?.file_id) {
+    return null;
+  }
+  try {
+    const getFileUrl = `https://api.telegram.org/bot${token}/getFile?file_id=${thumb.file_id}`;
+    const getFileRes = await fetchImpl(getFileUrl);
+    if (!getFileRes.ok) {
+      logVerbose(`telegram: getFile for thumbnail failed: ${getFileRes.status}`);
+      return null;
+    }
+    const getFileData = (await getFileRes.json()) as {
+      ok: boolean;
+      result?: { file_path?: string };
+    };
+    const filePath = getFileData.result?.file_path;
+    if (!filePath) {
+      logVerbose("telegram: getFile for thumbnail returned no file_path");
+      return null;
+    }
+    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const fetched = await fetchRemoteMedia({ url, fetchImpl, filePathHint: filePath });
+    const originalName = fetched.fileName ?? filePath;
+    return await saveMediaBuffer(
+      fetched.buffer,
+      fetched.contentType,
+      "inbound",
+      maxBytes,
+      originalName,
+    );
+  } catch (err) {
+    logVerbose(`telegram: failed to download sticker thumbnail: ${String(err)}`);
+    return null;
   }
 }

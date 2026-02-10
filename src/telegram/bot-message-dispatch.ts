@@ -1,4 +1,10 @@
 import type { Bot } from "grammy";
+import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   findModelInCatalog,
@@ -17,15 +23,10 @@ import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
-import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
-import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
-import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
+import { resolveCustomEmojiAnnotations } from "./custom-emoji.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { renderTelegramHtmlText } from "./format.js";
@@ -34,7 +35,7 @@ import {
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
 import { editMessageTelegram } from "./send.js";
-import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import { cacheSticker, describeStickerImage, indexStickerSet } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
@@ -322,6 +323,8 @@ export const dispatchTelegramMessage = async ({
         cfg,
         agentDir,
         agentId: route.agentId,
+        contentType: ctxPayload.MediaType,
+        visionModel: telegramCfg.stickerVisionModel,
       });
     }
     if (description) {
@@ -357,8 +360,51 @@ export const dispatchTelegramMessage = async ({
           receivedFrom: ctxPayload.From,
         });
         logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
+
+        // Fire-and-forget: pre-index the entire sticker set for vocabulary building
+        if (sticker.setName && telegramCfg.stickerSetIndexing !== false) {
+          void indexStickerSet({
+            setName: sticker.setName,
+            bot,
+            token: opts.token,
+            cfg,
+            agentDir,
+            agentId: route.agentId,
+            limit: telegramCfg.stickerSetIndexLimit ?? 20,
+            visionModel: telegramCfg.stickerVisionModel,
+          }).catch((err) =>
+            logVerbose(`telegram: set indexing failed for "${sticker.setName}": ${String(err)}`),
+          );
+        }
       } else {
         logVerbose(`telegram: skipped sticker cache (missing fileId)`);
+      }
+    }
+  }
+
+  // Annotate custom emoji in the message body with vision descriptions
+  if (telegramCfg.customEmojiVision && ctxPayload.Body) {
+    const entities = msg.entities ?? msg.caption_entities ?? [];
+    const hasCustomEmoji = entities.some((e) => e.type === "custom_emoji");
+    if (hasCustomEmoji) {
+      try {
+        const agentDir = resolveAgentDir(cfg, route.agentId);
+        const { annotatedText } = await resolveCustomEmojiAnnotations({
+          text: ctxPayload.Body,
+          entities,
+          bot,
+          token: opts.token,
+          cfg,
+          agentDir,
+          agentId: route.agentId,
+          visionModel: telegramCfg.stickerVisionModel,
+        });
+        if (annotatedText !== ctxPayload.Body) {
+          ctxPayload.Body = annotatedText;
+          ctxPayload.BodyForAgent = annotatedText;
+        }
+      } catch (err) {
+        logVerbose(`telegram: custom emoji annotation failed: ${String(err)}`);
       }
     }
   }

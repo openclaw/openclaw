@@ -1,7 +1,8 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
-import { deliverReplies } from "./delivery.js";
+import type { TelegramContext } from "./types.js";
+import { deliverReplies, resolveMedia } from "./delivery.js";
 
 const loadWebMedia = vi.fn();
 const baseDeliveryParams = {
@@ -20,6 +21,23 @@ type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
 vi.mock("../../web/media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
+}));
+
+const mockFetchRemoteMedia = vi.fn();
+vi.mock("../../media/fetch.js", () => ({
+  fetchRemoteMedia: (...args: unknown[]) => mockFetchRemoteMedia(...args),
+}));
+
+const mockSaveMediaBuffer = vi.fn();
+vi.mock("../../media/store.js", () => ({
+  saveMediaBuffer: (...args: unknown[]) => mockSaveMediaBuffer(...args),
+}));
+
+const mockGetCachedSticker = vi.fn();
+const mockCacheSticker = vi.fn();
+vi.mock("../sticker-cache.js", () => ({
+  getCachedSticker: (...args: unknown[]) => mockGetCachedSticker(...args),
+  cacheSticker: (...args: unknown[]) => mockCacheSticker(...args),
 }));
 
 vi.mock("grammy", () => ({
@@ -338,5 +356,367 @@ describe("deliverReplies", () => {
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("sends sticker when stickerId is provided", async () => {
+    const runtime = { error: vi.fn() };
+    const sendSticker = vi.fn().mockResolvedValue({
+      message_id: 20,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendSticker } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ stickerId: "sticker-file-id-123" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendSticker).toHaveBeenCalledTimes(1);
+    expect(sendSticker).toHaveBeenCalledWith("123", "sticker-file-id-123", expect.any(Object));
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("sends sticker and text when both provided", async () => {
+    const runtime = { error: vi.fn() };
+    const sendSticker = vi.fn().mockResolvedValue({
+      message_id: 21,
+      chat: { id: "123" },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 22,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendSticker, sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ stickerId: "sticker-file-id-456", text: "Look at this!" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendSticker).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Look at this!"),
+      expect.any(Object),
+    );
+  });
+
+  it("does not send sticker when stickerId is absent (unchanged behavior)", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendSticker = vi.fn();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 23,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendSticker, sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "Just text" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendSticker).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveMedia", () => {
+  const TOKEN = "test-token";
+  const MAX_BYTES = 5 * 1024 * 1024;
+
+  function makeFetchMock(
+    responses: Record<string, { ok: boolean; json?: unknown; buffer?: Buffer }>,
+  ) {
+    return vi.fn(async (url: string) => {
+      const match = Object.entries(responses).find(([pattern]) => url.includes(pattern));
+      const resp = match?.[1] ?? { ok: false };
+      return {
+        ok: resp.ok,
+        status: resp.ok ? 200 : 404,
+        json: async () => resp.json,
+        arrayBuffer: async () => (resp.buffer ?? Buffer.alloc(0)).buffer,
+        headers: new Map([["content-type", "image/webp"]]),
+      };
+    }) as unknown as typeof fetch;
+  }
+
+  beforeEach(() => {
+    mockFetchRemoteMedia.mockReset();
+    mockSaveMediaBuffer.mockReset();
+    mockGetCachedSticker.mockReset();
+    mockCacheSticker.mockReset();
+  });
+
+  it("video sticker with thumbnail returns media with isVideo metadata", async () => {
+    const proxyFetch = makeFetchMock({
+      getFile: {
+        ok: true,
+        json: { ok: true, result: { file_path: "thumbnails/thumb.webp" } },
+      },
+      "file/bot": {
+        ok: true,
+        buffer: Buffer.from("thumb-data"),
+      },
+    });
+    mockGetCachedSticker.mockReturnValue(null);
+    mockFetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("thumb-data"),
+      contentType: "image/webp",
+      fileName: "thumb.webp",
+    });
+    mockSaveMediaBuffer.mockResolvedValue({
+      path: "/tmp/thumb.webp",
+      contentType: "image/webp",
+    });
+
+    const ctx: TelegramContext = {
+      message: {
+        message_id: 1,
+        date: 0,
+        chat: { id: 123, type: "private" },
+        sticker: {
+          file_id: "sticker-file-id",
+          file_unique_id: "sticker-unique-id",
+          type: "regular" as const,
+          width: 512,
+          height: 512,
+          is_animated: false,
+          is_video: true,
+          emoji: "😘",
+          set_name: "VideoStickerPack",
+          thumbnail: {
+            file_id: "thumb-file-id",
+            file_unique_id: "thumb-unique-id",
+            width: 128,
+            height: 128,
+          },
+        },
+      },
+      getFile: vi.fn(),
+    };
+
+    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
+
+    expect(result).not.toBeNull();
+    expect(result!.stickerMetadata?.isVideo).toBe(true);
+    expect(result!.stickerMetadata?.emoji).toBe("😘");
+    expect(result!.stickerMetadata?.setName).toBe("VideoStickerPack");
+    expect(result!.placeholder).toBe("<media:sticker>");
+  });
+
+  it("animated sticker with thumbnail returns media with isAnimated metadata", async () => {
+    const proxyFetch = makeFetchMock({
+      getFile: {
+        ok: true,
+        json: { ok: true, result: { file_path: "thumbnails/thumb.webp" } },
+      },
+      "file/bot": {
+        ok: true,
+        buffer: Buffer.from("thumb-data"),
+      },
+    });
+    mockGetCachedSticker.mockReturnValue(null);
+    mockFetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("thumb-data"),
+      contentType: "image/webp",
+      fileName: "thumb.webp",
+    });
+    mockSaveMediaBuffer.mockResolvedValue({
+      path: "/tmp/thumb.webp",
+      contentType: "image/webp",
+    });
+
+    const ctx: TelegramContext = {
+      message: {
+        message_id: 1,
+        date: 0,
+        chat: { id: 123, type: "private" },
+        sticker: {
+          file_id: "sticker-file-id",
+          file_unique_id: "sticker-unique-id",
+          type: "regular" as const,
+          width: 512,
+          height: 512,
+          is_animated: true,
+          is_video: false,
+          emoji: "🎉",
+          thumbnail: {
+            file_id: "thumb-file-id",
+            file_unique_id: "thumb-unique-id",
+            width: 128,
+            height: 128,
+          },
+        },
+      },
+      getFile: vi.fn(),
+    };
+
+    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
+
+    expect(result).not.toBeNull();
+    expect(result!.stickerMetadata?.isAnimated).toBe(true);
+    expect(result!.stickerMetadata?.isVideo).toBeUndefined();
+  });
+
+  it("video sticker with no thumbnail and no cache returns null", async () => {
+    mockGetCachedSticker.mockReturnValue(null);
+
+    const ctx: TelegramContext = {
+      message: {
+        message_id: 1,
+        date: 0,
+        chat: { id: 123, type: "private" },
+        sticker: {
+          file_id: "sticker-file-id",
+          file_unique_id: "sticker-unique-id",
+          type: "regular" as const,
+          width: 512,
+          height: 512,
+          is_animated: false,
+          is_video: true,
+          // no thumbnail
+        },
+      },
+      getFile: vi.fn(),
+    };
+
+    const proxyFetch = vi.fn() as unknown as typeof fetch;
+    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
+
+    expect(result).toBeNull();
+  });
+
+  it("video sticker with cache hit returns cached description", async () => {
+    mockGetCachedSticker.mockReturnValue({
+      fileId: "sticker-file-id",
+      fileUniqueId: "sticker-unique-id",
+      emoji: "😘",
+      setName: "VideoStickerPack",
+      description: "A kissing face",
+      cachedAt: "2026-01-26T12:00:00.000Z",
+    });
+
+    const ctx: TelegramContext = {
+      message: {
+        message_id: 1,
+        date: 0,
+        chat: { id: 123, type: "private" },
+        sticker: {
+          file_id: "sticker-file-id",
+          file_unique_id: "sticker-unique-id",
+          type: "regular" as const,
+          width: 512,
+          height: 512,
+          is_animated: false,
+          is_video: true,
+          emoji: "😘",
+          set_name: "VideoStickerPack",
+          // no thumbnail needed — cache covers it
+        },
+      },
+      getFile: vi.fn(),
+    };
+
+    const proxyFetch = vi.fn() as unknown as typeof fetch;
+    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
+
+    expect(result).not.toBeNull();
+    expect(result!.stickerMetadata?.cachedDescription).toBe("A kissing face");
+    expect(result!.stickerMetadata?.isVideo).toBe(true);
+    expect(result!.path).toBe("");
+  });
+
+  it("thumbnail download failure returns null gracefully", async () => {
+    const proxyFetch = makeFetchMock({
+      getFile: { ok: false },
+    });
+    mockGetCachedSticker.mockReturnValue(null);
+
+    const ctx: TelegramContext = {
+      message: {
+        message_id: 1,
+        date: 0,
+        chat: { id: 123, type: "private" },
+        sticker: {
+          file_id: "sticker-file-id",
+          file_unique_id: "sticker-unique-id",
+          type: "regular" as const,
+          width: 512,
+          height: 512,
+          is_animated: false,
+          is_video: true,
+          thumbnail: {
+            file_id: "thumb-file-id",
+            file_unique_id: "thumb-unique-id",
+            width: 128,
+            height: 128,
+          },
+        },
+      },
+      getFile: vi.fn(),
+    };
+
+    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
+
+    expect(result).toBeNull();
+  });
+
+  it("static WEBP sticker works unchanged (regression guard)", async () => {
+    mockGetCachedSticker.mockReturnValue(null);
+    mockFetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("webp-data"),
+      contentType: "image/webp",
+      fileName: "sticker.webp",
+    });
+    mockSaveMediaBuffer.mockResolvedValue({
+      path: "/tmp/sticker.webp",
+      contentType: "image/webp",
+    });
+
+    const ctx: TelegramContext = {
+      message: {
+        message_id: 1,
+        date: 0,
+        chat: { id: 123, type: "private" },
+        sticker: {
+          file_id: "sticker-file-id",
+          file_unique_id: "sticker-unique-id",
+          type: "regular" as const,
+          width: 512,
+          height: 512,
+          is_animated: false,
+          is_video: false,
+          emoji: "😎",
+          set_name: "StaticPack",
+        },
+      },
+      getFile: vi.fn().mockResolvedValue({ file_path: "stickers/sticker.webp" }),
+    };
+
+    const proxyFetch = vi.fn() as unknown as typeof fetch;
+    const result = await resolveMedia(ctx, MAX_BYTES, TOKEN, proxyFetch);
+
+    expect(result).not.toBeNull();
+    expect(result!.stickerMetadata?.isVideo).toBeUndefined();
+    expect(result!.stickerMetadata?.isAnimated).toBeUndefined();
+    expect(result!.stickerMetadata?.emoji).toBe("😎");
+    expect(result!.stickerMetadata?.setName).toBe("StaticPack");
+    expect(result!.path).toBe("/tmp/sticker.webp");
   });
 });
