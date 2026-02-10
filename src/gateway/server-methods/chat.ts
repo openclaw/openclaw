@@ -199,6 +199,7 @@ function appendAssistantTranscriptMessage(params: {
  */
 function appendCommandTranscriptMessages(params: {
   userMessage: string;
+  userImages?: ChatImageContent[];
   assistantMessage: string;
   label?: string;
   sessionId: string;
@@ -232,9 +233,17 @@ function appendCommandTranscriptMessages(params: {
 
   const userBody: AppendMessageArg & Record<string, unknown> = {
     role: "user",
-    content: [{ type: "text", text: params.userMessage }],
+    content: [{ type: "text" as const, text: params.userMessage }],
     timestamp: now,
   };
+  if (params.userImages?.length) {
+    // Include attachment images in the user transcript entry so the full input is preserved.
+    (userBody as Record<string, unknown>).images = params.userImages.map((img) => ({
+      type: "image",
+      data: img.data,
+      mimeType: img.mimeType,
+    }));
+  }
 
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
   const usage = {
@@ -672,6 +681,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
               const appended = appendCommandTranscriptMessages({
                 userMessage: parsedMessage,
+                userImages: parsedImages.length > 0 ? parsedImages : undefined,
                 assistantMessage: combinedReply,
                 sessionId,
                 storePath: latestStorePath,
