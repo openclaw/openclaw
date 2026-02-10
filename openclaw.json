@@ -17,40 +17,16 @@
       }
     }
   },
- "tools": {
-    "browser": {
-      "enabled": true,
-      "mode": "openclaw",
-      "headless": true,
-      "args": [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--incognito"
-      ],
-      "screenshot": true
-    },
-    "exec": {
-      "enabled": true,
-      "ask": "on",
-      "timeout": 30
-    },
-    "file": {
-      "enabled": true,
-      "basePath": "./workspace",
-      "allowAbsolutePaths": false
-    }
-  }, 
   "agents": {
     "defaults": {
       "model": {
         "primary": "openrouter/minimax/minimax-m2.1"
       },
     "sandbox": {
-        "mode": "non-main",
-        "scope": "session",
-        "workspaceAccess": "ro",
-        "containerImage": "openclaw/sandbox-base:latest"
-      },
+            "mode": "non-main",
+            "scope": "session",
+            "workspaceAccess": "ro"
+    },
       "models": {
         "openrouter/auto": {
           "alias": "OpenRouter"
