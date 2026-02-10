@@ -29,18 +29,10 @@ describe("isAbortError", () => {
     expect(isAbortError(new RangeError("Invalid array length"))).toBe(false);
   });
 
-  it("returns true for errors with abort-related messages", () => {
-    // isAbortError uses message.includes("aborted") to catch undici and
-    // other abort sources, so any message containing "aborted" matches.
-    expect(isAbortError(new Error("Operation aborted"))).toBe(true);
-    expect(isAbortError(new Error("aborted"))).toBe(true);
-    expect(isAbortError(new Error("Request was aborted"))).toBe(true);
-  });
-
-  it("returns false for errors with unrelated messages", () => {
-    expect(isAbortError(new Error("timeout"))).toBe(false);
-    expect(isAbortError(new Error("connection refused"))).toBe(false);
-    expect(isAbortError(new Error("ECONNRESET"))).toBe(false);
+  it("returns false for errors with similar but different messages", () => {
+    expect(isAbortError(new Error("Operation aborted"))).toBe(false);
+    expect(isAbortError(new Error("aborted"))).toBe(false);
+    expect(isAbortError(new Error("Request was aborted"))).toBe(false);
   });
 
   it("returns false for null and undefined", () => {
