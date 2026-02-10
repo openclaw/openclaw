@@ -684,34 +684,81 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      // Read the deleted file to extract metadata
-      const fileContent = fs.readFileSync(deletedPath, "utf-8");
-      const lines = fileContent.split("\n").filter((line) => line.trim());
-
-      // Look for metadata line at the end
+      // Read only the tail of the file to extract metadata (avoid loading full transcript)
+      const TAIL_SIZE = 8192; // Read last 8KB to find metadata
+      const stat = fs.statSync(deletedPath);
+      const fileSize = stat.size;
       let metadata: unknown = null;
-      let transcriptLines = lines;
+      let hasMetadata = false;
 
-      if (lines.length > 0) {
-        const lastLine = lines[lines.length - 1];
+      if (fileSize > 0) {
+        const readSize = Math.min(TAIL_SIZE, fileSize);
+        const buffer = Buffer.alloc(readSize);
+        const fd = fs.openSync(deletedPath, "r");
         try {
-          const parsed = JSON.parse(lastLine);
-          if (parsed.__session_metadata__) {
-            metadata = parsed.__session_metadata__;
-            // Remove metadata line from transcript
-            transcriptLines = lines.slice(0, -1);
+          fs.readSync(fd, buffer, 0, readSize, fileSize - readSize);
+          const tail = buffer.toString("utf-8");
+          const lines = tail.split("\n");
+          // Check last non-empty line for metadata
+          for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i].trim();
+            if (!line) {
+              continue;
+            }
+            try {
+              const parsed = JSON.parse(line);
+              if (parsed.__session_metadata__) {
+                metadata = parsed.__session_metadata__;
+                hasMetadata = true;
+                break;
+              }
+            } catch {
+              // Not JSON or not metadata
+            }
+            break; // Only check the last non-empty line
           }
-        } catch {
-          // Last line isn't metadata, that's fine
+        } finally {
+          fs.closeSync(fd);
         }
       }
 
-      // Write the transcript file without metadata line
-      fs.writeFileSync(
-        restoredPath,
-        transcriptLines.join("\n") + (transcriptLines.length > 0 ? "\n" : ""),
-        "utf-8",
-      );
+      // Copy the deleted file to restored path, removing metadata line if present
+      if (hasMetadata && fileSize > 0) {
+        // Stream copy, excluding the last line
+        const input = fs.createReadStream(deletedPath, { encoding: "utf-8" });
+        const output = fs.createWriteStream(restoredPath, { encoding: "utf-8" });
+        let buffer = "";
+        let lastLine = "";
+
+        await new Promise<void>((resolve, reject) => {
+          input.on("data", (chunk: string) => {
+            buffer += chunk;
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || ""; // Keep incomplete line in buffer
+            for (const line of lines) {
+              if (lastLine) {
+                output.write(lastLine + "\n");
+              }
+              lastLine = line;
+            }
+          });
+          input.on("end", () => {
+            // Don't write the last line (it's the metadata)
+            if (buffer && buffer !== lastLine) {
+              if (lastLine) {
+                output.write(lastLine + "\n");
+              }
+            }
+            output.end();
+          });
+          output.on("finish", resolve);
+          input.on("error", reject);
+          output.on("error", reject);
+        });
+      } else {
+        // No metadata, just copy the file as-is
+        fs.copyFileSync(deletedPath, restoredPath);
+      }
 
       // Delete ALL archived files for this sessionId to prevent duplicates
       const allFiles = fs.readdirSync(sessionsDir);
