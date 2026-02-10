@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveChannelGroupPolicy } from "../../../src/config/group-policy.js";
 import {
   resolveIrcGroupAccessGate,
   resolveIrcGroupMatch,
@@ -97,5 +98,35 @@ describe("irc policy", () => {
       commandAuthorized: true,
     });
     expect(gate.shouldSkip).toBe(false);
+  });
+
+  it("keeps case-insensitive group matching aligned with shared channel policy resolution", () => {
+    const groups = {
+      "#Ops": { requireMention: false },
+      "#Hidden": { enabled: false },
+      "*": { requireMention: true },
+    };
+
+    const inboundDirect = resolveIrcGroupMatch({ groups, target: "#ops" });
+    const sharedDirect = resolveChannelGroupPolicy({
+      cfg: { channels: { irc: { groups } } },
+      channel: "irc",
+      groupId: "#ops",
+      groupIdCaseInsensitive: true,
+    });
+    expect(sharedDirect.allowed).toBe(inboundDirect.allowed);
+    expect(sharedDirect.groupConfig?.requireMention).toBe(
+      inboundDirect.groupConfig?.requireMention,
+    );
+
+    const inboundDisabled = resolveIrcGroupMatch({ groups, target: "#hidden" });
+    const sharedDisabled = resolveChannelGroupPolicy({
+      cfg: { channels: { irc: { groups } } },
+      channel: "irc",
+      groupId: "#hidden",
+      groupIdCaseInsensitive: true,
+    });
+    expect(sharedDisabled.allowed).toBe(inboundDisabled.allowed);
+    expect(sharedDisabled.groupConfig?.enabled).toBe(inboundDisabled.groupConfig?.enabled);
   });
 });

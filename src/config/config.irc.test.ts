@@ -46,6 +46,27 @@ describe("config irc", () => {
     expect(res.config.channels?.irc?.dmPolicy).toBe("open");
   });
 
+  it("accepts mixed allowFrom value types for IRC", () => {
+    const res = validateConfigObject({
+      channels: {
+        irc: {
+          allowFrom: [12345, "alice"],
+          groupAllowFrom: [67890, "alice!ident@example.org"],
+          groups: {
+            "#ops": {
+              allowFrom: [42, "alice"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.config.channels?.irc?.allowFrom).toEqual([12345, "alice"]);
+    expect(res.config.channels?.irc?.groupAllowFrom).toEqual([67890, "alice!ident@example.org"]);
+    expect(res.config.channels?.irc?.groups?.["#ops"]?.allowFrom).toEqual([42, "alice"]);
+  });
+
   it("rejects nickserv register without registerEmail", () => {
     const res = validateConfigObject({
       channels: {

@@ -16,7 +16,7 @@ const IrcGroupSchema = z
     toolsBySender: z.record(z.string(), ToolPolicySchema).optional(),
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
-    allowFrom: z.array(z.string()).optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
   })
   .strict();
@@ -55,9 +55,9 @@ export const IrcAccountSchemaBase = z
     passwordFile: z.string().optional(),
     nickserv: IrcNickServSchema.optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.string()).optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    groupAllowFrom: z.array(z.string()).optional(),
+    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z.record(z.string(), IrcGroupSchema.optional()).optional(),
     channels: z.array(z.string()).optional(),
     mentionPatterns: z.array(z.string()).optional(),

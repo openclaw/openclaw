@@ -4,6 +4,7 @@ description: Connect OpenClaw to IRC channels and direct messages.
 ---
 
 Use IRC when you want OpenClaw in classic channels (`#room`) and direct messages.
+IRC ships as an extension plugin, but it is configured in the main config under `channels.irc`.
 
 ## Quick start
 

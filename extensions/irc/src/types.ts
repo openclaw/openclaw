@@ -6,7 +6,7 @@ export type IrcChannelConfig = {
   toolsBySender?: Record<string, unknown>;
   skills?: string[];
   enabled?: boolean;
-  allowFrom?: string[];
+  allowFrom?: Array<string | number>;
   systemPrompt?: string;
 };
 
@@ -32,9 +32,9 @@ export type IrcAccountConfig = {
   passwordFile?: string;
   nickserv?: IrcNickServConfig;
   dmPolicy?: "pairing" | "open" | "allowlist" | "disabled";
-  allowFrom?: string[];
+  allowFrom?: Array<string | number>;
   groupPolicy?: "open" | "allowlist" | "disabled";
-  groupAllowFrom?: string[];
+  groupAllowFrom?: Array<string | number>;
   groups?: Record<string, IrcChannelConfig>;
   channels?: string[];
   mentionPatterns?: string[];
