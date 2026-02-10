@@ -277,6 +277,10 @@ export class ConvosSDKClient {
     }
 
     try {
+      // Snapshot existing group IDs before joining so we can diff after
+      await this.agent.client.conversations.sync();
+      const beforeIds = new Set(this.agent.client.conversations.listGroups().map((g) => g.id));
+
       const result = await this.convos.join(invite);
 
       if (this.debug) {
@@ -288,26 +292,40 @@ export class ConvosSDKClient {
       }
 
       // convos.join() returns the invite token as conversationId (not the XMTP
-      // group ID). Resolve the real group ID via listGroups() so callers can
-      // use it for send/rename. listGroups() also returns proper Group objects
-      // with updateAppData(), needed for setConversationProfile().
+      // group ID). The join is asynchronous — the creator agent needs time to
+      // process the join request DM and add us to the group. Poll until the
+      // new group appears in our conversation list.
       let conversationId: string = result.conversationId;
-      try {
-        await this.agent.client.conversations.sync();
-        const groups = this.agent.client.conversations.listGroups();
-        const group = groups[groups.length - 1];
-        if (group) {
-          conversationId = group.id;
-          console.log(`[convos-sdk] Resolved group ID: ${group.id}`);
+      const MAX_ATTEMPTS = 15;
+      const POLL_INTERVAL_MS = 1000;
 
-          if (name) {
-            const convosGroup = this.convos.group(group);
-            await convosGroup.setConversationProfile({ name });
-            console.log(`[convos-sdk] Set profile name: "${name}"`);
+      for (let i = 0; i < MAX_ATTEMPTS; i++) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        try {
+          await this.agent.client.conversations.sync();
+          const groups = this.agent.client.conversations.listGroups();
+          const newGroup = groups.find((g) => !beforeIds.has(g.id));
+          if (newGroup) {
+            conversationId = newGroup.id;
+            console.log(
+              `[convos-sdk] Resolved group ID: ${newGroup.id} (after ${i + 1} attempt(s))`,
+            );
+            if (name) {
+              const convosGroup = this.convos.group(newGroup);
+              await convosGroup.setConversationProfile({ name });
+              console.log(`[convos-sdk] Set profile name: "${name}"`);
+            }
+            break;
           }
+        } catch (err) {
+          console.warn(`[convos-sdk] Poll attempt ${i + 1} failed:`, err);
         }
-      } catch (err) {
-        console.warn(`[convos-sdk] Failed to resolve group / set profile:`, err);
+      }
+
+      if (conversationId === result.conversationId) {
+        console.warn(
+          `[convos-sdk] Could not resolve group ID after ${MAX_ATTEMPTS} attempts, using raw token`,
+        );
       }
 
       return { status: "joined", conversationId };
