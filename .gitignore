@@ -72,6 +72,10 @@ apps/ios/*.mobileprovision
 IDENTITY.md
 USER.md
 .tgz
+.claude/
+local/
+nul
+start-gateway.ps1
 
 # local tooling
 .serena/
