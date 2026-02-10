@@ -353,44 +353,48 @@ export async function installHooksFromArchive(params: {
   }
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-"));
-  const extractDir = path.join(tmpDir, "extract");
-  await fs.mkdir(extractDir, { recursive: true });
-
-  logger.info?.(`Extracting ${archivePath}…`);
   try {
-    await extractArchive({ archivePath, destDir: extractDir, timeoutMs, logger });
-  } catch (err) {
-    return { ok: false, error: `failed to extract archive: ${String(err)}` };
-  }
+    const extractDir = path.join(tmpDir, "extract");
+    await fs.mkdir(extractDir, { recursive: true });
 
-  let rootDir = "";
-  try {
-    rootDir = await resolvePackedRootDir(extractDir);
-  } catch (err) {
-    return { ok: false, error: String(err) };
-  }
+    logger.info?.(`Extracting ${archivePath}…`);
+    try {
+      await extractArchive({ archivePath, destDir: extractDir, timeoutMs, logger });
+    } catch (err) {
+      return { ok: false, error: `failed to extract archive: ${String(err)}` };
+    }
 
-  const manifestPath = path.join(rootDir, "package.json");
-  if (await fileExists(manifestPath)) {
-    return await installHookPackageFromDir({
-      packageDir: rootDir,
+    let rootDir = "";
+    try {
+      rootDir = await resolvePackedRootDir(extractDir);
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+
+    const manifestPath = path.join(rootDir, "package.json");
+    if (await fileExists(manifestPath)) {
+      return await installHookPackageFromDir({
+        packageDir: rootDir,
+        hooksDir: params.hooksDir,
+        timeoutMs,
+        logger,
+        mode: params.mode,
+        dryRun: params.dryRun,
+        expectedHookPackId: params.expectedHookPackId,
+      });
+    }
+
+    return await installHookFromDir({
+      hookDir: rootDir,
       hooksDir: params.hooksDir,
-      timeoutMs,
       logger,
       mode: params.mode,
       dryRun: params.dryRun,
       expectedHookPackId: params.expectedHookPackId,
     });
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   }
-
-  return await installHookFromDir({
-    hookDir: rootDir,
-    hooksDir: params.hooksDir,
-    logger,
-    mode: params.mode,
-    dryRun: params.dryRun,
-    expectedHookPackId: params.expectedHookPackId,
-  });
 }
 
 export async function installHooksFromNpmSpec(params: {
@@ -413,35 +417,39 @@ export async function installHooksFromNpmSpec(params: {
   }
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-pack-"));
-  logger.info?.(`Downloading ${spec}…`);
-  const res = await runCommandWithTimeout(["npm", "pack", spec], {
-    timeoutMs: Math.max(timeoutMs, 300_000),
-    cwd: tmpDir,
-    env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
-  });
-  if (res.code !== 0) {
-    return { ok: false, error: `npm pack failed: ${res.stderr.trim() || res.stdout.trim()}` };
-  }
+  try {
+    logger.info?.(`Downloading ${spec}…`);
+    const res = await runCommandWithTimeout(["npm", "pack", spec], {
+      timeoutMs: Math.max(timeoutMs, 300_000),
+      cwd: tmpDir,
+      env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
+    });
+    if (res.code !== 0) {
+      return { ok: false, error: `npm pack failed: ${res.stderr.trim() || res.stdout.trim()}` };
+    }
 
-  const packed = (res.stdout || "")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .pop();
-  if (!packed) {
-    return { ok: false, error: "npm pack produced no archive" };
-  }
+    const packed = (res.stdout || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .pop();
+    if (!packed) {
+      return { ok: false, error: "npm pack produced no archive" };
+    }
 
-  const archivePath = path.join(tmpDir, packed);
-  return await installHooksFromArchive({
-    archivePath,
-    hooksDir: params.hooksDir,
-    timeoutMs,
-    logger,
-    mode,
-    dryRun,
-    expectedHookPackId,
-  });
+    const archivePath = path.join(tmpDir, packed);
+    return await installHooksFromArchive({
+      archivePath,
+      hooksDir: params.hooksDir,
+      timeoutMs,
+      logger,
+      mode,
+      dryRun,
+      expectedHookPackId,
+    });
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 export async function installHooksFromPath(params: {

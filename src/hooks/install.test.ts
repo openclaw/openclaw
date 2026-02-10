@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
 
@@ -211,6 +211,60 @@ describe("installHooksFromArchive", () => {
       return;
     }
     expect(result.error).toContain("reserved path segment");
+  });
+
+  it("cleans temporary extraction directories after archive install", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const tmpRoot = makeTempDir();
+    const archivePath = path.join(workDir, "hooks.zip");
+
+    const zip = new JSZip();
+    zip.file(
+      "package/package.json",
+      JSON.stringify({
+        name: "@openclaw/temp-cleanup-hooks",
+        version: "0.0.1",
+        openclaw: { hooks: ["./hooks/cleanup-hook"] },
+      }),
+    );
+    zip.file(
+      "package/hooks/cleanup-hook/HOOK.md",
+      [
+        "---",
+        "name: cleanup-hook",
+        "description: Cleanup hook",
+        'metadata: {"openclaw":{"events":["command:new"]}}',
+        "---",
+        "",
+        "# Cleanup Hook",
+      ].join("\n"),
+    );
+    zip.file("package/hooks/cleanup-hook/handler.ts", "export default async () => {};\n");
+    const buffer = await zip.generateAsync({ type: "nodebuffer" });
+    fs.writeFileSync(archivePath, buffer);
+
+    vi.resetModules();
+    vi.doMock("node:os", async () => {
+      const actual = await vi.importActual<typeof import("node:os")>("node:os");
+      return { ...actual, tmpdir: () => tmpRoot };
+    });
+
+    try {
+      const hooksDir = path.join(stateDir, "hooks");
+      const { installHooksFromArchive } = await import("./install.js");
+      const result = await installHooksFromArchive({ archivePath, hooksDir });
+
+      expect(result.ok).toBe(true);
+
+      const leaked = fs
+        .readdirSync(tmpRoot)
+        .filter((entry) => entry.startsWith("openclaw-hook-"));
+      expect(leaked).toHaveLength(0);
+    } finally {
+      vi.doUnmock("node:os");
+      vi.resetModules();
+    }
   });
 });
 
