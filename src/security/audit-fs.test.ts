@@ -225,8 +225,9 @@ describe("audit-fs", () => {
         posixMode: 0o600,
         env: { USERNAME: "TestUser" },
       });
-      expect(result).toContain("icacls");
-      expect(result).toContain("C:\\path\\to\\file");
+      expect(result).toBe(
+        'icacls "C:\\path\\to\\file" /inheritance:r /grant:r "TestUser:F" /grant:r "SYSTEM:F"',
+      );
     });
   });
 
@@ -333,7 +334,6 @@ describe("audit-fs", () => {
     });
 
     it("uses Windows ACL inspection on win32 platform", async () => {
-      // Mock exec function for Windows ACL inspection
       const mockExec = vi.fn().mockResolvedValue({
         stdout: "",
         stderr: "",
@@ -344,9 +344,9 @@ describe("audit-fs", () => {
         exec: mockExec,
       });
 
-      // On win32, it should attempt to use Windows ACL
+      expect(mockExec).toHaveBeenCalled();
       expect(result.ok).toBe(true);
-      // Without real icacls output, it falls back to unknown/error state
+      expect(result.source).toBe("windows-acl");
     });
   });
 });
