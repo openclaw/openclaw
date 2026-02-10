@@ -28,7 +28,10 @@
             "workspaceAccess": "ro",
             "browser": {
                 "enabled": true,
-                "cdpUrl": "ws://openclaw-browser:9222"
+                "cdpPort": 9222,
+                "headless": true,
+                "enableNoVnc": false,
+                "autoStart": true
             }
     },
       "models": {
