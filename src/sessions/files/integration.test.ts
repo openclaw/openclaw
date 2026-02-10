@@ -38,9 +38,11 @@ describe("Markdown storage integration with real files", () => {
     });
 
     const content = result.buffer.toString("utf-8");
-    // Should be markdown table format
-    expect(content).toContain("|");
-    expect(content).toContain("---");
+    // Should be raw CSV content (not markdown table)
+    expect(content).toContain(",");
+    // Should NOT contain markdown table markers
+    expect(content).not.toContain("|");
+    expect(content).not.toContain("---");
     // Should contain some data from the CSV
     expect(content.length).toBeGreaterThan(100);
 
@@ -76,9 +78,9 @@ describe("Markdown storage integration with real files", () => {
     });
 
     const content = result.buffer.toString("utf-8");
-    // Should be wrapped in json code block
-    expect(content).toContain("```json");
-    expect(content).toContain("```");
+    // Should be raw JSON content (not wrapped in code block)
+    expect(content).not.toContain("```json");
+    expect(content).not.toContain("```");
     // Should contain JSON content (check for common JSON structure)
     expect(content).toMatch(/\{/);
     expect(content.length).toBeGreaterThan(100);
@@ -182,10 +184,13 @@ describe("Markdown storage integration with real files", () => {
 
     // Verify each file can be retrieved
     const csvResult = await getFile({ sessionId, agentId, fileId: csvFileId, filesDir: testDir });
-    expect(csvResult.buffer.toString("utf-8")).toContain("|");
+    // Should be raw CSV (not markdown table)
+    expect(csvResult.buffer.toString("utf-8")).toContain(",");
+    expect(csvResult.buffer.toString("utf-8")).not.toContain("|");
 
     const jsonResult = await getFile({ sessionId, agentId, fileId: jsonFileId, filesDir: testDir });
-    expect(jsonResult.buffer.toString("utf-8")).toContain("```json");
+    // Should be raw JSON (not code block wrapped)
+    expect(jsonResult.buffer.toString("utf-8")).not.toContain("```json");
 
     const textResult = await getFile({ sessionId, agentId, fileId: textFileId, filesDir: testDir });
     expect(textResult.buffer.toString("utf-8")).toContain("BRI");
