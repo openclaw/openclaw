@@ -73,6 +73,18 @@ jobs:
                   ? label === "r: testflight"
                   : label?.name === "r: testflight",
               );
+              const hasSecurityLabel = (issue.labels ?? []).some((label) =>
+                typeof label === "string" ? label === "security" : label?.name === "security",
+              );
+              if (title.toLowerCase().includes("security") && !hasSecurityLabel) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ["security"],
+                });
+                return;
+              }
               if (title.toLowerCase().includes("testflight") && !hasTestflightLabel) {
                 await github.rest.issues.addLabels({
                   owner: context.repo.owner,
