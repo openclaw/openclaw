@@ -11,6 +11,13 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
     source: "test",
     runtime: { version: "test" } as any,
     resolvePath: (p) => p,
+    sessions: {
+      getEntry() {
+        return undefined;
+      },
+      async updateEntry() {},
+      async init() {},
+    },
     ...overrides,
   });
 }

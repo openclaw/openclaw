@@ -52,6 +52,11 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     resolvePath(input: string) {
       return input;
     },
+    sessions: {
+      getEntry() { return undefined; },
+      async updateEntry() {},
+      async init() {},
+    },
     on() {},
     ...api,
   };

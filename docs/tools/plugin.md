@@ -346,6 +346,34 @@ Hook guard behavior for typed lifecycle hooks:
 
 For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
 
+## Session store access
+
+Plugins can read and update session store entries via `api.sessions`:
+
+```ts
+export default function (api) {
+  api.sessions.init().catch(() => {});
+
+  api.registerCommand({
+    name: "switch",
+    description: "Switch session context",
+    handler: async (ctx) => {
+      const entry = api.sessions.getEntry(ctx.sessionKey);
+      await api.sessions.updateEntry(ctx.sessionKey, {
+        sessionId: "new-uuid",
+      });
+      return { text: "Switched!" };
+    },
+  });
+}
+```
+
+- `sessions.init()` — pre-load session modules (call during registration)
+- `sessions.getEntry(key)` — read a `SessionEntry` by key
+- `sessions.updateEntry(key, patch)` — atomically merge fields into an entry
+
+The command handler receives `ctx.sessionKey` identifying the current session.
+
 ## Related
 
 - [Building Plugins](/plugins/building-plugins) — create your own plugin

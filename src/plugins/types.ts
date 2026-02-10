@@ -20,6 +20,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -2018,6 +2019,15 @@ export type OpenClawPluginApi = {
     adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;
   resolvePath: (input: string) => string;
+  /** Session store access for plugins that need to read or swap session entries. */
+  sessions: {
+    /** Read the session entry for a given session key. */
+    getEntry(key: string): SessionEntry | undefined;
+    /** Atomically update fields on a session entry (e.g., swap sessionId). */
+    updateEntry(key: string, patch: Partial<SessionEntry>): Promise<void>;
+    /** Pre-load session modules (call during plugin init if you need sync getEntry). */
+    init(): Promise<void>;
+  };
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
     hookName: K,

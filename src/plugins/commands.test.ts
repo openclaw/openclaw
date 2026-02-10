@@ -687,3 +687,95 @@ describe("registerPluginCommand", () => {
     });
   });
 });
+
+describe("executePluginCommand — sessionKey passthrough", () => {
+  it("passes sessionKey to the command handler context", async () => {
+    let receivedSessionKey: string | undefined;
+    registerPluginCommand("test-plugin", {
+      name: "checksession",
+      description: "Test sessionKey",
+      handler: async (ctx) => {
+        receivedSessionKey = ctx.sessionKey;
+        return { text: "ok" };
+      },
+    });
+
+    const match = matchPluginCommand("/checksession");
+    expect(match).not.toBeNull();
+
+    await executePluginCommand({
+      command: match!.command,
+      args: match!.args,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      commandBody: "/checksession",
+      config: {} as never,
+      sessionKey: "agent:main:main",
+    });
+
+    expect(receivedSessionKey).toBe("agent:main:main");
+  });
+
+  it("passes undefined sessionKey when not provided", async () => {
+    let receivedSessionKey: string | undefined = "sentinel";
+    registerPluginCommand("test-plugin", {
+      name: "nosession",
+      description: "Test no sessionKey",
+      handler: async (ctx) => {
+        receivedSessionKey = ctx.sessionKey;
+        return { text: "ok" };
+      },
+    });
+
+    const match = matchPluginCommand("/nosession");
+    await executePluginCommand({
+      command: match!.command,
+      channel: "discord",
+      isAuthorizedSender: true,
+      commandBody: "/nosession",
+      config: {} as never,
+    });
+
+    expect(receivedSessionKey).toBeUndefined();
+  });
+
+  it("passes different sessionKeys for different channels", async () => {
+    const receivedKeys: string[] = [];
+    registerPluginCommand("test-plugin", {
+      name: "multi",
+      description: "Test multi sessionKey",
+      handler: async (ctx) => {
+        if (ctx.sessionKey) {
+          receivedKeys.push(ctx.sessionKey);
+        }
+        return { text: "ok" };
+      },
+    });
+
+    const match1 = matchPluginCommand("/multi");
+    expect(match1).not.toBeNull();
+
+    await executePluginCommand({
+      command: match1!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      commandBody: "/multi",
+      config: {} as never,
+      sessionKey: "agent:main:main",
+    });
+
+    const match2 = matchPluginCommand("/multi");
+    expect(match2).not.toBeNull();
+
+    await executePluginCommand({
+      command: match2!.command,
+      channel: "discord",
+      isAuthorizedSender: true,
+      commandBody: "/multi",
+      config: {} as never,
+      sessionKey: "agent:main:discord:dm:12345",
+    });
+
+    expect(receivedKeys).toEqual(["agent:main:main", "agent:main:discord:dm:12345"]);
+  });
+});

@@ -15,6 +15,7 @@ export type BuildPluginApiParams = {
   runtime: PluginRuntime;
   logger: PluginLogger;
   resolvePath: (input: string) => string;
+  sessions?: OpenClawPluginApi["sessions"];
   handlers?: Partial<
     Pick<
       OpenClawPluginApi,
@@ -180,6 +181,13 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerMemoryEmbeddingProvider:
       handlers.registerMemoryEmbeddingProvider ?? noopRegisterMemoryEmbeddingProvider,
     resolvePath: params.resolvePath,
+    sessions: params.sessions ?? {
+      getEntry() {
+        return undefined;
+      },
+      async updateEntry() {},
+      async init() {},
+    },
     on: handlers.on ?? noopOn,
   };
 }
