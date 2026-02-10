@@ -44,6 +44,7 @@ export const handlePluginCommand: CommandHandler = async (
     accountId: params.ctx.AccountId ?? undefined,
     messageThreadId:
       typeof params.ctx.MessageThreadId === "number" ? params.ctx.MessageThreadId : undefined,
+    agentId: params.agentId,
   });
 
   return {
