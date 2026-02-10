@@ -1,4 +1,10 @@
 #!/bin/sh
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-[ -z "$ROOT" ] && exit 0
-node "$ROOT/scripts/format-staged.js"
+FILES=$(git diff --cached --name-only --diff-filter=ACMR | sed 's| |\\ |g')
+[ -z "$FILES" ] && exit 0
+
+# Lint and format staged files
+echo "$FILES" | xargs pnpm exec oxlint --fix
+echo "$FILES" | xargs pnpm exec oxfmt --write
+echo "$FILES" | xargs git add
+
+exit 0

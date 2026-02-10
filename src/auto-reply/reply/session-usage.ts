@@ -2,6 +2,7 @@ import { setCliSessionId } from "../../agents/cli-session.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   deriveCliContextTokens,
+  deriveSessionTotalTokens,
   hasNonzeroUsage,
   type NormalizedUsage,
 } from "../../agents/usage.js";
@@ -38,21 +39,22 @@ export async function persistSessionUsageUpdate(params: {
         update: async (entry) => {
           const input = params.usage?.input ?? 0;
           const output = params.usage?.output ?? 0;
-          const cacheRead = params.usage?.cacheRead ?? 0;
-          const cacheWrite = params.usage?.cacheWrite ?? 0;
+          const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
           // For CLI providers, use the full context for this turn (cacheRead + cacheWrite + input)
           const isCli = isCliProvider(params.providerUsed ?? "", undefined);
-          const promptTokens = isCli
+          const newTotalTokens = isCli
             ? (deriveCliContextTokens(params.usage) ?? input)
-            : input + cacheRead + cacheWrite;
-          const newTotalTokens = promptTokens > 0 ? promptTokens : (params.usage?.total ?? input);
+            : (deriveSessionTotalTokens({
+                usage: params.usage,
+                contextTokens: resolvedContextTokens,
+              }) ?? input);
           const patch: Partial<SessionEntry> = {
             inputTokens: input,
             outputTokens: output,
             totalTokens: newTotalTokens,
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
-            contextTokens: params.contextTokensUsed ?? entry.contextTokens,
+            contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };

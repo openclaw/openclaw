@@ -1,7 +1,9 @@
 import { Type } from "@sinclair/typebox";
+import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import { truncateUtf16Safe } from "../../utils.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
@@ -16,6 +18,7 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-h
 const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
 
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
+const CRON_RUN_MODES = ["due", "force"] as const;
 
 const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
@@ -35,6 +38,7 @@ const CronToolSchema = Type.Object({
   patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
   text: Type.Optional(Type.String()),
   mode: optionalStringEnum(CRON_WAKE_MODES),
+  runMode: optionalStringEnum(CRON_RUN_MODES),
   contextMessages: Type.Optional(
     Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
   ),
@@ -153,6 +157,69 @@ async function buildReminderContextLines(params: {
   }
 }
 
+function stripThreadSuffixFromSessionKey(sessionKey: string): string {
+  const normalized = sessionKey.toLowerCase();
+  const idx = normalized.lastIndexOf(":thread:");
+  if (idx <= 0) {
+    return sessionKey;
+  }
+  const parent = sessionKey.slice(0, idx).trim();
+  return parent ? parent : sessionKey;
+}
+
+function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
+  const rawSessionKey = agentSessionKey?.trim();
+  if (!rawSessionKey) {
+    return null;
+  }
+  const parsed = parseAgentSessionKey(stripThreadSuffixFromSessionKey(rawSessionKey));
+  if (!parsed || !parsed.rest) {
+    return null;
+  }
+  const parts = parsed.rest.split(":").filter(Boolean);
+  if (parts.length === 0) {
+    return null;
+  }
+  const head = parts[0]?.trim().toLowerCase();
+  if (!head || head === "main" || head === "subagent" || head === "acp") {
+    return null;
+  }
+
+  // buildAgentPeerSessionKey encodes peers as:
+  // - direct:<peerId>
+  // - <channel>:direct:<peerId>
+  // - <channel>:<accountId>:direct:<peerId>
+  // - <channel>:group:<peerId>
+  // - <channel>:channel:<peerId>
+  // Note: legacy keys may use "dm" instead of "direct".
+  // Threaded sessions append :thread:<id>, which we strip so delivery targets the parent peer.
+  // NOTE: Telegram forum topics encode as <chatId>:topic:<topicId> and should be preserved.
+  const markerIndex = parts.findIndex(
+    (part) => part === "direct" || part === "dm" || part === "group" || part === "channel",
+  );
+  if (markerIndex === -1) {
+    return null;
+  }
+  const peerId = parts
+    .slice(markerIndex + 1)
+    .join(":")
+    .trim();
+  if (!peerId) {
+    return null;
+  }
+
+  let channel: CronMessageChannel | undefined;
+  if (markerIndex >= 1) {
+    channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
+  }
+
+  const delivery: CronDelivery = { mode: "announce", to: peerId };
+  if (channel) {
+    delivery.channel = channel;
+  }
+  return delivery;
+}
+
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   return {
     label: "Cron",
@@ -174,27 +241,36 @@ JOB SCHEMA (for add action):
   "name": "string (optional)",
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
+  "delivery": { ... },      // Optional: announce summary (isolated only)
   "sessionTarget": "main" | "isolated",  // Required
   "enabled": true | false   // Optional, default true
 }
 
 SCHEDULE TYPES (schedule.kind):
 - "at": One-shot at absolute time
-  { "kind": "at", "atMs": <unix-ms-timestamp> }
+  { "kind": "at", "at": "<ISO-8601 timestamp>" }
 - "every": Recurring interval
   { "kind": "every", "everyMs": <interval-ms>, "anchorMs": <optional-start-ms> }
 - "cron": Cron expression
   { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-timezone>" }
 
+ISO timestamps without an explicit timezone are treated as UTC.
+
 PAYLOAD TYPES (payload.kind):
 - "systemEvent": Injects text as system event into session
   { "kind": "systemEvent", "text": "<message>" }
 - "agentTurn": Runs agent with message (isolated sessions only)
-  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional>, "deliver": <optional-bool>, "channel": "<optional>", "to": "<optional>", "bestEffortDeliver": <optional-bool> }
+  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional> }
+
+DELIVERY (isolated-only, top-level):
+  { "mode": "none|announce", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
+  - Default for isolated agentTurn jobs (when delivery omitted): "announce"
+  - If the task needs to send to a specific chat/recipient, set delivery.channel/to here; do not call messaging tools inside the run.
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
+Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
@@ -208,7 +284,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       const gatewayOpts: GatewayCallOptions = {
         gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
         gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : 60_000,
       };
 
       switch (action) {
@@ -221,6 +297,57 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }),
           );
         case "add": {
+          // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
+          // job properties to the top level alongside `action` instead of nesting
+          // them inside `job`. When `params.job` is missing or empty, reconstruct
+          // a synthetic job object from any recognised top-level job fields.
+          // See: https://github.com/openclaw/openclaw/issues/11310
+          if (
+            !params.job ||
+            (typeof params.job === "object" &&
+              params.job !== null &&
+              Object.keys(params.job as Record<string, unknown>).length === 0)
+          ) {
+            const JOB_KEYS: ReadonlySet<string> = new Set([
+              "name",
+              "schedule",
+              "sessionTarget",
+              "wakeMode",
+              "payload",
+              "delivery",
+              "enabled",
+              "description",
+              "deleteAfterRun",
+              "agentId",
+              "message",
+              "text",
+              "model",
+              "thinking",
+              "timeoutSeconds",
+              "allowUnsafeExternalContent",
+            ]);
+            const synthetic: Record<string, unknown> = {};
+            let found = false;
+            for (const key of Object.keys(params)) {
+              if (JOB_KEYS.has(key) && params[key] !== undefined) {
+                synthetic[key] = params[key];
+                found = true;
+              }
+            }
+            // Only use the synthetic job if at least one meaningful field is present
+            // (schedule, payload, message, or text are the minimum signals that the
+            // LLM intended to create a job).
+            if (
+              found &&
+              (synthetic.schedule !== undefined ||
+                synthetic.payload !== undefined ||
+                synthetic.message !== undefined ||
+                synthetic.text !== undefined)
+            ) {
+              params.job = synthetic;
+            }
+          }
+
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
@@ -234,6 +361,34 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               (job as { agentId?: string }).agentId = agentId;
             }
           }
+
+          if (
+            opts?.agentSessionKey &&
+            job &&
+            typeof job === "object" &&
+            "payload" in job &&
+            (job as { payload?: { kind?: string } }).payload?.kind === "agentTurn"
+          ) {
+            const deliveryValue = (job as { delivery?: unknown }).delivery;
+            const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
+            const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
+            const mode = modeRaw.trim().toLowerCase();
+            const hasTarget =
+              (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
+              (typeof delivery?.to === "string" && delivery.to.trim());
+            const shouldInfer =
+              (deliveryValue == null || delivery) && mode !== "none" && !hasTarget;
+            if (shouldInfer) {
+              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
+              if (inferred) {
+                (job as { delivery?: unknown }).delivery = {
+                  ...delivery,
+                  ...inferred,
+                } satisfies CronDelivery;
+              }
+            }
+          }
+
           const contextMessages =
             typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
               ? params.contextMessages
@@ -287,7 +442,9 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGatewayTool("cron.run", gatewayOpts, { id }));
+          const runMode =
+            params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
+          return jsonResult(await callGatewayTool("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");

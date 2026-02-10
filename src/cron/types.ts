@@ -1,7 +1,7 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 
 export type CronSchedule =
-  | { kind: "at"; atMs: number }
+  | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
   | { kind: "cron"; expr: string; tz?: string };
 
@@ -9,6 +9,17 @@ export type CronSessionTarget = "main" | "isolated";
 export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronMessageChannel = ChannelId | "last";
+
+export type CronDeliveryMode = "none" | "announce";
+
+export type CronDelivery = {
+  mode: CronDeliveryMode;
+  channel?: CronMessageChannel;
+  to?: string;
+  bestEffort?: boolean;
+};
+
+export type CronDeliveryPatch = Partial<CronDelivery>;
 
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
@@ -41,18 +52,6 @@ export type CronPayloadPatch =
       bestEffortDeliver?: boolean;
     };
 
-export type CronIsolation = {
-  postToMainPrefix?: string;
-  /**
-   * What to post back into the main session after an isolated run.
-   * - summary: small status/summary line (default)
-   * - full: the agent's final text output (optionally truncated)
-   */
-  postToMainMode?: "summary" | "full";
-  /** Max chars when postToMainMode="full". Default: 8000. */
-  postToMainMaxChars?: number;
-};
-
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
@@ -60,6 +59,8 @@ export type CronJobState = {
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
+  /** Number of consecutive execution errors (reset on success). Used for backoff. */
+  consecutiveErrors?: number;
 };
 
 export type CronJob = {
@@ -75,7 +76,7 @@ export type CronJob = {
   sessionTarget: CronSessionTarget;
   wakeMode: CronWakeMode;
   payload: CronPayload;
-  isolation?: CronIsolation;
+  delivery?: CronDelivery;
   state: CronJobState;
 };
 
@@ -90,5 +91,6 @@ export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" |
 
 export type CronJobPatch = Partial<Omit<CronJob, "id" | "createdAtMs" | "state" | "payload">> & {
   payload?: CronPayloadPatch;
+  delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;
 };

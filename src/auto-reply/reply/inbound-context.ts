@@ -1,7 +1,6 @@
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
 export type FinalizeInboundContextOptions = {
@@ -31,6 +30,12 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   normalized.CommandBody = normalizeTextField(normalized.CommandBody);
   normalized.Transcript = normalizeTextField(normalized.Transcript);
   normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
+  if (Array.isArray(normalized.UntrustedContext)) {
+    const normalizedUntrusted = normalized.UntrustedContext.map((entry) =>
+      normalizeInboundTextNewlines(entry),
+    ).filter((entry) => Boolean(entry));
+    normalized.UntrustedContext = normalizedUntrusted;
+  }
 
   const chatType = normalizeChatType(normalized.ChatType);
   if (chatType && (opts.forceChatType || normalized.ChatType !== chatType)) {
@@ -39,7 +44,11 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
 
   const bodyForAgentSource = opts.forceBodyForAgent
     ? normalized.Body
-    : (normalized.BodyForAgent ?? normalized.Body);
+    : (normalized.BodyForAgent ??
+      // Prefer "clean" text over legacy envelope-shaped Body when upstream forgets to set BodyForAgent.
+      normalized.CommandBody ??
+      normalized.RawBody ??
+      normalized.Body);
   normalized.BodyForAgent = normalizeInboundTextNewlines(bodyForAgentSource);
 
   const bodyForCommandsSource = opts.forceBodyForCommands
@@ -59,14 +68,6 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   } else {
     normalized.ConversationLabel = explicitLabel;
   }
-
-  // Ensure group/channel messages retain a sender meta line even when the body is a
-  // structured envelope (e.g. "[Signal ...] Alice: hi").
-  normalized.Body = formatInboundBodyWithSenderMeta({ ctx: normalized, body: normalized.Body });
-  normalized.BodyForAgent = formatInboundBodyWithSenderMeta({
-    ctx: normalized,
-    body: normalized.BodyForAgent,
-  });
 
   // Always set. Default-deny when upstream forgets to populate it.
   normalized.CommandAuthorized = normalized.CommandAuthorized === true;

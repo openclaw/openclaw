@@ -2,6 +2,7 @@ import type { CronJob, CronSchedule } from "../../cron/types.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
+import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
@@ -60,18 +61,18 @@ export function parseDurationMs(input: string): number | null {
   return Math.floor(n * factor);
 }
 
-export function parseAtMs(input: string): number | null {
+export function parseAt(input: string): string | null {
   const raw = input.trim();
   if (!raw) {
     return null;
   }
   const absolute = parseAbsoluteTimeMs(raw);
-  if (absolute) {
-    return absolute;
+  if (absolute !== null) {
+    return new Date(absolute).toISOString();
   }
   const dur = parseDurationMs(raw);
-  if (dur) {
-    return Date.now() + dur;
+  if (dur !== null) {
+    return new Date(Date.now() + dur).toISOString();
   }
   return null;
 }
@@ -97,26 +98,14 @@ const truncate = (value: string, width: number) => {
   return `${value.slice(0, width - 3)}...`;
 };
 
-const formatIsoMinute = (ms: number) => {
-  const d = new Date(ms);
+const formatIsoMinute = (iso: string) => {
+  const parsed = parseAbsoluteTimeMs(iso);
+  const d = new Date(parsed ?? NaN);
   if (Number.isNaN(d.getTime())) {
     return "-";
   }
-  const iso = d.toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`;
-};
-
-const formatDuration = (ms: number) => {
-  if (ms < 60_000) {
-    return `${Math.max(1, Math.round(ms / 1000))}s`;
-  }
-  if (ms < 3_600_000) {
-    return `${Math.round(ms / 60_000)}m`;
-  }
-  if (ms < 86_400_000) {
-    return `${Math.round(ms / 3_600_000)}h`;
-  }
-  return `${Math.round(ms / 86_400_000)}d`;
+  const isoStr = d.toISOString();
+  return `${isoStr.slice(0, 10)} ${isoStr.slice(11, 16)}Z`;
 };
 
 const formatSpan = (ms: number) => {
@@ -143,10 +132,10 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
 
 const formatSchedule = (schedule: CronSchedule) => {
   if (schedule.kind === "at") {
-    return `at ${formatIsoMinute(schedule.atMs)}`;
+    return `at ${formatIsoMinute(schedule.at)}`;
   }
   if (schedule.kind === "every") {
-    return `every ${formatDuration(schedule.everyMs)}`;
+    return `every ${formatDurationHuman(schedule.everyMs)}`;
   }
   return schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
 };
@@ -196,7 +185,7 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const lastLabel = pad(formatRelative(job.state.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
-    const targetLabel = pad(job.sessionTarget, CRON_TARGET_PAD);
+    const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "default", CRON_AGENT_PAD), CRON_AGENT_PAD);
 
     const coloredStatus = (() => {

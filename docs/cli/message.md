@@ -118,7 +118,7 @@ Name lookup:
 - `thread create`
   - Channels: Discord
   - Required: `--thread-name`, `--target` (channel id)
-  - Optional: `--message-id`, `--auto-archive-min`
+  - Optional: `--message-id`, `--message`, `--auto-archive-min`
 
 - `thread list`
   - Channels: Discord

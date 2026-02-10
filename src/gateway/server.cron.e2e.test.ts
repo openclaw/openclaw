@@ -89,7 +89,7 @@ describe("gateway server cron", () => {
       const routeRes = await rpcReq(ws, "cron.add", {
         name: "route test",
         enabled: true,
-        schedule: { kind: "at", atMs: routeAtMs },
+        schedule: { kind: "at", at: new Date(routeAtMs).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "cron route check" },
@@ -108,7 +108,7 @@ describe("gateway server cron", () => {
       const wrappedRes = await rpcReq(ws, "cron.add", {
         data: {
           name: "wrapped",
-          schedule: { atMs: wrappedAtMs },
+          schedule: { at: new Date(wrappedAtMs).toISOString() },
           payload: { kind: "systemEvent", text: "hello" },
         },
       });
@@ -117,7 +117,7 @@ describe("gateway server cron", () => {
         | { schedule?: unknown; sessionTarget?: unknown; wakeMode?: unknown }
         | undefined;
       expect(wrappedPayload?.sessionTarget).toBe("main");
-      expect(wrappedPayload?.wakeMode).toBe("next-heartbeat");
+      expect(wrappedPayload?.wakeMode).toBe("now");
       expect((wrappedPayload?.schedule as { kind?: unknown } | undefined)?.kind).toBe("at");
 
       const patchRes = await rpcReq(ws, "cron.add", {
@@ -137,7 +137,7 @@ describe("gateway server cron", () => {
       const updateRes = await rpcReq(ws, "cron.update", {
         id: patchJobId,
         patch: {
-          schedule: { atMs },
+          schedule: { at: new Date(atMs).toISOString() },
           payload: { kind: "systemEvent", text: "updated" },
         },
       });
@@ -164,28 +164,48 @@ describe("gateway server cron", () => {
       const mergeUpdateRes = await rpcReq(ws, "cron.update", {
         id: mergeJobId,
         patch: {
-          payload: { kind: "agentTurn", deliver: true, channel: "telegram", to: "19098680" },
+          delivery: { mode: "announce", channel: "telegram", to: "19098680" },
         },
       });
       expect(mergeUpdateRes.ok).toBe(true);
       const merged = mergeUpdateRes.payload as
         | {
-            payload?: {
-              kind?: unknown;
-              message?: unknown;
-              model?: unknown;
-              deliver?: unknown;
-              channel?: unknown;
-              to?: unknown;
-            };
+            payload?: { kind?: unknown; message?: unknown; model?: unknown };
+            delivery?: { mode?: unknown; channel?: unknown; to?: unknown };
           }
         | undefined;
       expect(merged?.payload?.kind).toBe("agentTurn");
       expect(merged?.payload?.message).toBe("hello");
       expect(merged?.payload?.model).toBe("opus");
-      expect(merged?.payload?.deliver).toBe(true);
-      expect(merged?.payload?.channel).toBe("telegram");
-      expect(merged?.payload?.to).toBe("19098680");
+      expect(merged?.delivery?.mode).toBe("announce");
+      expect(merged?.delivery?.channel).toBe("telegram");
+      expect(merged?.delivery?.to).toBe("19098680");
+
+      const legacyDeliveryPatchRes = await rpcReq(ws, "cron.update", {
+        id: mergeJobId,
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            deliver: true,
+            channel: "signal",
+            to: "+15550001111",
+            bestEffortDeliver: true,
+          },
+        },
+      });
+      expect(legacyDeliveryPatchRes.ok).toBe(true);
+      const legacyDeliveryPatched = legacyDeliveryPatchRes.payload as
+        | {
+            payload?: { kind?: unknown; message?: unknown };
+            delivery?: { mode?: unknown; channel?: unknown; to?: unknown; bestEffort?: unknown };
+          }
+        | undefined;
+      expect(legacyDeliveryPatched?.payload?.kind).toBe("agentTurn");
+      expect(legacyDeliveryPatched?.payload?.message).toBe("hello");
+      expect(legacyDeliveryPatched?.delivery?.mode).toBe("announce");
+      expect(legacyDeliveryPatched?.delivery?.channel).toBe("signal");
+      expect(legacyDeliveryPatched?.delivery?.to).toBe("+15550001111");
+      expect(legacyDeliveryPatched?.delivery?.bestEffort).toBe(true);
 
       const rejectRes = await rpcReq(ws, "cron.add", {
         name: "patch reject",
@@ -203,7 +223,7 @@ describe("gateway server cron", () => {
       const rejectUpdateRes = await rpcReq(ws, "cron.update", {
         id: rejectJobId,
         patch: {
-          payload: { kind: "agentTurn", deliver: true },
+          payload: { kind: "agentTurn", message: "nope" },
         },
       });
       expect(rejectUpdateRes.ok).toBe(false);
@@ -224,7 +244,7 @@ describe("gateway server cron", () => {
       const jobIdUpdateRes = await rpcReq(ws, "cron.update", {
         jobId,
         patch: {
-          schedule: { atMs: Date.now() + 2_000 },
+          schedule: { at: new Date(Date.now() + 2_000).toISOString() },
           payload: { kind: "systemEvent", text: "updated" },
         },
       });
@@ -282,7 +302,7 @@ describe("gateway server cron", () => {
       const addRes = await rpcReq(ws, "cron.add", {
         name: "log test",
         enabled: true,
-        schedule: { kind: "at", atMs },
+        schedule: { kind: "at", at: new Date(atMs).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "hello" },
@@ -331,7 +351,7 @@ describe("gateway server cron", () => {
       const autoRes = await rpcReq(ws, "cron.add", {
         name: "auto run test",
         enabled: true,
-        schedule: { kind: "at", atMs: Date.now() - 10 },
+        schedule: { kind: "at", at: new Date(Date.now() - 10).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "auto" },

@@ -52,7 +52,7 @@ export function createGatewayHooksRequestHandler(params: {
       enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
-      schedule: { kind: "at", atMs: now },
+      schedule: { kind: "at", at: new Date(now).toISOString() },
       sessionTarget: "isolated",
       wakeMode: value.wakeMode,
       payload: {

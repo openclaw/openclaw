@@ -1,6 +1,6 @@
-import type { GatewayBrowserClient } from "../gateway";
-import type { SessionsListResult } from "../types";
-import { toNumber } from "../format";
+import type { GatewayBrowserClient } from "../gateway.ts";
+import type { SessionsListResult } from "../types.ts";
+import { toNumber } from "../format.ts";
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
@@ -46,7 +46,7 @@ export async function loadSessions(
     if (limit > 0) {
       params.limit = limit;
     }
-    const res = await state.client.request("sessions.list", params);
+    const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = res;
     }

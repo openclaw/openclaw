@@ -1,5 +1,5 @@
-import type { Tab } from "./navigation";
-import { connectGateway } from "./app-gateway";
+import type { Tab } from "./navigation.ts";
+import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
   startNodesPolling,
@@ -7,8 +7,8 @@ import {
   stopNodesPolling,
   startDebugPolling,
   stopDebugPolling,
-} from "./app-polling";
-import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
+} from "./app-polling.ts";
+import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
   attachThemeListener,
@@ -16,12 +16,13 @@ import {
   inferBasePath,
   syncTabWithLocation,
   syncThemeWithSettings,
-} from "./app-settings";
+} from "./app-settings.ts";
 
 type LifecycleHost = {
   basePath: string;
   tab: Tab;
   chatHasAutoScrolled: boolean;
+  chatManualRefreshInFlight: boolean;
   chatLoading: boolean;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
@@ -65,6 +66,9 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  if (host.tab === "chat" && host.chatManualRefreshInFlight) {
+    return;
+  }
   if (
     host.tab === "chat" &&
     (changed.has("chatMessages") ||

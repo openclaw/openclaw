@@ -163,6 +163,7 @@ export function handleMessageUpdate(
           mediaUrls: hasMedia ? mediaUrls : undefined,
         },
       });
+      ctx.state.emittedAssistantUpdate = true;
       if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
         void ctx.params.onPartialReply({
           text: cleanedText,
@@ -197,6 +198,7 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
+  ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);
@@ -215,6 +217,44 @@ export function handleMessageEnd(
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
+  const trimmedText = text.trim();
+  const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;
+  let cleanedText = parsedText?.text ?? "";
+  let mediaUrls = parsedText?.mediaUrls;
+  let hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+
+  if (!cleanedText && !hasMedia) {
+    const rawTrimmed = rawText.trim();
+    const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
+    const rawCandidate = rawStrippedFinal || rawTrimmed;
+    if (rawCandidate) {
+      const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
+      cleanedText = parsedFallback.text ?? rawCandidate;
+      mediaUrls = parsedFallback.mediaUrls;
+      hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+    }
+  }
+
+  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "assistant",
+      data: {
+        text: cleanedText,
+        delta: cleanedText,
+        mediaUrls: hasMedia ? mediaUrls : undefined,
+      },
+    });
+    void ctx.params.onAgentEvent?.({
+      stream: "assistant",
+      data: {
+        text: cleanedText,
+        delta: cleanedText,
+        mediaUrls: hasMedia ? mediaUrls : undefined,
+      },
+    });
+    ctx.state.emittedAssistantUpdate = true;
+  }
 
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;

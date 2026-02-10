@@ -85,6 +85,7 @@ export async function handleDirectiveOnly(params: {
   currentVerboseLevel?: VerboseLevel;
   currentReasoningLevel?: ReasoningLevel;
   currentElevatedLevel?: ElevatedLevel;
+  surface?: string;
 }): Promise<ReplyPayload | undefined> {
   const {
     directives,
@@ -132,6 +133,7 @@ export async function handleDirectiveOnly(params: {
     aliasIndex,
     allowedModelCatalog,
     resetModelOverride,
+    surface: params.surface,
   });
   if (modelInfo) {
     return modelInfo;
@@ -307,11 +309,7 @@ export async function handleDirectiveOnly(params: {
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (directives.hasThinkDirective && directives.thinkLevel) {
-    if (directives.thinkLevel === "off") {
-      delete sessionEntry.thinkingLevel;
-    } else {
-      sessionEntry.thinkingLevel = directives.thinkLevel;
-    }
+    sessionEntry.thinkingLevel = directives.thinkLevel;
   }
   if (shouldDowngradeXHigh) {
     sessionEntry.thinkingLevel = "high";

@@ -331,4 +331,29 @@ describe("listSessionsFromStore search", () => {
     });
     expect(result.sessions.length).toBe(1);
   });
+
+  test("hides cron run alias session keys from sessions list", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:cron:job-1": {
+        sessionId: "run-abc",
+        updatedAt: now,
+        label: "Cron: job-1",
+      } as SessionEntry,
+      "agent:main:cron:job-1:run:run-abc": {
+        sessionId: "run-abc",
+        updatedAt: now,
+        label: "Cron: job-1",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:cron:job-1"]);
+  });
 });

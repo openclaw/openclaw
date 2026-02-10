@@ -184,6 +184,7 @@ export async function handleDiscordMessageAction(
   if (action === "thread-create") {
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
+    const content = readStringParam(params, "message");
     const autoArchiveMinutes = readNumberParam(params, "autoArchiveMin", {
       integer: true,
     });
@@ -194,6 +195,7 @@ export async function handleDiscordMessageAction(
         channelId: resolveChannelId(),
         name,
         messageId,
+        content,
         autoArchiveMinutes,
       },
       cfg,
@@ -213,6 +215,21 @@ export async function handleDiscordMessageAction(
         to: readStringParam(params, "to", { required: true }),
         stickerIds,
         content: readStringParam(params, "message"),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "set-presence") {
+    return await handleDiscordAction(
+      {
+        action: "setPresence",
+        accountId: accountId ?? undefined,
+        status: readStringParam(params, "status"),
+        activityType: readStringParam(params, "activityType"),
+        activityName: readStringParam(params, "activityName"),
+        activityUrl: readStringParam(params, "activityUrl"),
+        activityState: readStringParam(params, "activityState"),
       },
       cfg,
     );

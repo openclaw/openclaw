@@ -1,3 +1,4 @@
+import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoreFile } from "../types.js";
 
@@ -9,6 +10,8 @@ export type CronEvent = {
   status?: "ok" | "error" | "skipped";
   error?: string;
   summary?: string;
+  sessionId?: string;
+  sessionKey?: string;
   nextRunAtMs?: number;
 };
 
@@ -24,6 +27,14 @@ export type CronServiceDeps = {
   log: Logger;
   storePath: string;
   cronEnabled: boolean;
+  /** CronConfig for session retention settings. */
+  cronConfig?: CronConfig;
+  /** Default agent id for jobs without an agent id. */
+  defaultAgentId?: string;
+  /** Resolve session store path for a given agent id. */
+  resolveSessionStorePath?: (agentId?: string) => string;
+  /** Path to the session store (sessions.json) for reaper use. */
+  sessionStorePath?: string;
   enqueueSystemEvent: (text: string, opts?: { agentId?: string }) => void;
   requestHeartbeatNow: (opts?: { reason?: string }) => void;
   runHeartbeatOnce?: (opts?: { reason?: string }) => Promise<HeartbeatRunResult>;
@@ -33,6 +44,8 @@ export type CronServiceDeps = {
     /** Last non-empty agent text output (not truncated). */
     outputText?: string;
     error?: string;
+    sessionId?: string;
+    sessionKey?: string;
   }>;
   onEvent?: (evt: CronEvent) => void;
 };
@@ -48,6 +61,8 @@ export type CronServiceState = {
   running: boolean;
   op: Promise<unknown>;
   warnedDisabled: boolean;
+  storeLoadedAtMs: number | null;
+  storeFileMtimeMs: number | null;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
@@ -58,6 +73,8 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     running: false,
     op: Promise.resolve(),
     warnedDisabled: false,
+    storeLoadedAtMs: null,
+    storeFileMtimeMs: null,
   };
 }
 
@@ -74,6 +91,7 @@ export type CronStatusSummary = {
 export type CronRunResult =
   | { ok: true; ran: true }
   | { ok: true; ran: false; reason: "not-due" }
+  | { ok: true; ran: false; reason: "already-running" }
   | { ok: false };
 
 export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };

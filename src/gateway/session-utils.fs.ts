@@ -7,6 +7,8 @@ import type { SessionPreviewItem } from "./session-utils.types.js";
 import { isCliProvider } from "../agents/model-selection.js";
 import { deriveCliContextTokens, type NormalizedUsage } from "../agents/usage.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
 
 export type TranscriptAppendResult = {
@@ -92,7 +94,9 @@ function resolveTranscriptPathFromParams(params: {
   sessionFile?: string;
   storePath?: string;
 }): string | null {
-  if (params.sessionFile) return params.sessionFile;
+  if (params.sessionFile) {
+    return params.sessionFile;
+  }
   if (params.storePath) {
     return path.join(path.dirname(params.storePath), `${params.sessionId}.jsonl`);
   }
@@ -156,8 +160,12 @@ function appendMessageToTranscriptImpl(
         u?.total ?? (derivedTotal > 0 ? derivedTotal : (u?.input ?? 0) + (u?.output ?? 0)),
     };
     messageBody.usage = usageToWrite;
-    if (params.provider) messageBody.provider = params.provider;
-    if (params.model) messageBody.model = params.model;
+    if (params.provider) {
+      messageBody.provider = params.provider;
+    }
+    if (params.model) {
+      messageBody.model = params.model;
+    }
   }
   const transcriptEntry = {
     type: "message",
@@ -296,6 +304,23 @@ export function readSessionMessages(
       const parsed = JSON.parse(line);
       if (parsed?.message) {
         messages.push(parsed.message);
+        continue;
+      }
+
+      // Compaction entries are not "message" records, but they're useful context for debugging.
+      // Emit a lightweight synthetic message that the Web UI can render as a divider.
+      if (parsed?.type === "compaction") {
+        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
+        const timestamp = Number.isFinite(ts) ? ts : Date.now();
+        messages.push({
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          timestamp,
+          __openclaw: {
+            kind: "compaction",
+            id: typeof parsed.id === "string" ? parsed.id : undefined,
+          },
+        });
       }
     } catch {
       // ignore bad lines
@@ -321,7 +346,7 @@ export function resolveSessionTranscriptCandidates(
   if (agentId) {
     candidates.push(resolveSessionTranscriptPath(sessionId, agentId));
   }
-  const home = os.homedir();
+  const home = resolveRequiredHomeDir(process.env, os.homedir);
   candidates.push(path.join(home, ".openclaw", "sessions", `${sessionId}.jsonl`));
   return candidates;
 }
@@ -561,35 +586,11 @@ function extractPreviewText(message: TranscriptPreviewMessage): string | null {
 }
 
 function isToolCall(message: TranscriptPreviewMessage): boolean {
-  if (message.toolName || message.tool_name) {
-    return true;
-  }
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  return message.content.some((entry) => {
-    if (entry?.name) {
-      return true;
-    }
-    const raw = typeof entry?.type === "string" ? entry.type.toLowerCase() : "";
-    return raw === "toolcall" || raw === "tool_call";
-  });
+  return hasToolCall(message as Record<string, unknown>);
 }
 
 function extractToolNames(message: TranscriptPreviewMessage): string[] {
-  const names: string[] = [];
-  if (Array.isArray(message.content)) {
-    for (const entry of message.content) {
-      if (typeof entry?.name === "string" && entry.name.trim()) {
-        names.push(entry.name.trim());
-      }
-    }
-  }
-  const toolName = typeof message.toolName === "string" ? message.toolName : message.tool_name;
-  if (typeof toolName === "string" && toolName.trim()) {
-    names.push(toolName.trim());
-  }
-  return names;
+  return extractToolCallNames(message as Record<string, unknown>);
 }
 
 function extractMediaSummary(message: TranscriptPreviewMessage): string | null {

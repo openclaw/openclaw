@@ -101,6 +101,7 @@ Use Tailscale Serve for the private dashboard and Funnel for the public webhook 
    If prompted, visit the authorization URL shown in the output to enable Funnel for this node in your tailnet policy.
 
 5. **Verify the configuration:**
+
    ```bash
    tailscale serve status
    tailscale funnel status
@@ -225,6 +226,7 @@ This means the webhook handler isn't registered. Common causes:
    If it shows "disabled", add `plugins.entries.googlechat.enabled: true` to your config.
 
 3. **Gateway not restarted**: After adding config, restart the gateway:
+
    ```bash
    openclaw gateway restart
    ```

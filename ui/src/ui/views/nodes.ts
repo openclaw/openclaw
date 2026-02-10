@@ -4,13 +4,13 @@ import type {
   DeviceTokenSummary,
   PairedDevice,
   PendingDevice,
-} from "../controllers/devices";
+} from "../controllers/devices.ts";
 import type {
   ExecApprovalsAllowlistEntry,
   ExecApprovalsFile,
   ExecApprovalsSnapshot,
-} from "../controllers/exec-approvals";
-import { clampText, formatAgo, formatList } from "../format";
+} from "../controllers/exec-approvals.ts";
+import { clampText, formatRelativeTimestamp, formatList } from "../format.ts";
 
 export type NodesProps = {
   loading: boolean;
@@ -130,7 +130,7 @@ function renderDevices(props: NodesProps) {
 
 function renderPendingDevice(req: PendingDevice, props: NodesProps) {
   const name = req.displayName?.trim() || req.deviceId;
-  const age = typeof req.ts === "number" ? formatAgo(req.ts) : "n/a";
+  const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : "n/a";
   const role = req.role?.trim() ? `role: ${req.role}` : "role: -";
   const repair = req.isRepair ? " · repair" : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
@@ -189,7 +189,9 @@ function renderPairedDevice(device: PairedDevice, props: NodesProps) {
 function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: NodesProps) {
   const status = token.revokedAtMs ? "revoked" : "active";
   const scopes = `scopes: ${formatList(token.scopes)}`;
-  const when = formatAgo(token.rotatedAtMs ?? token.createdAtMs ?? token.lastUsedAtMs ?? null);
+  const when = formatRelativeTimestamp(
+    token.rotatedAtMs ?? token.createdAtMs ?? token.lastUsedAtMs ?? null,
+  );
   return html`
     <div class="row" style="justify-content: space-between; gap: 8px;">
       <div class="list-sub">${token.role} · ${status} · ${scopes} · ${when}</div>
@@ -931,7 +933,7 @@ function renderAllowlistEntry(
   entry: ExecApprovalsAllowlistEntry,
   index: number,
 ) {
-  const lastUsed = entry.lastUsedAt ? formatAgo(entry.lastUsedAt) : "never";
+  const lastUsed = entry.lastUsedAt ? formatRelativeTimestamp(entry.lastUsedAt) : "never";
   const lastCommand = entry.lastUsedCommand ? clampText(entry.lastUsedCommand, 120) : null;
   const lastPath = entry.lastResolvedPath ? clampText(entry.lastResolvedPath, 120) : null;
   return html`

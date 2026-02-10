@@ -1,13 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   appendMessageToTranscript,
   ensureTranscriptFile,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readSessionMessages,
   readSessionPreviewItemsFromTranscript,
+  resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
 
 describe("readFirstUserMessageFromTranscript", () => {
@@ -345,6 +347,53 @@ describe("readLastMessagePreviewFromTranscript", () => {
   });
 });
 
+describe("readSessionMessages", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
+    storePath = path.join(tmpDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("includes synthetic compaction markers for compaction entries", () => {
+    const sessionId = "test-session-compaction";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "Hello" } }),
+      JSON.stringify({
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "2026-02-07T00:00:00.000Z",
+        summary: "Compacted history",
+        firstKeptEntryId: "x",
+        tokensBefore: 123,
+      }),
+      JSON.stringify({ message: { role: "assistant", content: "World" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(3);
+    const marker = out[1] as {
+      role: string;
+      content?: Array<{ text?: string }>;
+      __openclaw?: { kind?: string; id?: string };
+      timestamp?: number;
+    };
+    expect(marker.role).toBe("system");
+    expect(marker.content?.[0]?.text).toBe("Compaction");
+    expect(marker.__openclaw?.kind).toBe("compaction");
+    expect(marker.__openclaw?.id).toBe("comp-1");
+    expect(typeof marker.timestamp).toBe("number");
+  });
+});
+
 describe("readSessionPreviewItemsFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
@@ -383,6 +432,43 @@ describe("readSessionPreviewItemsFromTranscript", () => {
 
     expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(result[1]?.text).toContain("call weather");
+  });
+
+  test("detects tool calls from tool_use/tool_call blocks and toolName field", () => {
+    const sessionId = "preview-session-tools";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          toolName: "camera",
+          content: [
+            { type: "tool_use", name: "read" },
+            { type: "tool_call", name: "write" },
+          ],
+        },
+      }),
+      JSON.stringify({ message: { role: "assistant", content: "Done" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readSessionPreviewItemsFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      3,
+      120,
+    );
+
+    expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
+    expect(result[1]?.text).toContain("call");
+    expect(result[1]?.text).toContain("camera");
+    expect(result[1]?.text).toContain("read");
+    // Preview text may not list every tool name; it should at least hint there were multiple calls.
+    expect(result[1]?.text).toMatch(/\+\d+/);
   });
 
   test("truncates preview text to max chars", () => {
@@ -691,5 +777,22 @@ describe("ensureTranscriptFile", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toBeDefined();
+  });
+});
+
+describe("resolveSessionTranscriptCandidates", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test("fallback candidate uses OPENCLAW_HOME instead of os.homedir()", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+
+    const candidates = resolveSessionTranscriptCandidates("sess-1", undefined);
+    const fallback = candidates[candidates.length - 1];
+    expect(fallback).toBe(
+      path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "sessions", "sess-1.jsonl"),
+    );
   });
 });

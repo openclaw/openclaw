@@ -1,6 +1,6 @@
 ---
 name: discord
-description: Use when you need to control Discord from OpenClaw via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, create/edit/delete channels and categories, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels.
+description: Use when you need to control Discord from OpenClaw via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, create/edit/delete channels and categories, fetch permissions or member/role/channel info, set bot presence/activity, or handle moderation actions in Discord DMs or channels.
 metadata: {"openclaw":{"emoji":"🎮","requires":{"config":["channels.discord"]}}}
 ---
 
@@ -139,6 +139,7 @@ Use `discord.actions.*` to disable action groups:
 - `roles` (role add/remove, default `false`)
 - `channels` (channel/category create/edit/delete/move, default `false`)
 - `moderation` (timeout/kick/ban, default `false`)
+- `presence` (bot status/activity, default `false`)
 
 ### Read recent messages
 
@@ -431,6 +432,101 @@ Create, edit, delete, and move channels and categories. Enable via `discord.acti
   "durationMinutes": 10
 }
 ```
+
+### Bot presence/activity (disabled by default)
+
+Set the bot's online status and activity. Enable via `discord.actions.presence: true`.
+
+Discord bots can only set `name`, `state`, `type`, and `url` on an activity. Other Activity fields (details, emoji, assets) are accepted by the gateway but silently ignored by Discord for bots.
+
+**How fields render by activity type:**
+
+- **playing, streaming, listening, watching, competing**: `activityName` is shown in the sidebar under the bot's name (e.g. "**with fire**" for type "playing" and name "with fire"). `activityState` is shown in the profile flyout.
+- **custom**: `activityName` is ignored. Only `activityState` is displayed as the status text in the sidebar.
+- **streaming**: `activityUrl` may be displayed or embedded by the client.
+
+**Set playing status:**
+
+```json
+{
+  "action": "setPresence",
+  "activityType": "playing",
+  "activityName": "with fire"
+}
+```
+
+Result in sidebar: "**with fire**". Flyout shows: "Playing: with fire"
+
+**With state (shown in flyout):**
+
+```json
+{
+  "action": "setPresence",
+  "activityType": "playing",
+  "activityName": "My Game",
+  "activityState": "In the lobby"
+}
+```
+
+Result in sidebar: "**My Game**". Flyout shows: "Playing: My Game (newline) In the lobby".
+
+**Set streaming (optional URL, may not render for bots):**
+
+```json
+{
+  "action": "setPresence",
+  "activityType": "streaming",
+  "activityName": "Live coding",
+  "activityUrl": "https://twitch.tv/example"
+}
+```
+
+**Set listening/watching:**
+
+```json
+{
+  "action": "setPresence",
+  "activityType": "listening",
+  "activityName": "Spotify"
+}
+```
+
+```json
+{
+  "action": "setPresence",
+  "activityType": "watching",
+  "activityName": "the logs"
+}
+```
+
+**Set a custom status (text in sidebar):**
+
+```json
+{
+  "action": "setPresence",
+  "activityType": "custom",
+  "activityState": "Vibing"
+}
+```
+
+Result in sidebar: "Vibing". Note: `activityName` is ignored for custom type.
+
+**Set bot status only (no activity/clear status):**
+
+```json
+{
+  "action": "setPresence",
+  "status": "dnd"
+}
+```
+
+**Parameters:**
+
+- `activityType`: `playing`, `streaming`, `listening`, `watching`, `competing`, `custom`
+- `activityName`: text shown in the sidebar for non-custom types (ignored for `custom`)
+- `activityUrl`: Twitch or YouTube URL for streaming type (optional; may not render for bots)
+- `activityState`: for `custom` this is the status text; for other types it shows in the profile flyout
+- `status`: `online` (default), `dnd`, `idle`, `invisible`
 
 ## Discord Writing Style Guide
 

@@ -43,7 +43,7 @@ import {
   buildDockerExecArgs,
   buildSandboxEnv,
   chunkString,
-  clampNumber,
+  clampWithDefault,
   coerceEnv,
   killSession,
   readEnvInt,
@@ -105,13 +105,13 @@ function validateHostEnv(env: Record<string, string>): void {
     }
   }
 }
-const DEFAULT_MAX_OUTPUT = clampNumber(
+const DEFAULT_MAX_OUTPUT = clampWithDefault(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
   200_000,
   1_000,
   200_000,
 );
-const DEFAULT_PENDING_MAX_OUTPUT = clampNumber(
+const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
   readEnvInt("OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS"),
   200_000,
   1_000,
@@ -801,7 +801,7 @@ export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ExecToolDetails> {
-  const defaultBackgroundMs = clampNumber(
+  const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,
     10,
@@ -860,7 +860,12 @@ export function createExecTool(
       const yieldWindow = allowBackground
         ? backgroundRequested
           ? 0
-          : clampNumber(params.yieldMs ?? defaultBackgroundMs, defaultBackgroundMs, 10, 120_000)
+          : clampWithDefault(
+              params.yieldMs ?? defaultBackgroundMs,
+              defaultBackgroundMs,
+              10,
+              120_000,
+            )
         : null;
       const elevatedDefaults = defaults?.elevated;
       const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
@@ -1046,6 +1051,7 @@ export function createExecTool(
           safeBins: new Set(),
           cwd: workdir,
           env,
+          platform: nodeInfo?.platform,
         });
         let analysisOk = baseAllowlistEval.analysisOk;
         let allowlistSatisfied = false;
@@ -1073,6 +1079,7 @@ export function createExecTool(
                 safeBins: new Set(),
                 cwd: workdir,
                 env,
+                platform: nodeInfo?.platform,
               });
               allowlistSatisfied = allowlistEval.allowlistSatisfied;
               analysisOk = allowlistEval.analysisOk;
@@ -1282,6 +1289,7 @@ export function createExecTool(
           safeBins,
           cwd: workdir,
           env,
+          platform: process.platform,
         });
         const allowlistMatches = allowlistEval.allowlistMatches;
         const analysisOk = allowlistEval.analysisOk;

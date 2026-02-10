@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
-import type { SkillMessageMap } from "../controllers/skills";
-import type { SkillStatusEntry, SkillStatusReport } from "../types";
-import { clampText } from "../format";
+import type { SkillMessageMap } from "../controllers/skills.ts";
+import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
+import { clampText } from "../format.ts";
 
 type SkillGroup = {
   id: string;
@@ -21,9 +21,12 @@ function groupSkills(skills: SkillStatusEntry[]): SkillGroup[] {
   for (const def of SKILL_SOURCE_GROUPS) {
     groups.set(def.id, { id: def.id, label: def.label, skills: [] });
   }
+  const builtInGroup = SKILL_SOURCE_GROUPS.find((group) => group.id === "built-in");
   const other: SkillGroup = { id: "other", label: "Other Skills", skills: [] };
   for (const skill of skills) {
-    const match = SKILL_SOURCE_GROUPS.find((group) => group.sources.includes(skill.source));
+    const match = skill.bundled
+      ? builtInGroup
+      : SKILL_SOURCE_GROUPS.find((group) => group.sources.includes(skill.source));
     if (match) {
       groups.get(match.id)?.skills.push(skill);
     } else {
@@ -128,6 +131,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
   const apiKey = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
   const canInstall = skill.install.length > 0 && skill.missing.bins.length > 0;
+  const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = [
     ...skill.missing.bins.map((b) => `bin:${b}`),
     ...skill.missing.env.map((e) => `env:${e}`),
@@ -150,6 +154,13 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
         <div class="list-sub">${clampText(skill.description, 140)}</div>
         <div class="chip-row" style="margin-top: 6px;">
           <span class="chip">${skill.source}</span>
+          ${
+            showBundledBadge
+              ? html`
+                  <span class="chip">bundled</span>
+                `
+              : nothing
+          }
           <span class="chip ${skill.eligible ? "chip-ok" : "chip-warn"}">
             ${skill.eligible ? "eligible" : "blocked"}
           </span>

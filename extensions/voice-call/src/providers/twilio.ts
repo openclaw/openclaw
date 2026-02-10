@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { TwilioConfig } from "../config.js";
+import type { TwilioConfig, WebhookSecurityConfig } from "../config.js";
 import type { MediaStreamHandler } from "../media-stream.js";
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
@@ -38,6 +38,8 @@ export interface TwilioProviderOptions {
   streamPath?: string;
   /** Skip webhook signature verification (development only) */
   skipVerification?: boolean;
+  /** Webhook security options (forwarded headers/allowlist) */
+  webhookSecurity?: WebhookSecurityConfig;
 }
 
 export class TwilioProvider implements VoiceCallProvider {
@@ -60,6 +62,8 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /** Map of call SID to stream SID for media streams */
   private callStreamMap = new Map<string, string>();
+  /** Per-call tokens for media stream authentication */
+  private streamAuthTokens = new Map<string, string>();
 
   /** Storage for TwiML content (for notify mode with URL-based TwiML) */
   private readonly twimlStorage = new Map<string, string>();
@@ -94,6 +98,7 @@ export class TwilioProvider implements VoiceCallProvider {
     }
 
     this.deleteStoredTwiml(callIdMatch[1]);
+    this.streamAuthTokens.delete(providerCallId);
   }
 
   constructor(config: TwilioConfig, options: TwilioProviderOptions = {}) {
@@ -136,6 +141,19 @@ export class TwilioProvider implements VoiceCallProvider {
 
   unregisterCallStream(callSid: string): void {
     this.callStreamMap.delete(callSid);
+  }
+
+  isValidStreamToken(callSid: string, token?: string): boolean {
+    const expected = this.streamAuthTokens.get(callSid);
+    if (!expected || !token) {
+      return false;
+    }
+    if (expected.length !== token.length) {
+      const dummy = Buffer.from(expected);
+      crypto.timingSafeEqual(dummy, dummy);
+      return false;
+    }
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(token));
   }
 
   /**
@@ -271,11 +289,13 @@ export class TwilioProvider implements VoiceCallProvider {
       case "busy":
       case "no-answer":
       case "failed":
+        this.streamAuthTokens.delete(callSid);
         if (callIdOverride) {
           this.deleteStoredTwiml(callIdOverride);
         }
         return { ...baseEvent, type: "call.ended", reason: callStatus };
       case "canceled":
+        this.streamAuthTokens.delete(callSid);
         if (callIdOverride) {
           this.deleteStoredTwiml(callIdOverride);
         }
@@ -308,6 +328,7 @@ export class TwilioProvider implements VoiceCallProvider {
     const callStatus = params.get("CallStatus");
     const direction = params.get("Direction");
     const isOutbound = direction?.startsWith("outbound") ?? false;
+    const callSid = params.get("CallSid") || undefined;
     const callIdFromQuery =
       typeof ctx.query?.callId === "string" && ctx.query.callId.trim()
         ? ctx.query.callId.trim()
@@ -330,7 +351,7 @@ export class TwilioProvider implements VoiceCallProvider {
 
       // Conversation mode: return streaming TwiML immediately for outbound calls.
       if (isOutbound) {
-        const streamUrl = this.getStreamUrl();
+        const streamUrl = callSid ? this.getStreamUrlForCall(callSid) : null;
         return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
       }
     }
@@ -343,7 +364,7 @@ export class TwilioProvider implements VoiceCallProvider {
     // Handle subsequent webhook requests (status callbacks, etc.)
     // For inbound calls, answer immediately with stream
     if (direction === "inbound") {
-      const streamUrl = this.getStreamUrl();
+      const streamUrl = callSid ? this.getStreamUrlForCall(callSid) : null;
       return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
     }
 
@@ -352,7 +373,7 @@ export class TwilioProvider implements VoiceCallProvider {
       return TwilioProvider.EMPTY_TWIML;
     }
 
-    const streamUrl = this.getStreamUrl();
+    const streamUrl = callSid ? this.getStreamUrlForCall(callSid) : null;
     return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
   }
 
@@ -378,6 +399,27 @@ export class TwilioProvider implements VoiceCallProvider {
       : `/${this.options.streamPath}`;
 
     return `${wsOrigin}${path}`;
+  }
+
+  private getStreamAuthToken(callSid: string): string {
+    const existing = this.streamAuthTokens.get(callSid);
+    if (existing) {
+      return existing;
+    }
+    const token = crypto.randomBytes(16).toString("base64url");
+    this.streamAuthTokens.set(callSid, token);
+    return token;
+  }
+
+  private getStreamUrlForCall(callSid: string): string | null {
+    const baseUrl = this.getStreamUrl();
+    if (!baseUrl) {
+      return null;
+    }
+    const token = this.getStreamAuthToken(callSid);
+    const url = new URL(baseUrl);
+    url.searchParams.set("token", token);
+    return url.toString();
   }
 
   /**
@@ -444,6 +486,7 @@ export class TwilioProvider implements VoiceCallProvider {
     this.deleteStoredTwimlForProviderCall(input.providerCallId);
 
     this.callWebhookUrls.delete(input.providerCallId);
+    this.streamAuthTokens.delete(input.providerCallId);
 
     await this.apiRequest(
       `/Calls/${input.providerCallId}.json`,
