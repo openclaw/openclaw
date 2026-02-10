@@ -28,11 +28,11 @@
 - README (GitHub): keep absolute docs URLs (`https://docs.openclaw.ai/...`) so links work on GitHub.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-## Docs i18n (zh-CN)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Docs i18n (zh-)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-- `docs/zh-CN/**` is generated; do not edit unless the user explicitly asks.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-- Pipeline: update English docs → adjust glossary (`docs/.i18n/glossary.zh-CN.json`) → run `scripts/docs-i18n` → apply targeted fixes only if instructed.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-- Translation memory: `docs/.i18n/zh-CN.tm.jsonl` (generated).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- `docs/zh-/**` is generated; do not edit unless the user explicitly asks.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Pipeline: update English docs → adjust glossary (`docs/.i18n/glossary.zh-.json`) → run `scripts/docs-i18n` → apply targeted fixes only if instructed.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Translation memory: `docs/.i18n/zh-.tm.jsonl` (generated).（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - See `docs/.i18n/README.md`.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - The pipeline can be slow/inefficient; if it’s dragging, ping @jospalmbier on Discord instead of hacking around it.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

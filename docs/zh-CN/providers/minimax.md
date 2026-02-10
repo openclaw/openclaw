@@ -53,7 +53,7 @@ openclaw onboard --auth-choice minimax-portal（轉為繁體中文）（轉為�
 系统会提示你选择端点：（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - **Global** - 国际用户（`api.minimax.io`）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-- **CN** - 中国用户（`api.minimaxi.com`）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- **** - 中国用户（`api.minimaxi.com`）（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 详情参见 [MiniMax OAuth 插件 README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax-portal-auth)。（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

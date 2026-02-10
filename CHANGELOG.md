@@ -118,7 +118,7 @@ Docs: https://docs.openclaw.ai（轉為繁體中文）（轉為繁體中文）�
 - Onboarding: add Cloudflare AI Gateway provider setup and docs. (#7914) Thanks @roerohan.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - Onboarding: add Moonshot (.cn) auth choice and keep the China base URL when preserving defaults. (#7180) Thanks @waynelwz.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - Docs: clarify tmux send-keys for TUI by splitting text and Enter. (#7737) Thanks @Wangnov.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-- Docs: mirror the landing page revamp for zh-CN (features, quickstart, docs directory, network model, credits). (#8994) Thanks @joshp123.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Docs: mirror the landing page revamp for zh- (features, quickstart, docs directory, network model, credits). (#8994) Thanks @joshp123.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - Messages: add per-channel and per-account responsePrefix overrides across channels. (#9001) Thanks @mudrii.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - Cron: add announce delivery mode for isolated jobs (CLI + Control UI) and delivery mode config.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - Cron: default isolated jobs to announce delivery; accept ISO 8601 `schedule.at` in tool inputs.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
@@ -182,8 +182,8 @@ Docs: https://docs.openclaw.ai（轉為繁體中文）（轉為繁體中文）�
 - Memory: implement the opt-in QMD backend for workspace memory. (#3160) Thanks @vignesh07.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - Security: add healthcheck skill and bootstrap audit guidance. (#7641) Thanks @Takhoffman.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 - Config: allow setting a default subagent thinking level via `agents.defaults.subagents.thinking` (and per-agent `agents.list[].subagents.thinking`). (#7372) Thanks @tyler6204.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-- Docs: zh-CN translations seed + polish, pipeline guidance, nav/landing updates, and typo fixes. (#8202, #6995, #6619, #7242, #7303, #7415) Thanks @AaronWander, @taiyi747, @Explorer1092, @rendaoyuan, @joshp123, @lailoo.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-- Docs: add zh-CN i18n guardrails to avoid editing generated translations. (#8416) Thanks @joshp123.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Docs: zh- translations seed + polish, pipeline guidance, nav/landing updates, and typo fixes. (#8202, #6995, #6619, #7242, #7303, #7415) Thanks @AaronWander, @taiyi747, @Explorer1092, @rendaoyuan, @joshp123, @lailoo.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+- Docs: add zh- i18n guardrails to avoid editing generated translations. (#8416) Thanks @joshp123.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 ### Fixes（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）

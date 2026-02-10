@@ -142,12 +142,12 @@ tailscale serve status（轉為繁體中文）（轉為繁體中文）（轉為�
 curl http://localhost:18789（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 ```（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-## 8) Lock Down VCN Security（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## 8) Lock Down V Security（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-Now that everything is working, lock down the VCN to block all traffic except Tailscale. OCI's Virtual Cloud Network acts as a firewall at the network edge — traffic is blocked before it reaches your instance.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+Now that everything is working, lock down the V to block all traffic except Tailscale. OCI's Virtual Cloud Network acts as a firewall at the network edge — traffic is blocked before it reaches your instance.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 1. Go to **Networking → Virtual Cloud Networks** in the OCI Console（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-2. Click your VCN → **Security Lists** → Default Security List（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+2. Click your V → **Security Lists** → Default Security List（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 3. **Remove** all ingress rules except:（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
    - `0.0.0.0/0 UDP 41641` (Tailscale)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 4. Keep default egress rules (allow all outbound)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
@@ -174,9 +174,9 @@ No SSH tunnel needed. Tailscale provides:（轉為繁體中文）（轉為繁體
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 ---（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-## Security: VCN + Tailscale (recommended baseline)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+## Security: V + Tailscale (recommended baseline)（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-With the VCN locked down (only UDP 41641 open) and the Gateway bound to loopback, you get strong defense-in-depth: public traffic is blocked at the network edge, and admin access happens over your tailnet.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+With the V locked down (only UDP 41641 open) and the Gateway bound to loopback, you get strong defense-in-depth: public traffic is blocked at the network edge, and admin access happens over your tailnet.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 This setup often removes the _need_ for extra host-based firewall rules purely to stop Internet-wide SSH brute force — but you should still keep the OS updated, run `openclaw security audit`, and verify you aren’t accidentally listening on public interfaces.（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
@@ -184,12 +184,12 @@ This setup often removes the _need_ for extra host-based firewall rules purely t
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 | Traditional Step   | Needed?     | Why                                                                          |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 | ------------------ | ----------- | ---------------------------------------------------------------------------- |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-| UFW firewall       | No          | VCN blocks before traffic reaches instance                                   |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-| fail2ban           | No          | No brute force if port 22 blocked at VCN                                     |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| UFW firewall       | No          | V blocks before traffic reaches instance                                   |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| fail2ban           | No          | No brute force if port 22 blocked at V                                     |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 | sshd hardening     | No          | Tailscale SSH doesn't use sshd                                               |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 | Disable root login | No          | Tailscale uses Tailscale identity, not system users                          |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 | SSH key-only auth  | No          | Tailscale authenticates via your tailnet                                     |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
-| IPv6 hardening     | Usually not | Depends on your VCN/subnet settings; verify what’s actually assigned/exposed |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
+| IPv6 hardening     | Usually not | Depends on your V/subnet settings; verify what’s actually assigned/exposed |（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 ### Still Recommended（轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
 （轉為繁體中文）（轉為繁體中文）（轉為繁體中文）
