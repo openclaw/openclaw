@@ -92,6 +92,7 @@ export async function signalCheck(
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const normalized = normalizeBaseUrl(baseUrl);
   // Try the REST health endpoint first (signal-cli <0.13)
+  let restStatus: number | null = null;
   try {
     const res = await fetchWithTimeout(
       `${normalized}/api/v1/check`,
@@ -99,11 +100,18 @@ export async function signalCheck(
       timeoutMs,
       getRequiredFetch(),
     );
+    restStatus = res.status;
     if (res.ok) {
       return { ok: true, status: res.status, error: null };
     }
   } catch {
-    // REST endpoint unavailable, try JSON-RPC below
+    // REST endpoint unavailable (connection refused, timeout, etc.)
+  }
+  // Only fall back to JSON-RPC when the REST endpoint is missing (404) or
+  // unreachable (network error). Other non-OK statuses (401, 500, 503) indicate
+  // the server is reachable but unhealthy — don't mask those with an RPC probe.
+  if (restStatus !== null && restStatus !== 404) {
+    return { ok: false, status: restStatus, error: `HTTP ${restStatus}` };
   }
   // Fall back to JSON-RPC "version" method (signal-cli 0.13+)
   try {
@@ -112,7 +120,7 @@ export async function signalCheck(
   } catch (err) {
     return {
       ok: false,
-      status: null,
+      status: restStatus,
       error: err instanceof Error ? err.message : String(err),
     };
   }

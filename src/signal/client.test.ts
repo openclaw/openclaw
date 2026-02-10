@@ -63,7 +63,29 @@ describe("signalCheck", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("returns error when both REST and JSON-RPC fail", async () => {
+  it("does NOT fall back to JSON-RPC on non-404 HTTP errors (e.g. 500, 401)", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+
+    const result = await signalCheck("http://127.0.0.1:8080", 1000);
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(500);
+    expect(result.error).toBe("HTTP 500");
+    // Should NOT attempt JSON-RPC fallback
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fall back to JSON-RPC on 401 Unauthorized", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 401 });
+
+    const result = await signalCheck("http://127.0.0.1:8080", 1000);
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(401);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns error when both REST (404) and JSON-RPC fail", async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
     mockFetch.mockRejectedValueOnce(new Error("connection refused"));
 
