@@ -223,6 +223,61 @@ describe("redactConfigSnapshot", () => {
     const gw = result.config.gateway as Record<string, Record<string, string>>;
     expect(gw.auth.token).toBe(REDACTED_SENTINEL);
   });
+
+  it("does NOT redact maxTokens (not a secret)", () => {
+    const snapshot = makeSnapshot({
+      models: {
+        providers: {
+          openai: { maxTokens: 8192, apiKey: "sk-proj-1234567890abcdef" },
+        },
+      },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const models = result.config.models as Record<string, Record<string, Record<string, unknown>>>;
+    expect(models.providers.openai.maxTokens).toBe(8192);
+    expect(models.providers.openai.apiKey).toBe(REDACTED_SENTINEL);
+  });
+
+  it("does NOT redact token-count fields (inputTokens, outputTokens, totalTokens)", () => {
+    const snapshot = makeSnapshot({
+      usage: {
+        inputTokens: 1500,
+        outputTokens: 2000,
+        totalTokens: 3500,
+      },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const usage = result.config.usage as Record<string, number>;
+    expect(usage.inputTokens).toBe(1500);
+    expect(usage.outputTokens).toBe(2000);
+    expect(usage.totalTokens).toBe(3500);
+  });
+
+  it("still redacts fields ending in 'token' (botToken, apiToken, accessToken)", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        discord: { botToken: "discord-bot-secret-token-value" },
+        custom: {
+          apiToken: "api-secret-token-placeholder-value",
+          accessToken: "access-secret-tok",
+        },
+      },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, string>>;
+    expect(channels.discord.botToken).toBe(REDACTED_SENTINEL);
+    expect(channels.custom.apiToken).toBe(REDACTED_SENTINEL);
+    expect(channels.custom.accessToken).toBe(REDACTED_SENTINEL);
+  });
+
+  it("does NOT redact maxTokens in raw text", () => {
+    const config = { models: { providers: { openai: { maxTokens: 8192 } } } };
+    const raw = '{ "models": { "providers": { "openai": { "maxTokens": 8192 } } } }';
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.raw).toContain("8192");
+    expect(result.raw).not.toContain(REDACTED_SENTINEL);
+  });
 });
 
 describe("restoreRedactedValues", () => {
