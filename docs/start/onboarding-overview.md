@@ -37,10 +37,10 @@ Use the OpenClaw app when you want a fully guided setup on macOS. Docs:
 
 - [Onboarding (macOS App)](/start/onboarding)
 
-## Custom API Endpoint
+## Custom Provider
 
 If you need an endpoint that is not listed, including hosted providers that
-expose standard OpenAI or Anthropic APIs, choose **Custom API Endpoint** in the
+expose standard OpenAI or Anthropic APIs, choose **Custom Provider** in the
 CLI wizard. You will be asked to:
 
 - Pick OpenAI-compatible, Anthropic-compatible, or **Unknown** (auto-detect).
