@@ -40,6 +40,7 @@
         },
         "openrouter/minimax/minimax-m2.1": {},
         "openrouter/moonshotai/kimi-k2.5": {},
+        "openrouter/deepseek/deepseek-v3.2": {},
         "openrouter/z-ai/glm-4.7": {}
       },
       "workspace": "/home/node/.openclaw/workspace",

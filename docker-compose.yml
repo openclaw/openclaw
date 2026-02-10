@@ -15,6 +15,7 @@ services:
       # VPS-specific
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
