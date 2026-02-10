@@ -31,6 +31,8 @@ const BROWSER_TOOL_ACTIONS = [
   "pdf",
   "upload",
   "dialog",
+  "waitForDownload",
+  "download",
   "act",
 ] as const;
 
@@ -103,6 +105,7 @@ export const BrowserToolSchema = Type.Object({
   element: Type.Optional(Type.String()),
   type: optionalStringEnum(BROWSER_IMAGE_TYPES),
   level: Type.Optional(Type.String()),
+  path: Type.Optional(Type.String()),
   paths: Type.Optional(Type.Array(Type.String())),
   inputRef: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),

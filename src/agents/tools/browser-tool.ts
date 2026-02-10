@@ -4,9 +4,11 @@ import {
   browserArmDialog,
   browserArmFileChooser,
   browserConsoleMessages,
+  browserDownload,
   browserNavigate,
   browserPdfSave,
   browserScreenshotAction,
+  browserWaitForDownload,
 } from "../../browser/client-actions.js";
 import {
   browserCloseTab,
@@ -667,6 +669,67 @@ export function createBrowserTool(opts?: {
             await browserArmDialog(baseUrl, {
               accept,
               promptText,
+              targetId,
+              timeoutMs,
+              profile,
+            }),
+          );
+        }
+        case "waitForDownload": {
+          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+          const path = readStringParam(params, "path");
+          const timeoutMs =
+            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+              ? params.timeoutMs
+              : undefined;
+          if (proxyRequest) {
+            const result = await proxyRequest({
+              method: "POST",
+              path: "/wait/download",
+              profile,
+              body: {
+                path,
+                targetId,
+                timeoutMs,
+              },
+            });
+            return jsonResult(result);
+          }
+          return jsonResult(
+            await browserWaitForDownload(baseUrl, {
+              path,
+              targetId,
+              timeoutMs,
+              profile,
+            }),
+          );
+        }
+        case "download": {
+          const ref = readStringParam(params, "ref", { required: true });
+          const path = readStringParam(params, "path", { required: true });
+          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+          const timeoutMs =
+            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+              ? params.timeoutMs
+              : undefined;
+          if (proxyRequest) {
+            const result = await proxyRequest({
+              method: "POST",
+              path: "/download",
+              profile,
+              body: {
+                ref,
+                path,
+                targetId,
+                timeoutMs,
+              },
+            });
+            return jsonResult(result);
+          }
+          return jsonResult(
+            await browserDownload(baseUrl, {
+              ref,
+              path,
               targetId,
               timeoutMs,
               profile,
