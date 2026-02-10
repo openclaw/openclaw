@@ -57,11 +57,10 @@ describe("passesAttentionGate", () => {
     });
 
     it("should accept messages at exactly 30 characters with sufficient words", () => {
-      // 30 chars, 5 words: "abcde abcde abcde abcde abcde" = 29 chars (5*5 + 4 spaces)
-      // Need 30+ chars and 5+ words
-      const text = "abcdef abcdef abcdef abcdef ab";
-      expect(text.length).toBe(30);
-      expect(text.split(/\s+/).length).toBeGreaterThanOrEqual(5);
+      // Need 30+ chars and 8+ words
+      const text = "ab cd ef gh ij kl mn op qr st u";
+      expect(text.length).toBeGreaterThanOrEqual(30);
+      expect(text.split(/\s+/).length).toBeGreaterThanOrEqual(8);
       expect(passesAttentionGate(text)).toBe(true);
     });
 
@@ -81,15 +80,19 @@ describe("passesAttentionGate", () => {
   // -----------------------------------------------------------------------
 
   describe("word count", () => {
-    it("should reject messages with fewer than 5 words", () => {
-      // 4 words, but long enough in chars (> 30)
+    it("should reject messages with fewer than 8 words", () => {
+      // 7 words, but long enough in chars (> 30)
       expect(
-        passesAttentionGate("thisislongword anotherlongword thirdlongword fourthlongword"),
+        passesAttentionGate(
+          "thisislongword anotherlongword thirdlongword fourthlongword fifth sixth seventh",
+        ),
       ).toBe(false);
     });
 
-    it("should accept messages with exactly 5 words", () => {
-      expect(passesAttentionGate("thisword thatword another fourth fifthword")).toBe(true);
+    it("should accept messages with exactly 8 words", () => {
+      expect(
+        passesAttentionGate("thisword thatword another fourth fifthword sixth seventh eighth"),
+      ).toBe(true);
     });
   });
 

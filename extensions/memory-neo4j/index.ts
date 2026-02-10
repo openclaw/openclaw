@@ -1285,7 +1285,7 @@ async function runAutoCapture(
         const result = await captureMessage(
           text,
           "auto-capture",
-          0.3,
+          0.5,
           1.0,
           agentId,
           sessionKey,
@@ -1312,7 +1312,7 @@ async function runAutoCapture(
         const result = await captureMessage(
           text,
           "auto-capture-assistant",
-          0.7,
+          0.8,
           0.75,
           agentId,
           sessionKey,

@@ -29,6 +29,11 @@ const NOISE_PATTERNS = [
   // --- Session reset prompts (from /new and /reset commands) ---
   /^A new session was started via/i,
 
+  // --- Raw chat messages with channel metadata (autocaptured noise) ---
+  /\[slack message id:/i,
+  /\[message_id:/i,
+  /\[telegram message id:/i,
+
   // --- System infrastructure messages (never user-generated) ---
   // Heartbeat prompts
   /Read HEARTBEAT\.md if it exists/i,
@@ -51,7 +56,7 @@ const MAX_CAPTURE_CHARS = 2000;
 const MIN_CAPTURE_CHARS = 30;
 
 /** Minimum word count — short contextual phrases lack standalone meaning. */
-const MIN_WORD_COUNT = 5;
+const MIN_WORD_COUNT = 8;
 
 export function passesAttentionGate(text: string): boolean {
   const trimmed = text.trim();
@@ -100,6 +105,34 @@ const MAX_ASSISTANT_CAPTURE_CHARS = 1000;
 /** Minimum word count for assistant messages — higher than user. */
 const MIN_ASSISTANT_WORD_COUNT = 10;
 
+/**
+ * Patterns that reject assistant self-narration — play-by-play commentary
+ * that reads like thinking out loud rather than a conclusion or fact.
+ * These are the single biggest source of noise in auto-captured assistant memories.
+ */
+const ASSISTANT_NARRATION_PATTERNS = [
+  // "Let me ..." / "Now let me ..." / "I'll ..." action narration
+  /^(ok[,.]?\s+)?(now\s+)?let me\s+(check|look|see|try|run|start|test|read|update|verify|fix|search|process|create|build|set up|examine|investigate|query|fetch|pull|scan|clean|install|download|configure)/i,
+  // "I'll ..." action narration
+  /^I('ll| will)\s+(check|look|see|try|run|start|test|read|update|verify|fix|search|process|create|build|set up|examine|investigate|query|fetch|pull|scan|clean|install|download|configure|execute|help|handle)/i,
+  // "Starting ..." / "Running ..." / "Processing ..." status updates
+  /^(starting|running|processing|checking|fetching|scanning|building|installing|downloading|configuring|executing|loading|updating)\s/i,
+  // "Good!" / "Great!" / "Perfect!" as opener followed by narration
+  /^(good|great|perfect|nice|excellent|awesome|done)[!.]?\s+(i |the |now |let |we |that )/i,
+  // Progress narration: "Now I have..." / "Now I can see..." / "Now let me..."
+  /^now\s+(i\s+(have|can|need|see|understand)|we\s+(have|can|need)|the\s)/i,
+  // Step narration: "Step 1:" / "**Step 1:**"
+  /^\*?\*?step\s+\d/i,
+  // Narration of what was found/done: "Found it." / "Found X." / "I see — ..."
+  /^(found it|found the|i see\s*[—–-])/i,
+  // Sub-agent task descriptions (workflow narration)
+  /^\[?(mon|tue|wed|thu|fri|sat|sun)\s+\d{4}-\d{2}-\d{2}/i,
+  // Context compaction self-announcements
+  /^🔄\s*\*?\*?context reset/i,
+  // Filename slug generation prompts (internal tool use)
+  /^based on this conversation,?\s*generate a short/i,
+];
+
 export function passesAssistantAttentionGate(text: string): boolean {
   const trimmed = text.trim();
 
@@ -141,6 +174,11 @@ export function passesAssistantAttentionGate(text: string): boolean {
 
   // Noise patterns (same as user gate)
   if (NOISE_PATTERNS.some((r) => r.test(trimmed))) {
+    return false;
+  }
+
+  // Assistant-specific narration patterns (play-by-play self-talk)
+  if (ASSISTANT_NARRATION_PATTERNS.some((r) => r.test(trimmed))) {
     return false;
   }
 
