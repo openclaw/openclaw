@@ -278,10 +278,13 @@ async function installPluginFromPackageDir(params: {
   const hasDeps = Object.keys(deps).length > 0;
   if (hasDeps) {
     logger.info?.("Installing plugin dependencies…");
-    const npmRes = await runCommandWithTimeout(["npm", "install", "--omit=dev", "--silent"], {
-      timeoutMs: Math.max(timeoutMs, 300_000),
-      cwd: targetDir,
-    });
+    const npmRes = await runCommandWithTimeout(
+      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      {
+        timeoutMs: Math.max(timeoutMs, 300_000),
+        cwd: targetDir,
+      },
+    );
     if (npmRes.code !== 0) {
       if (backupDir) {
         await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);

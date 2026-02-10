@@ -6,6 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: vi.fn(),
+}));
+
 const tempDirs: string[] = [];
 
 function makeTempDir() {
@@ -491,5 +495,49 @@ describe("installPluginFromArchive", () => {
 
     vi.doUnmock("../security/skill-scanner.js");
     vi.resetModules();
+  });
+});
+
+describe("installPluginFromDir", () => {
+  it("uses --ignore-scripts for dependency install", async () => {
+    const workDir = makeTempDir();
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(workDir, "plugin");
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/test-plugin",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: { "left-pad": "1.3.0" },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+
+    const { runCommandWithTimeout } = await import("../process/exec.js");
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+
+    const { installPluginFromDir } = await import("./install.js");
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir: path.join(stateDir, "extensions"),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+
+    const calls = run.mock.calls.filter((c) => Array.isArray(c[0]) && c[0][0] === "npm");
+    expect(calls.length).toBe(1);
+    const first = calls[0];
+    if (!first) {
+      throw new Error("expected npm install call");
+    }
+    const [argv, opts] = first;
+    expect(argv).toEqual(["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"]);
+    expect(opts?.cwd).toBe(res.targetDir);
   });
 });
