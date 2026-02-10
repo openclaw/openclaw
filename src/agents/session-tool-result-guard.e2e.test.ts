@@ -1,6 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -56,37 +55,9 @@ function createTrackedDiskSM(): { sm: SessionManager; getSessionFile: () => stri
   };
 }
 
-describe("upstream _persist compatibility", () => {
-  // These tests validate that the upstream SessionManager methods we replicate
-  // in our monkey-patch haven't changed. If they fail after a pi-coding-agent
-  // upgrade, review the new implementation and update our patch.
-  //
-  // NOTE: Our patched _persist iterates `sm.fileEntries` as the canonical entry
-  // list — this is currently the only entry store in SessionManager. If upstream
-  // ever introduces lazy-loaded or secondary entry sources, these hashes will
-  // change and the tests below will fail, signaling that our patch needs to be
-  // updated to account for the new entry source.
-
-  function hashMethodSource(fn: (...args: unknown[]) => unknown): string {
-    return crypto.createHash("sha256").update(fn.toString()).digest("hex").slice(0, 16);
-  }
-
-  it("SessionManager._persist matches expected source hash (v0.52.8)", () => {
-    const sm = SessionManager.inMemory();
-    // oxlint-disable-next-line typescript-eslint(unbound-method) -- intentionally extracting for source hash
-    const hash = hashMethodSource(sm._persist);
-    // If this hash changes, the upstream _persist logic has changed.
-    // Review the new implementation and update the patched version in
-    // installSessionToolResultGuard, then update this hash.
-    expect(hash).toBe("6d47dbef2be2b962");
-  });
-
-  it("SessionManager._rewriteFile matches expected source hash (v0.52.8)", () => {
-    const sm = SessionManager.inMemory();
-    const hash = hashMethodSource((sm as unknown as { _rewriteFile: () => void })._rewriteFile);
-    expect(hash).toBe("247e3a7be1fe0745");
-  });
-});
+// No upstream hash guards needed — we wrap _persist/_rewriteFile instead of
+// replicating them. The wrapper swaps fileEntries with redacted copies during
+// writes, preserving all upstream persistence semantics unchanged.
 
 describe("redactEntryForPersistence", () => {
   it("redacts secrets in compaction summary", () => {

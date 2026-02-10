@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { SessionEntry, SessionManager } from "@mariozechner/pi-coding-agent";
-import fs, { appendFileSync } from "node:fs";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import type { RedactSensitiveMode } from "../logging/redact.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -264,18 +264,15 @@ export function installSessionToolResultGuard(
 
   const redactEntry = (entry: SessionEntry) => redactEntryForPersistence(entry, redactOptions);
 
-  // Monkey-patch _persist to redact secrets at the serialization boundary.
+  // Wrap _persist and _rewriteFile to redact secrets at the serialization boundary.
   // This ensures in-memory entries (used by LLM via buildSessionContext) stay
   // unredacted while the on-disk JSONL transcript gets secrets masked.
   //
-  // We must replace _persist entirely (not just wrap it) because the original
-  // bulk-flush path iterates this.fileEntries directly with JSON.stringify.
-  // We need to redact each entry during that iteration.
+  // Instead of replicating upstream logic, we wrap the original methods by
+  // temporarily swapping `fileEntries` with redacted copies during writes.
+  // This preserves all upstream persistence semantics (hasAssistant gating,
+  // bulk-flush logic, etc.) — we only transform the data, not the control flow.
   //
-  // UPSTREAM VERSION: This replicates the _persist logic from
-  // @mariozechner/pi-coding-agent v0.52.8 (SessionManager._persist).
-  // If the upstream _persist changes, this patch must be updated to match.
-  // A version-pinned test in the test file validates structural compatibility.
   // Cast to access private internals. We intentionally bypass visibility
   // because we're monkey-patching persistence methods. The intersection with
   // SessionManager is avoided because tsgo reduces it to `never` when private
@@ -291,39 +288,31 @@ export function installSessionToolResultGuard(
     appendMessage: SessionManager["appendMessage"];
   };
 
+  const originalPersist = sm._persist.bind(sm);
+  const originalRewriteFile = sm._rewriteFile.bind(sm);
+
   sm._persist = (entry: SessionEntry) => {
-    if (!sm.persist || !sm.sessionFile) {
-      return;
-    }
-    const hasAssistant = sm.fileEntries.some(
-      (e: SessionEntry) =>
-        (e as { type?: string }).type === "message" &&
-        (e as { message?: { role?: string } }).message?.role === "assistant",
-    );
-    if (!hasAssistant) {
-      sm.flushed = false;
-      return;
-    }
-    if (!sm.flushed) {
-      // Bulk-flush: write all entries. If an error occurs mid-write,
-      // flushed stays false so the next call retries the full flush.
-      for (const e of sm.fileEntries) {
-        appendFileSync(sm.sessionFile, `${JSON.stringify(redactEntry(e))}\n`);
-      }
-      sm.flushed = true;
-    } else {
-      appendFileSync(sm.sessionFile, `${JSON.stringify(redactEntry(entry))}\n`);
+    // Swap fileEntries with redacted copies, call original, then restore.
+    // The original _persist reads fileEntries directly during bulk-flush.
+    const original = sm.fileEntries;
+    sm.fileEntries = original.map((e) => redactEntry(e));
+    try {
+      originalPersist(redactEntry(entry));
+    } finally {
+      sm.fileEntries = original;
     }
   };
 
-  // Also patch _rewriteFile which is called during session migration/recovery
+  // Also wrap _rewriteFile which is called during session migration/recovery
   // and writes fileEntries directly without going through _persist.
   sm._rewriteFile = () => {
-    if (!sm.persist || !sm.sessionFile) {
-      return;
+    const original = sm.fileEntries;
+    sm.fileEntries = original.map((e) => redactEntry(e));
+    try {
+      originalRewriteFile();
+    } finally {
+      sm.fileEntries = original;
     }
-    const content = `${sm.fileEntries.map((e) => JSON.stringify(redactEntry(e))).join("\n")}\n`;
-    fs.writeFileSync(sm.sessionFile, content);
   };
 
   const persistToolResult = (
