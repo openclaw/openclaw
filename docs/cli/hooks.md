@@ -12,8 +12,8 @@ Manage agent hooks (event-driven automations for commands like `/new`, `/reset`,
 
 Related:
 
-- Hooks: [Hooks](/hooks)
-- Plugin hooks: [Plugins](/plugin#plugin-hooks)
+- Hooks: [Hooks](/automation/hooks)
+- Plugin hooks: [Plugins](/tools/plugin#plugin-hooks)
 
 ## List All Hooks
 
@@ -248,7 +248,7 @@ openclaw hooks enable session-memory
 
 **Output:** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
 
-**See:** [session-memory documentation](/hooks#session-memory)
+**See:** [session-memory documentation](/automation/hooks#session-memory)
 
 ### command-logger
 
@@ -275,7 +275,7 @@ cat ~/.openclaw/logs/commands.log | jq .
 grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 ```
 
-**See:** [command-logger documentation](/hooks#command-logger)
+**See:** [command-logger documentation](/automation/hooks#command-logger)
 
 ### soul-evil
 
@@ -301,4 +301,4 @@ Runs `BOOT.md` when the gateway starts (after channels start).
 openclaw hooks enable boot-md
 ```
 
-**See:** [boot-md documentation](/hooks#boot-md)
+**See:** [boot-md documentation](/automation/hooks#boot-md)

@@ -49,17 +49,17 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  let cursor = nowMs;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const next = cron.nextRun(new Date(cursor));
-    if (!next) {
-      return undefined;
-    }
-    const nextMs = next.getTime();
-    if (Number.isFinite(nextMs) && nextMs > nowMs) {
-      return nextMs;
-    }
-    cursor += 1_000;
+  // Cron operates at second granularity, so floor nowMs to the start of the
+  // current second.  This prevents the lookback from landing inside a matching
+  // second — if nowMs is e.g. 12:00:00.500 and the pattern fires at second 0,
+  // a 1ms lookback (12:00:00.499) is still *within* that second, causing
+  // croner to skip ahead to the next occurrence (e.g. the following day).
+  // Flooring first ensures the lookback always falls in the *previous* second.
+  const nowSecondMs = Math.floor(nowMs / 1000) * 1000;
+  const next = cron.nextRun(new Date(nowSecondMs - 1));
+  if (!next) {
+    return undefined;
   }
-  return undefined;
+  const nextMs = next.getTime();
+  return Number.isFinite(nextMs) && nextMs >= nowSecondMs ? nextMs : undefined;
 }

@@ -336,7 +336,7 @@ mixed access levels in one gateway:
 - Read-only tools + read-only workspace (family/work agent)
 - No filesystem/shell tools (public agent)
 
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for examples,
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for examples,
 precedence, and troubleshooting.
 
 ### Default behavior

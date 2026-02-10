@@ -289,7 +289,7 @@ process env is missing the key (same non-overriding rule):
 }
 ```
 
-See [/environment](/environment) for full precedence and sources.
+See [/environment](/help/environment) for full precedence and sources.
 
 ### `env.shellEnv` (optional)
 
@@ -765,7 +765,7 @@ Inbound messages are routed to an agent via bindings.
 - `bindings[]`: routes inbound messages to an `agentId`.
   - `match.channel` (required)
   - `match.accountId` (optional; `*` = any account; omitted = default account)
-  - `match.peer` (optional; `{ kind: dm|group|channel, id }`)
+  - `match.peer` (optional; `{ kind: direct|group|channel, id }`)
   - `match.guildId` / `match.teamId` (optional; channel-specific)
 
 Deterministic match order:
@@ -788,7 +788,7 @@ levels in one gateway:
 - **Read-only** tools + workspace
 - **No filesystem access** (messaging/session tools only)
 
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence and
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence and
 additional examples.
 
 Full access (no sandbox):
@@ -990,6 +990,10 @@ Controls how chat commands are enabled across connectors.
     config: false, // allow /config (writes to disk)
     debug: false, // allow /debug (runtime-only overrides)
     restart: false, // allow /restart + gateway restart tool
+    allowFrom: {
+      "*": ["user1"], // optional per-provider command allowlist
+      discord: ["user:123"],
+    },
     useAccessGroups: true, // enforce access-group allowlists/policies for commands
   },
 }
@@ -1008,9 +1012,14 @@ Notes:
 - `channels.<provider>.configWrites` gates config mutations initiated by that channel (default: true). This applies to `/config set|unset` plus provider-specific auto-migrations (Telegram supergroup ID changes, Slack channel ID changes).
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
-- `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
-- Slash commands and directives are only honored for **authorized senders**. Authorization is derived from
-  channel allowlists/pairing plus `commands.useAccessGroups`.
+- `commands.allowFrom` sets a per-provider allowlist for command execution. When configured, it is the **only**
+  authorization source for commands and directives (channel allowlists/pairing and `commands.useAccessGroups` are ignored).
+  Use `"*"` for a global default; provider-specific keys (for example `discord`) override it.
+- `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies when `commands.allowFrom`
+  is not set.
+- Slash commands and directives are only honored for **authorized senders**. If `commands.allowFrom` is set,
+  authorization comes solely from that list; otherwise it is derived from channel allowlists/pairing plus
+  `commands.useAccessGroups`.
 
 ### `web` (WhatsApp web channel runtime)
 
@@ -1453,7 +1462,7 @@ working directory). The path must exist to be used.
 
 ### `agents.defaults.skipBootstrap`
 
-Disables automatic creation of the workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`).
+Disables automatic creation of the workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md`).
 
 Use this for pre-seeded deployments where your workspace files come from a repo.
 
@@ -2760,13 +2769,19 @@ Controls session scoping, reset policy, reset triggers, and where the session st
     },
     resetByType: {
       thread: { mode: "daily", atHour: 4 },
-      dm: { mode: "idle", idleMinutes: 240 },
+      direct: { mode: "idle", idleMinutes: 240 },
       group: { mode: "idle", idleMinutes: 120 },
     },
     resetTriggers: ["/new", "/reset"],
     // Default is already per-agent under ~/.openclaw/agents/<agentId>/sessions/sessions.json
     // You can override with {agentId} templating:
     store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+    maintenance: {
+      mode: "warn",
+      pruneAfter: "30d",
+      maxEntries: 500,
+      rotateBytes: "10mb",
+    },
     // Direct chats collapse to agent:<agentId>:<mainKey> (default: "main").
     mainKey: "main",
     agentToAgent: {
@@ -2797,12 +2812,17 @@ Fields:
   - `mode`: `daily` or `idle` (default: `daily` when `reset` is present).
   - `atHour`: local hour (0-23) for the daily reset boundary.
   - `idleMinutes`: sliding idle window in minutes. When daily + idle are both configured, whichever expires first wins.
-- `resetByType`: per-session overrides for `dm`, `group`, and `thread`.
+- `resetByType`: per-session overrides for `direct`, `group`, and `thread`. Legacy `dm` key is accepted as an alias for `direct`.
   - If you only set legacy `session.idleMinutes` without any `reset`/`resetByType`, OpenClaw stays in idle-only mode for backward compatibility.
 - `heartbeatIdleMinutes`: optional idle override for heartbeat checks (daily reset still applies when enabled).
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
 - `sendPolicy.rules[]`: match by `channel`, `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.
+- `maintenance`: session store maintenance settings for pruning, capping, and rotation.
+  - `mode`: `"warn"` (default) warns the active session (best-effort delivery) when it would be evicted without enforcing maintenance. `"enforce"` applies pruning and rotation.
+  - `pruneAfter`: remove entries older than this duration (for example `"30m"`, `"1h"`, `"30d"`). Default "30d".
+  - `maxEntries`: cap the number of session entries kept (default 500).
+  - `rotateBytes`: rotate `sessions.json` when it exceeds this size (for example `"10kb"`, `"1mb"`, `"10mb"`). Default "10mb".
 
 ### `skills` (skills config)
 
@@ -2857,7 +2877,7 @@ Example:
 Controls plugin discovery, allow/deny, and per-plugin config. Plugins are loaded
 from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus any
 `plugins.load.paths` entries. **Config changes require a gateway restart.**
-See [/plugin](/plugin) for full usage.
+See [/plugin](/tools/plugin) for full usage.
 
 Fields:
 
@@ -3407,9 +3427,14 @@ Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron jobs
   cron: {
     enabled: true,
     maxConcurrentRuns: 2,
+    sessionRetention: "24h",
   },
 }
 ```
+
+Fields:
+
+- `sessionRetention`: how long to keep completed cron run sessions before pruning. Accepts a duration string like `"24h"` or `"7d"`. Use `false` to disable pruning. Default is 24h.
 
 ---
 

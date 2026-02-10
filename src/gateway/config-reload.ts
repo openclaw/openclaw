@@ -2,6 +2,7 @@ import chokidar from "chokidar";
 import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { isPlainObject } from "../utils.js";
 
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
@@ -124,15 +125,6 @@ function matchRule(path: string): ReloadRule | null {
     }
   }
   return null;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.prototype.toString.call(value) === "[object Object]",
-  );
 }
 
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {

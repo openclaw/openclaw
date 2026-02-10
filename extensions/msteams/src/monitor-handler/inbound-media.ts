@@ -10,7 +10,7 @@ import {
 } from "../attachments.js";
 
 type MSTeamsLogger = {
-  debug: (message: string, meta?: Record<string, unknown>) => void;
+  debug?: (message: string, meta?: Record<string, unknown>) => void;
 };
 
 export async function resolveMSTeamsInboundMedia(params: {
@@ -66,7 +66,7 @@ export async function resolveMSTeamsInboundMedia(params: {
         channelData: activity.channelData,
       });
       if (messageUrls.length === 0) {
-        log.debug("graph message url unavailable", {
+        log.debug?.("graph message url unavailable", {
           conversationType,
           hasChannelData: Boolean(activity.channelData),
           messageId: activity.id ?? undefined,
@@ -107,16 +107,16 @@ export async function resolveMSTeamsInboundMedia(params: {
           }
         }
         if (mediaList.length === 0) {
-          log.debug("graph media fetch empty", { attempts });
+          log.debug?.("graph media fetch empty", { attempts });
         }
       }
     }
   }
 
   if (mediaList.length > 0) {
-    log.debug("downloaded attachments", { count: mediaList.length });
+    log.debug?.("downloaded attachments", { count: mediaList.length });
   } else if (htmlSummary?.imgTags) {
-    log.debug("inline images detected but none downloaded", {
+    log.debug?.("inline images detected but none downloaded", {
       imgTags: htmlSummary.imgTags,
       srcHosts: htmlSummary.srcHosts,
       dataImages: htmlSummary.dataImages,

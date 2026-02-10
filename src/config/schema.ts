@@ -271,7 +271,11 @@ const FIELD_LABELS: Record<string, string> = {
   "memory.qmd.update.interval": "QMD Update Interval",
   "memory.qmd.update.debounceMs": "QMD Update Debounce (ms)",
   "memory.qmd.update.onBoot": "QMD Update on Startup",
+  "memory.qmd.update.waitForBootSync": "QMD Wait for Boot Sync",
   "memory.qmd.update.embedInterval": "QMD Embed Interval",
+  "memory.qmd.update.commandTimeoutMs": "QMD Command Timeout (ms)",
+  "memory.qmd.update.updateTimeoutMs": "QMD Update Timeout (ms)",
+  "memory.qmd.update.embedTimeoutMs": "QMD Embed Timeout (ms)",
   "memory.qmd.limits.maxResults": "QMD Max Results",
   "memory.qmd.limits.maxSnippetChars": "QMD Max Snippet Chars",
   "memory.qmd.limits.maxInjectedChars": "QMD Max Injected Chars",
@@ -302,6 +306,7 @@ const FIELD_LABELS: Record<string, string> = {
   "commands.restart": "Allow Restart",
   "commands.useAccessGroups": "Use Access Groups",
   "commands.ownerAllowFrom": "Command Owners",
+  "commands.allowFrom": "Command Access Allowlist",
   "ui.seamColor": "Accent Color",
   "ui.assistant.name": "Assistant Name",
   "ui.assistant.avatar": "Assistant Avatar",
@@ -550,7 +555,7 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.remote.headers":
     "Extra headers for remote embeddings (merged; remote overrides OpenAI headers).",
   "agents.defaults.memorySearch.remote.batch.enabled":
-    "Enable batch API for memory embeddings (OpenAI/Gemini; default: true).",
+    "Enable batch API for memory embeddings (OpenAI/Gemini/Voyage; default: false).",
   "agents.defaults.memorySearch.remote.batch.wait":
     "Wait for batch completion when indexing (default: true).",
   "agents.defaults.memorySearch.remote.batch.concurrency":
@@ -602,8 +607,14 @@ const FIELD_HELP: Record<string, string> = {
   "memory.qmd.update.debounceMs":
     "Minimum delay between successive QMD refresh runs (default: 15000).",
   "memory.qmd.update.onBoot": "Run QMD update once on gateway startup (default: true).",
+  "memory.qmd.update.waitForBootSync":
+    "Block startup until the boot QMD refresh finishes (default: false).",
   "memory.qmd.update.embedInterval":
     "How often QMD embeddings are refreshed (duration string, default: 60m). Set to 0 to disable periodic embed.",
+  "memory.qmd.update.commandTimeoutMs":
+    "Timeout for QMD maintenance commands like collection list/add (default: 30000).",
+  "memory.qmd.update.updateTimeoutMs": "Timeout for `qmd update` runs (default: 120000).",
+  "memory.qmd.update.embedTimeoutMs": "Timeout for `qmd embed` runs (default: 120000).",
   "memory.qmd.limits.maxResults": "Max QMD results returned to the agent loop (default: 6).",
   "memory.qmd.limits.maxSnippetChars": "Max characters per snippet pulled from QMD (default: 700).",
   "memory.qmd.limits.maxInjectedChars": "Max total characters injected from QMD hits per turn.",
@@ -665,6 +676,8 @@ const FIELD_HELP: Record<string, string> = {
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-only tools/commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
+  "commands.allowFrom":
+    'Per-provider allowlist restricting who can use slash commands. If set, overrides the channel\'s allowFrom for command authorization. Use \'*\' key for global default; provider-specific keys (e.g. \'discord\') override the global. Example: { "*": ["user1"], "discord": ["user:123"] }.',
   "session.dmScope":
     'DM session scoping: "main" keeps continuity; "per-peer", "per-channel-peer", or "per-account-channel-peer" isolates DM history (recommended for shared inboxes/multi-account).',
   "session.identityLinks":

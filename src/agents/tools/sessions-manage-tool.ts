@@ -94,9 +94,10 @@ export function createSessionsManageTool(opts?: {
       const resolvedKey = resolvedSession.key;
       const displayKey = resolvedSession.displayKey;
       const resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
-      if (restrictToSpawned && !resolvedViaSessionId) {
+      if (restrictToSpawned) {
+        // Even if resolved via sessionId, we must verify visibility to prevent unauthorized access by guessing IDs.
         const ok = await isSpawnedSessionAllowed({
-          requesterSessionKey: requesterInternalKey,
+          requesterSessionKey: requesterInternalKey!,
           targetSessionKey: resolvedKey,
         });
         if (!ok) {
@@ -107,10 +108,20 @@ export function createSessionsManageTool(opts?: {
         }
       }
 
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
+      const requesterAgentId = requesterInternalKey
+        ? resolveAgentIdFromSessionKey(requesterInternalKey)
+        : "main";
       const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
       const isCrossAgent = requesterAgentId !== targetAgentId;
+
+      // If we don't know who is asking (and they aren't explicitly "main"), we can't safely allow cross-agent access.
+      // For sandboxed agents, requesterInternalKey is required (checked above implicitly by restrictToSpawned logic, but explicit check is safer).
+      if (opts?.sandboxed && !requesterInternalKey) {
+        return jsonResult({
+          status: "forbidden",
+          error: "Sandboxed agent session key missing; cannot verify permissions.",
+        });
+      }
       if (isCrossAgent) {
         if (!a2aPolicy.enabled) {
           return jsonResult({

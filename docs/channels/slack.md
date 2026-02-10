@@ -537,6 +537,32 @@ Slack tool actions can be gated with `channels.slack.actions.*`:
   scopes you expect (`chat:write`, `reactions:write`, `pins:write`,
   `files:write`) or those operations will fail.
 
+## Troubleshooting
+
+Run this ladder first:
+
+```bash
+openclaw status
+openclaw gateway status
+openclaw logs --follow
+openclaw doctor
+openclaw channels status --probe
+```
+
+Then confirm DM pairing state if needed:
+
+```bash
+openclaw pairing list slack
+```
+
+Common failures:
+
+- Connected but no channel replies: channel blocked by `groupPolicy` or not in `channels.slack.channels` allowlist.
+- DMs ignored: sender not approved when `channels.slack.dm.policy="pairing"`.
+- API errors (`missing_scope`, `not_in_channel`, auth failures): bot/app tokens or Slack scopes are incomplete.
+
+For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
+
 ## Notes
 
 - Mention gating is controlled via `channels.slack.channels` (set `requireMention` to `true`); `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`) also count as mentions.

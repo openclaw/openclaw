@@ -526,7 +526,8 @@ describe("sessions tools", () => {
         return { ok: true, compacted: true };
       }
       if (request.method === "sessions.reset") {
-        return { ok: true, key: "main", deleted: true, archived: [] };
+        // Mock the actual gateway response shape: { ok: true, key: string, entry: SessionEntry }
+        return { ok: true, key: "main", entry: { key: "main", sessionId: "new-sess" } };
       }
       return {};
     });
@@ -556,8 +557,9 @@ describe("sessions tools", () => {
       status: "ok",
       action: "reset",
       sessionKey: "main",
-      deleted: true,
     });
+    // sessions.reset returns the new session entry, not a deleted flag.
+    expect((resetResult.details as { deleted?: boolean })?.deleted).not.toBe(true);
 
     expect(
       calls.some((call) => call.method === "sessions.compact" && call.params?.key === "main"),

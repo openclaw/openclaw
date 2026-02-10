@@ -32,7 +32,7 @@ const loadLanceDB = async (): Promise<typeof import("@lancedb/lancedb")> => {
     return await lancedbImportPromise;
   } catch (err) {
     // Common on macOS today: upstream package may not ship darwin native bindings.
-    throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`);
+    throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`, { cause: err });
   }
 };
 
@@ -195,7 +195,7 @@ const MEMORY_TRIGGERS = [
   /always|never|important/i,
 ];
 
-function shouldCapture(text: string): boolean {
+export function shouldCapture(text: string): boolean {
   if (text.length < 10 || text.length > 500) {
     return false;
   }
@@ -219,7 +219,7 @@ function shouldCapture(text: string): boolean {
   return MEMORY_TRIGGERS.some((r) => r.test(text));
 }
 
-function detectCategory(text: string): MemoryCategory {
+export function detectCategory(text: string): MemoryCategory {
   const lower = text.toLowerCase();
   if (/prefer|radši|like|love|hate|want/i.test(lower)) {
     return "preference";

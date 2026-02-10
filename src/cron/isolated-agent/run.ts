@@ -31,8 +31,9 @@ import {
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { hasNonzeroUsage } from "../../agents/usage.js";
+import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
   normalizeThinkLevel,
@@ -40,7 +41,11 @@ import {
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveSessionTranscriptPath,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
@@ -358,6 +363,8 @@ export async function runCronIsolatedAgentTurn(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
   let fallbackModel = model;
+  const runStartedAt = Date.now();
+  let runEndedAt = runStartedAt;
   try {
     const sessionFile = resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId);
     const resolvedVerboseLevel =
@@ -420,6 +427,7 @@ export async function runCronIsolatedAgentTurn(params: {
     runResult = fallbackResult.result;
     fallbackProvider = fallbackResult.provider;
     fallbackModel = fallbackResult.model;
+    runEndedAt = Date.now();
   } catch (err) {
     return withRunSession({ status: "error", error: String(err) });
   }
@@ -446,11 +454,13 @@ export async function runCronIsolatedAgentTurn(params: {
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
-      const promptTokens = input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
       cronSession.sessionEntry.inputTokens = input;
       cronSession.sessionEntry.outputTokens = output;
       cronSession.sessionEntry.totalTokens =
-        promptTokens > 0 ? promptTokens : (usage.total ?? input);
+        deriveSessionTotalTokens({
+          usage,
+          contextTokens,
+        }) ?? input;
     }
     await persistSessionEntry();
   }
@@ -465,6 +475,10 @@ export async function runCronIsolatedAgentTurn(params: {
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
+  const deliveryPayloadHasStructuredContent =
+    Boolean(deliveryPayload?.mediaUrl) ||
+    (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
+    Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
@@ -507,20 +521,73 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText });
     }
-    try {
-      await deliverOutboundPayloads({
-        cfg: cfgWithAgentDefaults,
-        channel: resolvedDelivery.channel,
-        to: resolvedDelivery.to,
-        accountId: resolvedDelivery.accountId,
-        threadId: resolvedDelivery.threadId,
-        payloads: deliveryPayloads,
-        bestEffort: deliveryBestEffort,
-        deps: createOutboundSendDeps(params.deps),
+    // Shared subagent announce flow is text-based; keep direct outbound delivery
+    // for media/channel payloads so structured content is preserved.
+    if (deliveryPayloadHasStructuredContent) {
+      try {
+        await deliverOutboundPayloads({
+          cfg: cfgWithAgentDefaults,
+          channel: resolvedDelivery.channel,
+          to: resolvedDelivery.to,
+          accountId: resolvedDelivery.accountId,
+          threadId: resolvedDelivery.threadId,
+          payloads: deliveryPayloads,
+          bestEffort: deliveryBestEffort,
+          deps: createOutboundSendDeps(params.deps),
+        });
+      } catch (err) {
+        if (!deliveryBestEffort) {
+          return withRunSession({ status: "error", summary, outputText, error: String(err) });
+        }
+      }
+    } else if (synthesizedText) {
+      const announceSessionKey = resolveAgentMainSessionKey({
+        cfg: params.cfg,
+        agentId,
       });
-    } catch (err) {
-      if (!deliveryBestEffort) {
-        return withRunSession({ status: "error", summary, outputText, error: String(err) });
+      const taskLabel =
+        typeof params.job.name === "string" && params.job.name.trim()
+          ? params.job.name.trim()
+          : `cron:${params.job.id}`;
+      try {
+        const didAnnounce = await runSubagentAnnounceFlow({
+          childSessionKey: runSessionKey,
+          childRunId: `${params.job.id}:${runSessionId}`,
+          requesterSessionKey: announceSessionKey,
+          requesterOrigin: {
+            channel: resolvedDelivery.channel,
+            to: resolvedDelivery.to,
+            accountId: resolvedDelivery.accountId,
+            threadId: resolvedDelivery.threadId,
+          },
+          requesterDisplayKey: announceSessionKey,
+          task: taskLabel,
+          timeoutMs,
+          cleanup: "keep",
+          roundOneReply: synthesizedText,
+          waitForCompletion: false,
+          startedAt: runStartedAt,
+          endedAt: runEndedAt,
+          outcome: { status: "ok" },
+          announceType: "cron job",
+        });
+        if (!didAnnounce) {
+          const message = "cron announce delivery failed";
+          if (!deliveryBestEffort) {
+            return withRunSession({
+              status: "error",
+              summary,
+              outputText,
+              error: message,
+            });
+          }
+          logWarn(`[cron:${params.job.id}] ${message}`);
+        }
+      } catch (err) {
+        if (!deliveryBestEffort) {
+          return withRunSession({ status: "error", summary, outputText, error: String(err) });
+        }
+        logWarn(`[cron:${params.job.id}] ${String(err)}`);
       }
     }
   }

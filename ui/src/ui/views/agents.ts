@@ -16,7 +16,7 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy.js";
-import { formatAgo } from "../format.ts";
+import { formatRelativeTimestamp } from "../format.ts";
 import {
   formatCronPayload,
   formatCronSchedule,
@@ -1113,7 +1113,9 @@ function renderAgentChannels(params: {
     params.agentIdentity,
   );
   const entries = resolveChannelEntries(params.snapshot);
-  const lastSuccessLabel = params.lastSuccess ? formatAgo(params.lastSuccess) : "never";
+  const lastSuccessLabel = params.lastSuccess
+    ? formatRelativeTimestamp(params.lastSuccess)
+    : "never";
   return html`
     <section class="grid grid-cols-2">
       ${renderAgentContextCard(context, "Workspace, identity, and model configuration.")}
@@ -1408,7 +1410,7 @@ function renderAgentFiles(params: {
 function renderAgentFileRow(file: AgentFileEntry, active: string | null, onSelect: () => void) {
   const status = file.missing
     ? "Missing"
-    : `${formatBytes(file.size)} · ${formatAgo(file.updatedAtMs ?? null)}`;
+    : `${formatBytes(file.size)} · ${formatRelativeTimestamp(file.updatedAtMs ?? null)}`;
   return html`
     <button
       type="button"
