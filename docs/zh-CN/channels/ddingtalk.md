@@ -44,7 +44,7 @@ openclaw onboard
 2. 配置应用凭证
 3. 启动网关
 
-✅ **完成配置后**，您可以使用以下命令检查网关状态：
+**完成配置后**，您可以使用以下命令检查网关状态：
 
 - `openclaw gateway status` - 查看网关运行状态
 - `openclaw logs --follow` - 查看实时日志
@@ -59,7 +59,7 @@ openclaw channels add
 
 然后根据交互式提示选择 DingTalk，输入 AppKey (Client ID) 和 AppSecret (Client Secret) 即可。
 
-✅ **完成配置后**，您可以使用以下命令管理网关：
+**完成配置后**，您可以使用以下命令管理网关：
 
 - `openclaw gateway status` - 查看网关运行状态
 - `openclaw gateway restart` - 重启网关以应用新配置
@@ -78,7 +78,7 @@ openclaw channels add
 1. 点击右上角 **创建应用**
 2. 填写应用名称和描述，上传图片（可选）
 
-![创建应用](/images/ddingtalk/ddingtalk-create-app.png)
+![创建应用](../../images/ddingtalk/ddingtalk-create-app.png)
 
 ### 3. 获取应用凭证
 
@@ -89,27 +89,27 @@ openclaw channels add
 
 ❗ **重要**：请妥善保管 Client Secret，不要分享给他人。
 
-![获取应用凭证](/images/ddingtalk/ddingtalk-credentials.png)
+![获取应用凭证](../../images/ddingtalk/ddingtalk-credentials.png)
 
 ### 4. 添加应用机器人
 
 在应用的 **添加应用能力** 页面，选择 **机器人**，点击添加
 
-![添加机器人](/images/ddingtalk/ddingtalk-create-robot.png)
+![添加机器人](../../images/ddingtalk/ddingtalk-create-robot.png)
 
 输入机器人相关信息，**消息接收模式** 选择 **Stream模式**，然后保存
 
-![配置机器人](/images/ddingtalk/ddingtalk-robot-config.png)
+![配置机器人](../../images/ddingtalk/ddingtalk-robot-config.png)
 
-![配置机器人消息接收模式](/images/ddingtalk/ddingtalk-robot-config-stream.png)
+![配置机器人消息接收模式](../../images/ddingtalk/ddingtalk-robot-config-stream.png)
 
 ### 5. 发布机器人
 
 创建机器人版本，填入版本号，描述，应用可用范围，点击保存，点击确认发布
 
-![创建机器人版本](/images/ddingtalk/ddingtalk-create-version.png)
+![创建机器人版本](../../images/ddingtalk/ddingtalk-create-version.png)
 
-![编辑版本](/images/ddingtalk/ddingtalk-edit-version.png)
+![编辑版本](../../images/ddingtalk/ddingtalk-edit-version.png)
 
 ---
 
