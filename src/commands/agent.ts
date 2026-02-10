@@ -322,9 +322,11 @@ export async function agentCommand(
     // This takes precedence over session-stored overrides to avoid timing issues.
     const directModelOverride = opts.model?.trim();
     if (directModelOverride) {
-      const [modelProvider, modelName] = directModelOverride.includes("/")
-        ? directModelOverride.split("/", 2)
-        : [defaultProvider, directModelOverride];
+      // Split only on first slash to preserve hierarchical model IDs (e.g., openrouter/moonshotai/kimi-k2)
+      const slashIndex = directModelOverride.indexOf("/");
+      const [modelProvider, modelName] = slashIndex === -1
+        ? [defaultProvider, directModelOverride]
+        : [directModelOverride.slice(0, slashIndex), directModelOverride.slice(slashIndex + 1)];
       const candidateProvider = modelProvider || defaultProvider;
       const candidateModel = modelName || directModelOverride;
       const key = modelKey(candidateProvider, candidateModel);
