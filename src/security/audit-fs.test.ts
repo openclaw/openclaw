@@ -314,16 +314,14 @@ describe("audit-fs", () => {
       expect(result.source).toBe("unknown");
     });
 
-    it("detects world-writable files on POSIX", async () => {
-      // Set world-writable permissions
+    it.skipIf(process.platform === "win32")("detects world-writable files on POSIX", async () => {
       await fs.chmod(tempFile, 0o666);
       const result = await inspectPathPermissions(tempFile, { platform: "darwin" });
       expect(result.ok).toBe(true);
       expect(result.worldWritable).toBe(true);
     });
 
-    it("detects restricted files on POSIX", async () => {
-      // Set restricted permissions
+    it.skipIf(process.platform === "win32")("detects restricted files on POSIX", async () => {
       await fs.chmod(tempFile, 0o600);
       const result = await inspectPathPermissions(tempFile, { platform: "darwin" });
       expect(result.ok).toBe(true);
