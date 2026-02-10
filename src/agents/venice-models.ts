@@ -381,7 +381,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     }
 
     // Filter out offline models
-    const onlineModels = data.data.filter((m) => !m.model_spec.offline);
+    const onlineModels = data.data.filter((m) => !m.model_spec?.offline);
 
     // Merge discovered models with catalog metadata
     const catalogById = new Map<string, VeniceCatalogEntry>(
@@ -414,7 +414,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           reasoning: isReasoning,
           input: hasVision ? ["text", "image"] : ["text"],
           cost: VENICE_DEFAULT_COST,
-          contextWindow: apiModel.model_spec.availableContextTokens || 128000,
+          contextWindow: apiModel.model_spec.availableContextTokens ?? 128000,
           maxTokens: 8192,
         });
       }
