@@ -54,6 +54,7 @@ Docs: https://docs.openclaw.ai
 - Discord: support forum/media thread-create starter messages, wire `message thread create --message`, and harden routing. (#10062) Thanks @jarvis89757.
 - Paths: structurally resolve `OPENCLAW_HOME`-derived home paths and fix Windows drive-letter handling in tool meta shortening. (#12125) Thanks @mcaxtr.
 - Memory: set Voyage embeddings `input_type` for improved retrieval. (#10818) Thanks @mcinteerj.
+- Memory: disable async batch embeddings by default for memory indexing (opt-in via `agents.defaults.memorySearch.remote.batch.enabled`). (#13069) Thanks @mcinteerj.
 - Memory/QMD: reuse default model cache across agents instead of re-downloading per agent. (#12114) Thanks @tyler6204.
 - Media understanding: recognize `.caf` audio attachments for transcription. (#10982) Thanks @succ985.
 - State dir: honor `OPENCLAW_STATE_DIR` for default device identity and canvas storage paths. (#4824) Thanks @kossoy.

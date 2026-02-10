@@ -302,7 +302,7 @@ Fallbacks:
 - `memorySearch.fallback` can be `openai`, `gemini`, `local`, or `none`.
 - The fallback provider is only used when the primary embedding provider fails.
 
-Batch indexing (OpenAI + Gemini):
+Batch indexing (OpenAI + Gemini + Voyage):
 
 - Disabled by default. Set `agents.defaults.memorySearch.remote.batch.enabled = true` to enable for large-corpus indexing (OpenAI, Gemini, and Voyage).
 - Default behavior waits for batch completion; tune `remote.batch.wait`, `remote.batch.pollIntervalMs`, and `remote.batch.timeoutMinutes` if needed.

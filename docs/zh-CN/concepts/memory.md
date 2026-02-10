@@ -164,7 +164,7 @@ agents: {
 
 批量索引（OpenAI + Gemini）：
 
-- 默认禁用。设置 `agents.defaults.memorySearch.remote.batch.enabled = true` 以启用大规模语料库索引（OpenAI、Gemini 和 Voyage）。
+- OpenAI 和 Gemini 嵌入默认启用。设置 `agents.defaults.memorySearch.remote.batch.enabled = false` 以禁用。
 - 默认行为等待批处理完成；如果需要可以调整 `remote.batch.wait`、`remote.batch.pollIntervalMs` 和 `remote.batch.timeoutMinutes`。
 - 设置 `remote.batch.concurrency` 以控制我们并行提交多少个批处理作业（默认：2）。
 - 批处理模式在 `memorySearch.provider = "openai"` 或 `"gemini"` 时适用，并使用相应的 API 密钥。
