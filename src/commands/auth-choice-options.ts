@@ -23,6 +23,7 @@ export type AuthChoiceGroupId =
   | "synthetic"
   | "venice"
   | "qwen"
+  | "together"
   | "qianfan"
   | "xai";
 
@@ -130,6 +131,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["synthetic-api-key"],
   },
   {
+    value: "together",
+    label: "Together AI",
+    hint: "API key",
+    choices: ["together-api-key"],
+  },
+  {
     value: "venice",
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",
@@ -185,12 +192,20 @@ export function buildAuthChoiceOptions(params: {
     value: "moonshot-api-key-cn",
     label: "Kimi API key (.cn)",
   });
-  options.push({ value: "kimi-code-api-key", label: "Kimi Code API key (subscription)" });
+  options.push({
+    value: "kimi-code-api-key",
+    label: "Kimi Code API key (subscription)",
+  });
   options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
   options.push({
     value: "venice-api-key",
     label: "Venice AI API key",
     hint: "Privacy-focused inference (uncensored models)",
+  });
+  options.push({
+    value: "together-api-key",
+    label: "Together AI API key",
+    hint: "Access to Llama, DeepSeek, Qwen, and more open models",
   });
   options.push({
     value: "github-copilot",
