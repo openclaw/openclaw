@@ -87,7 +87,7 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_APPROX_CHARS_PER_TOKEN = 1;
+const EMBEDDING_MODEL_MAX_TOKENS = 8192;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
@@ -1547,7 +1547,65 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (!text) {
       return 0;
     }
-    return Math.ceil(text.length / EMBEDDING_APPROX_CHARS_PER_TOKEN);
+    // UTF-8 byte length is a safe upper bound for tokenizer output length.
+    return Buffer.byteLength(text, "utf8");
+  }
+
+  private splitChunkToTokenLimit(chunk: MemoryChunk): MemoryChunk[] {
+    if (this.estimateEmbeddingTokens(chunk.text) <= EMBEDDING_MODEL_MAX_TOKENS) {
+      return [chunk];
+    }
+    const parts: MemoryChunk[] = [];
+    let cursor = 0;
+    while (cursor < chunk.text.length) {
+      let low = cursor + 1;
+      let high = Math.min(chunk.text.length, cursor + EMBEDDING_MODEL_MAX_TOKENS);
+      let best = cursor;
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        const bytes = this.estimateEmbeddingTokens(chunk.text.slice(cursor, mid));
+        if (bytes <= EMBEDDING_MODEL_MAX_TOKENS) {
+          best = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      if (best <= cursor) {
+        best = Math.min(chunk.text.length, cursor + 1);
+      }
+      // Avoid splitting inside a surrogate pair.
+      if (
+        best < chunk.text.length &&
+        best > cursor &&
+        chunk.text.charCodeAt(best - 1) >= 0xd800 &&
+        chunk.text.charCodeAt(best - 1) <= 0xdbff &&
+        chunk.text.charCodeAt(best) >= 0xdc00 &&
+        chunk.text.charCodeAt(best) <= 0xdfff
+      ) {
+        best -= 1;
+      }
+      const text = chunk.text.slice(cursor, best);
+      if (!text) {
+        break;
+      }
+      parts.push({
+        startLine: chunk.startLine,
+        endLine: chunk.endLine,
+        text,
+        hash: hashText(text),
+      });
+      cursor = best;
+    }
+    return parts;
+  }
+
+  private enforceChunkTokenLimit(chunks: MemoryChunk[]): MemoryChunk[] {
+    const out: MemoryChunk[] = [];
+    for (const chunk of chunks) {
+      out.push(...this.splitChunkToTokenLimit(chunk));
+    }
+    return out;
   }
 
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
@@ -2206,8 +2264,10 @@ export class MemoryIndexManager implements MemorySearchManager {
     options: { source: MemorySource; content?: string },
   ) {
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-    const chunks = chunkMarkdown(content, this.settings.chunking).filter(
-      (chunk) => chunk.text.trim().length > 0,
+    const chunks = this.enforceChunkTokenLimit(
+      chunkMarkdown(content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
+      ),
     );
     if (options.source === "sessions" && "lineMap" in entry) {
       remapChunkLines(chunks, entry.lineMap);
