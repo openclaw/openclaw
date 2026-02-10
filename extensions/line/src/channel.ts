@@ -619,6 +619,22 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
             message: "LINE channel access token not configured",
           });
         }
+
+        // Also check if secret is configured (when not using env/file source for token,
+        // or explicitly if we want to be safe, but here we assume tokenSource implies secret availability
+        // unless it's direct config).
+        // Actually, to address the feedback: check if secret is present OR implied by source.
+        const hasSecret =
+          account.channelSecret?.trim() || (account.tokenSource && account.tokenSource !== "none");
+
+        if (!hasSecret) {
+          issues.push({
+            channel: "line",
+            accountId,
+            kind: "config",
+            message: "LINE channel secret not configured",
+          });
+        }
       }
       return issues;
     },
