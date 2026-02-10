@@ -163,7 +163,7 @@ function getGlobalState(): DiagnosticGlobalState {
       listeners: new Set(),
     };
   }
-  return g[GLOBAL_KEY]!;
+  return g[GLOBAL_KEY] as DiagnosticGlobalState;
 }
 
 const state = getGlobalState();
