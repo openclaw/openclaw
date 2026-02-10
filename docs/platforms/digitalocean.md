@@ -63,8 +63,6 @@ The 1-Click and App Platform deployments include additional security hardening o
 4. Click **Create Droplet**
 5. Note the IP address
 
-> **Tip:** See [DigitalOcean's complete Droplet size reference](https://slugs.do-api.dev/) for all available plans, pricing, and specs.
-
 ### 2) Connect via SSH
 
 ```bash
@@ -282,15 +280,9 @@ App Platform provides managed infrastructure with automatic scaling, zero-downti
 
 The build takes ~5 minutes.
 
-### 2) Verify the Deployment
+### 2) Connect Channels
 
 Once built, go to the **Console** tab:
-
-```bash
-openclaw gateway health --url ws://127.0.0.1:18789
-```
-
-### 3) Connect Channels
 
 Switch to the `openclaw` user and navigate to the home directory:
 
@@ -306,7 +298,7 @@ openclaw channels login --channel whatsapp
 # Scan QR code
 ```
 
-### 4) Install Skills
+### 3) Install Skills
 
 ```bash
 # Browse available skills
