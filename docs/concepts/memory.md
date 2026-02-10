@@ -135,7 +135,8 @@ out to QMD for retrieval. Key points:
 - Boot refresh now runs in the background by default so chat startup is not
   blocked; set `memory.qmd.update.waitForBootSync = true` to keep the previous
   blocking behavior.
-- Searches run via `qmd query --json`. If QMD fails or the binary is missing,
+- Searches run via `qmd query --json`, scoped to OpenClaw-managed collections.
+  If QMD fails or the binary is missing,
   OpenClaw automatically falls back to the builtin SQLite manager so memory tools
   keep working.
 - OpenClaw does not expose QMD embed batch-size tuning today; batch behavior is
