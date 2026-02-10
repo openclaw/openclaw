@@ -123,13 +123,23 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
 done
 
 ENV_FILE="$ROOT_DIR/.env"
+has_seen() {
+  local key="$1"
+  shift || true
+  for item in "$@"; do
+    if [[ "$item" == "$key" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 upsert_env() {
   local file="$1"
   shift
   local -a keys=("$@")
   local tmp
   tmp="$(mktemp)"
-  declare -A seen=()
+  local -a seen_keys=()
 
   if [[ -f "$file" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -138,7 +148,7 @@ upsert_env() {
       for k in "${keys[@]}"; do
         if [[ "$key" == "$k" ]]; then
           printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
-          seen["$k"]=1
+          seen_keys+=("$k")
           replaced=true
           break
         fi
@@ -150,7 +160,7 @@ upsert_env() {
   fi
 
   for k in "${keys[@]}"; do
-    if [[ -z "${seen[$k]:-}" ]]; then
+    if ! has_seen "$k" "${seen_keys[@]-}"; then
       printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
     fi
   done
