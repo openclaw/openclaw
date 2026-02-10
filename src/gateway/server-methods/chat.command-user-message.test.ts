@@ -8,13 +8,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // the user's command message is persisted to the session transcript (not just the assistant reply).
 // Regression test for https://github.com/openclaw/openclaw/issues/12934
 describe("chat.send command transcript – user message persistence", () => {
+  let tempDir: string | undefined;
+
   afterEach(() => {
     vi.restoreAllMocks();
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = undefined;
+    }
   });
 
   it("appends the user's command message to the transcript when a command is handled without an agent run", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-cmd-user-"));
-    const transcriptPath = path.join(dir, "sess.jsonl");
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-cmd-user-"));
+    const transcriptPath = path.join(tempDir, "sess.jsonl");
 
     // Minimal Pi session header so SessionManager can open/append safely.
     fs.writeFileSync(
@@ -39,7 +45,7 @@ describe("chat.send command transcript – user message persistence", () => {
         ...original,
         loadSessionEntry: () => ({
           cfg: { commands: {} },
-          storePath: dir,
+          storePath: tempDir,
           canonicalKey: "test-session",
           entry: {
             sessionId: "sess-cmd-1",
@@ -102,13 +108,18 @@ describe("chat.send command transcript – user message persistence", () => {
 
     // Use a deferred promise resolved by the broadcast mock to deterministically wait
     // for the .then() handler to complete instead of relying on timer-based synchronization.
+    // Also resolve on error state so failures surface as assertions, not suite-level timeouts.
     let resolveFinished: () => void;
-    const finished = new Promise<void>((resolve) => {
+    let rejectFinished: (err: Error) => void;
+    const finished = new Promise<void>((resolve, reject) => {
       resolveFinished = resolve;
+      rejectFinished = reject;
     });
     const broadcast = vi.fn((_event: string, payload: Record<string, unknown>) => {
       if (payload.state === "final") {
         resolveFinished();
+      } else if (payload.state === "error") {
+        rejectFinished(new Error(`chat broadcast error: ${JSON.stringify(payload)}`));
       }
     });
 
@@ -138,7 +149,13 @@ describe("chat.send command transcript – user message persistence", () => {
     });
 
     // Wait for broadcastChatFinal to fire — this happens after transcript writes complete.
-    await finished;
+    // Bounded timeout ensures failures surface as assertions instead of suite-level hangs.
+    await Promise.race([
+      finished,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Timed out waiting for chat final broadcast")), 10_000),
+      ),
+    ]);
 
     // Read the transcript file and parse all entries.
     const rawContent = fs.readFileSync(transcriptPath, "utf-8");
@@ -177,8 +194,5 @@ describe("chat.send command transcript – user message persistence", () => {
     const userIdx = messages.indexOf(userMessages[0]);
     const assistantIdx = messages.indexOf(assistantMessages[0]);
     expect(userIdx).toBeLessThan(assistantIdx);
-
-    // Clean up.
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
