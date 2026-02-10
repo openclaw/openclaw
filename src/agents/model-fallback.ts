@@ -35,10 +35,10 @@ type FallbackAttempt = {
 };
 
 /**
- * Strict abort check for model fallback. Only treats explicit AbortError names as user aborts.
+ * Fallback abort check. Only treats explicit AbortError names as user aborts.
  * Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
  */
-function isStrictAbortError(err: unknown): boolean {
+function isFallbackAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
@@ -50,7 +50,7 @@ function isStrictAbortError(err: unknown): boolean {
 }
 
 function shouldRethrowAbort(err: unknown): boolean {
-  return isStrictAbortError(err) && !isTimeoutError(err);
+  return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
 function resolveImageFallbackCandidates(params: {
