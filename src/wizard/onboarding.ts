@@ -338,12 +338,16 @@ export async function runOnboardingWizard(
       skipBootstrap: Boolean(baseConfig.agents?.defaults?.skipBootstrap),
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Failed to create workspace directory";
-    await prompter.outro(
-      `Workspace not writable: ${workspaceDir}\n${msg}\nFix directory permissions, then re-run onboarding.`,
-    );
-    runtime.exit(1);
-    return;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EACCES" || code === "EPERM") {
+      const msg = err instanceof Error ? err.message : "Permission denied";
+      await prompter.outro(
+        `Workspace not writable: ${workspaceDir}\n${msg}\nFix directory permissions, then re-run onboarding.`,
+      );
+      runtime.exit(1);
+      return;
+    }
+    throw err;
   }
 
   const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
