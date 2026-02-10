@@ -11,8 +11,8 @@ import { listAgentIds } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { listAgentsForGateway } from "../session-utils.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
+import { listAgentsForGateway } from "../session-utils.js";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                              */
@@ -110,10 +110,10 @@ export const agentsHealthHandlers: GatewayRequestHandlers = {
 
       // Load cron jobs
       const cronResult = await context.cron.list({ includeDisabled: true });
-      const cronJobs = cronResult ?? [];
+      const cronJobs = (cronResult as { jobs?: unknown[] })?.jobs ?? [];
       const cronByAgent = new Map<string, typeof cronJobs>();
       for (const job of cronJobs) {
-        const aid = (job as Record<string, unknown>).agentId as string ?? "main";
+        const aid = ((job as Record<string, unknown>).agentId as string) ?? "main";
         if (!cronByAgent.has(aid)) cronByAgent.set(aid, []);
         cronByAgent.get(aid)!.push(job);
       }
@@ -122,9 +122,7 @@ export const agentsHealthHandlers: GatewayRequestHandlers = {
       const agents: AgentHealthEntry[] = [];
 
       for (const agentId of agentIds) {
-        const meta = agentsMeta.agents?.find(
-          (a: Record<string, unknown>) => a.agentId === agentId,
-        );
+        const meta = agentsMeta.agents?.find((a: Record<string, unknown>) => a.agentId === agentId);
 
         // Main session
         const sessions = sessionsByAgent.get(agentId) ?? [];

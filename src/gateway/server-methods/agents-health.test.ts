@@ -37,21 +37,36 @@ const mocks = vi.hoisted(() => ({
       agentId: "coding",
       name: "Ticket Nudger",
       enabled: true,
-      state: { lastStatus: "ok", nextRunAtMs: Date.now() + 600_000, lastRunAtMs: Date.now() - 60_000, lastDurationMs: 13000 },
+      state: {
+        lastStatus: "ok",
+        nextRunAtMs: Date.now() + 600_000,
+        lastRunAtMs: Date.now() - 60_000,
+        lastDurationMs: 13000,
+      },
     },
     {
       id: "job-2",
       agentId: "coding",
       name: "Daily Report",
       enabled: true,
-      state: { lastStatus: "error", nextRunAtMs: Date.now() + 3600_000, lastRunAtMs: Date.now() - 300_000, lastDurationMs: 5000 },
+      state: {
+        lastStatus: "error",
+        nextRunAtMs: Date.now() + 3600_000,
+        lastRunAtMs: Date.now() - 300_000,
+        lastDurationMs: 5000,
+      },
     },
     {
       id: "job-3",
       agentId: "main",
       name: "Backup",
       enabled: true,
-      state: { lastStatus: "ok", nextRunAtMs: Date.now() + 7200_000, lastRunAtMs: Date.now() - 1800_000, lastDurationMs: 17000 },
+      state: {
+        lastStatus: "ok",
+        nextRunAtMs: Date.now() + 7200_000,
+        lastRunAtMs: Date.now() - 1800_000,
+        lastDurationMs: 17000,
+      },
     },
     {
       id: "job-4",
@@ -111,11 +126,18 @@ describe("agents.health", () => {
 
     const context = {
       cron: {
-        list: vi.fn(async () => mocks.cronListReturn),
+        list: vi.fn(async () => ({ jobs: mocks.cronListReturn })),
       },
     };
 
-    await handler({ respond, context, params: {}, req: {}, client: null, isWebchatConnect: () => false });
+    await handler({
+      respond,
+      context,
+      params: {},
+      req: {},
+      client: null,
+      isWebchatConnect: () => false,
+    });
 
     expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
     const agents = (result as Record<string, unknown>).agents as Array<Record<string, unknown>>;
@@ -147,11 +169,18 @@ describe("agents.health", () => {
     });
 
     const context = {
-      cron: { list: vi.fn(async () => []) },
+      cron: { list: vi.fn(async () => ({ jobs: [] })) },
     };
 
     const before = Date.now();
-    await handler({ respond, context, params: {}, req: {}, client: null, isWebchatConnect: () => false });
+    await handler({
+      respond,
+      context,
+      params: {},
+      req: {},
+      client: null,
+      isWebchatConnect: () => false,
+    });
     const after = Date.now();
 
     expect((result as Record<string, unknown>).generatedAtMs).toBeGreaterThanOrEqual(before);

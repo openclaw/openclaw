@@ -1,8 +1,8 @@
 import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { agentHandlers } from "./server-methods/agent.js";
-import { agentsHandlers } from "./server-methods/agents.js";
 import { agentsHealthHandlers } from "./server-methods/agents-health.js";
+import { agentsHandlers } from "./server-methods/agents.js";
 import { browserHandlers } from "./server-methods/browser.js";
 import { channelsHandlers } from "./server-methods/channels.js";
 import { chatHandlers } from "./server-methods/chat.js";
