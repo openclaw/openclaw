@@ -114,9 +114,6 @@ export function resolveImageModelConfigForTool(params: {
   // MiniMax users: always try the canonical vision model first when auth exists.
   if (primary.provider === "minimax" && providerOk) {
     preferred = "minimax/MiniMax-VL-01";
-  } else if (primary.provider === "zai" && providerOk) {
-    // ZAI uses glm-4.6v for vision capabilities
-    preferred = "zai/glm-4.6v";
   } else if (providerOk && providerVisionFromConfig) {
     preferred = providerVisionFromConfig;
   } else if (primary.provider === "zai" && providerOk) {
