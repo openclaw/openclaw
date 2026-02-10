@@ -47,6 +47,10 @@ const NOISE_PATTERNS = [
   /^GatewayRestart:\s*\{/i,
   // Background task completion reports
   /^\[\w{3}\s+\d{4}-\d{2}-\d{2}\s.*\]\s*A background task/i,
+
+  // --- Conversation metadata that survived stripping ---
+  /^Conversation info\s*\(/i,
+  /^\[Queued messages/i,
 ];
 
 /** Maximum message length — code dumps, logs, etc. are not memories. */
@@ -112,17 +116,19 @@ const MIN_ASSISTANT_WORD_COUNT = 10;
  */
 const ASSISTANT_NARRATION_PATTERNS = [
   // "Let me ..." / "Now let me ..." / "I'll ..." action narration
-  /^(ok[,.]?\s+)?(now\s+)?let me\s+(check|look|see|try|run|start|test|read|update|verify|fix|search|process|create|build|set up|examine|investigate|query|fetch|pull|scan|clean|install|download|configure)/i,
+  /^(ok[,.]?\s+)?(now\s+)?let me\s+(check|look|see|try|run|start|test|read|update|verify|fix|search|process|create|build|set up|examine|investigate|query|fetch|pull|scan|clean|install|download|configure|make|select|click|type|fill|open|close|switch|send|post|submit|edit|change|add|remove|write|save|upload)/i,
   // "I'll ..." action narration
-  /^I('ll| will)\s+(check|look|see|try|run|start|test|read|update|verify|fix|search|process|create|build|set up|examine|investigate|query|fetch|pull|scan|clean|install|download|configure|execute|help|handle)/i,
+  /^I('ll| will)\s+(check|look|see|try|run|start|test|read|update|verify|fix|search|process|create|build|set up|examine|investigate|query|fetch|pull|scan|clean|install|download|configure|execute|help|handle|make|select|click|type|fill|open|close|switch|send|post|submit|edit|change|add|remove|write|save|upload|use|grab|get|do)/i,
   // "Starting ..." / "Running ..." / "Processing ..." status updates
-  /^(starting|running|processing|checking|fetching|scanning|building|installing|downloading|configuring|executing|loading|updating)\s/i,
-  // "Good!" / "Great!" / "Perfect!" as opener followed by narration
-  /^(good|great|perfect|nice|excellent|awesome|done)[!.]?\s+(i |the |now |let |we |that )/i,
+  /^(starting|running|processing|checking|fetching|scanning|building|installing|downloading|configuring|executing|loading|updating|filling|selecting|clicking|typing|opening|closing|switching|navigating|uploading|saving|sending|posting|submitting)\s/i,
+  // "Good!" / "Great!" / "Perfect!" / "Done!" as opener followed by narration
+  /^(good|great|perfect|nice|excellent|awesome|done)[!.]?\s+(i |the |now |let |we |that |here)/i,
   // Progress narration: "Now I have..." / "Now I can see..." / "Now let me..."
-  /^now\s+(i\s+(have|can|need|see|understand)|we\s+(have|can|need)|the\s)/i,
+  /^now\s+(i\s+(have|can|need|see|understand)|we\s+(have|can|need)|the\s|on\s)/i,
   // Step narration: "Step 1:" / "**Step 1:**"
   /^\*?\*?step\s+\d/i,
+  // Page/section progress narration: "Page 1 done!", "Page 3 — final page!"
+  /^Page\s+\d/i,
   // Narration of what was found/done: "Found it." / "Found X." / "I see — ..."
   /^(found it|found the|i see\s*[—–-])/i,
   // Sub-agent task descriptions (workflow narration)
@@ -131,6 +137,16 @@ const ASSISTANT_NARRATION_PATTERNS = [
   /^🔄\s*\*?\*?context reset/i,
   // Filename slug generation prompts (internal tool use)
   /^based on this conversation,?\s*generate a short/i,
+
+  // --- Conversational filler responses (not knowledge) ---
+  // "I'm here" / "I am here" filler: "I'm here to help", "I am here and listening", etc.
+  /^I('m| am) here\b/i,
+  // Ready-state: "Sure, (just) tell me what you want..."
+  /^Sure[,!.]?\s+(just\s+)?(tell|let)\s+me/i,
+  // Observational UI narration: "I can see the picker", "I can see the button"
+  /^I can see\s/i,
+  // A sub-agent task report (quoted or inline)
+  /^A sub-?agent task\b/i,
 ];
 
 export function passesAssistantAttentionGate(text: string): boolean {

@@ -72,10 +72,22 @@ export function stripMessageWrappers(text: string): string {
   s = s.replace(/^\[media attached:[^\]]*\]\s*(?:To send an image[^\n]*\n?)*/i, "");
   // System exec output blocks (may appear before Telegram wrapper)
   s = s.replace(/^(?:System:\s*\[[^\]]*\][^\n]*\n?)+/gi, "");
+  // Voice chat timestamp prefix: [Tue 2026-02-10 19:41 GMT+8]
+  s = s.replace(
+    /^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+GMT[+-]\d+\]\s*/i,
+    "",
+  );
+  // Conversation info metadata block (gateway routing context with JSON code fence)
+  s = s.replace(/Conversation info\s*\(untrusted metadata\):\s*```[\s\S]*?```\s*/g, "");
+  // Queued message batch header and separators
+  s = s.replace(/^\[Queued messages while agent was busy\]\s*/i, "");
+  s = s.replace(/---\s*Queued #\d+\s*/g, "");
   // Telegram wrapper — may now be at start after previous strips
   s = s.replace(/^\s*\[Telegram\s[^\]]+\]\s*/i, "");
   // "[message_id: NNN]" suffix (Telegram)
   s = s.replace(/\n?\[message_id:\s*\d+\]\s*$/i, "");
+  // "[message_id: UUID]" suffix (non-numeric Telegram/channel IDs)
+  s = s.replace(/\n?\[message_id:\s*[^\]]+\]\s*$/i, "");
   // Slack wrapper — "[Slack <workspace> #channel @user] MESSAGE [slack message id: ...]"
   s = s.replace(/^\s*\[Slack\s[^\]]+\]\s*/i, "");
   s = s.replace(/\n?\[slack message id:\s*[^\]]*\]\s*$/i, "");

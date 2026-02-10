@@ -31,8 +31,15 @@ export type MemoryNeo4jConfig = {
     baseUrl: string;
   };
   autoCapture: boolean;
+  autoCaptureSkipPattern?: RegExp;
   autoRecall: boolean;
   autoRecallMinScore: number;
+  /**
+   * RegExp pattern to skip auto-recall for matching session keys.
+   * Useful for voice/realtime sessions where latency is critical.
+   * Example: /voice|realtime/ skips sessions containing "voice" or "realtime".
+   */
+  autoRecallSkipPattern?: RegExp;
   coreMemory: {
     enabled: boolean;
     maxEntries: number;
@@ -207,8 +214,10 @@ export const memoryNeo4jConfigSchema = {
         "embedding",
         "neo4j",
         "autoCapture",
+        "autoCaptureSkipPattern",
         "autoRecall",
         "autoRecallMinScore",
+        "autoRecallSkipPattern",
         "coreMemory",
         "extraction",
         "graphSearchDepth",
@@ -369,8 +378,16 @@ export const memoryNeo4jConfigSchema = {
       },
       extraction,
       autoCapture: cfg.autoCapture !== false,
+      autoCaptureSkipPattern:
+        typeof cfg.autoCaptureSkipPattern === "string" && cfg.autoCaptureSkipPattern
+          ? new RegExp(cfg.autoCaptureSkipPattern)
+          : undefined,
       autoRecall: cfg.autoRecall !== false,
       autoRecallMinScore: parseAutoRecallMinScore(cfg.autoRecallMinScore),
+      autoRecallSkipPattern:
+        typeof cfg.autoRecallSkipPattern === "string" && cfg.autoRecallSkipPattern
+          ? new RegExp(cfg.autoRecallSkipPattern)
+          : undefined,
       coreMemory: {
         enabled: coreMemoryEnabled,
         maxEntries: coreMemoryMaxEntries,

@@ -986,6 +986,17 @@ const memoryNeo4jPlugin = {
           return;
         }
 
+        // Skip auto-recall for voice/realtime sessions where latency is critical.
+        // These sessions use short conversational turns that don't benefit from
+        // memory injection, and the ~100-300ms embedding+search overhead matters.
+        const sessionKey = ctx.sessionKey ?? "";
+        if (cfg.autoRecallSkipPattern && cfg.autoRecallSkipPattern.test(sessionKey)) {
+          api.logger.debug?.(
+            `memory-neo4j: skipping auto-recall for session ${sessionKey} (matches skipPattern)`,
+          );
+          return;
+        }
+
         const agentId = ctx.agentId || "default";
 
         // ~1000 chars keeps us safely within even small embedding contexts
@@ -1156,8 +1167,20 @@ const memoryNeo4jPlugin = {
           return;
         }
 
-        const agentId = ctx.agentId || "default";
+        // Skip auto-capture for sessions matching the skip pattern (e.g. voice sessions)
         const sessionKey = ctx.sessionKey;
+        if (
+          cfg.autoCaptureSkipPattern &&
+          sessionKey &&
+          cfg.autoCaptureSkipPattern.test(sessionKey)
+        ) {
+          api.logger.debug?.(
+            `memory-neo4j: skipping auto-capture for session ${sessionKey} (matches skipPattern)`,
+          );
+          return;
+        }
+
+        const agentId = ctx.agentId || "default";
 
         // Fire-and-forget: run auto-capture asynchronously so it doesn't
         // block the agent_end hook (which otherwise adds 2-10s per turn).
