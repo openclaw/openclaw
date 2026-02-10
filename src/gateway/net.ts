@@ -185,7 +185,11 @@ export async function resolveGatewayBindHost(
       return "0.0.0.0";
     } // invalid config → fall back to all
 
-    if (isValidIPv4(host) && (await canBindToHost(host))) {
+    if (isValidIp(host)) {
+      if (await canBindToHost(host)) {
+        return host;
+      }
+    } else if (await canBindToHost(host)) {
       return host;
     }
     // Custom IP failed → fall back to LAN
@@ -211,14 +215,21 @@ export async function resolveGatewayBindHost(
  */
 export async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
+    let settled = false;
     const testServer = net.createServer();
-    testServer.once("error", () => {
-      resolve(false);
-    });
-    testServer.once("listening", () => {
-      testServer.close();
-      resolve(true);
-    });
+    const finalize = (result: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      testServer.removeAllListeners();
+      try {
+        testServer.close();
+      } catch {}
+      resolve(result);
+    };
+    testServer.once("error", () => finalize(false));
+    testServer.once("listening", () => finalize(true));
     // Use port 0 to let OS pick an available port for testing
     testServer.listen(0, host);
   });
@@ -228,31 +239,24 @@ export async function resolveGatewayListenHosts(
   bindHost: string,
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
-  if (bindHost !== "127.0.0.1") {
+  const canBind = opts?.canBindToHost ?? canBindToHost;
+  if (bindHost === "127.0.0.1") {
+    if (await canBind("::1")) {
+      return [bindHost, "::1"];
+    }
     return [bindHost];
   }
-  const canBind = opts?.canBindToHost ?? canBindToHost;
-  if (await canBind("::1")) {
-    return [bindHost, "::1"];
+  if (bindHost === "0.0.0.0") {
+    if (await canBind("::")) {
+      return [bindHost, "::"];
+    }
+    return [bindHost];
   }
   return [bindHost];
 }
 
-/**
- * Validate if a string is a valid IPv4 address.
- *
- * @param host - The string to validate
- * @returns True if valid IPv4 format
- */
-function isValidIPv4(host: string): boolean {
-  const parts = host.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  return parts.every((part) => {
-    const n = parseInt(part, 10);
-    return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
-  });
+function isValidIp(host: string): boolean {
+  return net.isIP(host) !== 0;
 }
 
 /**
