@@ -189,6 +189,89 @@ function appendAssistantTranscriptMessage(params: {
   }
 }
 
+/**
+ * Append both the user's command message and the assistant's reply to the session transcript
+ * in a single SessionManager instance. Using one instance guarantees the parentId chain stays
+ * intact and both messages are written atomically.
+ *
+ * This ensures the user's command message survives the UI's loadChatHistory() refresh, which
+ * replaces local messages with the server transcript. See #12934.
+ */
+function appendCommandTranscriptMessages(params: {
+  userMessage: string;
+  assistantMessage: string;
+  label?: string;
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  createIfMissing?: boolean;
+}): TranscriptAppendResult {
+  const transcriptPath = resolveTranscriptPath({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+  });
+  if (!transcriptPath) {
+    return { ok: false, error: "transcript path not resolved" };
+  }
+
+  if (!fs.existsSync(transcriptPath)) {
+    if (!params.createIfMissing) {
+      return { ok: false, error: "transcript file not found" };
+    }
+    const ensured = ensureTranscriptFile({
+      transcriptPath,
+      sessionId: params.sessionId,
+    });
+    if (!ensured.ok) {
+      return { ok: false, error: ensured.error ?? "failed to create transcript file" };
+    }
+  }
+
+  const now = Date.now();
+
+  const userBody: AppendMessageArg & Record<string, unknown> = {
+    role: "user",
+    content: [{ type: "text", text: params.userMessage }],
+    timestamp: now,
+  };
+
+  const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
+  const usage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+  const assistantBody: AppendMessageArg & Record<string, unknown> = {
+    role: "assistant",
+    content: [{ type: "text", text: `${labelPrefix}${params.assistantMessage}` }],
+    timestamp: now,
+    stopReason: "stop",
+    usage,
+    api: "openai-responses",
+    provider: "openclaw",
+    model: "gateway-injected",
+  };
+
+  try {
+    const sessionManager = SessionManager.open(transcriptPath);
+    sessionManager.appendMessage(userBody);
+    const messageId = sessionManager.appendMessage(assistantBody);
+    return { ok: true, messageId, message: assistantBody };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: string) {
   const next = (context.agentRunSeq.get(runId) ?? 0) + 1;
   context.agentRunSeq.set(runId, next);
@@ -587,8 +670,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-              const appended = appendAssistantTranscriptMessage({
-                message: combinedReply,
+              const appended = appendCommandTranscriptMessages({
+                userMessage: parsedMessage,
+                assistantMessage: combinedReply,
                 sessionId,
                 storePath: latestStorePath,
                 sessionFile: latestEntry?.sessionFile,
