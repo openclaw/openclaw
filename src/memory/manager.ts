@@ -37,6 +37,7 @@ const BATCH_FAILURE_LIMIT = 2;
 const log = createSubsystemLogger("memory");
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
+const INDEX_INIT_LOCKS = new Map<string, Promise<MemoryIndexManager | null>>();
 
 export class MemoryIndexManager implements MemorySearchManager {
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -110,30 +111,58 @@ export class MemoryIndexManager implements MemorySearchManager {
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
+
+    // Fast path: return cached manager if available
     const existing = INDEX_CACHE.get(key);
     if (existing) {
       return existing;
     }
-    const providerResult = await createEmbeddingProvider({
-      config: cfg,
-      agentDir: resolveAgentDir(cfg, agentId),
-      provider: settings.provider,
-      remote: settings.remote,
-      model: settings.model,
-      fallback: settings.fallback,
-      local: settings.local,
-    });
-    const manager = new MemoryIndexManager({
-      cacheKey: key,
-      cfg,
-      agentId,
-      workspaceDir,
-      settings,
-      providerResult,
-      purpose: params.purpose,
-    });
-    INDEX_CACHE.set(key, manager);
-    return manager;
+
+    // Serialize initialization per key to prevent concurrent llama/model loading
+    // which can hang or deadlock on Windows.
+    const pendingInit = INDEX_INIT_LOCKS.get(key);
+    if (pendingInit) {
+      log.debug("memory: waiting for pending initialization", { key });
+      return pendingInit;
+    }
+
+    const initPromise = (async () => {
+      // Double-check cache after acquiring the "lock"
+      const cached = INDEX_CACHE.get(key);
+      if (cached) {
+        return cached;
+      }
+
+      log.debug("memory: initializing embedding provider", { key, provider: settings.provider });
+      const providerResult = await createEmbeddingProvider({
+        config: cfg,
+        agentDir: resolveAgentDir(cfg, agentId),
+        provider: settings.provider,
+        remote: settings.remote,
+        model: settings.model,
+        fallback: settings.fallback,
+        local: settings.local,
+      });
+      const manager = new MemoryIndexManager({
+        cacheKey: key,
+        cfg,
+        agentId,
+        workspaceDir,
+        settings,
+        providerResult,
+        purpose: params.purpose,
+      });
+      INDEX_CACHE.set(key, manager);
+      log.debug("memory: embedding provider initialized", { key, provider: providerResult.provider.id });
+      return manager;
+    })();
+
+    INDEX_INIT_LOCKS.set(key, initPromise);
+    try {
+      return await initPromise;
+    } finally {
+      INDEX_INIT_LOCKS.delete(key);
+    }
   }
 
   private constructor(params: {
