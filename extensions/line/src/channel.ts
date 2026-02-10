@@ -10,6 +10,7 @@ import {
   type LineChannelData,
   type ResolvedLineAccount,
 } from "openclaw/plugin-sdk";
+import { parseLineDirectives } from "./directives.js";
 import { getLineRuntime } from "./runtime.js";
 
 // LINE channel metadata
@@ -349,7 +350,21 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     textChunkLimit: 5000, // LINE allows up to 5000 characters per text message
     sendPayload: async ({ to, payload, accountId, cfg }) => {
       const runtime = getLineRuntime();
-      const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+      let lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+      const { text: cleanedText, lineData: extractedData } = parseLineDirectives(
+        payload.text || "",
+      );
+
+      // Merge parsed directives into lineData
+      if (Object.keys(extractedData).length > 0) {
+        lineData = { ...lineData, ...extractedData };
+        // If extracted directives modify text (e.g. removed tags), update it.
+        // However, payload.text is readonly in some contexts or we should use cleanedText.
+      }
+
+      // Use cleanedText instead of payload.text
+      const textToSend = cleanedText;
+
       const sendText = runtime.channel.line.pushMessageLine;
       const sendBatch = runtime.channel.line.pushMessagesLine;
       const sendFlex = runtime.channel.line.pushFlexMessage;
@@ -380,8 +395,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         }
       };
 
-      const processed = payload.text
-        ? processLineMessage(payload.text)
+      const processed = textToSend
+        ? processLineMessage(textToSend)
         : { text: "", flexMessages: [] };
 
       const chunkLimit =
@@ -527,19 +542,34 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     },
     sendText: async ({ to, text, accountId }) => {
       const runtime = getLineRuntime();
+      // Pre-process text to extract directives (Quick Replies, etc.)
+      // Since sendText signature doesn't support rich metadata return fully,
+      // we only strip directives here. To use features, sendPayload is preferred.
+      // However, if we want quick replies to work even in simple sendText calls:
+      const { text: cleanedText, lineData } = parseLineDirectives(text);
+
       const sendText = runtime.channel.line.pushMessageLine;
       const sendFlex = runtime.channel.line.pushFlexMessage;
+      const sendQuickReplies = runtime.channel.line.pushTextMessageWithQuickReplies;
 
       // Process markdown: extract tables/code blocks, strip formatting
-      const processed = processLineMessage(text);
+      const processed = processLineMessage(cleanedText);
 
       // Send cleaned text first (if non-empty)
       let result: { messageId: string; chatId: string };
+
       if (processed.text.trim()) {
-        result = await sendText(to, processed.text, {
-          verbose: false,
-          accountId: accountId ?? undefined,
-        });
+        if (lineData.quickReplies && lineData.quickReplies.length > 0) {
+          result = await sendQuickReplies(to, processed.text, lineData.quickReplies, {
+            verbose: false,
+            accountId: accountId ?? undefined,
+          });
+        } else {
+          result = await sendText(to, processed.text, {
+            verbose: false,
+            accountId: accountId ?? undefined,
+          });
+        }
       } else {
         // If text is empty after processing, still need a result
         result = { messageId: "processed", chatId: to };
