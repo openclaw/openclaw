@@ -1,4 +1,5 @@
 import { resolveFetch } from "../infra/fetch.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
@@ -70,11 +71,9 @@ export async function fetchDiscordApplicationSummary(
   try {
     const res = await fetchWithTimeout(
       `${DISCORD_API_BASE}/oauth2/applications/@me`,
+      { headers: { Authorization: `Bot ${normalized}` } },
       timeoutMs,
-      fetcher,
-      {
-        Authorization: `Bot ${normalized}`,
-      },
+      getResolvedFetch(fetcher),
     );
     if (!res.ok) {
       return undefined;
@@ -93,23 +92,12 @@ export async function fetchDiscordApplicationSummary(
   }
 }
 
-async function fetchWithTimeout(
-  url: string,
-  timeoutMs: number,
-  fetcher: typeof fetch,
-  headers?: HeadersInit,
-): Promise<Response> {
+function getResolvedFetch(fetcher: typeof fetch): typeof fetch {
   const fetchImpl = resolveFetch(fetcher);
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetchImpl(url, { signal: controller.signal, headers });
-  } finally {
-    clearTimeout(timer);
-  }
+  return fetchImpl;
 }
 
 export async function probeDiscord(
@@ -135,9 +123,12 @@ export async function probeDiscord(
     };
   }
   try {
-    const res = await fetchWithTimeout(`${DISCORD_API_BASE}/users/@me`, timeoutMs, fetcher, {
-      Authorization: `Bot ${normalized}`,
-    });
+    const res = await fetchWithTimeout(
+      `${DISCORD_API_BASE}/users/@me`,
+      { headers: { Authorization: `Bot ${normalized}` } },
+      timeoutMs,
+      getResolvedFetch(fetcher),
+    );
     if (!res.ok) {
       result.status = res.status;
       result.error = `getMe failed (${res.status})`;
@@ -176,11 +167,9 @@ export async function fetchDiscordApplicationId(
   try {
     const res = await fetchWithTimeout(
       `${DISCORD_API_BASE}/oauth2/applications/@me`,
+      { headers: { Authorization: `Bot ${normalized}` } },
       timeoutMs,
-      fetcher,
-      {
-        Authorization: `Bot ${normalized}`,
-      },
+      getResolvedFetch(fetcher),
     );
     if (!res.ok) {
       return undefined;
@@ -211,19 +200,26 @@ export type DiscordApplicationIdProbe = {
 };
 
 function truncateBodyForLog(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
+  if (text.length <= maxChars) {
+    return text;
+  }
   return `${text.slice(0, maxChars)}… (truncated, ${text.length} chars total)`;
 }
 
 function formatNetworkErrorDetails(err: unknown): string | null {
-  if (!err || typeof err !== "object") return null;
+  if (!err || typeof err !== "object") {
+    return null;
+  }
   const record = err as Record<string, unknown>;
   const parts: string[] = [];
 
   const pick = (key: string) => {
     const value = record[key];
-    if (typeof value === "string" && value.trim()) parts.push(`${key}=${value}`);
-    else if (typeof value === "number" && Number.isFinite(value)) parts.push(`${key}=${value}`);
+    if (typeof value === "string" && value.trim()) {
+      parts.push(`${key}=${value}`);
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      parts.push(`${key}=${value}`);
+    }
   };
 
   pick("name");
@@ -239,8 +235,11 @@ function formatNetworkErrorDetails(err: unknown): string | null {
     const cparts: string[] = [];
     const cpick = (key: string) => {
       const value = c[key];
-      if (typeof value === "string" && value.trim()) cparts.push(`${key}=${value}`);
-      else if (typeof value === "number" && Number.isFinite(value)) cparts.push(`${key}=${value}`);
+      if (typeof value === "string" && value.trim()) {
+        cparts.push(`${key}=${value}`);
+      } else if (typeof value === "number" && Number.isFinite(value)) {
+        cparts.push(`${key}=${value}`);
+      }
     };
     cpick("name");
     cpick("code");
@@ -248,7 +247,9 @@ function formatNetworkErrorDetails(err: unknown): string | null {
     cpick("syscall");
     cpick("address");
     cpick("port");
-    if (cparts.length > 0) parts.push(`cause{${cparts.join(" ")}}`);
+    if (cparts.length > 0) {
+      parts.push(`cause{${cparts.join(" ")}}`);
+    }
   }
 
   return parts.length > 0 ? parts.join(" ") : null;
