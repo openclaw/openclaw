@@ -75,6 +75,19 @@ describe("extractAssistantText", () => {
     expect(result).toBe("This is a normal response without any tool calls.");
   });
 
+  it("sanitizes HTTP-ish error text only when stopReason is error", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "500 Internal Server Error",
+      content: [{ type: "text", text: "500 Internal Server Error" }],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("HTTP 500: Internal Server Error");
+  });
+
   it("strips Minimax tool invocations with extra attributes", () => {
     const msg: AssistantMessage = {
       role: "assistant",
