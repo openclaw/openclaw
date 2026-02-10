@@ -1,7 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { SessionEntry, SessionManager } from "@mariozechner/pi-coding-agent";
-import fs from "node:fs";
 import { createRequire } from "node:module";
 import type { RedactSensitiveMode } from "../logging/redact.js";
 import { redactSensitiveText } from "../logging/redact.js";
