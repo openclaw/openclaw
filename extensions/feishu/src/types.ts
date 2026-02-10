@@ -73,3 +73,10 @@ export type FeishuToolsConfig = {
   perm?: boolean;
   scopes?: boolean;
 };
+
+export type DynamicAgentCreationConfig = {
+  enabled?: boolean;
+  workspaceTemplate?: string;
+  agentDirTemplate?: string;
+  maxAgents?: number;
+};

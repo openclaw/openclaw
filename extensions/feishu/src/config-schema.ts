@@ -54,6 +54,20 @@ const ChannelHeartbeatVisibilitySchema = z
   .optional();
 
 /**
+ * Dynamic agent creation configuration.
+ * When enabled, a new agent is created for each unique DM user.
+ */
+const DynamicAgentCreationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    workspaceTemplate: z.string().optional(),
+    agentDirTemplate: z.string().optional(),
+    maxAgents: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
+/**
  * Feishu tools configuration.
  * Controls which tool categories are enabled.
  *
@@ -72,6 +86,16 @@ const FeishuToolsConfigSchema = z
   .strict()
   .optional();
 
+/**
+ * Topic session isolation mode for group chats.
+ * - "disabled" (default): All messages in a group share one session
+ * - "enabled": Messages in different topics get separate sessions
+ *
+ * When enabled, the session key becomes `chat:{chatId}:topic:{rootId}`
+ * for messages within a topic thread, allowing isolated conversations.
+ */
+const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -80,6 +104,7 @@ export const FeishuGroupSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    topicSessionMode: TopicSessionModeSchema,
   })
   .strict();
 
@@ -142,6 +167,7 @@ export const FeishuConfigSchema = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     requireMention: z.boolean().optional().default(true),
     groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
+    topicSessionMode: TopicSessionModeSchema,
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema).optional(),
@@ -152,6 +178,8 @@ export const FeishuConfigSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     renderMode: RenderModeSchema, // raw = plain text (default), card = interactive card with markdown
     tools: FeishuToolsConfigSchema,
+    // Dynamic agent creation for DM users
+    dynamicAgentCreation: DynamicAgentCreationSchema,
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })
