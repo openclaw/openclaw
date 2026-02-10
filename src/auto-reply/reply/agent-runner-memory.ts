@@ -113,6 +113,7 @@ export async function runMemoryFlushIfNeeded(params: {
         return runEmbeddedPiAgent({
           sessionId: params.followupRun.run.sessionId,
           sessionKey: params.sessionKey,
+          agentId: params.followupRun.run.agentId,
           messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
           agentAccountId: params.sessionCtx.AccountId,
           messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,

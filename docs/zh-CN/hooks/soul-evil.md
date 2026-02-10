@@ -69,4 +69,4 @@ openclaw hooks enable soul-evil
 
 ## 另请参阅
 
-- [钩子](/hooks)
+- [钩子](/automation/hooks)

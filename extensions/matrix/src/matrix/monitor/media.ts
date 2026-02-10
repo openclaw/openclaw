@@ -22,29 +22,19 @@ async function fetchMatrixMediaBuffer(params: {
   maxBytes: number;
 }): Promise<{ buffer: Buffer; headerType?: string } | null> {
   // @vector-im/matrix-bot-sdk provides mxcToHttp helper
-  const url = await params.client.mxcToHttp(params.mxcUrl);
+  const url = params.client.mxcToHttp(params.mxcUrl);
   if (!url) {
     return null;
   }
 
   // Use the client's download method which handles auth
   try {
-    const response = await params.client.downloadContent(params.mxcUrl);
-
-    // @vector-im/matrix-bot-sdk returns {data: Buffer, contentType: string}
-    const downloaded =
-      typeof response === "object" && "data" in response ? response.data : response;
-
-    // Handle both Buffer and ArrayBuffer responses
-    const buffer = Buffer.isBuffer(downloaded) ? downloaded : Buffer.from(downloaded);
+    const result = await params.client.downloadContent(params.mxcUrl);
+    const buffer = result.data;
     if (buffer.byteLength > params.maxBytes) {
       throw new Error("Matrix media exceeds configured size limit");
     }
-
-    const headerType =
-      typeof response === "object" && "contentType" in response ? response.contentType : undefined;
-
-    return { buffer, headerType };
+    return { buffer: Buffer.from(buffer) };
   } catch (err) {
     throw new Error(`Matrix media download failed: ${String(err)}`, { cause: err });
   }
@@ -64,7 +54,9 @@ async function fetchEncryptedMediaBuffer(params: {
   }
 
   // decryptMedia handles downloading and decrypting the encrypted content internally
-  const decrypted = await params.client.crypto.decryptMedia(params.file);
+  const decrypted = await params.client.crypto.decryptMedia(
+    params.file as Parameters<typeof params.client.crypto.decryptMedia>[0],
+  );
 
   if (decrypted.byteLength > params.maxBytes) {
     throw new Error("Matrix media exceeds configured size limit");

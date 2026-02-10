@@ -7,6 +7,7 @@ import { groqProvider } from "./groq/index.js";
 import { minimaxProvider } from "./minimax/index.js";
 import { openaiProvider } from "./openai/index.js";
 import { whisperProvider } from "./whisper/index.js";
+import { zaiProvider } from "./zai/index.js";
 
 const PROVIDERS: MediaUnderstandingProvider[] = [
   groqProvider,
@@ -14,6 +15,7 @@ const PROVIDERS: MediaUnderstandingProvider[] = [
   googleProvider,
   anthropicProvider,
   minimaxProvider,
+  zaiProvider,
   deepgramProvider,
   whisperProvider,
 ];

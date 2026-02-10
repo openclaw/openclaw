@@ -23,6 +23,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "xiaomi-api-key": "xiaomi",
   "synthetic-api-key": "synthetic",
   "venice-api-key": "venice",
+  "together-api-key": "together",
   "github-copilot": "github-copilot",
   "copilot-proxy": "copilot-proxy",
   "minimax-cloud": "minimax",
@@ -30,8 +31,11 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "minimax-api-lightning": "minimax",
   minimax: "lmstudio",
   "opencode-zen": "opencode",
+  "xai-api-key": "xai",
   "qwen-portal": "qwen-portal",
   "minimax-portal": "minimax-portal",
+  "qianfan-api-key": "qianfan",
+  "custom-api-key": "custom",
 };
 
 export function resolvePreferredProviderForAuthChoice(choice: AuthChoice): string | undefined {

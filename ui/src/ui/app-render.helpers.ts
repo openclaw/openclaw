@@ -105,7 +105,11 @@ export function renderChatControls(state: AppViewState) {
               lastActiveSessionKey: next,
             });
             void state.loadAssistantIdentity();
-            syncUrlWithSessionKey(next, true);
+            syncUrlWithSessionKey(
+              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+              next,
+              true,
+            );
             void loadChatHistory(state as unknown as ChatState);
           }}
         >
@@ -122,9 +126,23 @@ export function renderChatControls(state: AppViewState) {
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
-        @click=${() => {
-          (state as unknown as OpenClawApp).resetToolStream();
-          void refreshChat(state as unknown as Parameters<typeof refreshChat>[0]);
+        @click=${async () => {
+          const app = state as unknown as OpenClawApp;
+          app.chatManualRefreshInFlight = true;
+          app.chatNewMessagesBelow = false;
+          await app.updateComplete;
+          app.resetToolStream();
+          try {
+            await refreshChat(state as unknown as Parameters<typeof refreshChat>[0], {
+              scheduleScroll: false,
+            });
+            app.scrollToBottom({ smooth: true });
+          } finally {
+            requestAnimationFrame(() => {
+              app.chatManualRefreshInFlight = false;
+              app.chatNewMessagesBelow = false;
+            });
+          }
         }}
         title="Refresh chat data"
       >
@@ -201,14 +219,17 @@ function resolveMainSessionKey(
   return null;
 }
 
-function resolveSessionDisplayName(key: string, row?: SessionsListResult["sessions"][number]) {
-  const label = row?.label?.trim();
-  if (label) {
-    return `${label} (${key})`;
+export function resolveSessionDisplayName(
+  key: string,
+  row?: SessionsListResult["sessions"][number],
+) {
+  const displayName = row?.displayName?.trim() || "";
+  const label = row?.label?.trim() || "";
+  if (displayName && displayName !== key) {
+    return `${displayName} (${key})`;
   }
-  const displayName = row?.displayName?.trim();
-  if (displayName) {
-    return displayName;
+  if (label && label !== key) {
+    return `${label} (${key})`;
   }
   return key;
 }

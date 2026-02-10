@@ -1,4 +1,5 @@
 ---
+title: "Memory"
 summary: "How OpenClaw memory works (workspace files + automatic memory flush)"
 read_when:
   - You want the memory file layout and workflow
@@ -25,7 +26,7 @@ The default workspace layout uses two memory layers:
   - **Only load in the main, private session** (never in group contexts).
 
 These files live under the workspace (`agents.defaults.workspace`, default
-`~/clawd`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
+`~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
 
 ## When to write memory
 
@@ -84,11 +85,14 @@ Defaults:
 
 - Enabled by default.
 - Watches memory files for changes (debounced).
+- Configure memory search under `agents.defaults.memorySearch` (not top-level
+  `memorySearch`).
 - Uses remote embeddings by default. If `memorySearch.provider` is not set, OpenClaw auto-selects:
   1. `local` if a `memorySearch.local.modelPath` is configured and the file exists.
   2. `openai` if an OpenAI key can be resolved.
   3. `gemini` if a Gemini key can be resolved.
-  4. Otherwise memory search stays disabled until configured.
+  4. `voyage` if a Voyage key can be resolved.
+  5. Otherwise memory search stays disabled until configured.
 - Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
 - Uses sqlite-vec (when available) to accelerate vector search inside SQLite.
 
@@ -96,7 +100,8 @@ Remote embeddings **require** an API key for the embedding provider. OpenClaw
 resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
 variables. Codex OAuth only covers chat/completions and does **not** satisfy
 embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
-`models.providers.google.apiKey`. When using a custom OpenAI-compatible endpoint,
+`models.providers.google.apiKey`. For Voyage, use `VOYAGE_API_KEY` or
+`models.providers.voyage.apiKey`. When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
 ### QMD backend (experimental)
@@ -109,7 +114,7 @@ out to QMD for retrieval. Key points:
 **Prereqs**
 
 - Disabled by default. Opt in per-config (`memory.backend = "qmd"`).
-- Install the QMD CLI separately (`bun install -g github.com/tobi/qmd` or grab
+- Install the QMD CLI separately (`bun install -g https://github.com/tobi/qmd` or grab
   a release) and make sure the `qmd` binary is on the gateway’s `PATH`.
 - QMD needs an SQLite build that allows extensions (`brew install sqlite` on
   macOS).
@@ -125,12 +130,21 @@ out to QMD for retrieval. Key points:
 
 - The gateway writes a self-contained QMD home under
   `~/.openclaw/agents/<agentId>/qmd/` (config + cache + sqlite DB).
-- Collections are rewritten from `memory.qmd.paths` (plus default workspace
-  memory files) into `index.yml`, then `qmd update` + `qmd embed` run on boot and
-  on a configurable interval (`memory.qmd.update.interval`, default 5 m).
-- Searches run via `qmd query --json`. If QMD fails or the binary is missing,
+- Collections are created via `qmd collection add` from `memory.qmd.paths`
+  (plus default workspace memory files), then `qmd update` + `qmd embed` run
+  on boot and on a configurable interval (`memory.qmd.update.interval`,
+  default 5 m).
+- The gateway now initializes the QMD manager on startup, so periodic update
+  timers are armed even before the first `memory_search` call.
+- Boot refresh now runs in the background by default so chat startup is not
+  blocked; set `memory.qmd.update.waitForBootSync = true` to keep the previous
+  blocking behavior.
+- Searches run via `qmd query --json`, scoped to OpenClaw-managed collections.
+  If QMD fails or the binary is missing,
   OpenClaw automatically falls back to the builtin SQLite manager so memory tools
   keep working.
+- OpenClaw does not expose QMD embed batch-size tuning today; batch behavior is
+  controlled by QMD itself.
 - **First search may be slow**: QMD may download local GGUF models (reranker/query
   expansion) on the first `qmd query` run.
   - OpenClaw sets `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` automatically when it runs QMD.
@@ -168,12 +182,16 @@ out to QMD for retrieval. Key points:
   stable `name`).
 - `sessions`: opt into session JSONL indexing (`enabled`, `retentionDays`,
   `exportDir`).
-- `update`: controls refresh cadence (`interval`, `debounceMs`, `onBoot`, `embedInterval`).
+- `update`: controls refresh cadence and maintenance execution:
+  (`interval`, `debounceMs`, `onBoot`, `waitForBootSync`, `embedInterval`,
+  `commandTimeoutMs`, `updateTimeoutMs`, `embedTimeoutMs`).
 - `limits`: clamp recall payload (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`).
 - `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).
   Default is DM-only (`deny` all, `allow` direct chats); loosen it to surface QMD
   hits in groups/channels.
+- When `scope` denies a search, OpenClaw logs a warning with the derived
+  `channel`/`chatType` so empty results are easier to debug.
 - Snippets sourced outside the workspace show up as
   `qmd/<collection>/<relative-path>` in `memory_search` results; `memory_get`
   understands that prefix and reads from the configured QMD collection root.
@@ -289,9 +307,9 @@ Fallbacks:
 - `memorySearch.fallback` can be `openai`, `gemini`, `local`, or `none`.
 - The fallback provider is only used when the primary embedding provider fails.
 
-Batch indexing (OpenAI + Gemini):
+Batch indexing (OpenAI + Gemini + Voyage):
 
-- Enabled by default for OpenAI and Gemini embeddings. Set `agents.defaults.memorySearch.remote.batch.enabled = false` to disable.
+- Disabled by default. Set `agents.defaults.memorySearch.remote.batch.enabled = true` to enable for large-corpus indexing (OpenAI, Gemini, and Voyage).
 - Default behavior waits for batch completion; tune `remote.batch.wait`, `remote.batch.pollIntervalMs`, and `remote.batch.timeoutMinutes` if needed.
 - Set `remote.batch.concurrency` to control how many batch jobs we submit in parallel (default: 2).
 - Batch mode applies when `memorySearch.provider = "openai"` or `"gemini"` and uses the corresponding API key.
@@ -302,8 +320,8 @@ Why OpenAI batch is fast + cheap:
 - For large backfills, OpenAI is typically the fastest option we support because we can submit many embedding requests in a single batch job and let OpenAI process them asynchronously.
 - OpenAI offers discounted pricing for Batch API workloads, so large indexing runs are usually cheaper than sending the same requests synchronously.
 - See the OpenAI Batch API docs and pricing for details:
-  - https://platform.openai.com/docs/api-reference/batch
-  - https://platform.openai.com/pricing
+  - [https://platform.openai.com/docs/api-reference/batch](https://platform.openai.com/docs/api-reference/batch)
+  - [https://platform.openai.com/pricing](https://platform.openai.com/pricing)
 
 Config example:
 

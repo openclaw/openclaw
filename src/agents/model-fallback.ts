@@ -13,9 +13,9 @@ import {
   isTimeoutError,
 } from "./failover-error.js";
 import {
+  buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
   modelKey,
-  parseModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
@@ -34,7 +34,11 @@ type FallbackAttempt = {
   code?: string;
 };
 
-function isAbortError(err: unknown): boolean {
+/**
+ * Fallback abort check. Only treats explicit AbortError names as user aborts.
+ * Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
+ */
+function isFallbackAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
@@ -42,35 +46,11 @@ function isAbortError(err: unknown): boolean {
     return false;
   }
   const name = "name" in err ? String(err.name) : "";
-  // Only treat explicit AbortError names as user aborts.
-  // Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
   return name === "AbortError";
 }
 
 function shouldRethrowAbort(err: unknown): boolean {
-  return isAbortError(err) && !isTimeoutError(err);
-}
-
-function buildAllowedModelKeys(
-  cfg: OpenClawConfig | undefined,
-  defaultProvider: string,
-): Set<string> | null {
-  const rawAllowlist = (() => {
-    const modelMap = cfg?.agents?.defaults?.models ?? {};
-    return Object.keys(modelMap);
-  })();
-  if (rawAllowlist.length === 0) {
-    return null;
-  }
-  const keys = new Set<string>();
-  for (const raw of rawAllowlist) {
-    const parsed = parseModelRef(String(raw ?? ""), defaultProvider);
-    if (!parsed) {
-      continue;
-    }
-    keys.add(modelKey(parsed.provider, parsed.model));
-  }
-  return keys.size > 0 ? keys : null;
+  return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
 function resolveImageFallbackCandidates(params: {
@@ -82,7 +62,10 @@ function resolveImageFallbackCandidates(params: {
     cfg: params.cfg ?? {},
     defaultProvider: params.defaultProvider,
   });
-  const allowlist = buildAllowedModelKeys(params.cfg, params.defaultProvider);
+  const allowlist = buildConfiguredAllowlistKeys({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 
@@ -166,7 +149,10 @@ function resolveFallbackCandidates(params: {
     cfg: params.cfg ?? {},
     defaultProvider,
   });
-  const allowlist = buildAllowedModelKeys(params.cfg, defaultProvider);
+  const allowlist = buildConfiguredAllowlistKeys({
+    cfg: params.cfg,
+    defaultProvider,
+  });
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 

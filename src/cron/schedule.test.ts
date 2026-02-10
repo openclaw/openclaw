@@ -33,4 +33,38 @@ describe("cron schedule", () => {
     const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000, anchorMs: anchor }, anchor);
     expect(next).toBe(anchor + 30_000);
   });
+
+  describe("cron with specific seconds (6-field pattern)", () => {
+    // Pattern: fire at exactly second 0 of minute 0 of hour 12 every day
+    const dailyNoon = { kind: "cron" as const, expr: "0 0 12 * * *", tz: "UTC" };
+    const noonMs = Date.parse("2026-02-08T12:00:00.000Z");
+
+    it("returns current occurrence when nowMs is exactly at the match", () => {
+      const next = computeNextRunAtMs(dailyNoon, noonMs);
+      expect(next).toBe(noonMs);
+    });
+
+    it("returns current occurrence when nowMs is mid-second (.500) within the match", () => {
+      // This is the core regression: without the second-floor fix, a 1ms
+      // lookback from 12:00:00.499 still lands inside the matching second,
+      // causing croner to skip to the *next day*.
+      const next = computeNextRunAtMs(dailyNoon, noonMs + 500);
+      expect(next).toBe(noonMs);
+    });
+
+    it("returns current occurrence when nowMs is late in the matching second (.999)", () => {
+      const next = computeNextRunAtMs(dailyNoon, noonMs + 999);
+      expect(next).toBe(noonMs);
+    });
+
+    it("advances to next day once the matching second is fully past", () => {
+      const next = computeNextRunAtMs(dailyNoon, noonMs + 1000);
+      expect(next).toBe(noonMs + 86_400_000); // next day
+    });
+
+    it("returns today when nowMs is before the match", () => {
+      const next = computeNextRunAtMs(dailyNoon, noonMs - 500);
+      expect(next).toBe(noonMs);
+    });
+  });
 });
