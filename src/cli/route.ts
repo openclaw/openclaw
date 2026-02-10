@@ -4,8 +4,8 @@ import { VERSION } from "../version.js";
 import { getCommandPath, hasHelpOrVersion } from "./argv.js";
 import { emitCliBanner } from "./banner.js";
 import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
-import { findRoutedCommand } from "./program/command-registry.js";
 import { ensureConfigReady } from "./program/config-guard.js";
+import { findRoutedCommand } from "./program/route-specs.js";
 
 async function prepareRoutedCommand(params: {
   argv: string[];
