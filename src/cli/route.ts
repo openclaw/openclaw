@@ -1,20 +1,20 @@
 import { isTruthyEnvValue } from "../infra/env.js";
-import { defaultRuntime } from "../runtime.js";
-import { VERSION } from "../version.js";
 import { getCommandPath, hasHelpOrVersion } from "./argv.js";
-import { emitCliBanner } from "./banner.js";
-import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 import { findRoutedCommand } from "./program/command-registry.js";
-import { ensureConfigReady } from "./program/config-guard.js";
 
 async function prepareRoutedCommand(params: {
   argv: string[];
   commandPath: string[];
   loadPlugins?: boolean;
 }) {
+  const { VERSION } = await import("../version.js");
+  const { emitCliBanner } = await import("./banner.js");
+  const { defaultRuntime } = await import("../runtime.js");
+  const { ensureConfigReady } = await import("./program/config-guard.js");
   emitCliBanner(VERSION, { argv: params.argv });
   await ensureConfigReady({ runtime: defaultRuntime, commandPath: params.commandPath });
   if (params.loadPlugins) {
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
     ensurePluginRegistryLoaded();
   }
 }

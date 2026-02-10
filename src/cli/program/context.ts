@@ -1,5 +1,4 @@
 import { VERSION } from "../../version.js";
-import { resolveCliChannelOptions } from "../channel-options.js";
 
 export type ProgramContext = {
   programVersion: string;
@@ -8,12 +7,24 @@ export type ProgramContext = {
   agentChannelOptions: string;
 };
 
+// Core channel order inlined to avoid loading channels/registry.ts (which pulls
+// in plugins/runtime.js). Plugin channel options are resolved at runtime when
+// commands actually execute, not at registration time.
+const CORE_CHANNEL_ORDER = [
+  "telegram",
+  "whatsapp",
+  "discord",
+  "googlechat",
+  "slack",
+  "signal",
+  "imessage",
+];
+
 export function createProgramContext(): ProgramContext {
-  const channelOptions = resolveCliChannelOptions();
   return {
     programVersion: VERSION,
-    channelOptions,
-    messageChannelOptions: channelOptions.join("|"),
-    agentChannelOptions: ["last", ...channelOptions].join("|"),
+    channelOptions: CORE_CHANNEL_ORDER,
+    messageChannelOptions: CORE_CHANNEL_ORDER.join("|"),
+    agentChannelOptions: ["last", ...CORE_CHANNEL_ORDER].join("|"),
   };
 }
