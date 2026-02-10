@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: render forwarded commands in monospace for safer approval scanning. (#11937) Thanks @sebslight.
 - Config: clamp `maxTokens` to `contextWindow` to prevent invalid model configs. (#5516) Thanks @lailoo.
 - Thinking: allow xhigh for `github-copilot/gpt-5.2-codex` and `github-copilot/gpt-5.2`. (#11646) Thanks @LatencyTDH.
+- Thinking: honor `/think off` for reasoning-capable models. (#9564) Thanks @liuy.
 - Discord: support forum/media thread-create starter messages, wire `message thread create --message`, and harden routing. (#10062) Thanks @jarvis89757.
 - Paths: structurally resolve `OPENCLAW_HOME`-derived home paths and fix Windows drive-letter handling in tool meta shortening. (#12125) Thanks @mcaxtr.
 - Memory: set Voyage embeddings `input_type` for improved retrieval. (#10818) Thanks @mcinteerj.
