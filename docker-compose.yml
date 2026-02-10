@@ -22,6 +22,8 @@ services:
       - ${OPENCLAW_CONFIG_DIR}/gh_config:/home/node/.config/gh # GitHub CLI settings
       - ${OPENCLAW_CONFIG_DIR}/op_config:/home/node/.config/op # 1Password CLI settings
       - ${OPENCLAW_CONFIG_DIR}/ssh:/home/node/.ssh:ro # Read-only SSH keys for Git pushes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Enable host.docker.internal on Linux
     ports:
       - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
