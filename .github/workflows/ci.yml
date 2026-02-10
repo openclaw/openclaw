@@ -202,6 +202,8 @@ jobs:
   # Types, lint, and format check.
   check:
     name: "check"
+    needs: [docs-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
