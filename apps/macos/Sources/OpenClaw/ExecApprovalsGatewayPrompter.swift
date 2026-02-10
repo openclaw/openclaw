@@ -43,7 +43,17 @@ final class ExecApprovalsGatewayPrompter {
         do {
             let data = try JSONEncoder().encode(payload)
             let request = try JSONDecoder().decode(GatewayApprovalRequest.self, from: data)
-            guard self.shouldPresent(request: request) else { return }
+            guard self.shouldPresent(request: request) else {
+                // Auto-approve if not presenting
+                try await GatewayConnection.shared.requestVoid(
+                    method: .execApprovalResolve,
+                    params: [
+                        "id": AnyCodable(request.id),
+                        "decision": AnyCodable("allow-once"),
+                    ],
+                    timeoutMs: 10000)
+                return
+            }
             let decision = ExecApprovalsPromptPresenter.prompt(request.request)
             try await GatewayConnection.shared.requestVoid(
                 method: .execApprovalResolve,
@@ -57,10 +67,34 @@ final class ExecApprovalsGatewayPrompter {
         }
     }
 
+    private static func needsApproval(security: ExecSecurity, ask: ExecAsk) -> Bool {
+        switch ask {
+        case .always:
+            return true
+        case .onMiss:
+            return security == .allowlist
+        case .off:
+            return false
+        }
+    }
+
     private func shouldPresent(request: GatewayApprovalRequest) -> Bool {
         let mode = AppStateStore.shared.connectionMode
         let activeSession = WebChatManager.shared.activeSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         let requestSession = request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Check exec-approvals.json settings (use per-agent resolved config)
+        let approvals = ExecApprovalsStore.resolve(agentId: requestSession)
+        let security = approvals.agent.security
+        let ask = approvals.agent.ask
+        
+        // Check if approval is needed based on settings
+        let needsApproval = Self.needsApproval(security: security, ask: ask)
+        
+        if !needsApproval {
+            return false
+        }
+        
         return Self.shouldPresent(
             mode: mode,
             activeSession: activeSession,
@@ -116,6 +150,10 @@ extension ExecApprovalsGatewayPrompter {
             requestSession: requestSession,
             lastInputSeconds: lastInputSeconds,
             thresholdSeconds: thresholdSeconds)
+    }
+
+    static func _testNeedsApproval(security: ExecSecurity, ask: ExecAsk) -> Bool {
+        self.needsApproval(security: security, ask: ask)
     }
 }
 #endif

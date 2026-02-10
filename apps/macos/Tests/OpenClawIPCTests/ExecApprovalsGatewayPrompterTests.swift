@@ -52,4 +52,24 @@ struct ExecApprovalsGatewayPrompterTests {
             lastInputSeconds: 400)
         #expect(!remote)
     }
+
+    // MARK: - needsApproval
+
+    @Test func askAlwaysNeedsApprovalRegardlessOfSecurity() {
+        #expect(ExecApprovalsGatewayPrompter._testNeedsApproval(security: .deny, ask: .always))
+        #expect(ExecApprovalsGatewayPrompter._testNeedsApproval(security: .allowlist, ask: .always))
+        #expect(ExecApprovalsGatewayPrompter._testNeedsApproval(security: .full, ask: .always))
+    }
+
+    @Test func askOnMissNeedsApprovalOnlyForAllowlist() {
+        #expect(ExecApprovalsGatewayPrompter._testNeedsApproval(security: .allowlist, ask: .onMiss))
+        #expect(!ExecApprovalsGatewayPrompter._testNeedsApproval(security: .deny, ask: .onMiss))
+        #expect(!ExecApprovalsGatewayPrompter._testNeedsApproval(security: .full, ask: .onMiss))
+    }
+
+    @Test func askOffNeverNeedsApproval() {
+        #expect(!ExecApprovalsGatewayPrompter._testNeedsApproval(security: .deny, ask: .off))
+        #expect(!ExecApprovalsGatewayPrompter._testNeedsApproval(security: .allowlist, ask: .off))
+        #expect(!ExecApprovalsGatewayPrompter._testNeedsApproval(security: .full, ask: .off))
+    }
 }
