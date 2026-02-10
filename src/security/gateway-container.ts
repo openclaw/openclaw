@@ -100,10 +100,12 @@ async function startRelayContainer(proxyPort: number, proxySocketPath?: string):
 
   await execDocker(args);
 
-  // TCP mode: also connect relay to the internal network so the gateway container can reach it
-  // Socket mode: relay already started on internal network, no extra connect needed
+  // TCP mode: connect relay to the internal network, then disconnect from bridge
+  // so only the gateway container (on the internal network) can reach the relay.
+  // Socket mode: relay already started on internal network, no extra steps needed.
   if (!proxySocketPath) {
     await execDocker(["network", "connect", SECURE_NETWORK_NAME, RELAY_CONTAINER_NAME]);
+    await execDocker(["network", "disconnect", "bridge", RELAY_CONTAINER_NAME]);
   }
 
   const mode = proxySocketPath ? `socket:${proxySocketPath}` : `tcp:host.docker.internal:${proxyPort}`;

@@ -117,6 +117,8 @@ async function replacePlaceholders(text: string, registry: SecretRegistry): Prom
   let limitHit = false;
   const startTime = Date.now();
 
+  // Each .replace() callback below is invoked once per regex match.
+  // count++ inside each callback ensures the limit is enforced per individual match.
   const checkLimits = () => {
     if (limitHit) return true;
     if (Date.now() - startTime > PLACEHOLDER_LIMITS.timeoutMs) {

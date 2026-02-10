@@ -32,10 +32,7 @@ export interface SanitizedMounts {
  * - Original config with real channel tokens
  * - Original auth-profiles.json with real API keys
  */
-export async function prepareSanitizedMounts(opts?: {
-  dockerBridgeIp?: string;
-}): Promise<SanitizedMounts> {
-  const dockerBridgeIp = opts?.dockerBridgeIp ?? "172.17.0.1"; // fallback default
+export async function prepareSanitizedMounts(): Promise<SanitizedMounts> {
   const homeDir = os.homedir();
   const openclawDir = path.join(homeDir, ".openclaw");
   const sanitizedDir = path.join(openclawDir, ".sanitized");
@@ -61,22 +58,6 @@ export async function prepareSanitizedMounts(opts?: {
       // Load raw config then sanitize explicitly (don't use env var to avoid race conditions)
       const rawConfig = loadConfig();
       const config = sanitizeConfigSecrets(rawConfig, { force: true });
-
-      // In secure mode, Docker connections appear from bridge IP (e.g., 172.17.0.1), not localhost.
-      // Add the detected Docker bridge IP to trustedProxies so the gateway treats these as local.
-      // This keeps device auth working while allowing Docker-based connections.
-      if (!config.gateway) {
-        (config as Record<string, unknown>).gateway = {};
-      }
-      const existingProxies = Array.isArray(config.gateway!.trustedProxies)
-        ? config.gateway!.trustedProxies
-        : [];
-      if (!existingProxies.includes(dockerBridgeIp)) {
-        (config.gateway as { trustedProxies?: string[] }).trustedProxies = [
-          ...existingProxies,
-          dockerBridgeIp,
-        ];
-      }
 
       const ext = path.extname(configPath);
       const sanitizedConfigPath = path.join(sanitizedDir, `openclaw${ext}`);
