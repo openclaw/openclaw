@@ -346,8 +346,6 @@ For teams preferring infrastructure-as-code workflows, a community-maintained Te
 - Infrastructure: [openclaw-terraform-hetzner](https://github.com/andreesg/openclaw-terraform-hetzner)
 - Docker config: [openclaw-docker-config](https://github.com/andreesg/openclaw-docker-config)
 
-**Cost:** ~€6/month on Hetzner CX22 (2 vCPU, 4GB RAM)
-
 This approach complements the Docker setup above with reproducible deployments, version-controlled infrastructure, and automated disaster recovery.
 
 > **Note:** Community-maintained. For issues or contributions, see the repository links above.
