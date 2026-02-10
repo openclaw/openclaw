@@ -60,6 +60,12 @@ describe("upstream _persist compatibility", () => {
   // These tests validate that the upstream SessionManager methods we replicate
   // in our monkey-patch haven't changed. If they fail after a pi-coding-agent
   // upgrade, review the new implementation and update our patch.
+  //
+  // NOTE: Our patched _persist iterates `sm.fileEntries` as the canonical entry
+  // list — this is currently the only entry store in SessionManager. If upstream
+  // ever introduces lazy-loaded or secondary entry sources, these hashes will
+  // change and the tests below will fail, signaling that our patch needs to be
+  // updated to account for the new entry source.
 
   function hashMethodSource(fn: (...args: unknown[]) => unknown): string {
     return crypto.createHash("sha256").update(fn.toString()).digest("hex").slice(0, 16);
