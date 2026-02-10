@@ -52,7 +52,6 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { t } from "./i18n/i18n-manager.ts";
-
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";

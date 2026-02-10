@@ -1,8 +1,8 @@
 import { nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
-import { loadSessionLogs, loadSessionTimeSeries, loadUsage } from "./controllers/usage.ts";
 import type { UsageColumnId } from "./views/usage.ts";
+import { loadSessionLogs, loadSessionTimeSeries, loadUsage } from "./controllers/usage.ts";
 import { renderUsage } from "./views/usage.ts";
 
 // Module-scope debounce for usage date changes (avoids type-unsafe hacks on state object)
@@ -106,9 +106,7 @@ export function renderUsageTab(state: AppViewState) {
             if (lastIdx !== -1 && thisIdx !== -1) {
               const [start, end] = lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
               const range = allHours.slice(start, end + 1);
-              state.usageSelectedHours = [
-                ...new Set([...state.usageSelectedHours, ...range]),
-              ];
+              state.usageSelectedHours = [...new Set([...state.usageSelectedHours, ...range])];
             }
           } else {
             if (state.usageSelectedHours.includes(hour)) {
