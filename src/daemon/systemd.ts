@@ -188,10 +188,15 @@ export async function installSystemdService({
   workingDirectory,
   environment,
   description,
+  watchdog,
 }: GatewayServiceInstallArgs): Promise<{ unitPath: string }> {
   await assertSystemdAvailable();
 
-  const unitPath = resolveSystemdUnitPath(env);
+  // Derive the service name first so unitPath, enable, and restart all
+  // operate on the same resolved name (respects OPENCLAW_SYSTEMD_UNIT).
+  const serviceName = resolveSystemdServiceName(env);
+  const unitName = `${serviceName}.service`;
+  const unitPath = resolveSystemdUnitPathForName(env, serviceName);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const unit = buildSystemdUnit({
@@ -199,11 +204,9 @@ export async function installSystemdService({
     programArguments,
     workingDirectory,
     environment,
+    watchdog,
   });
   await fs.writeFile(unitPath, unit, "utf8");
-
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-  const unitName = `${serviceName}.service`;
   const reload = await execSystemctl(["--user", "daemon-reload"]);
   if (reload.code !== 0) {
     throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
@@ -217,6 +220,20 @@ export async function installSystemdService({
   const restart = await execSystemctl(["--user", "restart", unitName]);
   if (restart.code !== 0) {
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
+  }
+
+  // When OPENCLAW_SYSTEMD_UNIT overrides the name, disable the previous
+  // profile-based unit so two units don't compete for the same gateway.
+  const defaultName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  if (serviceName !== defaultName) {
+    const prevUnit = `${defaultName}.service`;
+    await execSystemctl(["--user", "disable", "--now", prevUnit]);
+    const prevPath = resolveSystemdUnitPathForName(env, defaultName);
+    try {
+      await fs.unlink(prevPath);
+    } catch {
+      // Previous unit may not exist — that's fine.
+    }
   }
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
@@ -238,16 +255,31 @@ export async function uninstallSystemdService({
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSystemdAvailable();
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   await execSystemctl(["--user", "disable", "--now", unitName]);
 
-  const unitPath = resolveSystemdUnitPath(env);
+  const unitPath = resolveSystemdUnitPathForName(env, serviceName);
   try {
     await fs.unlink(unitPath);
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
   } catch {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
+  }
+
+  // When OPENCLAW_SYSTEMD_UNIT overrides the name, also disable the previous
+  // profile-based unit so it doesn't remain enabled as a dangling service.
+  const defaultName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  if (serviceName !== defaultName) {
+    const prevUnit = `${defaultName}.service`;
+    await execSystemctl(["--user", "disable", "--now", prevUnit]);
+    const prevPath = resolveSystemdUnitPathForName(env, defaultName);
+    try {
+      await fs.unlink(prevPath);
+      stdout.write(`${formatLine("Removed previous systemd service", prevPath)}\n`);
+    } catch {
+      // Previous unit may not exist — that's fine.
+    }
   }
 }
 

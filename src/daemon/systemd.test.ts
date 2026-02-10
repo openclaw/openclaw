@@ -7,7 +7,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { parseSystemdExecStart } from "./systemd-unit.js";
+import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
@@ -201,5 +201,58 @@ describe("systemd service control", () => {
         env: {},
       }),
     ).rejects.toThrow("systemctl stop failed: permission denied");
+  });
+});
+
+describe("buildSystemdUnit", () => {
+  it("omits notify/watchdog directives by default", () => {
+    const unit = buildSystemdUnit({
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+    });
+    expect(unit).not.toContain("Type=notify");
+    expect(unit).not.toContain("NotifyAccess=all");
+    expect(unit).not.toContain("WatchdogSec=90");
+  });
+
+  it("includes Type=notify when watchdog is enabled", () => {
+    const unit = buildSystemdUnit({
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+      watchdog: true,
+    });
+    expect(unit).toContain("Type=notify");
+  });
+
+  it("includes NotifyAccess=all when watchdog is enabled", () => {
+    const unit = buildSystemdUnit({
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+      watchdog: true,
+    });
+    expect(unit).toContain("NotifyAccess=all");
+  });
+
+  it("includes WatchdogSec=90 when watchdog is enabled", () => {
+    const unit = buildSystemdUnit({
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+      watchdog: true,
+    });
+    expect(unit).toContain("WatchdogSec=90");
+  });
+
+  it("places watchdog directives in [Service] section", () => {
+    const unit = buildSystemdUnit({
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+      watchdog: true,
+    });
+    const serviceStart = unit.indexOf("[Service]");
+    const installStart = unit.indexOf("[Install]");
+    const typePos = unit.indexOf("Type=notify");
+    const notifyAccessPos = unit.indexOf("NotifyAccess=all");
+    const watchdogPos = unit.indexOf("WatchdogSec=90");
+    expect(typePos).toBeGreaterThan(serviceStart);
+    expect(typePos).toBeLessThan(installStart);
+    expect(notifyAccessPos).toBeGreaterThan(serviceStart);
+    expect(notifyAccessPos).toBeLessThan(installStart);
+    expect(watchdogPos).toBeGreaterThan(serviceStart);
+    expect(watchdogPos).toBeLessThan(installStart);
   });
 });

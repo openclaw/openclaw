@@ -7,6 +7,8 @@ export type GatewayServiceInstallArgs = {
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
   description?: string;
+  /** Enable Type=notify, NotifyAccess=all, and WatchdogSec. Only set for services that send sd_notify events. */
+  watchdog?: boolean;
 };
 
 export type GatewayServiceManageArgs = {
@@ -35,4 +37,6 @@ export type GatewayServiceRenderArgs = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
+  /** Enable Type=notify, NotifyAccess=all, and WatchdogSec. Only set for services that send sd_notify events. */
+  watchdog?: boolean;
 };
