@@ -13,7 +13,6 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { stripMarkdown } from "../line/markdown-to-line.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
@@ -33,6 +32,7 @@ import {
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { logVerbose } from "../globals.js";
+import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
