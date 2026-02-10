@@ -111,6 +111,8 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
     `sdk exec: model=${params.model ?? "default"} promptChars=${params.prompt.length} maxTurns=${options.maxTurns} debugFile=${options.debugFile}`,
   );
 
+  const sdkStartedAt = Date.now();
+  let turnCount = 0;
   try {
     for await (const msg of query({ prompt: params.prompt, options })) {
       if (msg.type === "system" && "subtype" in msg && msg.subtype === "init" && "tools" in msg) {
@@ -128,6 +130,8 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
       }
 
       if (msg.type === "assistant") {
+        turnCount++;
+        log.info(`sdk turn ${turnCount}: elapsed=${Date.now() - sdkStartedAt}ms`);
         const toolUses = msg.message?.content?.filter(
           (b: { type: string }) => b.type === "tool_use",
         ) as Array<{ name: string }> | undefined;

@@ -307,6 +307,7 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
+    defaultRuntime.error(`[timing] agent turn start: sessionKey=${sessionKey}`);
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -330,6 +331,9 @@ export async function runReplyAgent(params: {
       storePath,
       resolvedVerboseLevel,
     });
+    defaultRuntime.error(
+      `[timing] agent turn done: sessionKey=${sessionKey} durationMs=${Date.now() - runStartedAt}`,
+    );
 
     if (runOutcome.kind === "final") {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
