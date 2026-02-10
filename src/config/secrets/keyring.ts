@@ -14,6 +14,7 @@ import { homedir, platform } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { SecretsProvider } from "./provider.js";
+import { MissingSecretError } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -173,11 +174,7 @@ function createMacOSProvider(
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes("could not be found") || msg.includes("SecKeychainSearchCopyNext")) {
-          throw new Error(
-            `Secret "${secretName}" not found in keychain at ${keychainPath}. ` +
-              `Add it with: security add-generic-password -a ${account} -s ${secretName} -w "VALUE" ${keychainPath}`,
-            { cause: err },
-          );
+          throw new MissingSecretError(secretName, "keyring");
         }
         throw new Error(`Failed to retrieve secret "${secretName}" from keychain: ${msg}`, {
           cause: err,
@@ -242,11 +239,7 @@ function createLinuxProvider(account: string): SecretsProvider {
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes("empty") || msg.includes("exit code")) {
-          throw new Error(
-            `Secret "${secretName}" not found in keyring. ` +
-              `Add it with: echo -n "VALUE" | secret-tool store --label="openclaw: ${secretName}" service ${account} key ${secretName}`,
-            { cause: err },
-          );
+          throw new MissingSecretError(secretName, "keyring");
         }
         throw new Error(`Failed to retrieve secret "${secretName}" from keyring: ${msg}`, {
           cause: err,

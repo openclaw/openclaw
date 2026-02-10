@@ -36,17 +36,16 @@ const DEFAULT_RESOLVE_TIMEOUT_MS = 30_000;
 /** Maximum concurrent secret resolutions to avoid rate limiting. */
 const DEFAULT_MAX_CONCURRENCY = 5;
 
-/** Wrap a promise with a timeout. */
+/** Wrap a promise with a timeout, clearing the timer when the promise settles. */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`Secret resolution timed out after ${ms}ms: ${label}`)),
-        ms,
-      ),
-    ),
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Secret resolution timed out after ${ms}ms: ${label}`)),
+      ms,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**
