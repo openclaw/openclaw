@@ -153,6 +153,8 @@ openclaw gateway --verbose
 
 在钉钉中找到您创建的机器人，即可正常对话。
 
+![钉钉对话](../../images/ddingtalk/ddingtalk-chat.jpg)
+
 ---
 
 ## 介绍
