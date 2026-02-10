@@ -62,7 +62,7 @@ export function normalizeReplyPayload(
   }
 
   if (text) {
-    text = sanitizeUserFacingText(text);
+    text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
   if (!text?.trim() && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");
