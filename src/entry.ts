@@ -145,6 +145,14 @@ function normalizeWindowsArgv(argv: string[]): string[] {
 
 process.argv = normalizeWindowsArgv(process.argv);
 
+// Short-circuit --version before respawn + full module loading (~5s → <100ms).
+const VERSION_FLAGS = new Set(["-v", "-V", "--version"]);
+if (process.argv.slice(2).some((arg) => VERSION_FLAGS.has(arg))) {
+  const { VERSION } = await import("./version.js");
+  console.log(VERSION);
+  process.exit(0);
+}
+
 if (!ensureExperimentalWarningSuppressed()) {
   const parsed = parseCliProfileArgs(process.argv);
   if (!parsed.ok) {
