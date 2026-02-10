@@ -824,39 +824,58 @@ export async function runEmbeddedAttempt(
             note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
           });
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+          const promptWithCurrentImages = async (): Promise<void> => {
+            // Only pass images option if there are actually images to pass.
+            // This avoids potential issues with models that don't expect the images parameter.
+            if (imageResult.images.length > 0) {
+              await abortable(
+                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+              );
+            } else {
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
+          };
+          const hasTrailingEmptyAssistant = (): boolean => {
+            const last = activeSession.messages.at(-1);
+            return last?.role === "assistant" && isEmptyAssistantMessageContent(last);
+          };
+
+          await promptWithCurrentImages();
+
+          // Recovery phase 1: one in-run retry with the exact same payload.
+          // This protects vision-capable models from occasional transient empty replies
+          // without immediately mutating/persisting image history.
+          if (hasTrailingEmptyAssistant()) {
+            log.warn(
+              `empty assistant response — retrying once with original context: runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+            await promptWithCurrentImages();
           }
 
-          // Recovery: if the model returned an empty response and the context contains
-          // images, strip all image blocks and retry once. Some providers (e.g. GitHub
-          // Copilot) claim vision support but silently return empty when images are present.
-          const lastAfterPrompt = activeSession.messages.at(-1);
-          if (
-            lastAfterPrompt?.role === "assistant" &&
-            isEmptyAssistantMessageContent(lastAfterPrompt)
-          ) {
+          // Recovery phase 2: only after two consecutive empty replies, strip image
+          // blocks in-memory and retry once without prompt images.
+          if (hasTrailingEmptyAssistant()) {
             const { messages: stripped, hadImages } = stripImageBlocksFromMessages(
               activeSession.messages,
             );
             if (hadImages) {
               log.warn(
-                `empty assistant response with images in context — stripping images and retrying: runId=${params.runId} sessionId=${params.sessionId}`,
+                `empty assistant response persisted after same-context retry — stripping images and retrying: runId=${params.runId} sessionId=${params.sessionId}`,
               );
               activeSession.agent.replaceMessages(stripped);
-              // Also persist the image removal to the session file so subsequent
-              // messages don't reload the images from disk.
-              const fileStripped = stripImageBlocksFromSessionFile(params.sessionFile);
-              if (fileStripped > 0) {
-                log.debug(
-                  `stripped ${fileStripped} image blocks from session file: ${params.sessionFile}`,
-                );
-              }
               await abortable(activeSession.prompt(effectivePrompt));
+
+              // Persist image stripping only after we needed strip-retry and when this
+              // turn didn't include direct prompt images. This avoids permanent deletion
+              // on one-off empty replies from otherwise healthy vision models.
+              if (!hasTrailingEmptyAssistant() && imageResult.images.length === 0) {
+                const fileStripped = stripImageBlocksFromSessionFile(params.sessionFile);
+                if (fileStripped > 0) {
+                  log.debug(
+                    `stripped ${fileStripped} image blocks from session file: ${params.sessionFile}`,
+                  );
+                }
+              }
             }
           }
         } catch (err) {
@@ -868,12 +887,38 @@ export async function runEmbeddedAttempt(
         }
 
         try {
-          await waitForCompactionRetry();
+          // Compaction-specific timeout: if compaction doesn't finish within 60 seconds,
+          // give up waiting and proceed. This prevents the session from staying stuck in
+          // active=true when compaction hangs, which would block all subsequent messages.
+          // The run's main timeout (params.timeoutMs, default 600s) is too generous for this.
+          const COMPACTION_WAIT_TIMEOUT_MS = 60_000;
+          const compactionPromise = waitForCompactionRetry();
+          const compactionTimeout = new Promise<void>((_resolve, reject) => {
+            const timer = setTimeout(() => {
+              const err = new Error(
+                `compaction wait timed out after ${COMPACTION_WAIT_TIMEOUT_MS}ms`,
+              );
+              err.name = "CompactionTimeoutError";
+              reject(err);
+            }, COMPACTION_WAIT_TIMEOUT_MS);
+            // If the compaction finishes or abort fires first, clear the timer.
+            void compactionPromise.then(
+              () => clearTimeout(timer),
+              () => clearTimeout(timer),
+            );
+          });
+          await abortable(Promise.race([compactionPromise, compactionTimeout]));
         } catch (err) {
           if (isRunnerAbortError(err)) {
             if (!promptError) {
               promptError = err;
             }
+          } else if (err instanceof Error && err.name === "CompactionTimeoutError") {
+            log.warn(
+              `embedded run compaction wait timed out: runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+            // Don't treat this as a fatal error — the run completed, just compaction is slow.
+            // The session will be released in the finally block.
           } else {
             throw err;
           }

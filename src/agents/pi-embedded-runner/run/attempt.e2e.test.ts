@@ -62,9 +62,18 @@ describe("injectHistoryImagesIntoMessages", () => {
 });
 
 describe("empty response image-strip retry", () => {
-  it("strips images and retries when model returns empty with images in context", async () => {
+  async function runImageRetryScenario(params: {
+    emptyResponsesBeforeSuccess: number;
+    promptImages?: ImageContent[];
+  }): Promise<{
+    promptCallCount: number;
+    replaceMessagesCalls: AgentMessage[][];
+    usedPromptImagesByCall: boolean[];
+  }> {
+    const { emptyResponsesBeforeSuccess, promptImages = [] } = params;
     let promptCallCount = 0;
     const replaceMessagesCalls: AgentMessage[][] = [];
+    const usedPromptImagesByCall: boolean[] = [];
 
     vi.resetModules();
 
@@ -91,7 +100,7 @@ describe("empty response image-strip retry", () => {
 
     vi.doMock("./images.js", () => ({
       detectAndLoadPromptImages: async () => ({
-        images: [],
+        images: promptImages,
         historyImagesByIndex: new Map<number, ImageContent[]>(),
       }),
     }));
@@ -145,7 +154,6 @@ describe("empty response image-strip retry", () => {
       resolveSkillsPromptForRun: () => "",
     }));
 
-    // Session history with an image in a tool result
     const messagesWithImage: AgentMessage[] = [
       { role: "user", content: "take screenshot" } as AgentMessage,
       {
@@ -181,7 +189,7 @@ describe("empty response image-strip retry", () => {
         messages: AgentMessage[];
         isStreaming: boolean;
         agent: typeof agent;
-        prompt: (prompt: string, _opts?: unknown) => Promise<void>;
+        prompt: (_prompt: string, opts?: unknown) => Promise<void>;
         steer: (text: string) => Promise<void>;
         abort: () => Promise<void>;
         dispose: () => void;
@@ -190,16 +198,21 @@ describe("empty response image-strip retry", () => {
         messages: [...messagesWithImage],
         isStreaming: false,
         agent,
-        prompt: async () => {
+        prompt: async (_prompt, opts) => {
+          const hasPromptImages =
+            typeof opts === "object" &&
+            opts !== null &&
+            Array.isArray((opts as { images?: unknown[] }).images) &&
+            ((opts as { images?: unknown[] }).images?.length ?? 0) > 0;
+          usedPromptImagesByCall.push(hasPromptImages);
+
           promptCallCount++;
-          if (promptCallCount === 1) {
-            // First prompt: model returns empty (image problem)
+          if (promptCallCount <= emptyResponsesBeforeSuccess) {
             session.messages.push({
               role: "assistant",
               content: [],
             } as unknown as AgentMessage);
           } else {
-            // Second prompt (after image strip): model returns text
             session.messages.push({
               role: "assistant",
               content: [{ type: "text", text: "Here is my reply" }],
@@ -233,7 +246,7 @@ describe("empty response image-strip retry", () => {
     await fs.mkdir(agentDir, { recursive: true });
     await fs.mkdir(workspaceDir, { recursive: true });
 
-    const params = {
+    const runParams = {
       sessionId: "sess-img",
       sessionFile,
       workspaceDir,
@@ -250,13 +263,19 @@ describe("empty response image-strip retry", () => {
       disableTools: true,
     } satisfies EmbeddedRunAttemptParams;
 
-    await runEmbeddedAttempt(params);
+    await runEmbeddedAttempt(runParams);
+    return {
+      promptCallCount,
+      replaceMessagesCalls,
+      usedPromptImagesByCall,
+    };
+  }
 
-    // Should have prompted twice: first empty, then retry after stripping images
-    expect(promptCallCount).toBe(2);
+  it("retries once with original context before stripping", async () => {
+    const result = await runImageRetryScenario({ emptyResponsesBeforeSuccess: 1 });
+    expect(result.promptCallCount).toBe(2);
 
-    // replaceMessages should have been called with stripped images (text placeholder)
-    const lastReplace = replaceMessagesCalls.at(-1);
+    const lastReplace = result.replaceMessagesCalls.at(-1);
     expect(lastReplace).toBeDefined();
     const hasImage = lastReplace!.some((msg) => {
       if (!Array.isArray(msg.content)) {
@@ -264,9 +283,6 @@ describe("empty response image-strip retry", () => {
       }
       return (msg.content as { type: string }[]).some((b) => b.type === "image");
     });
-    expect(hasImage).toBe(false);
-
-    // Should have "[image omitted]" placeholder
     const hasPlaceholder = lastReplace!.some((msg) => {
       if (!Array.isArray(msg.content)) {
         return false;
@@ -275,206 +291,27 @@ describe("empty response image-strip retry", () => {
         (b) => b.type === "text" && b.text === "[image omitted]",
       );
     });
-    expect(hasPlaceholder).toBe(true);
+
+    expect(hasImage).toBe(true);
+    expect(hasPlaceholder).toBe(false);
   });
-});
 
-describe("empty response image-strip retry", () => {
-  it("strips images and retries when model returns empty with images in context", async () => {
-    let promptCallCount = 0;
-    const replaceMessagesCalls: AgentMessage[][] = [];
-
-    vi.resetModules();
-
-    vi.doMock("../runs.js", () => ({
-      clearActiveEmbeddedRun: vi.fn(),
-      setActiveEmbeddedRun: vi.fn(),
-    }));
-
-    vi.doMock("../../pi-embedded-subscribe.js", () => ({
-      subscribeEmbeddedPiSession: () => ({
-        assistantTexts: [],
-        toolMetas: [],
-        unsubscribe: vi.fn(),
-        waitForCompactionRetry: () => Promise.resolve(),
-        getMessagingToolSentTexts: () => [],
-        getMessagingToolSentTargets: () => [],
-        didSendViaMessagingTool: () => false,
-        getLastToolError: () => undefined,
-        isCompacting: () => false,
-        getUsageTotals: () => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
-        getCompactionCount: () => 0,
-      }),
-    }));
-
-    vi.doMock("./images.js", () => ({
-      detectAndLoadPromptImages: async () => ({
-        images: [],
-        historyImagesByIndex: new Map<number, ImageContent[]>(),
-      }),
-    }));
-
-    vi.doMock("../../cache-trace.js", () => ({ createCacheTrace: () => null }));
-    vi.doMock("../../anthropic-payload-log.js", () => ({
-      createAnthropicPayloadLogger: () => null,
-    }));
-    vi.doMock("../extensions.js", () => ({ buildEmbeddedExtensionPaths: () => undefined }));
-
-    vi.doMock("../../pi-settings.js", () => ({
-      ensurePiCompactionReserveTokens: () => undefined,
-      resolveCompactionReserveTokensFloor: () => 0,
-    }));
-
-    vi.doMock("../google.js", () => ({
-      sanitizeToolsForGoogle: ({ tools }: { tools: unknown }) => tools,
-      logToolSchemasForGoogle: () => undefined,
-      sanitizeSessionHistory: async ({ messages }: { messages: AgentMessage[] }) => messages,
-    }));
-
-    vi.doMock("../../session-write-lock.js", () => ({
-      acquireSessionWriteLock: async () => ({ release: async () => undefined }),
-    }));
-
-    vi.doMock("../../session-file-repair.js", () => ({
-      repairSessionFileIfNeeded: async () => undefined,
-    }));
-
-    vi.doMock("../session-manager-cache.js", () => ({
-      prewarmSessionFile: async () => undefined,
-      trackSessionManagerAccess: () => undefined,
-    }));
-
-    vi.doMock("../session-manager-init.js", () => ({
-      prepareSessionManagerForRun: async () => undefined,
-    }));
-
-    vi.doMock("../../session-tool-result-guard-wrapper.js", () => ({
-      guardSessionManager: (mgr: unknown) => mgr,
-    }));
-
-    vi.doMock("../../../plugins/hook-runner-global.js", () => ({
-      getGlobalHookRunner: () => null,
-    }));
-
-    vi.doMock("../../skills.js", () => ({
-      applySkillEnvOverrides: () => () => undefined,
-      applySkillEnvOverridesFromSnapshot: () => () => undefined,
-      loadWorkspaceSkillEntries: () => [],
-      resolveSkillsPromptForRun: () => "",
-    }));
-
-    // Session history with an image in a tool result
-    const messagesWithImage: AgentMessage[] = [
-      { role: "user", content: "take screenshot" } as AgentMessage,
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "tc1", name: "browser", arguments: "{}" }],
-        stopReason: "toolUse",
-      } as unknown as AgentMessage,
-      {
-        role: "toolResult",
-        toolCallId: "tc1",
-        content: [
-          { type: "text", text: "MEDIA:/tmp/screenshot.jpg" },
-          { type: "image", data: "base64data", mimeType: "image/jpeg" },
-        ],
-      } as unknown as AgentMessage,
-    ];
-
-    vi.doMock("@mariozechner/pi-coding-agent", () => {
-      const agent: {
-        streamFn?: unknown;
-        replaceMessages: (msgs: AgentMessage[]) => void;
-        setSystemPrompt: (prompt: string) => void;
-      } = {
-        streamFn: undefined,
-        replaceMessages: (msgs) => {
-          replaceMessagesCalls.push([...msgs]);
-          session.messages = msgs;
-        },
-        setSystemPrompt: () => undefined,
-      };
-      const session: {
-        sessionId: string;
-        messages: AgentMessage[];
-        isStreaming: boolean;
-        agent: typeof agent;
-        prompt: (prompt: string, _opts?: unknown) => Promise<void>;
-        steer: (text: string) => Promise<void>;
-        abort: () => Promise<void>;
-        dispose: () => void;
-      } = {
-        sessionId: "test-session-id",
-        messages: [...messagesWithImage],
-        isStreaming: false,
-        agent,
-        prompt: async () => {
-          promptCallCount++;
-          if (promptCallCount === 1) {
-            // First prompt: model returns empty (image problem)
-            session.messages.push({
-              role: "assistant",
-              content: [],
-            } as unknown as AgentMessage);
-          } else {
-            // Second prompt (after image strip): model returns text
-            session.messages.push({
-              role: "assistant",
-              content: [{ type: "text", text: "Here is my reply" }],
-            } as unknown as AgentMessage);
-          }
-        },
-        steer: async () => undefined,
-        abort: async () => undefined,
-        dispose: () => undefined,
-      };
-
-      return {
-        createAgentSession: async () => ({ session }),
-        SessionManager: {
-          open: () => ({
-            flushPendingToolResults: () => undefined,
-            getLeafEntry: () => null,
-          }),
-        },
-        SettingsManager: { create: () => ({}) },
-      };
+  it("keeps prompt images on same-context retry", async () => {
+    const promptImage: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
+    const result = await runImageRetryScenario({
+      emptyResponsesBeforeSuccess: 1,
+      promptImages: [promptImage],
     });
 
-    const { runEmbeddedAttempt } = await import("./attempt.js");
+    expect(result.promptCallCount).toBe(2);
+    expect(result.usedPromptImagesByCall).toEqual([true, true]);
+  });
 
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-strip-test-"));
-    const sessionFile = path.join(tmpRoot, "session.json");
-    await fs.writeFile(sessionFile, "{}", "utf8");
-    const agentDir = path.join(tmpRoot, "agent");
-    const workspaceDir = path.join(tmpRoot, "workspace");
-    await fs.mkdir(agentDir, { recursive: true });
-    await fs.mkdir(workspaceDir, { recursive: true });
+  it("strips images only after two consecutive empty responses", async () => {
+    const result = await runImageRetryScenario({ emptyResponsesBeforeSuccess: 2 });
+    expect(result.promptCallCount).toBe(3);
 
-    const params = {
-      sessionId: "sess-img",
-      sessionFile,
-      workspaceDir,
-      agentDir,
-      prompt: "what do you see?",
-      provider: "openai",
-      modelId: "gpt-test",
-      model: { api: "openai", provider: "openai", input: ["text", "image"] },
-      authStorage: {},
-      modelRegistry: {},
-      thinkLevel: "off",
-      timeoutMs: 60_000,
-      runId: "run-img",
-      disableTools: true,
-    } satisfies EmbeddedRunAttemptParams;
-
-    await runEmbeddedAttempt(params);
-
-    // Should have prompted twice: first empty, then retry after stripping images
-    expect(promptCallCount).toBe(2);
-
-    // replaceMessages should have been called with stripped images (text placeholder)
-    const lastReplace = replaceMessagesCalls.at(-1);
+    const lastReplace = result.replaceMessagesCalls.at(-1);
     expect(lastReplace).toBeDefined();
     const hasImage = lastReplace!.some((msg) => {
       if (!Array.isArray(msg.content)) {
@@ -482,9 +319,6 @@ describe("empty response image-strip retry", () => {
       }
       return (msg.content as { type: string }[]).some((b) => b.type === "image");
     });
-    expect(hasImage).toBe(false);
-
-    // Should have "[image omitted]" placeholder
     const hasPlaceholder = lastReplace!.some((msg) => {
       if (!Array.isArray(msg.content)) {
         return false;
@@ -493,6 +327,8 @@ describe("empty response image-strip retry", () => {
         (b) => b.type === "text" && b.text === "[image omitted]",
       );
     });
+
+    expect(hasImage).toBe(false);
     expect(hasPlaceholder).toBe(true);
   });
 });
