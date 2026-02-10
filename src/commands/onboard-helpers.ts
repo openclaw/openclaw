@@ -344,7 +344,9 @@ export async function detectBinary(name: string): Promise<boolean> {
 
   const command = process.platform === "win32" ? ["where", name] : ["/usr/bin/env", "which", name];
   try {
-    const result = await runCommandWithTimeout(command, { timeoutMs: 2000 });
+    const result = await runCommandWithTimeout(command, {
+      timeoutMs: 2000,
+    });
     return result.code === 0 && result.stdout.trim().length > 0;
   } catch {
     return false;
@@ -439,6 +441,7 @@ export function resolveControlUiLinks(params: {
   port: number;
   bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet" | "overlay" | "zerotier" | "wireguard";
   customBindHost?: string;
+  overlayInterface?: string;
   basePath?: string;
 }): { httpUrl: string; wsUrl: string } {
   const port = params.port;
@@ -457,7 +460,7 @@ export function resolveControlUiLinks(params: {
     }
     if (bind === "zerotier" || bind === "wireguard" || bind === "overlay") {
       const overlayIP = pickOverlayIPv4(
-        bind === "zerotier" ? "zt" : bind === "wireguard" ? "wg" : undefined,
+        bind === "overlay" ? params.overlayInterface : bind === "zerotier" ? "zt" : "wg",
       );
       return overlayIP ?? "127.0.0.1";
     }

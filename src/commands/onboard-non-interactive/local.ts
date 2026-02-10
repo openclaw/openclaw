@@ -119,6 +119,7 @@ export async function runNonInteractiveOnboardingLocal(params: {
         | "wireguard",
       port: gatewayResult.port,
       customBindHost: nextConfig.gateway?.customBindHost,
+      overlayInterface: nextConfig.gateway?.overlayInterface,
       basePath: undefined,
     });
     await waitForGatewayReachable({

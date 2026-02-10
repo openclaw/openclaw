@@ -153,7 +153,10 @@ export async function finalizeOnboardingWizard(
           { doneMessage: "Gateway service uninstalled." },
           async (progress) => {
             progress.update("Uninstalling Gateway service…");
-            await service.uninstall({ env: process.env, stdout: process.stdout });
+            await service.uninstall({
+              env: process.env,
+              stdout: process.stdout,
+            });
           },
         );
       }
@@ -200,6 +203,7 @@ export async function finalizeOnboardingWizard(
       bind: nextConfig.gateway?.bind ?? "loopback",
       port: settings.port,
       customBindHost: nextConfig.gateway?.customBindHost,
+      overlayInterface: nextConfig.gateway?.overlayInterface,
       basePath: undefined,
     });
     // Daemon install/restart can briefly flap the WS; wait a bit so health check doesn't false-fail.
@@ -248,6 +252,7 @@ export async function finalizeOnboardingWizard(
     bind: settings.bind,
     port: settings.port,
     customBindHost: settings.customBindHost,
+    overlayInterface: nextConfig.gateway?.overlayInterface,
     basePath: controlUiBasePath,
   });
   const authedUrl =

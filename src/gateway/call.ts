@@ -7,6 +7,7 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { pickOverlayIPv4 } from "../infra/overlay-net.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import {
@@ -90,7 +91,11 @@ export function ensureExplicitGatewayAuth(params: {
 }
 
 export function buildGatewayConnectionDetails(
-  options: { config?: OpenClawConfig; url?: string; configPath?: string } = {},
+  options: {
+    config?: OpenClawConfig;
+    url?: string;
+    configPath?: string;
+  } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =
@@ -104,13 +109,27 @@ export function buildGatewayConnectionDetails(
   const preferTailnet = bindMode === "tailnet" && !!tailnetIPv4;
   const preferLan = bindMode === "lan";
   const lanIPv4 = preferLan ? pickPrimaryLanIPv4() : undefined;
+  const overlayHint =
+    bindMode === "overlay"
+      ? config.gateway?.overlayInterface
+      : bindMode === "zerotier"
+        ? "zt"
+        : bindMode === "wireguard"
+          ? "wg"
+          : undefined;
+  const overlayIPv4 = overlayHint !== undefined ? pickOverlayIPv4(overlayHint) : undefined;
+  const preferOverlay =
+    (bindMode === "overlay" || bindMode === "zerotier" || bindMode === "wireguard") &&
+    !!overlayIPv4;
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl =
     preferTailnet && tailnetIPv4
       ? `${scheme}://${tailnetIPv4}:${localPort}`
       : preferLan && lanIPv4
         ? `${scheme}://${lanIPv4}:${localPort}`
-        : `${scheme}://127.0.0.1:${localPort}`;
+        : preferOverlay
+          ? `${scheme}://${overlayIPv4}:${localPort}`
+          : `${scheme}://127.0.0.1:${localPort}`;
   const urlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
@@ -129,7 +148,9 @@ export function buildGatewayConnectionDetails(
           ? `local tailnet ${tailnetIPv4}`
           : preferLan && lanIPv4
             ? `local lan ${lanIPv4}`
-            : "local loopback";
+            : preferOverlay && overlayIPv4
+              ? `local ${bindMode} ${overlayIPv4}`
+              : "local loopback";
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
@@ -164,7 +185,10 @@ export async function callGateway<T = Record<string, unknown>>(
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
-  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+  const explicitAuth = resolveExplicitGatewayAuth({
+    token: opts.token,
+    password: opts.password,
+  });
   ensureExplicitGatewayAuth({
     urlOverride,
     auth: explicitAuth,

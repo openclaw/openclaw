@@ -190,6 +190,7 @@ export async function gatewayStatusCommand(
     reachable.find((p) => p.target.kind === "explicit") ??
     reachable.find((p) => p.target.kind === "sshTunnel") ??
     reachable.find((p) => p.target.kind === "configRemote") ??
+    reachable.find((p) => p.target.kind === "localOverlay") ??
     reachable.find((p) => p.target.kind === "localLoopback") ??
     null;
 

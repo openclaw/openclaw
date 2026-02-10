@@ -1,13 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
-import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
-import {
-  isLoopbackAddress,
-  isTrustedProxyAddress,
-  parseForwardedForClientIp,
-  resolveGatewayClientIp,
-} from "./net.js";
+import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { resolveVerifiedTailscaleUser, type TailscaleWhoisLookup } from "./auth-tailscale.js";
+import { isLoopbackAddress, isTrustedProxyAddress, resolveGatewayClientIp } from "./net.js";
 export type ResolvedGatewayAuthMode = "token" | "password";
 
 export type ResolvedGatewayAuth = {
@@ -34,10 +30,6 @@ function safeEqual(a: string, b: string): boolean {
     return false;
   }
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
-
-function normalizeLogin(login: string): string {
-  return login.trim().toLowerCase();
 }
 
 function getHostName(hostHeader?: string): string {

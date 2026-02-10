@@ -63,7 +63,13 @@ export async function statusAllCommand(
                 .filter((v) => typeof v === "string" && v.trim().length > 0)
                 .map((v) => (v as string).trim())
             : [];
-        return { ok: true as const, backendState, dnsName, ips, error: null };
+        return {
+          ok: true as const,
+          backendState,
+          dnsName,
+          ips,
+          error: null,
+        };
       } catch (err) {
         return {
           ok: false as const,
@@ -193,7 +199,9 @@ export async function statusAllCommand(
     const agentStatus = await getAgentLocalStatuses(cfg);
     progress.tick();
     progress.setLabel("Summarizing channels…");
-    const channels = await buildChannelsTable(cfg, { showSecrets: false });
+    const channels = await buildChannelsTable(cfg, {
+      showSecrets: false,
+    });
     progress.tick();
 
     const connectionDetailsForReport = (() => {
@@ -232,7 +240,10 @@ export async function statusAllCommand(
     const channelsStatus = gatewayReachable
       ? await callGateway({
           method: "channels.status",
-          params: { probe: false, timeoutMs: opts?.timeoutMs ?? 10_000 },
+          params: {
+            probe: false,
+            timeoutMs: opts?.timeoutMs ?? 10_000,
+          },
           timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
           ...callOverrides,
         }).catch(() => null)
@@ -257,7 +268,9 @@ export async function statusAllCommand(
             try {
               return buildWorkspaceSkillStatus(defaultWorkspace, {
                 config: cfg,
-                eligibility: { remote: getRemoteSkillEligibility() },
+                eligibility: {
+                  remote: getRemoteSkillEligibility(),
+                },
               });
             } catch {
               return null;
@@ -271,6 +284,7 @@ export async function statusAllCommand(
           port,
           bind: cfg.gateway?.bind,
           customBindHost: cfg.gateway?.customBindHost,
+          overlayInterface: cfg.gateway?.overlayInterface,
           basePath: cfg.gateway?.controlUi?.basePath,
         }).httpUrl
       : null;
@@ -403,7 +417,10 @@ export async function statusAllCommand(
         Item: "Gateway",
         Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`,
       },
-      { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
+      {
+        Item: "Security",
+        Value: `Run: ${formatCliCommand("openclaw security audit --deep")}`,
+      },
       gatewaySelfLine
         ? { Item: "Gateway self", Value: gatewaySelfLine }
         : { Item: "Gateway self", Value: "unknown" },

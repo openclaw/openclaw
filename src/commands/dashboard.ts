@@ -29,6 +29,7 @@ export async function dashboardCommand(
     port,
     bind,
     customBindHost,
+    overlayInterface: cfg.gateway?.overlayInterface,
     basePath,
   });
   // Prefer URL fragment to avoid leaking auth tokens via query params.

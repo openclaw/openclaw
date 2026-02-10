@@ -36,6 +36,7 @@ type GatewayStatusSummary = {
   bindMode: GatewayBindMode;
   bindHost: string;
   customBindHost?: string;
+  overlayInterface?: string;
   port: number;
   portSource: "service args" | "env/config";
   probeUrl: string;
@@ -136,7 +137,10 @@ export async function gatherDaemonStatus(
     resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
   );
 
-  const cliIO = createConfigIO({ env: process.env, configPath: cliConfigPath });
+  const cliIO = createConfigIO({
+    env: process.env,
+    configPath: cliConfigPath,
+  });
   const daemonIO = createConfigIO({
     env: mergedDaemonEnv,
     configPath: daemonConfigPath,
@@ -277,6 +281,7 @@ export async function gatherDaemonStatus(
       bindMode,
       bindHost,
       customBindHost: daemonCfg.gateway?.customBindHost,
+      overlayInterface: daemonCfg.gateway?.overlayInterface,
       port: daemonPort,
       portSource,
       probeUrl,
