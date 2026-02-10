@@ -8,6 +8,7 @@
  */
 
 import type { SecretsProvider } from "./provider.js";
+import { SecretsProviderError } from "./errors.js";
 
 /**
  * Creates a 1Password secrets provider.
@@ -17,7 +18,7 @@ export function createOnePasswordSecretsProvider(): SecretsProvider {
   return {
     name: "1password",
     async resolve(_secretName: string): Promise<string> {
-      throw new Error(
+      throw new SecretsProviderError(
         "1Password secrets provider is not yet implemented. " +
           "Contributions welcome — see src/config/secrets/onepassword.ts",
       );

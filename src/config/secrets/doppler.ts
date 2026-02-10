@@ -13,6 +13,7 @@
  */
 
 import type { SecretsProvider } from "./provider.js";
+import { SecretsProviderError } from "./errors.js";
 
 /** Options for the Doppler secrets provider. */
 export interface DopplerSecretsProviderOptions {
@@ -32,7 +33,7 @@ export function createDopplerSecretsProvider(
   return {
     name: "doppler",
     async resolve(_secretName: string): Promise<string> {
-      throw new Error(
+      throw new SecretsProviderError(
         "Doppler secrets provider is not yet implemented — no access to a Doppler account. " +
           "Contributions welcome — see src/config/secrets/doppler.ts",
       );

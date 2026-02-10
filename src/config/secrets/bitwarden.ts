@@ -13,6 +13,7 @@
  */
 
 import type { SecretsProvider } from "./provider.js";
+import { SecretsProviderError } from "./errors.js";
 
 /**
  * Creates a Bitwarden secrets provider.
@@ -22,7 +23,7 @@ export function createBitwardenSecretsProvider(): SecretsProvider {
   return {
     name: "bitwarden",
     async resolve(_secretName: string): Promise<string> {
-      throw new Error(
+      throw new SecretsProviderError(
         "Bitwarden secrets provider is not yet implemented — no access to a Bitwarden account. " +
           "Contributions welcome — see src/config/secrets/bitwarden.ts",
       );

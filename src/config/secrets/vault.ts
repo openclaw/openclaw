@@ -13,6 +13,7 @@
  */
 
 import type { SecretsProvider } from "./provider.js";
+import { SecretsProviderError } from "./errors.js";
 
 /** Options for the HashiCorp Vault secrets provider. */
 export interface VaultSecretsProviderOptions {
@@ -34,7 +35,7 @@ export function createVaultSecretsProvider(
   return {
     name: "vault",
     async resolve(_secretName: string): Promise<string> {
-      throw new Error(
+      throw new SecretsProviderError(
         "HashiCorp Vault secrets provider is not yet implemented — no access to a Vault instance. " +
           "Contributions welcome — see src/config/secrets/vault.ts",
       );

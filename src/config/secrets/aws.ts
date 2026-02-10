@@ -7,6 +7,7 @@
  */
 
 import type { SecretsProvider } from "./provider.js";
+import { SecretsProviderError } from "./errors.js";
 
 /** Options for the AWS Secrets Manager provider. */
 export interface AwsSecretsProviderOptions {
@@ -24,7 +25,7 @@ export function createAwsSecretsProvider(
   return {
     name: "aws",
     async resolve(_secretName: string): Promise<string> {
-      throw new Error(
+      throw new SecretsProviderError(
         "AWS Secrets Manager provider is not yet implemented. " +
           "Contributions welcome — see src/config/secrets/aws.ts",
       );
