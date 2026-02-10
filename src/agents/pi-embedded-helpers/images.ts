@@ -45,9 +45,17 @@ export function stripImageBlocksFromMessages(messages: AgentMessage[]): {
 
   const stripBlocks = (blocks: unknown[]): unknown[] =>
     blocks.map((block) => {
-      if (block && typeof block === "object" && (block as { type?: unknown }).type === "image") {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const rec = block as Record<string, unknown>;
+      if (rec.type === "image") {
         hadImages = true;
         return { type: "text", text: "[image omitted]" };
+      }
+      // Recurse into nested content arrays (e.g. toolResult blocks with sub-content)
+      if (Array.isArray(rec.content)) {
+        return { ...rec, content: stripBlocks(rec.content) };
       }
       return block;
     });
@@ -94,7 +102,7 @@ export function stripImageBlocksFromMessages(messages: AgentMessage[]): {
 /**
  * Strip image blocks from a persisted session JSONL file so that subsequent
  * prompts don't reload the images. Operates directly on the file, replacing
- * \ content blocks with \.
+ * `{ type: "image", ... }` content blocks with `{ type: "text", text: "[image omitted]" }`.
  *
  * Returns the number of image blocks stripped.
  */
@@ -110,17 +118,22 @@ export function stripImageBlocksFromSessionFile(sessionFile: string): number {
         const msg = entry.message as Record<string, unknown> | undefined;
         const content = msg?.content;
         if (Array.isArray(content)) {
-          msg!.content = content.map((block: unknown) => {
-            if (
-              block &&
-              typeof block === "object" &&
-              (block as { type?: unknown }).type === "image"
-            ) {
-              stripped++;
-              return { type: "text", text: "[image omitted]" };
-            }
-            return block;
-          });
+          const stripFileBlocks = (blocks: unknown[]): unknown[] =>
+            blocks.map((block: unknown) => {
+              if (!block || typeof block !== "object") {
+                return block;
+              }
+              const rec = block as Record<string, unknown>;
+              if (rec.type === "image") {
+                stripped++;
+                return { type: "text", text: "[image omitted]" };
+              }
+              if (Array.isArray(rec.content)) {
+                return { ...rec, content: stripFileBlocks(rec.content) };
+              }
+              return block;
+            });
+          msg!.content = stripFileBlocks(content);
         }
       }
       out.push(JSON.stringify(entry));
