@@ -73,6 +73,7 @@ describe("Telegram file upload - real flow simulation", () => {
     const files = await listFiles({ sessionId, agentId: "main", filesDir: testFilesDir });
     expect(files).toHaveLength(1);
     expect(files[0].type).toBe("csv");
+    expect(files[0].storageFormat).toBe("markdown"); // NEW: verify storageFormat
 
     const fileId = files[0].id;
     const fileBase = `${fileId}-${files[0].filename}`;
@@ -122,6 +123,7 @@ describe("Telegram file upload - real flow simulation", () => {
 
     const files = await listFiles({ sessionId, agentId: "main", filesDir: testFilesDir });
     expect(files).toHaveLength(1);
+    expect(files[0].storageFormat).toBe("markdown"); // NEW: verify storageFormat
 
     const fileId = files[0].id;
     const fileBase = `${fileId}-${files[0].filename}`;
