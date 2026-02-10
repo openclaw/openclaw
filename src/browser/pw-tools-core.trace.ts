@@ -3,6 +3,8 @@ import { ensureContextState, getPageForTargetId } from "./pw-session.js";
 export async function traceStartViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
   screenshots?: boolean;
   snapshots?: boolean;
   sources?: boolean;
@@ -24,6 +26,8 @@ export async function traceStartViaPlaywright(opts: {
 export async function traceStopViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
   path: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);

@@ -1,16 +1,20 @@
 import type { Server } from "node:http";
-import type { RunningChrome } from "./chrome.js";
+import type { RunningBrowser } from "./browser-process.js";
 import type { BrowserTab } from "./client.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 
 export type { BrowserTab };
+export type { RunningBrowser };
+
+/** @deprecated Use RunningBrowser instead. */
+export type RunningChrome = RunningBrowser;
 
 /**
- * Runtime state for a single profile's Chrome instance.
+ * Runtime state for a single profile's browser instance (Chrome or Firefox).
  */
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
-  running: RunningChrome | null;
+  running: RunningBrowser | null;
   /** Sticky tab selection when callers omit targetId (keeps snapshot+act consistent). */
   lastTargetId?: string | null;
 };

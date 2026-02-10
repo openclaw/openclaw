@@ -41,6 +41,7 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   color: string;
   driver: "openclaw" | "extension";
+  engine: "chromium" | "firefox";
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -233,6 +234,14 @@ export function resolveProfile(
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
   const driver = profile.driver === "extension" ? "extension" : "openclaw";
+  const engine = profile.engine === "firefox" ? "firefox" : "chromium";
+
+  if (engine === "firefox" && driver === "extension") {
+    throw new Error(
+      `Profile "${profileName}": engine "firefox" is not compatible with driver "extension". ` +
+        "The Chrome extension relay only works with Chromium-based browsers.",
+    );
+  }
 
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
@@ -253,6 +262,7 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
+    engine,
   };
 }
 

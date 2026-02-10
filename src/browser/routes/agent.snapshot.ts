@@ -22,6 +22,11 @@ import {
 } from "./agent.shared.js";
 import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
+/** Extract engine opts from a profile context for passing to Playwright tool functions. */
+function engineOpts(profile: { engine: "chromium" | "firefox"; name: string }) {
+  return { engine: profile.engine, profileName: profile.name } as const;
+}
+
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -47,6 +52,7 @@ export function registerBrowserAgentSnapshotRoutes(
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         url,
+        ...engineOpts(profileCtx.profile),
       });
       res.json({ ok: true, targetId: tab.targetId, ...result });
     } catch (err) {
@@ -70,6 +76,7 @@ export function registerBrowserAgentSnapshotRoutes(
       const pdf = await pw.pdfViaPlaywright({
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
+        ...engineOpts(profileCtx.profile),
       });
       await ensureMediaDir();
       const saved = await saveMediaBuffer(
@@ -108,8 +115,13 @@ export function registerBrowserAgentSnapshotRoutes(
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       let buffer: Buffer;
+      // Firefox always uses Playwright (no raw CDP screenshots)
       const shouldUsePlaywright =
-        profileCtx.profile.driver === "extension" || !tab.wsUrl || Boolean(ref) || Boolean(element);
+        profileCtx.profile.engine === "firefox" ||
+        profileCtx.profile.driver === "extension" ||
+        !tab.wsUrl ||
+        Boolean(ref) ||
+        Boolean(element);
       if (shouldUsePlaywright) {
         const pw = await requirePwAi(res, "screenshot");
         if (!pw) {
@@ -122,6 +134,7 @@ export function registerBrowserAgentSnapshotRoutes(
           element,
           fullPage,
           type,
+          ...engineOpts(profileCtx.profile),
         });
         buffer = snap.buffer;
       } else {
@@ -194,6 +207,7 @@ export function registerBrowserAgentSnapshotRoutes(
       depthRaw ?? (mode === "efficient" ? DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH : undefined);
     const selector = toStringOrEmpty(req.query.selector);
     const frameSelector = toStringOrEmpty(req.query.frame);
+    const eOpts = engineOpts(profileCtx.profile);
 
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
@@ -226,12 +240,14 @@ export function registerBrowserAgentSnapshotRoutes(
                 compact: compact ?? undefined,
                 maxDepth: depth ?? undefined,
               },
+              ...eOpts,
             })
           : await pw
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
                 ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+                ...eOpts,
               })
               .catch(async (err) => {
                 // Public-API fallback when Playwright's private _snapshotForAI is missing.
@@ -247,6 +263,7 @@ export function registerBrowserAgentSnapshotRoutes(
                       compact: compact ?? undefined,
                       maxDepth: depth ?? undefined,
                     },
+                    ...eOpts,
                   });
                 }
                 throw err;
@@ -257,6 +274,7 @@ export function registerBrowserAgentSnapshotRoutes(
             targetId: tab.targetId,
             refs: "refs" in snap ? snap.refs : {},
             type: "png",
+            ...eOpts,
           });
           const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
             maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -293,11 +311,12 @@ export function registerBrowserAgentSnapshotRoutes(
         });
       }
 
+      // For Firefox with format=aria, always use Playwright path (no raw CDP)
       const snap =
-        profileCtx.profile.driver === "extension" || !tab.wsUrl
+        profileCtx.profile.engine === "firefox" ||
+        profileCtx.profile.driver === "extension" ||
+        !tab.wsUrl
           ? (() => {
-              // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
-              // Also covers cases where wsUrl is missing/unusable.
               return requirePwAi(res, "aria snapshot").then(async (pw) => {
                 if (!pw) {
                   return null;
@@ -306,6 +325,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   cdpUrl: profileCtx.profile.cdpUrl,
                   targetId: tab.targetId,
                   limit,
+                  ...eOpts,
                 });
               });
             })()

@@ -86,6 +86,8 @@ describe("browser server-context remote profile tab operations", () => {
     expect(closePageByTargetIdViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "https://browserless.example/chrome?token=abc",
       targetId: "T1",
+      engine: "chromium",
+      profileName: "remote",
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -175,6 +177,8 @@ describe("browser server-context remote profile tab operations", () => {
     expect(focusPageByTargetIdViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "https://browserless.example/chrome?token=abc",
       targetId: "T1",
+      engine: "chromium",
+      profileName: "remote",
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(state.profiles.get("remote")?.lastTargetId).toBe("T1");

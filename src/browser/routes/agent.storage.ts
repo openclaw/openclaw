@@ -13,6 +13,10 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       const pw = await requirePwAi(res, "cookies");
@@ -20,6 +24,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       const result = await pw.cookiesGetViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
       });
@@ -43,6 +48,10 @@ export function registerBrowserAgentStorageRoutes(
     if (!cookie) {
       return jsonError(res, 400, "cookie is required");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "cookies set");
@@ -50,6 +59,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.cookiesSetViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         cookie: {
@@ -80,6 +90,10 @@ export function registerBrowserAgentStorageRoutes(
     }
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "cookies clear");
@@ -87,6 +101,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.cookiesClearViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
       });
@@ -107,6 +122,10 @@ export function registerBrowserAgentStorageRoutes(
     }
     const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     const key = typeof req.query.key === "string" ? req.query.key : "";
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       const pw = await requirePwAi(res, "storage get");
@@ -114,6 +133,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       const result = await pw.storageGetViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         kind,
@@ -141,6 +161,10 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "key is required");
     }
     const value = typeof body.value === "string" ? body.value : "";
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "storage set");
@@ -148,6 +172,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.storageSetViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         kind,
@@ -171,6 +196,10 @@ export function registerBrowserAgentStorageRoutes(
     }
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "storage clear");
@@ -178,6 +207,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.storageClearViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         kind,
@@ -199,6 +229,10 @@ export function registerBrowserAgentStorageRoutes(
     if (offline === undefined) {
       return jsonError(res, 400, "offline is required");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "offline");
@@ -206,6 +240,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.setOfflineViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         offline,
@@ -236,6 +271,10 @@ export function registerBrowserAgentStorageRoutes(
         parsed[k] = v;
       }
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "headers");
@@ -243,6 +282,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.setExtraHTTPHeadersViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         headers: parsed,
@@ -263,6 +303,10 @@ export function registerBrowserAgentStorageRoutes(
     const clear = toBoolean(body.clear) ?? false;
     const username = toStringOrEmpty(body.username) || undefined;
     const password = typeof body.password === "string" ? body.password : undefined;
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "http credentials");
@@ -270,6 +314,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.setHttpCredentialsViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         username,
@@ -294,6 +339,10 @@ export function registerBrowserAgentStorageRoutes(
     const longitude = toNumber(body.longitude);
     const accuracy = toNumber(body.accuracy) ?? undefined;
     const origin = toStringOrEmpty(body.origin) || undefined;
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "geolocation");
@@ -301,6 +350,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.setGeolocationViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         latitude,
@@ -332,6 +382,10 @@ export function registerBrowserAgentStorageRoutes(
     if (colorScheme === undefined) {
       return jsonError(res, 400, "colorScheme must be dark|light|no-preference|none");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "media emulation");
@@ -339,6 +393,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.emulateMediaViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         colorScheme,
@@ -360,6 +415,10 @@ export function registerBrowserAgentStorageRoutes(
     if (!timezoneId) {
       return jsonError(res, 400, "timezoneId is required");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "timezone");
@@ -367,6 +426,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.setTimezoneViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         timezoneId,
@@ -388,6 +448,10 @@ export function registerBrowserAgentStorageRoutes(
     if (!locale) {
       return jsonError(res, 400, "locale is required");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "locale");
@@ -395,6 +459,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.setLocaleViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         locale,
@@ -416,6 +481,10 @@ export function registerBrowserAgentStorageRoutes(
     if (!name) {
       return jsonError(res, 400, "name is required");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "device emulation");
@@ -423,6 +492,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
       await pw.setDeviceViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         name,

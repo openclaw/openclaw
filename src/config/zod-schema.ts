@@ -219,6 +219,7 @@ export const OpenClawSchema = z
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
                 driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
+                engine: z.union([z.literal("chromium"), z.literal("firefox")]).optional(),
                 color: HexColorSchema,
               })
               .strict()

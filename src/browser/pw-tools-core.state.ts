@@ -11,10 +11,18 @@ async function withCdpSession<T>(page: Page, fn: (session: CDPSession) => Promis
   }
 }
 
+function requireChromiumEngine(engine: string | undefined, feature: string): void {
+  if (engine === "firefox") {
+    throw new Error(`${feature} requires a Chromium-based browser profile.`);
+  }
+}
+
 export async function setOfflineViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   offline: boolean;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -25,6 +33,8 @@ export async function setExtraHTTPHeadersViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   headers: Record<string, string>;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -37,6 +47,8 @@ export async function setHttpCredentialsViaPlaywright(opts: {
   username?: string;
   password?: string;
   clear?: boolean;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -60,6 +72,8 @@ export async function setGeolocationViaPlaywright(opts: {
   accuracy?: number;
   origin?: string;
   clear?: boolean;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -95,6 +109,8 @@ export async function emulateMediaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   colorScheme: "dark" | "light" | "no-preference" | null;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -105,7 +121,10 @@ export async function setLocaleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   locale: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
+  requireChromiumEngine(opts.engine, "Locale override");
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const locale = String(opts.locale ?? "").trim();
@@ -128,7 +147,10 @@ export async function setTimezoneViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   timezoneId: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
+  requireChromiumEngine(opts.engine, "Timezone override");
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const timezoneId = String(opts.timezoneId ?? "").trim();
@@ -155,6 +177,8 @@ export async function setDeviceViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   name: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -176,11 +200,17 @@ export async function setDeviceViaPlaywright(opts: {
     throw new Error(`Unknown device "${name}".`);
   }
 
+  // Viewport works cross-browser
   if (descriptor.viewport) {
     await page.setViewportSize({
       width: descriptor.viewport.width,
       height: descriptor.viewport.height,
     });
+  }
+
+  // CDP-based UA/touch/metrics override is Chromium-only
+  if (opts.engine === "firefox") {
+    return;
   }
 
   await withCdpSession(page, async (session) => {

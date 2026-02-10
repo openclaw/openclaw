@@ -1,6 +1,7 @@
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import { resolveFirefoxExecutableForPlatform } from "../firefox.executables.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
 
@@ -41,7 +42,10 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     let detectError: string | null = null;
 
     try {
-      const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
+      const detected =
+        profileCtx.profile.engine === "firefox"
+          ? resolveFirefoxExecutableForPlatform(process.platform)
+          : resolveBrowserExecutableForPlatform(current.resolved, process.platform);
       if (detected) {
         detectedBrowser = detected.kind;
         detectedExecutablePath = detected.path;
@@ -53,6 +57,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     res.json({
       enabled: current.resolved.enabled,
       profile: profileCtx.profile.name,
+      engine: profileCtx.profile.engine,
       running: cdpReady,
       cdpReady,
       cdpHttp,
@@ -130,6 +135,10 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       | "openclaw"
       | "extension"
       | "";
+    const engine = toStringOrEmpty((req.body as { engine?: unknown })?.engine) as
+      | "chromium"
+      | "firefox"
+      | "";
 
     if (!name) {
       return jsonError(res, 400, "name is required");
@@ -142,6 +151,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         color: color || undefined,
         cdpUrl: cdpUrl || undefined,
         driver: driver === "extension" ? "extension" : undefined,
+        engine: engine === "firefox" ? "firefox" : undefined,
       });
       res.json(result);
     } catch (err) {

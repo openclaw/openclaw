@@ -3,6 +3,8 @@ import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 export async function cookiesGetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<{ cookies: unknown[] }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -13,6 +15,8 @@ export async function cookiesGetViaPlaywright(opts: {
 export async function cookiesSetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
   cookie: {
     name: string;
     value: string;
@@ -46,6 +50,8 @@ export async function cookiesSetViaPlaywright(opts: {
 export async function cookiesClearViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -57,6 +63,8 @@ type StorageKind = "local" | "session";
 export async function storageGetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
   kind: StorageKind;
   key?: string;
 }): Promise<{ values: Record<string, string> }> {
@@ -92,6 +100,8 @@ export async function storageGetViaPlaywright(opts: {
 export async function storageSetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
   kind: StorageKind;
   key: string;
   value: string;
@@ -114,6 +124,8 @@ export async function storageSetViaPlaywright(opts: {
 export async function storageClearViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
   kind: StorageKind;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);

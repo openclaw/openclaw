@@ -39,6 +39,10 @@ export function registerBrowserAgentActRoutes(
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const cdpUrl = profileCtx.profile.cdpUrl;
+      const eOpts = {
+        engine: profileCtx.profile.engine,
+        profileName: profileCtx.profile.name,
+      } as const;
       const pw = await requirePwAi(res, `act:${kind}`);
       if (!pw) {
         return;
@@ -70,6 +74,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             ref,
             doubleClick,
+            ...eOpts,
           };
           if (button) {
             clickRequest.button = button;
@@ -102,6 +107,7 @@ export function registerBrowserAgentActRoutes(
             text,
             submit,
             slowly,
+            ...eOpts,
           };
           if (timeoutMs) {
             typeRequest.timeoutMs = timeoutMs;
@@ -120,6 +126,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             key,
             delayMs: delayMs ?? undefined,
+            ...eOpts,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -134,6 +141,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             ref,
             timeoutMs: timeoutMs ?? undefined,
+            ...eOpts,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -147,6 +155,7 @@ export function registerBrowserAgentActRoutes(
             cdpUrl,
             targetId: tab.targetId,
             ref,
+            ...eOpts,
           };
           if (timeoutMs) {
             scrollRequest.timeoutMs = timeoutMs;
@@ -167,6 +176,7 @@ export function registerBrowserAgentActRoutes(
             startRef,
             endRef,
             timeoutMs: timeoutMs ?? undefined,
+            ...eOpts,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -183,6 +193,7 @@ export function registerBrowserAgentActRoutes(
             ref,
             values,
             timeoutMs: timeoutMs ?? undefined,
+            ...eOpts,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -219,6 +230,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             fields,
             timeoutMs: timeoutMs ?? undefined,
+            ...eOpts,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -233,6 +245,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             width,
             height,
+            ...eOpts,
           });
           return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
         }
@@ -287,6 +300,7 @@ export function registerBrowserAgentActRoutes(
             loadState,
             fn,
             timeoutMs,
+            ...eOpts,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -311,6 +325,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             fn,
             ref,
+            ...eOpts,
           });
           return res.json({
             ok: true,
@@ -320,7 +335,7 @@ export function registerBrowserAgentActRoutes(
           });
         }
         case "close": {
-          await pw.closePageViaPlaywright({ cdpUrl, targetId: tab.targetId });
+          await pw.closePageViaPlaywright({ cdpUrl, targetId: tab.targetId, ...eOpts });
           return res.json({ ok: true, targetId: tab.targetId });
         }
         default: {
@@ -347,6 +362,10 @@ export function registerBrowserAgentActRoutes(
     if (!paths.length) {
       return jsonError(res, 400, "paths are required");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "file chooser hook");
@@ -363,6 +382,7 @@ export function registerBrowserAgentActRoutes(
           inputRef,
           element,
           paths,
+          ...eOpts,
         });
       } else {
         await pw.armFileUploadViaPlaywright({
@@ -370,12 +390,14 @@ export function registerBrowserAgentActRoutes(
           targetId: tab.targetId,
           paths,
           timeoutMs: timeoutMs ?? undefined,
+          ...eOpts,
         });
         if (ref) {
           await pw.clickViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
             ref,
+            ...eOpts,
           });
         }
       }
@@ -398,6 +420,10 @@ export function registerBrowserAgentActRoutes(
     if (accept === undefined) {
       return jsonError(res, 400, "accept is required");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "dialog hook");
@@ -410,6 +436,7 @@ export function registerBrowserAgentActRoutes(
         accept,
         promptText,
         timeoutMs: timeoutMs ?? undefined,
+        ...eOpts,
       });
       res.json({ ok: true });
     } catch (err) {
@@ -426,6 +453,10 @@ export function registerBrowserAgentActRoutes(
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const out = toStringOrEmpty(body.path) || undefined;
     const timeoutMs = toNumber(body.timeoutMs);
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "wait for download");
@@ -437,6 +468,7 @@ export function registerBrowserAgentActRoutes(
         targetId: tab.targetId,
         path: out,
         timeoutMs: timeoutMs ?? undefined,
+        ...eOpts,
       });
       res.json({ ok: true, targetId: tab.targetId, download: result });
     } catch (err) {
@@ -460,6 +492,10 @@ export function registerBrowserAgentActRoutes(
     if (!out) {
       return jsonError(res, 400, "path is required");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "download");
@@ -472,6 +508,7 @@ export function registerBrowserAgentActRoutes(
         ref,
         path: out,
         timeoutMs: timeoutMs ?? undefined,
+        ...eOpts,
       });
       res.json({ ok: true, targetId: tab.targetId, download: result });
     } catch (err) {
@@ -492,6 +529,10 @@ export function registerBrowserAgentActRoutes(
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "response body");
@@ -504,6 +545,7 @@ export function registerBrowserAgentActRoutes(
         url,
         timeoutMs: timeoutMs ?? undefined,
         maxChars: maxChars ?? undefined,
+        ...eOpts,
       });
       res.json({ ok: true, targetId: tab.targetId, response: result });
     } catch (err) {
@@ -522,6 +564,10 @@ export function registerBrowserAgentActRoutes(
     if (!ref) {
       return jsonError(res, 400, "ref is required");
     }
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "highlight");
@@ -532,6 +578,7 @@ export function registerBrowserAgentActRoutes(
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         ref,
+        ...eOpts,
       });
       res.json({ ok: true, targetId: tab.targetId });
     } catch (err) {
