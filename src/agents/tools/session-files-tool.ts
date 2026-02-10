@@ -137,7 +137,7 @@ export function createSessionFilesListTool(options: {
     label: "Session Files List",
     name: "session_files_list",
     description:
-      "List all files stored for a session. Note: All files are stored as Markdown (.md) format for better LLM understanding, regardless of their original type (CSV, JSON, PDF, text). The 'type' field indicates the original content type, not the storage format.",
+      "List all files stored for a session. Note: All files are stored with .md file extension, but content remains in original format (CSV files contain raw CSV, JSON files contain raw JSON, PDF files contain extracted text, text files contain raw text). The 'type' field indicates the original content type.",
     parameters: SessionFilesListSchema,
     execute: async (_toolCallId, params) => {
       let sessionId = readStringParam(params, "sessionId");
@@ -183,7 +183,7 @@ export function createSessionFilesGetTool(options: {
     label: "Session Files Get",
     name: "session_files_get",
     description:
-      "Get file content and metadata by file ID. Note: All files are stored and returned as Markdown (.md) format. CSV files are converted to markdown tables, JSON files are wrapped in code blocks, and text/PDF files are formatted as markdown. The 'type' field in metadata indicates the original content type, not the storage format.",
+      "Get file content and metadata by file ID. Note: All files are stored with .md file extension, but content is returned in original format (raw CSV, raw JSON, extracted PDF text, raw text). The 'type' field in metadata indicates the original content type.",
     parameters: SessionFilesGetSchema,
     execute: async (_toolCallId, params) => {
       let sessionId = readStringParam(params, "sessionId");
