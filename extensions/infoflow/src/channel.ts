@@ -8,7 +8,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk";
-import type { InfoflowAccountConfig, ResolvedInfoflowAccount } from "./types.js";
+import type { InfoflowAccountConfig, InfoflowAtOptions, ResolvedInfoflowAccount } from "./types.js";
 import { startInfoflowMonitor } from "./monitor.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { sendInfoflowPrivateMessage, sendInfoflowGroupMessage } from "./send.js";
@@ -285,16 +285,31 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
 
       const target = to.replace(/^infoflow:/i, "");
 
-      // Check if target is a group (format: group:123 or just numeric groupId)
-      const groupMatch = target.match(/^group:(\d+)$/i);
+      // Check if target is a group (format: group:123 or group:123?at=user1,user2 or group:123?atall=true)
+      const groupMatch = target.match(/^group:(\d+)/i);
       if (groupMatch) {
         const groupId = Number(groupMatch[1]);
+
+        // Parse AT options from query string
+        let atOptions: InfoflowAtOptions | undefined;
+        const atAllMatch = target.match(/[?&]atall=true/i);
+        const atMatch = target.match(/[?&]at=([^&]+)/);
+        if (atAllMatch) {
+          atOptions = { atAll: true };
+        } else if (atMatch) {
+          const atUserIds = atMatch[1].split(",").map((s) => s.trim()).filter(Boolean);
+          if (atUserIds.length > 0) {
+            atOptions = { atUserIds };
+          }
+        }
+
         const result = await sendInfoflowGroupMessage({
           apiHost,
           appKey,
           appSecret,
           groupId,
           content: text,
+          atOptions,
         });
         return {
           channel: "infoflow",

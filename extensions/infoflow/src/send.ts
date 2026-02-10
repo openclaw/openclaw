@@ -4,6 +4,7 @@
  */
 
 import { createHash } from "node:crypto";
+import type { InfoflowAtOptions, InfoflowGroupMessageBodyItem } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
 
@@ -196,9 +197,10 @@ export async function sendInfoflowGroupMessage(params: {
   appSecret: string;
   groupId: number;
   content: string;
+  atOptions?: InfoflowAtOptions;
   timeoutMs?: number;
 }): Promise<{ ok: boolean; error?: string; messageid?: string }> {
-  const { apiHost, appKey, appSecret, groupId, content, timeoutMs = DEFAULT_TIMEOUT_MS } = params;
+  const { apiHost, appKey, appSecret, groupId, content, atOptions, timeoutMs = DEFAULT_TIMEOUT_MS } = params;
 
   // Get token first
   const tokenResult = await getAppAccessToken({ apiHost, appKey, appSecret, timeoutMs });
@@ -210,6 +212,18 @@ export async function sendInfoflowGroupMessage(params: {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+    // Build group message body
+    const body: InfoflowGroupMessageBodyItem[] = [{ type: "TEXT", content }];
+
+    // Add AT element if atOptions is provided
+    if (atOptions?.atAll || (atOptions?.atUserIds && atOptions.atUserIds.length > 0)) {
+      body.push({
+        type: "AT",
+        atall: atOptions.atAll ?? false,
+        atuserids: atOptions.atUserIds ?? [],
+      });
+    }
+
     // Build group message payload (nested structure)
     const payload = {
       message: {
@@ -220,7 +234,7 @@ export async function sendInfoflowGroupMessage(params: {
           clientmsgid: Date.now(),
           role: "robot",
         },
-        body: [{ type: "TEXT", content }],
+        body,
       },
     };
 

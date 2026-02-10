@@ -3,6 +3,7 @@ import { resolveInfoflowAccount } from "./channel.js";
 import { recordSentMessageId } from "./infoflow_req_parse.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { sendInfoflowPrivateMessage, sendInfoflowGroupMessage } from "./send.js";
+import type { InfoflowAtOptions } from "./types.js";
 
 export type CreateInfoflowReplyDispatcherParams = {
   cfg: OpenClawConfig;
@@ -12,6 +13,8 @@ export type CreateInfoflowReplyDispatcherParams = {
   chatType: "direct" | "group";
   groupId?: number;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  /** AT 选项，用于在群消息中 @成员 */
+  atOptions?: InfoflowAtOptions;
 };
 
 /**
@@ -19,7 +22,7 @@ export type CreateInfoflowReplyDispatcherParams = {
  * Encapsulates prefix options, chunked deliver (send via Infoflow API + statusSink), and onError.
  */
 export function createInfoflowReplyDispatcher(params: CreateInfoflowReplyDispatcherParams) {
-  const { cfg, agentId, accountId, fromuser, chatType, groupId, statusSink } = params;
+  const { cfg, agentId, accountId, fromuser, chatType, groupId, statusSink, atOptions } = params;
   const core = getInfoflowRuntime();
   const verbose = core.logging.shouldLogVerbose();
   const account = resolveInfoflowAccount({ cfg, accountId });
@@ -57,6 +60,7 @@ export function createInfoflowReplyDispatcher(params: CreateInfoflowReplyDispatc
             appSecret,
             groupId,
             content: chunk,
+            atOptions,
           });
         } else {
           // Send private message (DM)

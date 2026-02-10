@@ -11,6 +11,23 @@ export type InfoflowGroupPolicy = "open" | "allowlist" | "disabled";
 export type InfoflowChatType = "direct" | "group";
 
 // ---------------------------------------------------------------------------
+// AT mention types
+// ---------------------------------------------------------------------------
+
+/** AT 功能选项，用于在群消息中 @成员 */
+export type InfoflowAtOptions = {
+  /** @全体成员，为 true 时 atUserIds 失效 */
+  atAll?: boolean;
+  /** 被 @ 的用户 ID 列表（uuapName） */
+  atUserIds?: string[];
+};
+
+/** 群消息 body 元素类型 */
+export type InfoflowGroupMessageBodyItem =
+  | { type: "TEXT"; content: string }
+  | { type: "AT"; atall: boolean; atuserids: string[] };
+
+// ---------------------------------------------------------------------------
 // Account configuration
 // ---------------------------------------------------------------------------
 
