@@ -75,6 +75,9 @@ RUN set -eu; \
     esac; \
     case "${OPENCLAW_UID}" in (""|*[!0-9]*|0) ;; (*) \
       usr="$(getent passwd "${OPENCLAW_UID}" 2>/dev/null | cut -d: -f1 || true)"; \
+      if [ -n "$usr" ] && [ "$usr" != node ]; then \
+        echo "OPENCLAW_UID ${OPENCLAW_UID} already used by ${usr}; choose a different UID" >&2; exit 1; \
+      fi; \
       if [ -z "$usr" ] || [ "$usr" = node ]; then usermod -u "${OPENCLAW_UID}" node; fi ;; \
     esac; \
     chown -R node:node /app
