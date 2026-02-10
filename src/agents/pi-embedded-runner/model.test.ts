@@ -135,6 +135,34 @@ describe("resolveModel", () => {
     expect(result.model?.id).toBe("missing-model");
   });
 
+  it("propagates inline model config properties in fallback path", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434/v1",
+            api: "openai-responses",
+            models: [
+              {
+                id: "my-reasoning-model",
+                reasoning: true,
+                contextWindow: 128000,
+                maxTokens: 32000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("ollama", "my-reasoning-model", "/tmp/agent", cfg);
+
+    expect(result.model?.reasoning).toBe(true);
+    expect(result.model?.contextWindow).toBe(128000);
+    expect(result.model?.maxTokens).toBe(32000);
+    expect(result.model?.baseUrl).toBe("http://localhost:11434/v1");
+  });
+
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
     const templateModel = {
       id: "gpt-5.2-codex",
