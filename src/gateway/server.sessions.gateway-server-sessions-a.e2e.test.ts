@@ -350,6 +350,7 @@ describe("gateway server sessions", () => {
     ).toBe(false);
     const filesAfterDelete = await fs.readdir(dir);
     expect(filesAfterDelete.some((f) => f.startsWith("sess-group.jsonl.deleted."))).toBe(true);
+    expect(filesAfterDelete.some((f) => f === "sess-group.metadata.json")).toBe(true);
 
     const reset = await rpcReq<{
       ok: true;
