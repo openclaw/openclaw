@@ -2,6 +2,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
+import { ProvenanceTracker } from "./provenance.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 type HookContext = {
@@ -19,13 +20,33 @@ export async function runBeforeToolCallHook(args: {
   toolCallId?: string;
   ctx?: HookContext;
 }): Promise<HookOutcome> {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("before_tool_call")) {
-    return { blocked: false, params: args.params };
-  }
-
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+
+  // Block high-impact sinks if they contain content previously sourced from
+  // untrusted tools (for example web fetch/browser output).
+  if (args.ctx?.sessionKey) {
+    const tracker = ProvenanceTracker.getInstance(args.ctx.sessionKey);
+    if (tracker.isSink(toolName)) {
+      const { tainted, evidence } = tracker.isTainted(params);
+      if (tainted) {
+        log.warn(
+          `blocked tainted tool call: tool=${toolName} sessionKey=${args.ctx.sessionKey} evidence=${evidence ?? "n/a"}`,
+        );
+        return {
+          blocked: true,
+          reason:
+            "Security: Potential prompt-injection flow detected. Untrusted content was found in sensitive tool parameters.",
+        };
+      }
+    }
+  }
+
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_tool_call")) {
+    return { blocked: false, params };
+  }
+
   try {
     const normalizedParams = isPlainObject(params) ? params : {};
     const hookResult = await hookRunner.runBeforeToolCall(
