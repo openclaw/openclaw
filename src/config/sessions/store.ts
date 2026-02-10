@@ -86,15 +86,6 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   };
 }
 
-function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
-  if (!context || context.threadId == null) {
-    return context;
-  }
-  const next: DeliveryContext = { ...context };
-  delete next.threadId;
-  return next;
-}
-
 function normalizeSessionStore(store: Record<string, SessionEntry>): void {
   for (const [key, entry] of Object.entries(store)) {
     if (!entry) {
@@ -430,7 +421,6 @@ export async function updateLastRoute(params: {
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
     const existing = store[sessionKey];
-    const now = Date.now();
     const explicitContext = normalizeDeliveryContext(params.deliveryContext);
     const inlineContext = normalizeDeliveryContext({
       channel,
@@ -439,26 +429,7 @@ export async function updateLastRoute(params: {
       threadId,
     });
     const mergedInput = mergeDeliveryContext(explicitContext, inlineContext);
-    const explicitDeliveryContext = params.deliveryContext;
-    const explicitThreadFromDeliveryContext =
-      explicitDeliveryContext != null &&
-      Object.prototype.hasOwnProperty.call(explicitDeliveryContext, "threadId")
-        ? explicitDeliveryContext.threadId
-        : undefined;
-    const explicitThreadValue =
-      explicitThreadFromDeliveryContext ??
-      (threadId != null && threadId !== "" ? threadId : undefined);
-    const explicitRouteProvided = Boolean(
-      explicitContext?.channel ||
-      explicitContext?.to ||
-      inlineContext?.channel ||
-      inlineContext?.to,
-    );
-    const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
-    const fallbackContext = clearThreadFromFallback
-      ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
-      : deliveryContextFromSession(existing);
-    const merged = mergeDeliveryContext(mergedInput, fallbackContext);
+    const merged = mergeDeliveryContext(mergedInput, deliveryContextFromSession(existing));
     const normalized = normalizeSessionDeliveryFields({
       deliveryContext: {
         channel: merged?.channel,
@@ -476,17 +447,21 @@ export async function updateLastRoute(params: {
         })
       : null;
     const basePatch: Partial<SessionEntry> = {
-      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,
       lastAccountId: normalized.lastAccountId,
       lastThreadId: normalized.lastThreadId,
     };
-    const next = mergeSessionEntry(
-      existing,
-      metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
-    );
+    const next: SessionEntry = {
+      ...existing,
+      ...metaPatch,
+      ...basePatch,
+      sessionId: existing?.sessionId ?? crypto.randomUUID(),
+      // Route metadata writes must not refresh session freshness timestamps.
+      // If the session is being created for the first time, use current time.
+      updatedAt: existing?.updatedAt ?? Date.now(),
+    };
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store);
     return next;

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { saveSessionStore } from "../../config/sessions.js";
+import { loadSessionStore, saveSessionStore, updateLastRoute } from "../../config/sessions.js";
 import { initSessionState } from "./session.js";
 
 describe("initSessionState thread forking", () => {
@@ -293,6 +293,54 @@ describe("initSessionState reset policy", () => {
     }
   });
 
+  it("does not let pre-init updateLastRoute writes bypass idle reset (#11520)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-idle-lastroute-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:whatsapp:dm:s-idle-last-route";
+      const existingSessionId = "idle-last-route-session-id";
+      const staleUpdatedAt = new Date(2026, 0, 18, 4, 45, 0).getTime();
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: staleUpdatedAt,
+        },
+      });
+
+      await updateLastRoute({
+        storePath,
+        sessionKey,
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15551234567",
+        },
+      });
+
+      const afterLastRoute = loadSessionStore(storePath);
+      expect(afterLastRoute[sessionKey]?.updatedAt).toBe(staleUpdatedAt);
+
+      const cfg = {
+        session: {
+          store: storePath,
+          reset: { mode: "idle", idleMinutes: 30 },
+        },
+      } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses per-type overrides for thread sessions", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
@@ -454,7 +502,7 @@ describe("initSessionState channel reset overrides", () => {
       session: {
         store: storePath,
         idleMinutes: 60,
-        resetByType: { direct: { mode: "idle", idleMinutes: 10 } },
+        resetByType: { dm: { mode: "idle", idleMinutes: 10 } },
         resetByChannel: { discord: { mode: "idle", idleMinutes: 10080 } },
       },
     } as OpenClawConfig;
