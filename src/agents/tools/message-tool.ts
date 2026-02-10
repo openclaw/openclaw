@@ -300,7 +300,7 @@ type MessageToolOptions = {
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
-  /** Channel where the control message originated (e.g. "x", "discord"). Used for X reply permission. */
+  /** Channel where the control message originated (e.g. "x", "feishu"). Used for X reply permission. */
   originatingChannel?: string;
   /** Sender ID of the control message. When originating from X, x-reply only allowed to this user's tweets. */
   originatingSenderId?: string;
