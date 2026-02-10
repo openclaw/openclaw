@@ -308,6 +308,7 @@ export const DiscordAccountSchema = z
         approvers: z.array(z.union([z.string(), z.number()])).optional(),
         agentFilter: z.array(z.string()).optional(),
         sessionFilter: z.array(z.string()).optional(),
+        cleanupAfterResolve: z.boolean().optional(),
       })
       .strict()
       .optional(),

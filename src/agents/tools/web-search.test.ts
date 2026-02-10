@@ -10,6 +10,7 @@ const {
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
+  extractGrokContent,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -140,5 +141,25 @@ describe("web_search grok config resolution", () => {
   it("respects inlineCitations config", () => {
     expect(resolveGrokInlineCitations({ inlineCitations: true })).toBe(true);
     expect(resolveGrokInlineCitations({ inlineCitations: false })).toBe(false);
+  });
+});
+
+describe("web_search grok response parsing", () => {
+  it("extracts content from Responses API output blocks", () => {
+    expect(
+      extractGrokContent({
+        output: [
+          {
+            content: [{ text: "hello from output" }],
+          },
+        ],
+      }),
+    ).toBe("hello from output");
+  });
+
+  it("falls back to deprecated output_text", () => {
+    expect(extractGrokContent({ output_text: "hello from output_text" })).toBe(
+      "hello from output_text",
+    );
   });
 });
