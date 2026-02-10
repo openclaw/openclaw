@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Docker: add ClawDock shell helpers for Docker workflows. (#12817) Thanks @Olshansk.
 - iOS: alpha node app + setup-code onboarding. (#11756) Thanks @mbelinky.
 - Channels: comprehensive BlueBubbles and channel cleanup. (#11093) Thanks @tyler6204.
+- Channels: IRC first-class channel support. (#11482) Thanks @vignesh07.
 - Plugins: device pairing + phone control plugins (Telegram `/pair`, iOS/Android node controls). (#11755) Thanks @mbelinky.
 - Tools: add Grok (xAI) as a `web_search` provider. (#12419) Thanks @tmchow.
 - Gateway: add agent management RPC methods for the web UI (`agents.create`, `agents.update`, `agents.delete`). (#11045) Thanks @advaitpaliwal.
