@@ -1,8 +1,8 @@
 import type { IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { AuthRateLimiter } from "./auth-rate-limiter.js";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { AuthRateLimiter } from "./auth-rate-limiter.js";
 import {
   isLoopbackAddress,
   isTrustedProxyAddress,
@@ -240,10 +240,11 @@ export async function authorizeGatewayConnect(params: {
   const localDirect = isLocalDirectRequest(req, trustedProxies);
 
   // Rate-limit authentication attempts per client IP (skip for local direct requests).
+  // If the client IP cannot be resolved, skip rate limiting rather than using a shared
+  // bucket that could let one attacker lock out all unresolvable-IP clients.
   if (!localDirect) {
-    const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "unknown";
-    const allowed = authRateLimiter.check(clientIp);
-    if (!allowed) {
+    const clientIp = resolveRequestClientIp(req, trustedProxies);
+    if (clientIp && !authRateLimiter.check(clientIp)) {
       return { ok: false, reason: "rate_limited" };
     }
   }
@@ -271,8 +272,10 @@ export async function authorizeGatewayConnect(params: {
     }
     if (!safeEqual(connectAuth.token, auth.token)) {
       if (!localDirect) {
-        const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "unknown";
-        authRateLimiter.recordFailure(clientIp);
+        const clientIp = resolveRequestClientIp(req, trustedProxies);
+        if (clientIp) {
+          authRateLimiter.recordFailure(clientIp);
+        }
       }
       return { ok: false, reason: "token_mismatch" };
     }
@@ -289,8 +292,10 @@ export async function authorizeGatewayConnect(params: {
     }
     if (!safeEqual(password, auth.password)) {
       if (!localDirect) {
-        const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "unknown";
-        authRateLimiter.recordFailure(clientIp);
+        const clientIp = resolveRequestClientIp(req, trustedProxies);
+        if (clientIp) {
+          authRateLimiter.recordFailure(clientIp);
+        }
       }
       return { ok: false, reason: "password_mismatch" };
     }
