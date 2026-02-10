@@ -43,17 +43,6 @@ EXCLUDED_CONTRIBUTORS = {
     "Ubuntu",
     "user",
     "Developer",
-    # Bot names that appear in git history
-    "CLAWDINATOR Bot",
-    "Clawd",
-    "Clawdbot",
-    "Clawdbot Maintainers",
-    "Claude Code",
-    "L36 Server",
-    "seans-openclawbot",
-    "therealZpoint-bot",
-    "Vultr-Clawd Admin",
-    "hyf0-agent",
 }
 
 # Minimum merged PRs to be considered a maintainer
@@ -69,11 +58,6 @@ def extract_github_username(email: str) -> str | None:
     """Extract GitHub username from noreply email, or return None."""
     match = GITHUB_NOREPLY_RE.match(email)
     return match.group(1).lower() if match else None
-
-
-def sanitize_name(name: str) -> str:
-    """Sanitize name for MDX by removing curly braces (which MDX interprets as JS)."""
-    return name.replace("{", "").replace("}", "").strip()
 
 
 def run_git(*args: str) -> str:
@@ -104,46 +88,11 @@ def run_gh(*args: str) -> str:
     return result.stdout.strip()
 
 
-def categorize_commit_files(files: list[str]) -> str:
-    """Categorize a commit based on its changed files.
-
-    Returns: 'ci', 'docs only', 'docs', or 'other'
-    - 'ci': any commit with CI files (.github/, scripts/ci*)
-    - 'docs only': only documentation files (docs/ or any .md)
-    - 'docs': docs + other files mixed
-    - 'other': code without CI or docs
-    """
-    has_ci = False
-    has_docs = False
-    has_other = False
-
-    for f in files:
-        f_lower = f.lower()
-        if f_lower.startswith(".github/") or f_lower.startswith("scripts/ci"):
-            has_ci = True
-        elif f_lower.startswith("docs/") or f_lower.endswith(".md"):
-            has_docs = True
-        else:
-            has_other = True
-
-    # CI takes priority if present
-    if has_ci:
-        return "ci"
-    if has_other:
-        if has_docs:
-            return "docs"  # Mixed: docs + other
-        return "other"  # Pure code
-    if has_docs:
-        return "docs only"  # Pure docs
-    return "other"
-
-
-def get_maintainers() -> list[tuple[str, int, dict[str, int]]]:
-    """Get maintainers with (login, merge_count, push_counts_by_category).
+def get_maintainers() -> list[tuple[str, int, int]]:
+    """Get maintainers with (login, merge_count, direct_push_count).
 
     - Merges: from GitHub API (who clicked "merge")
     - Direct pushes: non-merge commits to main (by committer name matching login)
-      categorized into 'ci', 'docs', 'other'
     """
     # 1. Fetch ALL merged PRs using gh pr list (handles pagination automatically)
     print("  Fetching merged PRs from GitHub API...")
@@ -173,78 +122,40 @@ def get_maintainers() -> list[tuple[str, int, dict[str, int]]]:
         f"  Found {sum(merge_counts.values())} merged PRs by {len(merge_counts)} users"
     )
 
-    # 2. Count direct pushes (non-merge commits by committer) with categories
+    # 2. Count direct pushes (non-merge commits by committer)
     # Use GitHub username from noreply emails, or committer name as fallback
     print("  Counting direct pushes from git history...")
-    # push_counts[key] = {"ci": N, "docs only": N, "docs": N, "other": N}
-    push_counts: dict[str, dict[str, int]] = {}
-
-    # Get commits with files using a delimiter to parse
-    output = run_git(
-        "log", "main", "--no-merges", "--format=COMMIT|%cN|%cE", "--name-only"
-    )
-
-    current_key: str | None = None
-    current_files: list[str] = []
-
-    def flush_commit() -> None:
-        nonlocal current_key, current_files
-        if current_key and current_files:
-            category = categorize_commit_files(current_files)
-            if current_key not in push_counts:
-                push_counts[current_key] = {
-                    "ci": 0,
-                    "docs only": 0,
-                    "docs": 0,
-                    "other": 0,
-                }
-            push_counts[current_key][category] += 1
-        current_key = None
-        current_files = []
-
+    push_counts: dict[str, int] = {}
+    output = run_git("log", "main", "--no-merges", "--format=%cN|%cE")
     for line in output.splitlines():
         line = line.strip()
-        if not line:
+        if not line or "|" not in line:
+            continue
+        name, email = line.rsplit("|", 1)
+        name = name.strip()
+        email = email.strip().lower()
+        if not name or name in EXCLUDED_CONTRIBUTORS:
             continue
 
-        if line.startswith("COMMIT|"):
-            # Flush previous commit
-            flush_commit()
-            # Parse new commit
-            parts = line.split("|", 2)
-            if len(parts) < 3:
-                continue
-            _, name, email = parts
-            name = name.strip()
-            email = email.strip().lower()
-            if not name or name in EXCLUDED_CONTRIBUTORS:
-                current_key = None
-                continue
-
-            # Use GitHub username from noreply email if available
-            gh_user = extract_github_username(email)
-            current_key = gh_user if gh_user else name.lower()
+        # Use GitHub username from noreply email if available, else committer name
+        gh_user = extract_github_username(email)
+        if gh_user:
+            key = gh_user
         else:
-            # This is a file path
-            if current_key:
-                current_files.append(line)
-
-    # Flush last commit
-    flush_commit()
+            key = name.lower()
+        push_counts[key] = push_counts.get(key, 0) + 1
 
     # 3. Build maintainer list: anyone with merges >= MIN_MERGES
-    maintainers: list[tuple[str, int, dict[str, int]]] = []
+    maintainers: list[tuple[str, int, int]] = []
 
     for login, merges in merge_counts.items():
         if merges >= MIN_MERGES:
             # Try to find matching push count (case-insensitive)
-            pushes = push_counts.get(
-                login.lower(), {"ci": 0, "docs only": 0, "docs": 0, "other": 0}
-            )
+            pushes = push_counts.get(login.lower(), 0)
             maintainers.append((login, merges, pushes))
 
-    # Sort by total activity (merges + sum of pushes) descending
-    maintainers.sort(key=lambda x: (-(x[1] + sum(x[2].values())), x[0].lower()))
+    # Sort by total activity (merges + pushes) descending
+    maintainers.sort(key=lambda x: (-(x[1] + x[2]), x[0].lower()))
     return maintainers
 
 
@@ -290,34 +201,29 @@ def get_contributors() -> list[tuple[str, int]]:
         if not name or not email or name in EXCLUDED_CONTRIBUTORS:
             continue
 
-        # Sanitize name for MDX safety and consistent deduplication
-        sanitized = sanitize_name(name)
-        if not sanitized:
-            continue
-
         # Determine the merge key:
         # 1. If email is a noreply email, use the extracted GitHub username
         # 2. If the author name matches a known GitHub username, use that
-        # 3. Otherwise use the sanitized display name (case-insensitive)
+        # 3. Otherwise use the display name (case-insensitive)
         gh_user = extract_github_username(email)
         if gh_user:
             key = f"gh:{gh_user}"
-        elif sanitized.lower() in known_github_users:
-            key = f"gh:{sanitized.lower()}"
+        elif name.lower() in known_github_users:
+            key = f"gh:{name.lower()}"
         else:
-            key = f"name:{sanitized.lower()}"
+            key = f"name:{name.lower()}"
 
         counts[key] = counts.get(key, 0) + 1
 
         # Prefer capitalized version, or longer name (more specific)
         if key not in canonical or (
-            (sanitized[0].isupper() and not canonical[key][0].isupper())
+            (name[0].isupper() and not canonical[key][0].isupper())
             or (
-                sanitized[0].isupper() == canonical[key][0].isupper()
-                and len(sanitized) > len(canonical[key])
+                name[0].isupper() == canonical[key][0].isupper()
+                and len(name) > len(canonical[key])
             )
         ):
-            canonical[key] = sanitized
+            canonical[key] = name
 
     # Build list with counts, sorted by count descending then name
     contributors = [(canonical[key], count) for key, count in counts.items()]
@@ -326,29 +232,16 @@ def get_contributors() -> list[tuple[str, int]]:
 
 
 def update_credits(
-    maintainers: list[tuple[str, int, dict[str, int]]],
-    contributors: list[tuple[str, int]],
+    maintainers: list[tuple[str, int, int]], contributors: list[tuple[str, int]]
 ) -> None:
     """Update the credits.md file with maintainers and contributors."""
     content = CREDITS_FILE.read_text(encoding="utf-8")
 
     # Build maintainers section (GitHub usernames with profile links)
     maintainer_lines = []
-    for login, merges, push_cats in maintainers:
-        total_pushes = sum(push_cats.values())
-        if total_pushes > 0:
-            # Build categorized push breakdown
-            push_parts = []
-            if push_cats.get("ci", 0) > 0:
-                push_parts.append(f"{push_cats['ci']} ci")
-            if push_cats.get("docs only", 0) > 0:
-                push_parts.append(f"{push_cats['docs only']} docs only")
-            if push_cats.get("docs", 0) > 0:
-                push_parts.append(f"{push_cats['docs']} docs")
-            if push_cats.get("other", 0) > 0:
-                push_parts.append(f"{push_cats['other']} other")
-            push_str = ", ".join(push_parts)
-            line = f"- [@{login}](https://github.com/{login}) ({merges} merges, {total_pushes} direct changes: {push_str})"
+    for login, merges, pushes in maintainers:
+        if pushes > 0:
+            line = f"- [@{login}](https://github.com/{login}) ({merges} merges, {pushes} direct pushes)"
         else:
             line = f"- [@{login}](https://github.com/{login}) ({merges} merges)"
         maintainer_lines.append(line)
@@ -360,10 +253,7 @@ def update_credits(
     )
 
     # Build contributors section with commit counts
-    # Sanitize names to avoid MDX interpreting special characters (like {}) as JS
-    contributor_lines = [
-        f"{sanitize_name(name)} ({count})" for name, count in contributors
-    ]
+    contributor_lines = [f"{name} ({count})" for name, count in contributors]
     contributor_section = (
         ", ".join(contributor_lines)
         if contributor_lines
