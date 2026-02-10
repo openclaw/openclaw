@@ -52,22 +52,17 @@ export async function runCli(argv: string[] = process.argv) {
     return;
   }
 
-  // Bare --help (no subcommand) fast path: register lightweight command stubs
-  // instead of loading all 20+ sub-modules from message/browser CLIs.
   const primary = getPrimaryCommand(normalizedArgv);
-  if (isHelpOnly && !primary) {
-    const { buildMinimalHelpProgram } = await import("./program.js");
-    const program = await buildMinimalHelpProgram();
-    await program.parseAsync(normalizedArgv);
-    return;
-  }
 
   // Capture all console output into structured logs while keeping stdout/stderr behavior.
   const { enableConsoleCapture } = await import("../logging.js");
   enableConsoleCapture();
 
-  const { buildProgram } = await import("./program.js");
-  const program = await buildProgram();
+  // For any --help invocation, use a lightweight program that stubs out
+  // message/browser registrations (each loads 10+ sub-modules: ~2s).
+  const buildFn = isHelpOnly ? "buildMinimalHelpProgram" : "buildProgram";
+  const mod = await import("./program.js");
+  const program = await mod[buildFn]();
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
