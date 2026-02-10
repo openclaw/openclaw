@@ -1,6 +1,11 @@
 services:
   openclaw-gateway:
+    build:
+      context: .
+      args:
+        - OPENCLAW_DOCKER_APT_PACKAGES=libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    privileged: true
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -14,6 +19,10 @@ services:
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "3005:3005"
+      - "3006:3006"
+      - "3007:3007"
+      - "3008:3008"
     init: true
     restart: unless-stopped
     command:
