@@ -50,7 +50,7 @@ export type MonitorMattermostOpts = {
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
 };
 
-type FetchLike = typeof fetch;
+type FetchLike = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>;
 type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 type MattermostEventPayload = {
@@ -688,8 +688,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
     const mediaPayload = buildMattermostMediaPayload(mediaList);
+    const inboundHistory =
+      historyKey && historyLimit > 0
+        ? (channelHistories.get(historyKey) ?? []).map((entry) => ({
+            sender: entry.sender,
+            body: entry.body,
+            timestamp: entry.timestamp,
+          }))
+        : undefined;
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
+      BodyForAgent: bodyText,
+      InboundHistory: inboundHistory,
       RawBody: bodyText,
       CommandBody: bodyText,
       From:
