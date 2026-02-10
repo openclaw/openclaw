@@ -53,8 +53,8 @@ export type SignalAccountConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
-  /** Require @mention to respond in groups (default: false). */
-  requireMention?: boolean;
+  /** Per-group config (keyed by group ID, "*" = default for all groups). */
+  groups?: Record<string, { requireMention?: boolean; tools?: unknown; toolsBySender?: unknown }>;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */

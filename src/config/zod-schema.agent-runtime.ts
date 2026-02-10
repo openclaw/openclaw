@@ -579,7 +579,16 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
-export { AgentModelSchema };
+export const AgentModelSchema = z.union([
+  z.string(),
+  z
+    .object({
+      primary: z.string().optional(),
+      compact: z.string().optional(),
+      fallbacks: z.array(z.string()).optional(),
+    })
+    .strict(),
+]);
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
