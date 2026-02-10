@@ -600,6 +600,50 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("symlinks shared qmd models into the agent cache", async () => {
+    const defaultCacheHome = path.join(tmpRoot, "default-cache");
+    const sharedModelsDir = path.join(defaultCacheHome, "qmd", "models");
+    await fs.mkdir(sharedModelsDir, { recursive: true });
+    const previousXdgCacheHome = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = defaultCacheHome;
+    const symlinkSpy = vi.spyOn(fs, "symlink");
+
+    try {
+      const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+      const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+      expect(manager).toBeTruthy();
+      if (!manager) {
+        throw new Error("manager missing");
+      }
+
+      const targetModelsDir = path.join(
+        stateDir,
+        "agents",
+        agentId,
+        "qmd",
+        "xdg-cache",
+        "qmd",
+        "models",
+      );
+      const modelsStat = await fs.lstat(targetModelsDir);
+      expect(modelsStat.isSymbolicLink() || modelsStat.isDirectory()).toBe(true);
+      expect(
+        symlinkSpy.mock.calls.some(
+          (call) => call[0] === sharedModelsDir && call[1] === targetModelsDir,
+        ),
+      ).toBe(true);
+
+      await manager.close();
+    } finally {
+      symlinkSpy.mockRestore();
+      if (previousXdgCacheHome === undefined) {
+        delete process.env.XDG_CACHE_HOME;
+      } else {
+        process.env.XDG_CACHE_HOME = previousXdgCacheHome;
+      }
+    }
+  });
+
   it("blocks non-markdown or symlink reads for qmd paths", async () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
