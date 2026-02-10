@@ -212,6 +212,61 @@ export function parseConfigJson5(
   }
 }
 
+// Output: Inserted logic.
+export function restoreTemplateVars(
+  current: unknown,
+  template: unknown,
+  env: NodeJS.ProcessEnv,
+): unknown {
+  if (current === undefined || current === null) {
+    return current;
+  }
+  // If we have a matching template string with ${...}
+  if (typeof template === "string" && template.includes("${")) {
+    try {
+      // Optimization: only attempt resolve if the current value matches the resolved template value
+      // This ensures we don't revert intentional changes to literal values.
+      // We only "restore" the template if the *resolved* template == current value.
+      const resolved = resolveConfigEnvVars(template, env);
+      if (resolved === current) {
+        return template;
+      }
+    } catch {
+      // If resolution fails, don't restore
+    }
+  }
+
+  if (Array.isArray(current)) {
+    if (!Array.isArray(template)) {
+      return current;
+    }
+    return current.map((item, index) => {
+      // Best effort: match by index
+      if (index < template.length) {
+        return restoreTemplateVars(item, template[index], env);
+      }
+      return item;
+    });
+  }
+
+  if (typeof current === "object") {
+    if (typeof template !== "object" || template === null || Array.isArray(template)) {
+      return current;
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(current)) {
+      if (key in template) {
+        out[key] = restoreTemplateVars(value, (template as Record<string, unknown>)[key], env);
+      } else {
+        out[key] = value;
+      }
+    }
+    return out;
+  }
+
+  return current;
+}
+
 export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const deps = normalizeDeps(overrides);
   const requestedConfigPath = resolveConfigPathForDeps(deps);
@@ -491,7 +546,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
   }
 
-  async function writeConfigFile(cfg: OpenClawConfig) {
+  // Output: Moved function logic.
+
+  async function writeConfigFile(cfg: OpenClawConfig, template?: unknown) {
     clearConfigCache();
     const validated = validateConfigObjectWithPlugins(cfg);
     if (!validated.ok) {
@@ -507,9 +564,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfg)), null, 2)
-      .trimEnd()
-      .concat("\n");
+
+    let configToWrite = applyModelDefaults(stampConfigVersion(cfg));
+    if (template) {
+      // Re-thread original variables from the template (parsed config with ${...})
+      // into the final config object before writing.
+      // This preserves keys like "token": "${MY_TOKEN}" instead of writing the resolved "abc".
+      configToWrite = restoreTemplateVars(configToWrite, template, deps.env) as OpenClawConfig;
+    }
+
+    const json = JSON.stringify(configToWrite, null, 2).trimEnd().concat("\n");
 
     const tmp = path.join(
       dir,
@@ -622,7 +686,7 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   return await createConfigIO().readConfigFileSnapshot();
 }
 
-export async function writeConfigFile(cfg: OpenClawConfig): Promise<void> {
+export async function writeConfigFile(cfg: OpenClawConfig, template?: unknown): Promise<void> {
   clearConfigCache();
-  await createConfigIO().writeConfigFile(cfg);
+  await createConfigIO().writeConfigFile(cfg, template);
 }
