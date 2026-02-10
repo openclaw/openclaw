@@ -21,6 +21,7 @@ import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
+import { triggerAgentEndHook } from "../../agent-end-hooks.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
@@ -1172,6 +1173,17 @@ export async function runEmbeddedAttempt(
               log.warn(`agent_end hook failed: ${err}`);
             });
         }
+
+        // Bridge agent_end to internal/workspace hooks (fire-and-forget)
+        void triggerAgentEndHook({
+          messages: messagesSnapshot,
+          success: !aborted && !promptError,
+          error: promptError ? describeUnknownError(promptError) : undefined,
+          durationMs: Date.now() - promptStartedAt,
+          agentId: hookAgentId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+        });
       } finally {
         clearTimeout(abortTimer);
         if (abortWarnTimer) {
