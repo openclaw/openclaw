@@ -135,12 +135,12 @@ const qwenPortalPlugin = {
               options: [
                 {
                   value: "intl",
-                  label: "🌏 International (Singapore) - dashscope-intl.aliyuncs.com",
+                  label: "International (Singapore) - dashscope-intl.aliyuncs.com",
                   hint: "For users outside mainland China",
                 },
                 {
                   value: "cn",
-                  label: "🇨🇳 China - dashscope.aliyuncs.com",
+                  label: "China - dashscope.aliyuncs.com",
                   hint: "For users in mainland China",
                 },
               ],
