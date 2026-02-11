@@ -25,11 +25,11 @@ import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -281,16 +281,11 @@ export const buildTelegramMessageContext = async ({
                 fn: () =>
                   bot.api.sendMessage(
                     chatId,
-                    [
-                      "OpenClaw: access not configured.",
-                      "",
-                      `Your Telegram user id: ${telegramUserId}`,
-                      "",
-                      `Pairing code: ${code}`,
-                      "",
-                      "Ask the bot owner to approve with:",
-                      formatCliCommand("openclaw pairing approve telegram <code>"),
-                    ].join("\n"),
+                    buildPairingReply({
+                      channel: "telegram",
+                      idLine: `Your Telegram user id: ${telegramUserId}`,
+                      code,
+                    }),
                   ),
               });
             }

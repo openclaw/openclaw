@@ -3177,12 +3177,17 @@ Defaults:
     enabled: true,
     token: "shared-secret",
     path: "/hooks",
+    // Optional: restrict explicit `agentId` routing.
+    // Omit or include "*" to allow any agent.
+    // Set [] to deny all explicit `agentId` routing.
+    allowedAgentIds: ["hooks", "main"],
     presets: ["gmail"],
     transformsDir: "~/.openclaw/hooks",
     mappings: [
       {
         match: { path: "gmail" },
         action: "agent",
+        agentId: "hooks",
         wakeMode: "now",
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
@@ -3204,7 +3209,7 @@ Requests must include the hook token:
 Endpoints:
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 `/hooks/agent` always posts a summary into the main session (and can optionally trigger an immediate heartbeat via `wakeMode: "now"`).
@@ -3215,6 +3220,8 @@ Mapping notes:
 - `match.source` matches a payload field (e.g. `{ source: "gmail" }`) so you can use a generic `/hooks/ingest` path.
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module that returns a hook action.
+- `agentId` can route to a specific agent; unknown IDs fall back to the default agent.
+- `hooks.allowedAgentIds` restricts explicit `agentId` routing (`*` or omitted means allow all, `[]` denies all explicit routing).
 - `deliver: true` sends the final reply to a channel; `channel` defaults to `last` (falls back to WhatsApp).
 - If there is no prior delivery route, set `channel` + `to` explicitly (required for Telegram/Discord/Google Chat/Slack/Signal/iMessage/MS Teams).
 - `model` overrides the LLM for this hook run (`provider/model` or alias; must be allowed if `agents.defaults.models` is set).
