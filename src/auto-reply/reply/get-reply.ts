@@ -78,6 +78,7 @@ export async function getReplyFromConfig(
   });
   let provider = defaultProvider;
   let model = defaultModel;
+  let hasResolvedHeartbeatModelOverride = false;
   if (opts?.isHeartbeat) {
     const heartbeatRaw = agentCfg?.heartbeat?.model?.trim() ?? "";
     const heartbeatRef = heartbeatRaw
@@ -90,6 +91,7 @@ export async function getReplyFromConfig(
     if (heartbeatRef) {
       provider = heartbeatRef.ref.provider;
       model = heartbeatRef.ref.model;
+      hasResolvedHeartbeatModelOverride = true;
     }
   }
 
@@ -196,6 +198,7 @@ export async function getReplyFromConfig(
     aliasIndex,
     provider,
     model,
+    hasResolvedHeartbeatModelOverride,
     typing,
     opts: resolvedOpts,
     skillFilter: mergedSkillFilter,
