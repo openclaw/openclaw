@@ -53,23 +53,23 @@ struct ExecApprovalsGatewayPrompterTests {
         #expect(!remote)
     }
 
-    // MARK: - needsApproval
+    // MARK: - shouldAsk
 
-    @Test func askAlwaysNeedsApprovalRegardlessOfSecurity() {
-        #expect(ExecApprovalsGatewayPrompter._testNeedsApproval(security: .deny, ask: .always))
-        #expect(ExecApprovalsGatewayPrompter._testNeedsApproval(security: .allowlist, ask: .always))
-        #expect(ExecApprovalsGatewayPrompter._testNeedsApproval(security: .full, ask: .always))
+    @Test func askAlwaysPromptsRegardlessOfSecurity() {
+        #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .deny, ask: .always))
+        #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .allowlist, ask: .always))
+        #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .always))
     }
 
-    @Test func askOnMissNeedsApprovalOnlyForAllowlist() {
-        #expect(ExecApprovalsGatewayPrompter._testNeedsApproval(security: .allowlist, ask: .onMiss))
-        #expect(!ExecApprovalsGatewayPrompter._testNeedsApproval(security: .deny, ask: .onMiss))
-        #expect(!ExecApprovalsGatewayPrompter._testNeedsApproval(security: .full, ask: .onMiss))
+    @Test func askOnMissPromptsOnlyForAllowlist() {
+        #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .allowlist, ask: .onMiss))
+        #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .deny, ask: .onMiss))
+        #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .onMiss))
     }
 
-    @Test func askOffNeverNeedsApproval() {
-        #expect(!ExecApprovalsGatewayPrompter._testNeedsApproval(security: .deny, ask: .off))
-        #expect(!ExecApprovalsGatewayPrompter._testNeedsApproval(security: .allowlist, ask: .off))
-        #expect(!ExecApprovalsGatewayPrompter._testNeedsApproval(security: .full, ask: .off))
+    @Test func askOffNeverPrompts() {
+        #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .deny, ask: .off))
+        #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .allowlist, ask: .off))
+        #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .off))
     }
 }

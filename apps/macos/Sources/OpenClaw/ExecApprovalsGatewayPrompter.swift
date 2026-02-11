@@ -44,8 +44,8 @@ final class ExecApprovalsGatewayPrompter {
             let data = try JSONEncoder().encode(payload)
             let request = try JSONDecoder().decode(GatewayApprovalRequest.self, from: data)
             let presentation = self.shouldPresent(request: request)
-            guard presentation.needsApproval else {
-                // No prompt needed – resolve based on security policy
+            guard presentation.shouldAsk else {
+                // Ask policy says no prompt needed – resolve based on security policy
                 let decision: ExecApprovalDecision = presentation.security == .full ? .allowOnce : .deny
                 try await GatewayConnection.shared.requestVoid(
                     method: .execApprovalResolve,
@@ -81,7 +81,10 @@ final class ExecApprovalsGatewayPrompter {
         }
     }
 
-    private static func needsApproval(security: ExecSecurity, ask: ExecAsk) -> Bool {
+    /// Whether the ask policy requires prompting the user.
+    /// Note: this only determines if a prompt is shown, not whether the action is allowed.
+    /// The security policy (full/deny/allowlist) decides the actual outcome.
+    private static func shouldAsk(security: ExecSecurity, ask: ExecAsk) -> Bool {
         switch ask {
         case .always:
             return true
@@ -93,9 +96,13 @@ final class ExecApprovalsGatewayPrompter {
     }
 
     struct PresentationDecision {
-        var needsApproval: Bool
+        /// Whether the ask policy requires prompting the user (not whether the action is allowed).
+        var shouldAsk: Bool
+        /// Whether the prompt can actually be shown (session match, recent activity, etc.).
         var canPresent: Bool
+        /// The resolved security policy, used to determine allow/deny when no prompt is shown.
         var security: ExecSecurity
+        /// Fallback security policy when a prompt is needed but can't be presented.
         var askFallback: ExecSecurity
     }
 
@@ -109,9 +116,9 @@ final class ExecApprovalsGatewayPrompter {
         let security = approvals.agent.security
         let ask = approvals.agent.ask
         
-        let needsApproval = Self.needsApproval(security: security, ask: ask)
+        let shouldAsk = Self.shouldAsk(security: security, ask: ask)
         
-        let canPresent = needsApproval && Self.shouldPresent(
+        let canPresent = shouldAsk && Self.shouldPresent(
             mode: mode,
             activeSession: activeSession,
             requestSession: requestSession,
@@ -119,7 +126,7 @@ final class ExecApprovalsGatewayPrompter {
             thresholdSeconds: 120)
         
         return PresentationDecision(
-            needsApproval: needsApproval,
+            shouldAsk: shouldAsk,
             canPresent: canPresent,
             security: security,
             askFallback: approvals.agent.askFallback)
@@ -174,8 +181,8 @@ extension ExecApprovalsGatewayPrompter {
             thresholdSeconds: thresholdSeconds)
     }
 
-    static func _testNeedsApproval(security: ExecSecurity, ask: ExecAsk) -> Bool {
-        self.needsApproval(security: security, ask: ask)
+    static func _testShouldAsk(security: ExecSecurity, ask: ExecAsk) -> Bool {
+        self.shouldAsk(security: security, ask: ask)
     }
 }
 #endif
