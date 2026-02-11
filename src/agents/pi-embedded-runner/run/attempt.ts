@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { resolveStreamFn, type StreamFnWrapper } from "../transport.js";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -514,8 +514,22 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
 
-      // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-      activeSession.agent.streamFn = streamSimple;
+      // Compose the stream function from a base transport + observability wrappers.
+      // The base defaults to streamSimple (direct LLM calls). Future transport
+      // modes (proxy, OpenCode backend) can be added by passing a different base.
+      const streamWrappers: StreamFnWrapper[] = [];
+      if (cacheTrace) {
+        cacheTrace.recordStage("session:loaded", {
+          messages: activeSession.messages,
+          system: systemPromptText,
+          note: "after session create",
+        });
+        streamWrappers.push((fn) => cacheTrace.wrapStreamFn(fn));
+      }
+      if (anthropicPayloadLogger) {
+        streamWrappers.push((fn) => anthropicPayloadLogger.wrapStreamFn(fn));
+      }
+      activeSession.agent.streamFn = resolveStreamFn({ wrappers: streamWrappers });
 
       applyExtraParamsToAgent(
         activeSession.agent,
@@ -524,20 +538,6 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
       );
-
-      if (cacheTrace) {
-        cacheTrace.recordStage("session:loaded", {
-          messages: activeSession.messages,
-          system: systemPromptText,
-          note: "after session create",
-        });
-        activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
-      }
-      if (anthropicPayloadLogger) {
-        activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
-          activeSession.agent.streamFn,
-        );
-      }
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -655,8 +655,12 @@ export async function runEmbeddedAttempt(
       } = subscription;
 
       const queueHandle: EmbeddedPiQueueHandle = {
-        queueMessage: async (text: string) => {
-          await activeSession.steer(text);
+        queueMessage: async (text: string, mode?: "steer" | "followUp") => {
+          if (mode === "followUp") {
+            await activeSession.followUp(text);
+          } else {
+            await activeSession.steer(text);
+          }
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),

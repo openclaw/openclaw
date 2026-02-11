@@ -19,6 +19,8 @@ export {
 export { buildEmbeddedSandboxInfo } from "./pi-embedded-runner/sandbox-info.js";
 export { createSystemPromptOverride } from "./pi-embedded-runner/system-prompt.js";
 export { splitSdkTools } from "./pi-embedded-runner/tool-split.js";
+export { resolveStreamFn } from "./pi-embedded-runner/transport.js";
+export type { TransportOptions, StreamFnWrapper } from "./pi-embedded-runner/transport.js";
 export type {
   EmbeddedPiAgentMeta,
   EmbeddedPiCompactResult,

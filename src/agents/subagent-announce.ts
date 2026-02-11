@@ -193,6 +193,15 @@ async function maybeQueueSubagentAnnounce(params: {
     }
   }
 
+  // Use Pi's native followUp() for "followup" mode — delivers the message
+  // after the current agent turn completes without interrupting tool execution.
+  if (isActive && queueSettings.mode === "followup") {
+    const queued = queueEmbeddedPiMessage(sessionId, params.triggerMessage, "followUp");
+    if (queued) {
+      return "queued";
+    }
+  }
+
   const shouldFollowup =
     queueSettings.mode === "followup" ||
     queueSettings.mode === "collect" ||
