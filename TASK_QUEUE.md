@@ -56,6 +56,28 @@
 - **Branch:** main
 - **Completed:** 2026-02-07
 
+### INGEST-001: Commit ingest_local_file tool + tests
+- **Status:** IN_PROGRESS
+- **Type:** feature
+- **Prerequisites:** None
+- **Definition of Done:** The 4 files (`src/agents/tools/ingest-tool.ts`, `src/agents/tools/ingest-tool.test.ts`, `src/agents/moltbot-tools.ts`, `RUNBOOK.md`) are committed to main. `pnpm lint`, `pnpm build`, and targeted `pnpm test` for the ingest tool pass. Commit message: `feat(ingest): add ingest_local_file tool (v0)`.
+- **Max Diff:** ~200 lines (2 new files, 2 minimal edits)
+- **Notes:** Implementation already complete. Commit only — no refactors, no new features.
+- **Assigned:** claude-code
+- **Branch:** main
+- **Completed:** --
+
+### FIX-001: Fix overflow-compaction test vi.mock missing resolveDefaultProvider export
+- **Status:** READY
+- **Type:** fix
+- **Prerequisites:** None
+- **Definition of Done:** All 4 tests in `src/agents/pi-embedded-runner/run.overflow-compaction.test.ts` pass. The vi.mock of `../defaults.js` re-exports `resolveDefaultProvider` and `resolveDefaultModel` using `importOriginal`. `pnpm test` shows 0 failures in this file.
+- **Max Diff:** ~10 lines
+- **Notes:** Pre-existing failure. The test mocks `../defaults.js` but does not re-export `resolveDefaultProvider`, which `run.ts:99` imports. Error: `[vitest] No "resolveDefaultProvider" export is defined on the "../defaults.js" mock`. Deterministic failure, 100% reproducible on main branch at commit 9a30a7947. Not caused by any recent PR.
+- **Assigned:** unassigned
+- **Branch:** --
+- **Completed:** --
+
 ---
 
 ## 2) Example Tasks (FOR REFERENCE ONLY -- DO NOT EXECUTE)

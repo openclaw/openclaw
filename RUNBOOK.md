@@ -292,4 +292,42 @@ lsof -i :19001 -t | xargs kill -9
 
 ---
 
+## 10) File Ingestion (`ingest_local_file`)
+
+### 10.1 Overview
+
+Sophie can ingest local `.md` and `.txt` files into her memory index via the `ingest_local_file` tool. Files are copied into the memory sync pipeline and indexed automatically.
+
+### 10.2 Usage
+
+- **Tool:** `ingest_local_file`
+- **Parameters:**
+  - `path` (required) — absolute path to the source file
+  - `target_name` (optional) — custom filename for the indexed copy
+  - `metadata` (optional) — YAML front-matter to include (e.g., `source: email`)
+- **Supported file types:** `.md`, `.txt`
+- **Allowlist root:** `SOPHIE_INGEST_ROOT` env var (default: `~/Documents/SOPHIE_INGEST/`, created if missing)
+
+### 10.3 How It Works
+
+1. Tool validates the file exists and is within the allowlist
+2. Generates a unique `ingest_id` token
+3. Copies the file to `{workspaceDir}/memory/ingest/{filename}.md` with front-matter containing the `ingest_id`
+4. Polls `memory_search` for the `ingest_id` (~1.75s max)
+5. Returns `INDEXED` if found, otherwise `QUEUED`
+
+### 10.4 Verify Indexing Completed
+
+- If the tool returns `{ status: "INDEXED" }`, the file is searchable
+- If the tool returns `{ status: "QUEUED" }`, use `memory_search` with the returned `ingest_id` to check later
+- Files are typically indexed within a few seconds
+
+### 10.5 Destination
+
+Files are copied to: `{workspaceDir}/memory/ingest/{filename}.md`
+
+For the default "main" agent: `~/clawd/memory/ingest/`
+
+---
+
 **End of runbook.**

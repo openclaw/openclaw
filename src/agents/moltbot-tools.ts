@@ -9,6 +9,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createIngestLocalFileTool } from "./tools/ingest-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -138,6 +139,13 @@ export function createMoltbotTools(options?: {
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
   ];
+
+  const ingestTool = createIngestLocalFileTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+    workspaceDir: options?.workspaceDir,
+  });
+  if (ingestTool) tools.push(ingestTool);
 
   const pluginTools = resolvePluginTools({
     context: {
