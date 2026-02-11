@@ -49,9 +49,10 @@ export function scheduleFollowupDrain(
             if (restoreOnLock) {
               // Collect mode: restore original items instead of the synthetic merged prompt.
               restoreOnLock();
-            } else if (queue.items.length < queue.cap) {
+            } else {
               // Individual mode: re-insert at front to preserve FIFO order.
-              // Respect queue cap to prevent unbounded growth.
+              // This is a restore (the item was already shift()ed from the
+              // queue), not a new addition, so cap checks don't apply.
               queue.items.unshift(item);
             }
             queue.lastEnqueuedAt = Date.now();

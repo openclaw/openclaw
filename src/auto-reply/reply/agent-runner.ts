@@ -363,11 +363,9 @@ export async function runReplyAgent(params: {
         if (queue) {
           queue.lockRetryCount = retryCount + 1;
           // Re-insert at front to preserve FIFO order. The item was shift()ed
-          // by the drain loop so this is a restore, not an addition. Still
-          // respect the queue cap to prevent unbounded growth.
-          if (queue.items.length < queue.cap) {
-            queue.items.unshift(followupRun);
-          }
+          // by the drain loop so this is a restore, not a new addition — cap
+          // checks don't apply since the item was already counted.
+          queue.items.unshift(followupRun);
           queue.lastEnqueuedAt = Date.now();
         } else {
           enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
