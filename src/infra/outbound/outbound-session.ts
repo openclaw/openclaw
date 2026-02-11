@@ -725,6 +725,34 @@ function resolveZalouserSession(
   };
 }
 
+function resolveVRChatSession(
+  params: ResolveOutboundSessionRouteParams,
+): OutboundSessionRoute | null {
+  const trimmed = stripProviderPrefix(params.target, "vrchat")
+    .replace(/^(vrc):/i, "")
+    .trim();
+  if (!trimmed) {
+    return null;
+  }
+  // VRChat uses world IDs (e.g., wrld_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+  const peer: RoutePeer = { kind: "direct", id: trimmed };
+  const baseSessionKey = buildBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "vrchat",
+    accountId: params.accountId,
+    peer,
+  });
+  return {
+    sessionKey: baseSessionKey,
+    baseSessionKey,
+    peer,
+    chatType: "direct",
+    from: `vrchat:${trimmed}`,
+    to: `vrchat:${trimmed}`,
+  };
+}
+
 function resolveNostrSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
@@ -940,6 +968,8 @@ export async function resolveOutboundSessionRoute(
       return resolveZaloSession({ ...params, target });
     case "zalouser":
       return resolveZalouserSession({ ...params, target });
+    case "vrchat":
+      return resolveVRChatSession({ ...params, target });
     case "nostr":
       return resolveNostrSession({ ...params, target });
     case "tlon":

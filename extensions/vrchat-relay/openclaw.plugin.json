@@ -1,0 +1,47 @@
+{
+  "id": "vrchat-relay",
+  "name": "VRChat Relay",
+  "description": "VRChat integration with OSC protocol for avatar control, chatbox messaging, and input commands",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "osc": {
+        "type": "object",
+        "description": "OSC connection settings",
+        "properties": {
+          "outgoingPort": {
+            "type": "integer",
+            "description": "Port to send OSC messages to VRChat (default: 9000)",
+            "default": 9000,
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "incomingPort": {
+            "type": "integer",
+            "description": "Port to receive OSC messages from VRChat (default: 9001)",
+            "default": 9001,
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "host": {
+            "type": "string",
+            "description": "VRChat host address (default: 127.0.0.1)",
+            "default": "127.0.0.1"
+          }
+        }
+      },
+      "security": {
+        "type": "object",
+        "description": "Security settings for VRChat controls",
+        "properties": {
+          "allowInputCommands": {
+            "type": "boolean",
+            "description": "Allow input commands (Jump, Move, Look) - requires PRO guard",
+            "default": false
+          }
+        }
+      }
+    }
+  }
+}
