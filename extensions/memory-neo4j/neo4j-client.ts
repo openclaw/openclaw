@@ -10,30 +10,19 @@
 
 import neo4j, { type Driver } from "neo4j-driver";
 import { randomUUID } from "node:crypto";
-import type {
-  ExtractionStatus,
-  MergeEntityInput,
-  SearchSignalResult,
-  StoreMemoryInput,
+import type { ExtractionStatus, Logger, SearchSignalResult, StoreMemoryInput } from "./schema.js";
+import {
+  ALLOWED_RELATIONSHIP_TYPES,
+  escapeLucene,
+  makePairKey,
+  validateRelationshipType,
 } from "./schema.js";
-import { ALLOWED_RELATIONSHIP_TYPES, escapeLucene, validateRelationshipType } from "./schema.js";
 
 // SAFETY: This pattern is built from the hardcoded ALLOWED_RELATIONSHIP_TYPES constant,
 // not from user input. It's used in Cypher variable-length path patterns like
 // (e1)-[:WORKS_AT|LIVES_AT|...*1..N]-(e2). Since the source is a compile-time
 // constant, there is no injection risk.
 const RELATIONSHIP_TYPE_PATTERN = [...ALLOWED_RELATIONSHIP_TYPES].join("|");
-
-// ============================================================================
-// Types
-// ============================================================================
-
-type Logger = {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-  error: (msg: string) => void;
-  debug?: (msg: string) => void;
-};
 
 // Retry configuration for transient Neo4j errors (deadlocks, etc.)
 const TRANSIENT_RETRY_ATTEMPTS = 3;
@@ -159,7 +148,7 @@ export class Neo4jMemoryClient {
         "CREATE INDEX entity_name_index IF NOT EXISTS FOR (e:Entity) ON (e.name)",
       );
       // Composite index for queries that filter by both agentId and category
-      // (e.g. listByCategory, promotion/demotion filtering in sleep cycle)
+      // (e.g. listByCategory, promotion filtering in sleep cycle)
       await this.runSafe(
         session,
         "CREATE INDEX memory_agent_category_index IF NOT EXISTS FOR (m:Memory) ON (m.agentId, m.category)",
@@ -256,12 +245,14 @@ export class Neo4jMemoryClient {
             agentId: $agentId, sessionKey: $sessionKey,
             createdAt: $createdAt, updatedAt: $updatedAt,
             retrievalCount: $retrievalCount, lastRetrievedAt: $lastRetrievedAt,
-            extractionRetries: $extractionRetries
+            extractionRetries: $extractionRetries,
+            userPinned: $userPinned
           })
           RETURN m.id AS id`,
           {
             ...input,
             sessionKey: input.sessionKey ?? null,
+            userPinned: input.userPinned ?? false,
             createdAt: now,
             updatedAt: now,
             retrievalCount: 0,
@@ -382,6 +373,47 @@ export class Neo4jMemoryClient {
           category,
           minImportance,
           limit: neo4j.int(Math.floor(limit)),
+          ...(agentId ? { agentId } : {}),
+        },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        category: r.get("category") as string,
+        importance: r.get("importance") as number,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Load core memories for injection: ALL user-pinned core memories (no limit)
+   * plus up to maxRegular non-pinned core memories ordered by importance.
+   *
+   * Total returned = (all userPinned core) + (top maxRegular non-pinned core).
+   */
+  async listCoreForInjection(
+    maxRegular: number,
+    agentId?: string,
+  ): Promise<{ id: string; text: string; category: string; importance: number }[]> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.category = 'core' ${agentFilter}
+         WITH m, coalesce(m.userPinned, false) AS pinned
+         ORDER BY m.importance DESC
+         WITH collect({id: m.id, text: m.text, category: m.category, importance: m.importance, pinned: pinned}) AS all
+         WITH [x IN all WHERE x.pinned] AS pinnedList,
+              [x IN all WHERE NOT x.pinned][0..$maxRegular] AS regularList
+         UNWIND (pinnedList + regularList) AS mem
+         RETURN mem.id AS id, mem.text AS text, mem.category AS category, mem.importance AS importance`,
+        {
+          maxRegular: neo4j.int(Math.floor(maxRegular)),
           ...(agentId ? { agentId } : {}),
         },
       );
@@ -549,7 +581,7 @@ export class Neo4jMemoryClient {
           // Variable-length relationship pattern: 1..maxHops hops through entity relationships
           const hopRange = `1..${Math.max(1, Math.min(3, maxHops))}`;
           const result = await session.run(
-            `// Find matching entities via fulltext index
+            `// Find matching entities via fulltext index (SINGLE lookup)
              CALL db.index.fulltext.queryNodes('entity_fulltext_index', $query)
              YIELD node AS entity, score
              WHERE score >= 0.5
@@ -557,37 +589,32 @@ export class Neo4jMemoryClient {
              ORDER BY score DESC
              LIMIT 5
 
-             // Direct: Entity ← MENTIONS ← Memory
+             // Collect direct mentions
              OPTIONAL MATCH (entity)<-[rm:MENTIONS]-(m:Memory)
              WHERE m IS NOT NULL ${agentFilter}
-             WITH m, coalesce(rm.confidence, 1.0) AS directScore, entity
-             WHERE m IS NOT NULL
+             WITH entity, collect({
+               id: m.id, text: m.text, category: m.category,
+               importance: m.importance, createdAt: m.createdAt,
+               score: coalesce(rm.confidence, 1.0)
+             }) AS directResults
 
-             RETURN m.id AS id, m.text AS text, m.category AS category,
-                    m.importance AS importance, m.createdAt AS createdAt,
-                    max(directScore) AS graphScore
-
-             UNION
-
-             // Find matching entities via fulltext index (repeated for UNION)
-             CALL db.index.fulltext.queryNodes('entity_fulltext_index', $query)
-             YIELD node AS entity, score
-             WHERE score >= 0.5
-             WITH entity
-             ORDER BY score DESC
-             LIMIT 5
-
-             // N-hop: Entity -[rels*1..N]-> Entity ← MENTIONS ← Memory
+             // N-hop spreading activation
              OPTIONAL MATCH (entity)-[rels:${RELATIONSHIP_TYPE_PATTERN}*${hopRange}]-(e2:Entity)
              WHERE ALL(r IN rels WHERE coalesce(r.confidence, 0.7) >= $firingThreshold)
-             OPTIONAL MATCH (e2)<-[rm:MENTIONS]-(m:Memory)
-             WHERE m IS NOT NULL ${agentFilter}
-             WITH m, reduce(s = 1.0, r IN rels | s * coalesce(r.confidence, 0.7)) * coalesce(rm.confidence, 1.0) AS hopScore
-             WHERE m IS NOT NULL
+             OPTIONAL MATCH (e2)<-[rm2:MENTIONS]-(m2:Memory)
+             WHERE m2 IS NOT NULL ${agentFilter}
+             WITH directResults, collect({
+               id: m2.id, text: m2.text, category: m2.category,
+               importance: m2.importance, createdAt: m2.createdAt,
+               score: reduce(s = 1.0, r IN rels | s * coalesce(r.confidence, 0.7)) * coalesce(rm2.confidence, 1.0)
+             }) AS hopResults
 
-             RETURN m.id AS id, m.text AS text, m.category AS category,
-                    m.importance AS importance, m.createdAt AS createdAt,
-                    max(hopScore) AS graphScore`,
+             // Combine and return
+             UNWIND (directResults + hopResults) AS row
+             WITH row WHERE row.id IS NOT NULL
+             RETURN row.id AS id, row.text AS text, row.category AS category,
+                    row.importance AS importance, row.createdAt AS createdAt,
+                    max(row.score) AS graphScore`,
             { query: escaped, firingThreshold, ...(agentId ? { agentId } : {}) },
           );
 
@@ -613,7 +640,6 @@ export class Neo4jMemoryClient {
           }
 
           return Array.from(byId.values())
-            .slice()
             .sort((a, b) => b.score - a.score)
             .slice(0, limit);
         } finally {
@@ -714,159 +740,6 @@ export class Neo4jMemoryClient {
   // --------------------------------------------------------------------------
 
   /**
-   * Merge (upsert) an Entity node using MERGE pattern.
-   * Idempotent — safe to call multiple times for the same entity name.
-   */
-  async mergeEntity(input: MergeEntityInput): Promise<{ id: string; name: string }> {
-    await this.ensureInitialized();
-    return this.retryOnTransient(async () => {
-      const session = this.driver!.session();
-      try {
-        const result = await session.run(
-          `MERGE (e:Entity {name: $name})
-           ON CREATE SET
-             e.id = $id, e.type = $type, e.aliases = $aliases,
-             e.description = $description,
-             e.firstSeen = $now, e.lastSeen = $now, e.mentionCount = 1
-           ON MATCH SET
-             e.type = COALESCE($type, e.type),
-             e.description = COALESCE($description, e.description),
-             e.lastSeen = $now,
-             e.mentionCount = e.mentionCount + 1
-           RETURN e.id AS id, e.name AS name`,
-          {
-            id: input.id,
-            name: input.name.trim().toLowerCase(),
-            type: input.type,
-            aliases: input.aliases ?? [],
-            description: input.description ?? null,
-            now: new Date().toISOString(),
-          },
-        );
-        const record = result.records[0];
-        return {
-          id: record.get("id") as string,
-          name: record.get("name") as string,
-        };
-      } finally {
-        await session.close();
-      }
-    });
-  }
-
-  /**
-   * Create a MENTIONS relationship between a Memory and an Entity.
-   */
-  async createMentions(
-    memoryId: string,
-    entityName: string,
-    role: string = "context",
-    confidence: number = 1.0,
-  ): Promise<void> {
-    await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      await session.run(
-        `MATCH (m:Memory {id: $memoryId})
-         MATCH (e:Entity {name: $entityName})
-         MERGE (m)-[r:MENTIONS]->(e)
-         ON CREATE SET r.role = $role, r.confidence = $confidence`,
-        { memoryId, entityName: entityName.trim().toLowerCase(), role, confidence },
-      );
-    } finally {
-      await session.close();
-    }
-  }
-
-  /**
-   * Create a typed relationship between two Entity nodes.
-   * The relationship type is validated against an allowlist before injection.
-   */
-  async createEntityRelationship(
-    sourceName: string,
-    targetName: string,
-    relType: string,
-    confidence: number = 1.0,
-  ): Promise<void> {
-    if (!validateRelationshipType(relType)) {
-      this.logger.warn(`memory-neo4j: rejected invalid relationship type: ${relType}`);
-      return;
-    }
-
-    await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      await session.run(
-        `MATCH (e1:Entity {name: $sourceName})
-         MATCH (e2:Entity {name: $targetName})
-         MERGE (e1)-[r:${relType}]->(e2)
-         ON CREATE SET r.confidence = $confidence, r.createdAt = $now
-         ON MATCH SET r.confidence = CASE WHEN $confidence > r.confidence THEN $confidence ELSE r.confidence END`,
-        {
-          sourceName: sourceName.trim().toLowerCase(),
-          targetName: targetName.trim().toLowerCase(),
-          confidence,
-          now: new Date().toISOString(),
-        },
-      );
-    } finally {
-      await session.close();
-    }
-  }
-
-  /**
-   * Merge a Tag node and link it to a Memory.
-   */
-  async tagMemory(
-    memoryId: string,
-    tagName: string,
-    tagCategory: string,
-    confidence: number = 1.0,
-  ): Promise<void> {
-    await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      await session.run(
-        `MERGE (t:Tag {name: $tagName})
-         ON CREATE SET t.id = $tagId, t.category = $tagCategory, t.createdAt = $now
-         WITH t
-         MATCH (m:Memory {id: $memoryId})
-         MERGE (m)-[r:TAGGED]->(t)
-         ON CREATE SET r.confidence = $confidence`,
-        {
-          memoryId,
-          tagName: tagName.trim().toLowerCase(),
-          tagId: randomUUID(),
-          tagCategory,
-          confidence,
-          now: new Date().toISOString(),
-        },
-      );
-    } finally {
-      await session.close();
-    }
-  }
-
-  /**
-   * Update a memory's category. Only updates if current category is 'other'
-   * (auto-assigned) to avoid overriding user-explicit categorization.
-   */
-  async updateMemoryCategory(id: string, category: string): Promise<void> {
-    await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      await session.run(
-        `MATCH (m:Memory {id: $id})
-         WHERE m.category = 'other'
-         SET m.category = $category, m.updatedAt = $now`,
-        { id, category, now: new Date().toISOString() },
-      );
-    } finally {
-      await session.close();
-    }
-  }
-
-  /**
    * Update the extraction status of a Memory node.
    * Optionally increments the extractionRetries counter (for transient failure tracking).
    */
@@ -886,24 +759,6 @@ export class Neo4jMemoryClient {
          SET m.extractionStatus = $status, m.updatedAt = $now${retryClause}`,
         { id, status, now: new Date().toISOString() },
       );
-    } finally {
-      await session.close();
-    }
-  }
-
-  /**
-   * Get the current extraction retry count for a memory.
-   */
-  async getExtractionRetries(id: string): Promise<number> {
-    await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      const result = await session.run(
-        `MATCH (m:Memory {id: $id})
-         RETURN coalesce(m.extractionRetries, 0) AS retries`,
-        { id },
-      );
-      return (result.records[0]?.get("retries") as number) ?? 0;
     } finally {
       await session.close();
     }
@@ -1154,21 +1009,20 @@ export class Neo4jMemoryClient {
   > {
     await this.ensureInitialized();
 
-    // Step 1: Fetch all memory metadata in a short-lived session
-    const memoryData = new Map<string, { text: string; importance: number }>();
+    // Step 1: Fetch only IDs and importance (not text) to reduce data transfer
+    const memoryMeta = new Map<string, { importance: number }>();
     {
       const session = this.driver!.session();
       try {
         const agentFilter = agentId ? "WHERE m.agentId = $agentId" : "";
         const allResult = await session.run(
           `MATCH (m:Memory) ${agentFilter}
-           RETURN m.id AS id, m.text AS text, m.importance AS importance`,
+           RETURN m.id AS id, m.importance AS importance`,
           agentId ? { agentId } : {},
         );
 
         for (const r of allResult.records) {
-          memoryData.set(r.get("id") as string, {
-            text: r.get("text") as string,
+          memoryMeta.set(r.get("id") as string, {
             importance: r.get("importance") as number,
           });
         }
@@ -1177,7 +1031,7 @@ export class Neo4jMemoryClient {
       }
     }
 
-    if (memoryData.size < 2) {
+    if (memoryMeta.size < 2) {
       return [];
     }
 
@@ -1207,16 +1061,11 @@ export class Neo4jMemoryClient {
       }
     };
 
-    // Helper to create a canonical pair key (sorted)
-    const makePairKey = (a: string, b: string): string => {
-      return a < b ? `${a}:${b}` : `${b}:${a}`;
-    };
-
     // Process vector queries in concurrent batches to avoid overwhelming Neo4j
     // while still being much faster than fully sequential execution.
     const DEDUP_CONCURRENCY = 8;
     let pairsFound = 0;
-    const allIds = [...memoryData.keys()];
+    const allIds = [...memoryMeta.keys()];
 
     for (let batchStart = 0; batchStart < allIds.length; batchStart += DEDUP_CONCURRENCY) {
       if (pairsFound > 500) {
@@ -1253,7 +1102,7 @@ export class Neo4jMemoryClient {
 
         for (const r of similar.records) {
           const matchId = r.get("matchId") as string;
-          if (memoryData.has(matchId)) {
+          if (memoryMeta.has(matchId)) {
             union(id, matchId);
             pairsFound++;
 
@@ -1274,7 +1123,7 @@ export class Neo4jMemoryClient {
 
     // Step 3: Group by root
     const clusters = new Map<string, string[]>();
-    for (const id of memoryData.keys()) {
+    for (const id of memoryMeta.keys()) {
       if (!parent.has(id)) {
         continue;
       }
@@ -1285,38 +1134,61 @@ export class Neo4jMemoryClient {
       clusters.get(root)!.push(id);
     }
 
-    // Return clusters with 2+ members
-    return Array.from(clusters.values())
-      .filter((ids) => ids.length >= 2)
-      .map((ids) => {
-        const cluster: {
-          memoryIds: string[];
-          texts: string[];
-          importances: number[];
-          similarities?: Map<string, number>;
-        } = {
-          memoryIds: ids,
-          texts: ids.map((id) => memoryData.get(id)!.text),
-          importances: ids.map((id) => memoryData.get(id)!.importance),
-        };
+    // Step 4: Fetch text only for memories that are in clusters (not all memories)
+    const duplicateClusters = Array.from(clusters.values()).filter((ids) => ids.length >= 2);
+    const clusteredIds = new Set<string>();
+    for (const ids of duplicateClusters) {
+      for (const id of ids) clusteredIds.add(id);
+    }
 
-        // Include similarities for this cluster if requested
-        if (pairwiseSimilarities) {
-          const clusterSims = new Map<string, number>();
-          for (let i = 0; i < ids.length - 1; i++) {
-            for (let j = i + 1; j < ids.length; j++) {
-              const pairKey = makePairKey(ids[i], ids[j]);
-              const score = pairwiseSimilarities.get(pairKey);
-              if (score !== undefined) {
-                clusterSims.set(pairKey, score);
-              }
+    const textMap = new Map<string, string>();
+    if (clusteredIds.size > 0) {
+      const session = this.driver!.session();
+      try {
+        const result = await session.run(
+          `UNWIND $ids AS memId
+           MATCH (m:Memory {id: memId})
+           RETURN m.id AS id, m.text AS text`,
+          { ids: [...clusteredIds] },
+        );
+        for (const r of result.records) {
+          textMap.set(r.get("id") as string, r.get("text") as string);
+        }
+      } finally {
+        await session.close();
+      }
+    }
+
+    // Return clusters with 2+ members
+    return duplicateClusters.map((ids) => {
+      const cluster: {
+        memoryIds: string[];
+        texts: string[];
+        importances: number[];
+        similarities?: Map<string, number>;
+      } = {
+        memoryIds: ids,
+        texts: ids.map((id) => textMap.get(id) ?? ""),
+        importances: ids.map((id) => memoryMeta.get(id)!.importance),
+      };
+
+      // Include similarities for this cluster if requested
+      if (pairwiseSimilarities) {
+        const clusterSims = new Map<string, number>();
+        for (let i = 0; i < ids.length - 1; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            const pairKey = makePairKey(ids[i], ids[j]);
+            const score = pairwiseSimilarities.get(pairKey);
+            if (score !== undefined) {
+              clusterSims.set(pairKey, score);
             }
           }
-          cluster.similarities = clusterSims;
         }
+        cluster.similarities = clusterSims;
+      }
 
-        return cluster;
-      });
+      return cluster;
+    });
   }
 
   /**
@@ -1420,8 +1292,8 @@ export class Neo4jMemoryClient {
    *
    * A memory with importance=1.0 decays slower than one with importance=0.3.
    *
-   * IMPORTANT: Core memories (category='core') are EXEMPT from decay.
-   * They persist indefinitely regardless of age.
+   * IMPORTANT: Core memories (category='core') and user-pinned memories
+   * are EXEMPT from decay. They persist indefinitely regardless of age.
    */
   async findDecayedMemories(
     options: {
@@ -1473,6 +1345,7 @@ export class Neo4jMemoryClient {
         `MATCH (m:Memory)
          WHERE m.createdAt IS NOT NULL
            AND m.category <> 'core'
+           AND coalesce(m.userPinned, false) = false
            ${agentFilter}
          WITH m,
               duration.between(datetime(m.createdAt), datetime()).days AS ageDays,
@@ -1659,7 +1532,7 @@ export class Neo4jMemoryClient {
   /**
    * Find memory pairs that share at least one entity (via MENTIONS relationships).
    * These are candidates for conflict resolution — the LLM decides if they truly conflict.
-   * Excludes core memories (conflicts there are handled by promotion/demotion).
+   * Excludes core memories (conflicts there are handled by promotion).
    */
   async findConflictingMemories(agentId?: string): Promise<
     Array<{
@@ -1729,8 +1602,8 @@ export class Neo4jMemoryClient {
    * Calculate effective scores for all memories to determine Pareto threshold.
    *
    * Uses: importance × freq_boost × recency for ALL memories (including core).
-   * This gives core memories a slight disadvantage (they need strong retrieval
-   * patterns to stay in top 20%), creating healthy churn.
+   * User-pinned core memories are excluded — they have fixed importance=1.0
+   * and should not influence the Pareto threshold calculation.
    */
   async calculateAllEffectiveScores(agentId?: string): Promise<
     Array<{
@@ -1747,8 +1620,8 @@ export class Neo4jMemoryClient {
     const session = this.driver!.session();
     try {
       const agentFilter = agentId
-        ? "WHERE m.agentId = $agentId AND m.createdAt IS NOT NULL"
-        : "WHERE m.createdAt IS NOT NULL";
+        ? "WHERE m.agentId = $agentId AND m.createdAt IS NOT NULL AND coalesce(m.userPinned, false) = false"
+        : "WHERE m.createdAt IS NOT NULL AND coalesce(m.userPinned, false) = false";
       const result = await session.run(
         `MATCH (m:Memory)
          ${agentFilter}
@@ -1761,7 +1634,7 @@ export class Neo4jMemoryClient {
               END AS daysSinceRetrieval
          WITH m, retrievalCount, ageDays, daysSinceRetrieval,
               // Effective score: importance × freq_boost × recency
-              // This is used for global ranking (promotion/demotion threshold)
+              // This is used for global ranking (promotion threshold)
               m.importance * (1 + log(1 + retrievalCount) * 0.3) *
                 CASE
                   WHEN daysSinceRetrieval IS NULL THEN 0.1
@@ -1788,7 +1661,7 @@ export class Neo4jMemoryClient {
   }
 
   /**
-   * Calculate the Pareto threshold (80th percentile) for promotion/demotion.
+   * Calculate the Pareto threshold (80th percentile) for promotion.
    * Returns the effective score that separates top 20% from bottom 80%.
    */
   calculateParetoThreshold(
@@ -1831,33 +1704,6 @@ export class Neo4jMemoryClient {
       );
 
       return (result.records[0]?.get("promoted") as number) ?? 0;
-    } finally {
-      await session.close();
-    }
-  }
-
-  /**
-   * Demote memories from core back to their original category.
-   * Uses 'fact' as default since we don't track original category.
-   */
-  async demoteFromCore(memoryIds: string[]): Promise<number> {
-    if (memoryIds.length === 0) {
-      return 0;
-    }
-
-    await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      const result = await session.run(
-        `UNWIND $ids AS memId
-         MATCH (m:Memory {id: memId})
-         WHERE m.category = 'core'
-         SET m.category = 'fact', m.demotedAt = $now, m.updatedAt = $now
-         RETURN count(*) AS demoted`,
-        { ids: memoryIds, now: new Date().toISOString() },
-      );
-
-      return (result.records[0]?.get("demoted") as number) ?? 0;
     } finally {
       await session.close();
     }

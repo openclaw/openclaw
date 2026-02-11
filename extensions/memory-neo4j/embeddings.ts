@@ -8,14 +8,8 @@
 import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import type { EmbeddingProvider } from "./config.js";
+import type { Logger } from "./schema.js";
 import { contextLengthForModel } from "./config.js";
-
-type Logger = {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-  error: (msg: string) => void;
-  debug?: (msg: string) => void;
-};
 
 /**
  * Simple LRU cache for embedding vectors.

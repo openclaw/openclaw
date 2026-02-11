@@ -14,7 +14,7 @@
 
 import type { Embeddings } from "./embeddings.js";
 import type { Neo4jMemoryClient } from "./neo4j-client.js";
-import type { HybridSearchResult, SearchSignalResult } from "./schema.js";
+import type { HybridSearchResult, Logger, SearchSignalResult } from "./schema.js";
 
 // ============================================================================
 // Query Classification
@@ -214,6 +214,7 @@ export async function hybridSearch(
     candidateMultiplier?: number;
     graphFiringThreshold?: number;
     graphSearchDepth?: number;
+    logger?: Logger;
   } = {},
 ): Promise<HybridSearchResult[]> {
   // Guard against empty queries
@@ -226,12 +227,15 @@ export async function hybridSearch(
     candidateMultiplier = 4,
     graphFiringThreshold = 0.3,
     graphSearchDepth = 1,
+    logger,
   } = options;
 
   const candidateLimit = Math.floor(Math.min(200, Math.max(1, limit * candidateMultiplier)));
 
   // 1. Generate query embedding
+  const t0 = performance.now();
   const queryEmbedding = await embeddings.embed(query);
+  const tEmbed = performance.now();
 
   // 2. Classify query and get adaptive weights
   const queryType = classifyQuery(query);
@@ -245,9 +249,11 @@ export async function hybridSearch(
       ? db.graphSearch(query, candidateLimit, graphFiringThreshold, agentId, graphSearchDepth)
       : Promise.resolve([] as SearchSignalResult[]),
   ]);
+  const tSignals = performance.now();
 
   // 4. Fuse with confidence-weighted RRF
   const fused = fuseWithConfidenceRRF([vectorResults, bm25Results, graphResults], rrfK, weights);
+  const tFuse = performance.now();
 
   // 5. Return top results, normalized to 0-100% display scores.
   // Only normalize when maxRrf is above a minimum threshold to avoid
@@ -274,6 +280,12 @@ export async function hybridSearch(
       // Silently ignore - retrieval tracking is non-critical
     });
   }
+
+  // Log search timing breakdown
+  logger?.info?.(
+    `memory-neo4j: [bench] hybridSearch ${(tFuse - t0).toFixed(0)}ms (embed=${(tEmbed - t0).toFixed(0)}ms, signals=${(tSignals - tEmbed).toFixed(0)}ms, fuse=${(tFuse - tSignals).toFixed(0)}ms) ` +
+      `type=${queryType} vec=${vectorResults.length} bm25=${bm25Results.length} graph=${graphResults.length} → ${results.length} results`,
+  );
 
   return results;
 }

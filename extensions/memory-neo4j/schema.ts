@@ -3,6 +3,17 @@
  */
 
 // ============================================================================
+// Shared Types
+// ============================================================================
+
+export type Logger = {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+  error: (msg: string) => void;
+  debug?: (msg: string) => void;
+};
+
+// ============================================================================
 // Node Types
 // ============================================================================
 
@@ -32,7 +43,7 @@ export type MemoryNode = {
   retrievalCount: number;
   lastRetrievedAt?: string;
   promotedAt?: string;
-  demotedAt?: string;
+  userPinned?: boolean;
 };
 
 export type EntityNode = {
@@ -119,6 +130,7 @@ export type StoreMemoryInput = {
   extractionStatus: ExtractionStatus;
   agentId: string;
   sessionKey?: string;
+  userPinned?: boolean;
 };
 
 export type MergeEntityInput = {
@@ -173,4 +185,11 @@ export function escapeLucene(query: string): string {
  */
 export function validateRelationshipType(type: string): boolean {
   return ALLOWED_RELATIONSHIP_TYPES.has(type);
+}
+
+/**
+ * Create a canonical key for a pair of IDs (sorted for order-independence).
+ */
+export function makePairKey(a: string, b: string): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
 }

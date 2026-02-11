@@ -92,24 +92,27 @@ export const EMBEDDING_DIMENSIONS: Record<string, number> = {
 // Default dimension for unknown models (Ollama models vary)
 export const DEFAULT_EMBEDDING_DIMS = 1024;
 
-export function vectorDimsForModel(model: string): number {
-  // Check exact match first
-  if (EMBEDDING_DIMENSIONS[model]) {
-    return EMBEDDING_DIMENSIONS[model];
+/**
+ * Lookup a value by exact key or longest matching prefix.
+ * Returns undefined if no match found.
+ */
+function lookupByPrefix<T>(table: Record<string, T>, key: string): T | undefined {
+  if (table[key] !== undefined) {
+    return table[key];
   }
-  // Prefer longest matching prefix (e.g. "mxbai-embed-large-2k" over "mxbai-embed-large")
-  let best: { dims: number; keyLen: number } | undefined;
-  for (const [known, dims] of Object.entries(EMBEDDING_DIMENSIONS)) {
-    if (model.startsWith(known) && (!best || known.length > best.keyLen)) {
-      best = { dims, keyLen: known.length };
+  let best: { value: T; keyLen: number } | undefined;
+  for (const [known, value] of Object.entries(table)) {
+    if (key.startsWith(known) && (!best || known.length > best.keyLen)) {
+      best = { value, keyLen: known.length };
     }
   }
-  if (best) {
-    return best.dims;
-  }
+  return best?.value;
+}
+
+export function vectorDimsForModel(model: string): number {
   // Return default for unknown models — callers should warn when this path is taken,
   // as the default 1024 dimensions may not match the actual model's output.
-  return DEFAULT_EMBEDDING_DIMS;
+  return lookupByPrefix(EMBEDDING_DIMENSIONS, model) ?? DEFAULT_EMBEDDING_DIMS;
 }
 
 /** Max input token lengths for known embedding models. */
@@ -129,17 +132,7 @@ export const EMBEDDING_CONTEXT_LENGTHS: Record<string, number> = {
 export const DEFAULT_EMBEDDING_CONTEXT_LENGTH = 512;
 
 export function contextLengthForModel(model: string): number {
-  if (EMBEDDING_CONTEXT_LENGTHS[model]) {
-    return EMBEDDING_CONTEXT_LENGTHS[model];
-  }
-  // Prefer longest matching prefix (e.g. "mxbai-embed-large-8k" over "mxbai-embed-large")
-  let best: { len: number; keyLen: number } | undefined;
-  for (const [known, len] of Object.entries(EMBEDDING_CONTEXT_LENGTHS)) {
-    if (model.startsWith(known) && (!best || known.length > best.keyLen)) {
-      best = { len, keyLen: known.length };
-    }
-  }
-  return best?.len ?? DEFAULT_EMBEDDING_CONTEXT_LENGTH;
+  return lookupByPrefix(EMBEDDING_CONTEXT_LENGTHS, model) ?? DEFAULT_EMBEDDING_CONTEXT_LENGTH;
 }
 
 /**
