@@ -7,6 +7,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { addConfigAtomicCommands } from "../commands/config-atomic.js";
 
 type PathSegment = string;
 
@@ -341,4 +342,7 @@ export function registerConfigCli(program: Command) {
         defaultRuntime.exit(1);
       }
     });
+
+  // Add atomic configuration management commands
+  addConfigAtomicCommands(cmd);
 }
