@@ -22,22 +22,19 @@ describe("runCliAgent resume cleanup", () => {
   });
 
   it("kills stale resume processes for codex sessions", async () => {
-    const selfPid = process.pid;
-
     runExecMock
       .mockResolvedValueOnce({
-        stdout: "  1 999 S /bin/launchd\n",
+        stdout: "  1 S /bin/launchd\n",
         stderr: "",
-      }) // cleanupSuspendedCliProcesses (ps) — ppid 999 != selfPid, no match
+      }) // cleanupSuspendedCliProcesses (ps)
       .mockResolvedValueOnce({
         stdout: [
-          `  ${selfPid + 1} ${selfPid} codex exec resume thread-123 --color never --sandbox read-only --skip-git-repo-check`,
-          `  ${selfPid + 2} 999 codex exec resume thread-123 --color never --sandbox read-only --skip-git-repo-check`,
+          "  50 T 600 codex exec resume thread-123 --color never --sandbox read-only --skip-git-repo-check",
+          "  51 S  10 codex exec resume thread-999 --color never --sandbox read-only --skip-git-repo-check",
         ].join("\n"),
         stderr: "",
       }) // cleanupResumeProcesses (ps)
-      .mockResolvedValueOnce({ stdout: "", stderr: "" }) // cleanupResumeProcesses (kill -TERM)
-      .mockResolvedValueOnce({ stdout: "", stderr: "" }); // cleanupResumeProcesses (kill -9)
+      .mockResolvedValueOnce({ stdout: "", stderr: "" }); // cleanupResumeProcesses (kill)
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       stdout: "ok",
       stderr: "",
@@ -63,23 +60,48 @@ describe("runCliAgent resume cleanup", () => {
       return;
     }
 
-    expect(runExecMock).toHaveBeenCalledTimes(4);
-
-    // Second call: cleanupResumeProcesses ps
+    expect(runExecMock).toHaveBeenCalledTimes(3);
     const psCall = runExecMock.mock.calls[1] ?? [];
     expect(psCall[0]).toBe("ps");
+    expect(psCall[1]).toEqual(["-ax", "-o", "pid=,stat=,etimes=,command="]);
 
-    // Third call: TERM, only the child PID
-    const termCall = runExecMock.mock.calls[2] ?? [];
-    expect(termCall[0]).toBe("kill");
-    const termArgs = termCall[1] as string[];
-    expect(termArgs).toEqual(["-TERM", String(selfPid + 1)]);
-
-    // Fourth call: KILL, only the child PID
-    const killCall = runExecMock.mock.calls[3] ?? [];
+    const killCall = runExecMock.mock.calls[2] ?? [];
     expect(killCall[0]).toBe("kill");
-    const killArgs = killCall[1] as string[];
-    expect(killArgs).toEqual(["-9", String(selfPid + 1)]);
+    expect(killCall[1]).toEqual(["-9", "50"]);
+  });
+
+  it("fails with timeout when CLI no-output watchdog trips", async () => {
+    runExecMock
+      .mockResolvedValueOnce({
+        stdout: "  1 S /bin/launchd\n",
+        stderr: "",
+      }) // cleanupSuspendedCliProcesses (ps)
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+      }); // cleanupResumeProcesses (ps)
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: "SIGKILL",
+      killed: true,
+      noOutputTimedOut: true,
+    });
+
+    await expect(
+      runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        prompt: "hi",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-1",
+        cliSessionId: "thread-123",
+      }),
+    ).rejects.toThrow("produced no output");
   });
 
   it("falls back to per-agent workspace when workspaceDir is missing", async () => {
@@ -159,6 +181,87 @@ describe("runCliAgent resume cleanup", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("cleanupResumeProcesses", () => {
+  beforeEach(() => {
+    runExecMock.mockReset();
+  });
+
+  it("kills only stopped or stale matched resume processes", async () => {
+    runExecMock
+      .mockResolvedValueOnce({
+        stdout: [
+          "  40 T  12 codex exec resume thread-99 --color never --sandbox read-only --skip-git-repo-check",
+          "  41 S 500 codex exec resume thread-99 --color never --sandbox read-only --skip-git-repo-check",
+          "  42 S  10 codex exec resume thread-99 --color never --sandbox read-only --skip-git-repo-check",
+          "  43 S 500 codex exec resume other --color never --sandbox read-only --skip-git-repo-check",
+        ].join("\n"),
+        stderr: "",
+      })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" });
+
+    await cleanupResumeProcesses(
+      {
+        command: "codex",
+        resumeArgs: [
+          "exec",
+          "resume",
+          "{sessionId}",
+          "--color",
+          "never",
+          "--sandbox",
+          "read-only",
+          "--skip-git-repo-check",
+        ],
+      } as CliBackendConfig,
+      "thread-99",
+    );
+
+    if (process.platform === "win32") {
+      expect(runExecMock).not.toHaveBeenCalled();
+      return;
+    }
+
+    expect(runExecMock).toHaveBeenCalledTimes(2);
+    const killCall = runExecMock.mock.calls[1] ?? [];
+    expect(killCall[0]).toBe("kill");
+    expect(killCall[1]).toEqual(["-9", "40", "41"]);
+  });
+
+  it("does nothing when only fresh running resume process exists", async () => {
+    runExecMock.mockResolvedValueOnce({
+      stdout:
+        "  44 S   8 codex exec resume thread-99 --color never --sandbox read-only --skip-git-repo-check",
+      stderr: "",
+    });
+
+    await cleanupResumeProcesses(
+      {
+        command: "codex",
+        resumeArgs: [
+          "exec",
+          "resume",
+          "{sessionId}",
+          "--color",
+          "never",
+          "--sandbox",
+          "read-only",
+          "--skip-git-repo-check",
+        ],
+      } as CliBackendConfig,
+      "thread-99",
+    );
+
+    if (process.platform === "win32") {
+      expect(runExecMock).not.toHaveBeenCalled();
+      return;
+    }
+
+    expect(runExecMock).toHaveBeenCalledTimes(1);
+    const psCall = runExecMock.mock.calls[0] ?? [];
+    expect(psCall[0]).toBe("ps");
   });
 });
 
