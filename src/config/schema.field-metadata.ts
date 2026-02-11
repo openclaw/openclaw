@@ -122,6 +122,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.alsoAllow": "Tool Allowlist Additions",
   "agents.list[].tools.profile": "Agent Tool Profile",
   "agents.list[].tools.alsoAllow": "Agent Tool Allowlist Additions",
+  "agents.list[].subagents.tools": "Sub-Agent Tool Policy",
   "tools.byProvider": "Tool Policy by Provider",
   "agents.list[].tools.byProvider": "Agent Tool Policy by Provider",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
@@ -428,6 +429,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
+  "agents.list[].subagents.tools":
+    "Sub-agent session tool policy. When set, spawned sub-agents use this instead of inheriting agents.list[].tools.",
   "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
   "tools.web.search.provider": 'Search provider ("brave" or "perplexity").',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",

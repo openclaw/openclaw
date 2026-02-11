@@ -11,6 +11,7 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../types.ts";
+import { SUBAGENT_DEFAULT_TOOL_DENY } from "../../../../src/agents/subagent-tool-deny.js";
 import {
   expandToolGroups,
   normalizeToolName,
@@ -69,6 +70,10 @@ export type AgentsProps = {
   onFileSave: (name: string) => void;
   onToolsProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onToolsOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
+  onSubagentToolsPolicyChange: (
+    agentId: string,
+    policy: { allow?: string[]; deny?: string[] } | null,
+  ) => void;
   onConfigReload: () => void;
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
@@ -173,6 +178,10 @@ const PROFILE_OPTIONS = [
   { id: "full", label: "Full" },
 ] as const;
 
+const SUBAGENT_LOCKED_TOOL_IDS = new Set(
+  SUBAGENT_DEFAULT_TOOL_DENY.map((entry) => normalizeToolName(entry)),
+);
+
 type ToolPolicy = {
   allow?: string[];
   deny?: string[];
@@ -190,6 +199,13 @@ type AgentConfigEntry = {
     allow?: string[];
     alsoAllow?: string[];
     deny?: string[];
+  };
+  subagents?: {
+    tools?: {
+      allow?: string[];
+      alsoAllow?: string[];
+      deny?: string[];
+    };
   };
 };
 
@@ -653,6 +669,7 @@ export function renderAgents(props: AgentsProps) {
                       configDirty: props.configDirty,
                       onProfileChange: props.onToolsProfileChange,
                       onOverridesChange: props.onToolsOverridesChange,
+                      onSubagentPolicyChange: props.onSubagentToolsPolicyChange,
                       onConfigReload: props.onConfigReload,
                       onConfigSave: props.onConfigSave,
                     })
@@ -1439,11 +1456,16 @@ function renderAgentTools(params: {
   configDirty: boolean;
   onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
+  onSubagentPolicyChange: (
+    agentId: string,
+    policy: { allow?: string[]; deny?: string[] } | null,
+  ) => void;
   onConfigReload: () => void;
   onConfigSave: () => void;
 }) {
   const config = resolveAgentConfig(params.configForm, params.agentId);
   const agentTools = config.entry?.tools ?? {};
+  const subagentTools = config.entry?.subagents?.tools;
   const globalTools = config.globalTools ?? {};
   const profile = agentTools.profile ?? globalTools.profile ?? "full";
   const profileSource = agentTools.profile
@@ -1465,6 +1487,9 @@ function renderAgentTools(params: {
     ? { allow: agentTools.allow ?? [], deny: agentTools.deny ?? [] }
     : (resolveToolProfilePolicy(profile) ?? undefined);
   const toolIds = TOOL_SECTIONS.flatMap((section) => section.tools.map((tool) => tool.id));
+  const profileIsKnown = PROFILE_OPTIONS.some((option) => option.id === profile);
+  const isCustomProfile =
+    hasAgentAllow || alsoAllow.length > 0 || deny.length > 0 || !profileIsKnown;
 
   const resolveAllowed = (toolId: string) => {
     const baseAllowed = isAllowedByPolicy(toolId, basePolicy);
@@ -1521,6 +1546,101 @@ function renderAgentTools(params: {
       }
     }
     params.onOverridesChange(params.agentId, [...nextAllow], [...nextDeny]);
+  };
+
+  const subagentToolIds = toolIds.filter((toolId) => !SUBAGENT_LOCKED_TOOL_IDS.has(toolId));
+  const subagentToolIdSet = new Set(subagentToolIds);
+  const subagentSections = TOOL_SECTIONS.map((section) => ({
+    ...section,
+    tools: section.tools.filter((tool) => subagentToolIdSet.has(tool.id)),
+  })).filter((section) => section.tools.length > 0);
+  const subagentAllowRaw = Array.isArray(subagentTools?.allow) ? subagentTools.allow : [];
+  const subagentAllow = Array.from(
+    new Set(
+      subagentAllowRaw.map((entry) => normalizeToolName(entry)).filter((entry) => entry.length > 0),
+    ),
+  );
+  const subagentDenyRaw = Array.isArray(subagentTools?.deny) ? subagentTools.deny : [];
+  const subagentDeny = Array.from(
+    new Set(
+      subagentDenyRaw.map((entry) => normalizeToolName(entry)).filter((entry) => entry.length > 0),
+    ),
+  );
+  const inheritedSubagentDeny = Array.from(
+    new Set(
+      subagentToolIds
+        .filter((toolId) => !resolveAllowed(toolId).allowed)
+        .map((toolId) => normalizeToolName(toolId)),
+    ),
+  );
+  const subagentAllowWildcardOnly = subagentAllow.length === 1 && subagentAllow[0] === "*";
+  const hasSubagentExplicitAllow = subagentAllow.length > 0 && !subagentAllowWildcardOnly;
+  const hasSubagentPolicy = Boolean(subagentTools);
+  const effectiveSubagentDeny = hasSubagentPolicy ? subagentDeny : inheritedSubagentDeny;
+  const subagentEditableDeny = effectiveSubagentDeny.filter((entry) =>
+    subagentToolIdSet.has(entry),
+  );
+  const subagentPreservedDeny = hasSubagentPolicy
+    ? subagentDeny.filter((entry) => !subagentToolIdSet.has(entry))
+    : [];
+  const subagentCanReset =
+    Boolean(params.configForm) &&
+    !params.configLoading &&
+    !params.configSaving &&
+    hasSubagentPolicy;
+  const subagentEditable =
+    Boolean(params.configForm) &&
+    !params.configLoading &&
+    !params.configSaving &&
+    !hasSubagentExplicitAllow;
+  const subagentPolicy: ToolPolicy | undefined =
+    subagentAllow.length > 0 || subagentDeny.length > 0
+      ? { allow: subagentAllow.length > 0 ? subagentAllow : undefined, deny: subagentDeny }
+      : undefined;
+  const resolveSubagentAllowed = (toolId: string) => {
+    if (!subagentToolIdSet.has(toolId)) {
+      return false;
+    }
+    if (hasSubagentExplicitAllow) {
+      return isAllowedByPolicy(toolId, subagentPolicy);
+    }
+    return !matchesList(toolId, effectiveSubagentDeny);
+  };
+  const subagentEnabledCount = subagentToolIds.filter((toolId) =>
+    resolveSubagentAllowed(toolId),
+  ).length;
+
+  const persistSubagentPolicy = (denyList: string[]) => {
+    const normalizedDeny = Array.from(new Set([...subagentPreservedDeny, ...denyList]));
+    const nextPolicy =
+      normalizedDeny.length > 0 ? { allow: ["*"], deny: normalizedDeny } : { allow: ["*"] };
+    params.onSubagentPolicyChange(params.agentId, nextPolicy);
+  };
+
+  const updateSubagentTool = (toolId: string, nextEnabled: boolean) => {
+    const nextDeny = new Set(subagentEditableDeny);
+    const normalized = normalizeToolName(toolId);
+    if (nextEnabled) {
+      nextDeny.delete(normalized);
+    } else {
+      nextDeny.add(normalized);
+    }
+    persistSubagentPolicy([...nextDeny]);
+  };
+
+  const updateAllSubagent = (nextEnabled: boolean) => {
+    const nextDeny = new Set(subagentEditableDeny);
+    if (nextEnabled) {
+      for (const toolId of subagentToolIds) {
+        const normalized = normalizeToolName(toolId);
+        nextDeny.delete(normalized);
+      }
+    } else {
+      for (const toolId of subagentToolIds) {
+        nextDeny.add(normalizeToolName(toolId));
+      }
+    }
+    persistSubagentPolicy([...nextDeny]);
   };
 
   return html`
@@ -1620,7 +1740,7 @@ function renderAgentTools(params: {
           ${PROFILE_OPTIONS.map(
             (option) => html`
               <button
-                class="btn btn--sm ${profile === option.id ? "active" : ""}"
+                class="btn btn--sm ${!isCustomProfile && profile === option.id ? "active" : ""}"
                 ?disabled=${!editable}
                 @click=${() => params.onProfileChange(params.agentId, option.id, true)}
               >
@@ -1628,6 +1748,9 @@ function renderAgentTools(params: {
               </button>
             `,
           )}
+          <button class="btn btn--sm ${isCustomProfile ? "active" : ""}" disabled>
+            Custom
+          </button>
           <button
             class="btn btn--sm"
             ?disabled=${!editable}
@@ -1669,6 +1792,95 @@ function renderAgentTools(params: {
               </div>
             </div>
           `,
+        )}
+      </div>
+    </section>
+
+    <section class="card" style="margin-top: 14px;">
+      <div class="row" style="justify-content: space-between;">
+        <div>
+          <div class="card-title">Sub-Agent Tool Access</div>
+          <div class="card-sub">
+            Optional override for spawned sub-agent sessions.
+            <span class="mono">${subagentEnabledCount}/${subagentToolIds.length}</span> enabled.
+          </div>
+        </div>
+        <div class="row" style="gap: 8px;">
+          <button
+            class="btn btn--sm"
+            ?disabled=${!subagentEditable}
+            @click=${() => updateAllSubagent(true)}
+          >
+            Enable All
+          </button>
+          <button
+            class="btn btn--sm"
+            ?disabled=${!subagentEditable}
+            @click=${() => updateAllSubagent(false)}
+          >
+            Disable All
+          </button>
+          <button
+            class="btn btn--sm"
+            ?disabled=${!subagentCanReset}
+            @click=${() => params.onSubagentPolicyChange(params.agentId, null)}
+          >
+            Inherit Agent Policy
+          </button>
+        </div>
+      </div>
+
+      ${
+        !hasSubagentPolicy
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                No subagents.tools override is set. Sub-agent sessions currently inherit this agent's tool policy,
+                then sub-agent safety denies are applied.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        hasSubagentExplicitAllow
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                This agent is using an explicit sub-agent allowlist in config. Tool toggles are disabled here;
+                edit allow/deny in Config if needed.
+              </div>
+            `
+          : nothing
+      }
+      <div class="agent-tools-grid" style="margin-top: 20px;">
+        ${subagentSections.map(
+          (section) =>
+            html`
+              <div class="agent-tools-section">
+                <div class="agent-tools-header">${section.label}</div>
+                <div class="agent-tools-list">
+                  ${section.tools.map((tool) => {
+                    const allowed = resolveSubagentAllowed(tool.id);
+                    return html`
+                      <div class="agent-tool-row">
+                        <div>
+                          <div class="agent-tool-title mono">${tool.label}</div>
+                          <div class="agent-tool-sub">${tool.description}</div>
+                        </div>
+                        <label class="cfg-toggle">
+                          <input
+                            type="checkbox"
+                            .checked=${allowed}
+                            ?disabled=${!subagentEditable}
+                            @change=${(e: Event) =>
+                              updateSubagentTool(tool.id, (e.target as HTMLInputElement).checked)}
+                          />
+                          <span class="cfg-toggle__track"></span>
+                        </label>
+                      </div>
+                    `;
+                  })}
+                </div>
+              </div>
+            `,
         )}
       </div>
     </section>

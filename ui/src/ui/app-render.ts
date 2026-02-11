@@ -775,6 +775,40 @@ export function renderApp(state: AppViewState) {
                     removeConfigFormValue(state, [...basePath, "deny"]);
                   }
                 },
+                onSubagentToolsPolicyChange: (agentId, policy) => {
+                  if (!configValue) {
+                    return;
+                  }
+                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  if (!Array.isArray(list)) {
+                    return;
+                  }
+                  const index = list.findIndex(
+                    (entry) =>
+                      entry &&
+                      typeof entry === "object" &&
+                      "id" in entry &&
+                      (entry as { id?: string }).id === agentId,
+                  );
+                  if (index < 0) {
+                    return;
+                  }
+                  const basePath = ["agents", "list", index, "subagents", "tools"];
+                  if (!policy) {
+                    removeConfigFormValue(state, basePath);
+                    return;
+                  }
+                  if (Array.isArray(policy.allow) && policy.allow.length > 0) {
+                    updateConfigFormValue(state, [...basePath, "allow"], policy.allow);
+                  } else {
+                    removeConfigFormValue(state, [...basePath, "allow"]);
+                  }
+                  if (Array.isArray(policy.deny) && policy.deny.length > 0) {
+                    updateConfigFormValue(state, [...basePath, "deny"], policy.deny);
+                  } else {
+                    removeConfigFormValue(state, [...basePath, "deny"]);
+                  }
+                },
                 onConfigReload: () => loadConfig(state),
                 onConfigSave: () => saveConfig(state),
                 onChannelsRefresh: () => loadChannels(state, false),
