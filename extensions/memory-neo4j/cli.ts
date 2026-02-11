@@ -48,59 +48,127 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
 
       memory
         .command("list")
-        .description("List memory counts by agent and category")
+        .description("List memories grouped by agent and category")
+        .option("--agent <id>", "Filter by agent id")
+        .option("--category <name>", "Filter by category")
+        .option("--limit <n>", "Max memories per category (default: 20)")
         .option("--json", "Output as JSON")
-        .action(async (opts: { json?: boolean }) => {
-          try {
-            await db.ensureInitialized();
-            const stats = await db.getMemoryStats();
-
-            if (opts.json) {
-              console.log(JSON.stringify(stats, null, 2));
-              return;
-            }
-
-            if (stats.length === 0) {
-              console.log("No memories stored.");
-              return;
-            }
-
-            // Group by agentId
-            const byAgent = new Map<
-              string,
-              Array<{ category: string; count: number; avgImportance: number }>
-            >();
-            for (const row of stats) {
-              const list = byAgent.get(row.agentId) || [];
-              list.push({
-                category: row.category,
-                count: row.count,
-                avgImportance: row.avgImportance,
-              });
-              byAgent.set(row.agentId, list);
-            }
-
-            // Print table for each agent
-            for (const [agentId, categories] of byAgent) {
-              const total = categories.reduce((sum, c) => sum + c.count, 0);
-              console.log(`\n┌─ ${agentId} (${total} total)`);
-              console.log("│");
-              console.log("│  Category      Count   Avg Importance");
-              console.log("│  ─────────────────────────────────────");
-              for (const { category, count, avgImportance } of categories) {
-                const cat = category.padEnd(12);
-                const cnt = String(count).padStart(5);
-                const imp = (avgImportance * 100).toFixed(0).padStart(3) + "%";
-                console.log(`│  ${cat} ${cnt}   ${imp}`);
+        .action(
+          async (opts: { agent?: string; category?: string; limit?: string; json?: boolean }) => {
+            try {
+              await db.ensureInitialized();
+              const perCategoryLimit = opts.limit ? parseInt(opts.limit, 10) : 20;
+              if (Number.isNaN(perCategoryLimit) || perCategoryLimit <= 0) {
+                console.error("Error: --limit must be greater than 0");
+                process.exitCode = 1;
+                return;
               }
-              console.log("└");
+
+              // Build query with optional filters
+              const conditions: string[] = [];
+              const params: Record<string, unknown> = {};
+              if (opts.agent) {
+                conditions.push("m.agentId = $agentId");
+                params.agentId = opts.agent;
+              }
+              if (opts.category) {
+                conditions.push("m.category = $category");
+                params.category = opts.category;
+              }
+              const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+              const rows = await db.runQuery<{
+                agentId: string;
+                category: string;
+                id: string;
+                text: string;
+                importance: number;
+                createdAt: string;
+                source: string;
+              }>(
+                `MATCH (m:Memory) ${where}
+                 WITH m.agentId AS agentId, m.category AS category, m
+                 ORDER BY m.importance DESC
+                 WITH agentId, category, collect({
+                   id: m.id, text: m.text, importance: m.importance,
+                   createdAt: m.createdAt, source: coalesce(m.source, 'unknown')
+                 }) AS memories
+                 UNWIND memories[0..${perCategoryLimit}] AS mem
+                 RETURN agentId, category,
+                        mem.id AS id, mem.text AS text,
+                        mem.importance AS importance,
+                        mem.createdAt AS createdAt,
+                        mem.source AS source
+                 ORDER BY agentId, category, importance DESC`,
+                params,
+              );
+
+              if (opts.json) {
+                console.log(JSON.stringify(rows, null, 2));
+                return;
+              }
+
+              if (rows.length === 0) {
+                console.log("No memories found.");
+                return;
+              }
+
+              // Group by agent → category → memories
+              const byAgent = new Map<
+                string,
+                Map<
+                  string,
+                  Array<{
+                    id: string;
+                    text: string;
+                    importance: number;
+                    createdAt: string;
+                    source: string;
+                  }>
+                >
+              >();
+              for (const row of rows) {
+                const agent = (row.agentId as string) ?? "default";
+                const cat = (row.category as string) ?? "other";
+                if (!byAgent.has(agent)) byAgent.set(agent, new Map());
+                const catMap = byAgent.get(agent)!;
+                if (!catMap.has(cat)) catMap.set(cat, []);
+                catMap.get(cat)!.push({
+                  id: row.id as string,
+                  text: row.text as string,
+                  importance: row.importance as number,
+                  createdAt: row.createdAt as string,
+                  source: row.source as string,
+                });
+              }
+
+              const impBar = (ratio: number) => {
+                const W = 10;
+                const filled = Math.round(ratio * W);
+                return "█".repeat(filled) + "░".repeat(W - filled);
+              };
+
+              for (const [agentId, categories] of byAgent) {
+                const agentTotal = [...categories.values()].reduce((s, m) => s + m.length, 0);
+                console.log(`\n┌─ ${agentId} (${agentTotal} shown)`);
+
+                for (const [category, memories] of categories) {
+                  console.log(`│\n│  ── ${category} (${memories.length}) ──`);
+                  for (const mem of memories) {
+                    const pct = ((mem.importance * 100).toFixed(0) + "%").padStart(4);
+                    const preview = mem.text.length > 72 ? `${mem.text.slice(0, 69)}...` : mem.text;
+                    console.log(`│  ${impBar(mem.importance)} ${pct}  ${preview}`);
+                  }
+                }
+                console.log("└");
+              }
+              console.log("");
+            } catch (err) {
+              console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+              process.exitCode = 1;
             }
-            console.log("");
-          } catch (err) {
-            console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-            process.exitCode = 1;
-          }
-        });
+          },
+        );
 
       memory
         .command("search")
@@ -155,19 +223,50 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
             console.log(`Core memory:    ${cfg.coreMemory.enabled ? "enabled" : "disabled"}`);
 
             if (stats.length > 0) {
-              // Group by category across all agents
-              const byCategory = new Map<string, number>();
+              const BAR_WIDTH = 20;
+              const bar = (ratio: number) => {
+                const filled = Math.round(ratio * BAR_WIDTH);
+                return "█".repeat(filled) + "░".repeat(BAR_WIDTH - filled);
+              };
+
+              // Group by agentId
+              const byAgent = new Map<
+                string,
+                Array<{ category: string; count: number; avgImportance: number }>
+              >();
               for (const row of stats) {
-                byCategory.set(row.category, (byCategory.get(row.category) ?? 0) + row.count);
-              }
-              console.log("\nBy Category:");
-              for (const [category, count] of byCategory) {
-                console.log(`  ${category.padEnd(12)} ${count}`);
+                const list = byAgent.get(row.agentId) || [];
+                list.push({
+                  category: row.category,
+                  count: row.count,
+                  avgImportance: row.avgImportance,
+                });
+                byAgent.set(row.agentId, list);
               }
 
-              // Show agent count
-              const agents = new Set(stats.map((s) => s.agentId));
-              console.log(`\nAgents: ${agents.size} (${[...agents].join(", ")})`);
+              for (const [agentId, categories] of byAgent) {
+                const agentTotal = categories.reduce((sum, c) => sum + c.count, 0);
+                const maxCatCount = Math.max(...categories.map((c) => c.count));
+                const catLabelLen = Math.max(...categories.map((c) => c.category.length));
+
+                console.log(`\n┌─ ${agentId} (${agentTotal} memories)`);
+                console.log("│");
+                console.log(
+                  `│  ${"Category".padEnd(catLabelLen)}  ${"Count".padStart(5)}  ${"".padEnd(BAR_WIDTH)}  ${"Importance".padStart(10)}`,
+                );
+                console.log(`│  ${"─".repeat(catLabelLen + 5 + BAR_WIDTH * 2 + 18)}`);
+                for (const { category, count, avgImportance } of categories) {
+                  const cat = category.padEnd(catLabelLen);
+                  const cnt = String(count).padStart(5);
+                  const pct = ((avgImportance * 100).toFixed(0) + "%").padStart(10);
+                  console.log(
+                    `│  ${cat}  ${cnt}  ${bar(count / maxCatCount)}  ${pct}  ${bar(avgImportance)}`,
+                  );
+                }
+                console.log("└");
+              }
+
+              console.log(`\nAgents: ${byAgent.size} (${[...byAgent.keys()].join(", ")})`);
             }
             console.log("");
           } catch (err) {
