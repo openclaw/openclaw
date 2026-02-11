@@ -10,6 +10,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
@@ -95,6 +96,13 @@ const EXEC_EVENT_PROMPT =
   "An async command you ran earlier has completed. The result is shown in the system messages above. " +
   "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
   "If it failed, explain what went wrong.";
+
+// Prompt used when a scheduled cron job has fired and injected a system event.
+// This overrides the standard heartbeat prompt so the model relays the scheduled
+// reminder instead of responding with "HEARTBEAT_OK".
+const CRON_EVENT_PROMPT =
+  "A scheduled reminder has been triggered. The reminder message is shown in the system messages above. " +
+  "Please relay this reminder to the user in a helpful and friendly way.";
 
 function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
   const trimmed = raw?.trim();
@@ -512,13 +520,19 @@ export async function runHeartbeatOnce(opts: {
 
   // Skip heartbeat if HEARTBEAT.md exists but has no actionable content.
   // This saves API calls/costs when the file is effectively empty (only comments/headers).
-  // EXCEPTION: Don't skip for exec events - they have pending system events to process.
+  // EXCEPTION: Don't skip for exec events or cron events - they have pending system events
+  // to process regardless of HEARTBEAT.md content.
   const isExecEventReason = opts.reason === "exec-event";
+  const isCronEventReason = Boolean(opts.reason?.startsWith("cron:"));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   try {
     const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
-    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && !isExecEventReason) {
+    if (
+      isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
+      !isExecEventReason &&
+      !isCronEventReason
+    ) {
       emitHeartbeatEvent({
         status: "skipped",
         reason: "empty-heartbeat-file",
@@ -561,19 +575,24 @@ export async function runHeartbeatOnce(opts: {
     accountId: delivery.accountId,
   }).responsePrefix;
 
-  // Check if this is an exec event with pending exec completion system events.
+  // Check if this is an exec event or cron event with pending system events.
   // If so, use a specialized prompt that instructs the model to relay the result
   // instead of the standard heartbeat prompt with "reply HEARTBEAT_OK".
   const isExecEvent = opts.reason === "exec-event";
-  const pendingEvents = isExecEvent ? peekSystemEvents(sessionKey) : [];
+  const isCronEvent = Boolean(opts.reason?.startsWith("cron:"));
+  const pendingEvents = isExecEvent || isCronEvent ? peekSystemEvents(sessionKey) : [];
   const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
-
-  const prompt = hasExecCompletion ? EXEC_EVENT_PROMPT : resolveHeartbeatPrompt(cfg, heartbeat);
+  const hasCronEvents = isCronEvent && pendingEvents.length > 0;
+  const prompt = hasExecCompletion
+    ? EXEC_EVENT_PROMPT
+    : hasCronEvents
+      ? CRON_EVENT_PROMPT
+      : resolveHeartbeatPrompt(cfg, heartbeat);
   const ctx = {
-    Body: prompt,
+    Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
     To: sender,
-    Provider: hasExecCompletion ? "exec-event" : "heartbeat",
+    Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: sessionKey,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {

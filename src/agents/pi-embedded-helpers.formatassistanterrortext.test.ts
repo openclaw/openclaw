@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import { BILLING_ERROR_USER_MESSAGE, formatAssistantErrorText } from "./pi-embedded-helpers.js";
 
 describe("formatAssistantErrorText", () => {
   const makeAssistantError = (errorMessage: string): AssistantMessage =>
@@ -52,5 +52,20 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
+  it("returns a friendly billing message for credit balance errors", () => {
+    const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+  });
+  it("returns a friendly billing message for HTTP 402 errors", () => {
+    const msg = makeAssistantError("HTTP 402 Payment Required");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+  });
+  it("returns a friendly billing message for insufficient credits", () => {
+    const msg = makeAssistantError("insufficient credits");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
 });

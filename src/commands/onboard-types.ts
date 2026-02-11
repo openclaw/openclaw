@@ -12,6 +12,7 @@ export type AuthChoice =
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
+  | "litellm-api-key"
   | "ai-gateway-api-key"
   | "cloudflare-ai-gateway-api-key"
   | "moonshot-api-key"
@@ -19,6 +20,7 @@ export type AuthChoice =
   | "kimi-code-api-key"
   | "synthetic-api-key"
   | "venice-api-key"
+  | "together-api-key"
   | "codex-cli"
   | "apiKey"
   | "gemini-api-key"
@@ -35,7 +37,29 @@ export type AuthChoice =
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
+  | "xai-api-key"
+  | "qianfan-api-key"
+  | "custom-api-key"
   | "skip";
+export type AuthChoiceGroupId =
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "copilot"
+  | "openrouter"
+  | "ai-gateway"
+  | "cloudflare-ai-gateway"
+  | "moonshot"
+  | "zai"
+  | "xiaomi"
+  | "opencode-zen"
+  | "minimax"
+  | "synthetic"
+  | "venice"
+  | "qwen"
+  | "qianfan"
+  | "xai"
+  | "custom";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
@@ -66,6 +90,7 @@ export type OnboardOptions = {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  litellmApiKey?: string;
   aiGatewayApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;
@@ -78,7 +103,10 @@ export type OnboardOptions = {
   minimaxApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;
+  togetherApiKey?: string;
   opencodeZenApiKey?: string;
+  xaiApiKey?: string;
+  qianfanApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;

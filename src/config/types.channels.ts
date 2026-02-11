@@ -1,8 +1,8 @@
 import type { GroupPolicy } from "./types.base.js";
 import type { DiscordConfig } from "./types.discord.js";
-import type { FeishuConfig } from "./types.feishu.js";
 import type { GoogleChatConfig } from "./types.googlechat.js";
 import type { IMessageConfig } from "./types.imessage.js";
+import type { IrcConfig } from "./types.irc.js";
 import type { MSTeamsConfig } from "./types.msteams.js";
 import type { QQBotConfig } from "./types.qqbot.js";
 import type { SignalConfig } from "./types.signal.js";
@@ -25,17 +25,32 @@ export type ChannelDefaultsConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
+/**
+ * Base type for extension channel config sections.
+ * Extensions can use this as a starting point for their channel config.
+ */
+export type ExtensionChannelConfig = {
+  enabled?: boolean;
+  allowFrom?: string | string[];
+  dmPolicy?: string;
+  groupPolicy?: GroupPolicy;
+  accounts?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 export type ChannelsConfig = {
   defaults?: ChannelDefaultsConfig;
   whatsapp?: WhatsAppConfig;
   telegram?: TelegramConfig;
   discord?: DiscordConfig;
-  feishu?: FeishuConfig;
+  irc?: IrcConfig;
   googlechat?: GoogleChatConfig;
   slack?: SlackConfig;
   signal?: SignalConfig;
   imessage?: IMessageConfig;
   msteams?: MSTeamsConfig;
   qqbot?: QQBotConfig;
-  [key: string]: unknown;
+  // Extension channels use dynamic keys - use ExtensionChannelConfig in extensions
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
 };

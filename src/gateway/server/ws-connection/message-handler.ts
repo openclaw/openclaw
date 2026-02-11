@@ -85,7 +85,7 @@ function formatGatewayAuthFailureMessage(params: {
   const isCli = isGatewayCliClient(client);
   const isControlUi = client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const isWebchat = isWebchatClient(client);
-  const uiHint = "open a tokenized dashboard URL or paste token in Control UI settings";
+  const uiHint = "open the dashboard URL and paste the token in Control UI settings";
   const tokenHint = isCli
     ? "set gateway.remote.token to match gateway.auth.token"
     : isControlUi || isWebchat
@@ -356,13 +356,8 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, "invalid role");
           return;
         }
-        const requestedScopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
-        const scopes =
-          requestedScopes.length > 0
-            ? requestedScopes
-            : role === "operator"
-              ? ["operator.admin"]
-              : [];
+        // Default-deny: scopes must be explicit. Empty/missing scopes means no permissions.
+        const scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
         connectParams.role = role;
         connectParams.scopes = scopes;
 
@@ -586,7 +581,7 @@ export function attachGatewayWsMessageHandler(params: {
             clientId: connectParams.client.id,
             clientMode: connectParams.client.mode,
             role,
-            scopes: requestedScopes,
+            scopes,
             signedAtMs: signedAt,
             token: connectParams.auth?.token ?? null,
             nonce: providedNonce || undefined,
@@ -600,7 +595,7 @@ export function attachGatewayWsMessageHandler(params: {
               clientId: connectParams.client.id,
               clientMode: connectParams.client.mode,
               role,
-              scopes: requestedScopes,
+              scopes,
               signedAtMs: signedAt,
               token: connectParams.auth?.token ?? null,
               version: "v1",
@@ -882,6 +877,7 @@ export function attachGatewayWsMessageHandler(params: {
           connect: connectParams,
           connId,
           presenceKey,
+          clientIp: reportedClientIp,
         };
         setClient(nextClient);
         setHandshakeState("connected");

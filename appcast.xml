@@ -3,13 +3,69 @@
     <channel>
         <title>OpenClaw</title>
         <item>
-            <title>2026.2.4</title>
+            <title>2026.2.9</title>
+            <pubDate>Mon, 09 Feb 2026 13:23:25 -0600</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <sparkle:version>9194</sparkle:version>
+            <sparkle:shortVersionString>2026.2.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>OpenClaw 2026.2.9</h2>
+<h3>Added</h3>
+<ul>
+<li>iOS: alpha node app + setup-code onboarding. (#11756) Thanks @mbelinky.</li>
+<li>Channels: comprehensive BlueBubbles and channel cleanup. (#11093) Thanks @tyler6204.</li>
+<li>Plugins: device pairing + phone control plugins (Telegram <code>/pair</code>, iOS/Android node controls). (#11755) Thanks @mbelinky.</li>
+<li>Tools: add Grok (xAI) as a <code>web_search</code> provider. (#12419) Thanks @tmchow.</li>
+<li>Gateway: add agent management RPC methods for the web UI (<code>agents.create</code>, <code>agents.update</code>, <code>agents.delete</code>). (#11045) Thanks @advaitpaliwal.</li>
+<li>Web UI: show a Compaction divider in chat history. (#11341) Thanks @Takhoffman.</li>
+<li>Agents: include runtime shell in agent envelopes. (#1835) Thanks @Takhoffman.</li>
+<li>Paths: add <code>OPENCLAW_HOME</code> for overriding the home directory used by internal path resolution. (#12091) Thanks @sebslight.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li>Telegram: harden quote parsing; preserve quote context; avoid QUOTE_TEXT_INVALID; avoid nested reply quote misclassification. (#12156) Thanks @rybnikov.</li>
+<li>Telegram: recover proactive sends when stale topic thread IDs are used by retrying without <code>message_thread_id</code>. (#11620)</li>
+<li>Telegram: render markdown spoilers with <code><tg-spoiler></code> HTML tags. (#11543) Thanks @ezhikkk.</li>
+<li>Telegram: truncate command registration to 100 entries to avoid <code>BOT_COMMANDS_TOO_MUCH</code> failures on startup. (#12356) Thanks @arosstale.</li>
+<li>Telegram: match DM <code>allowFrom</code> against sender user id (fallback to chat id) and clarify pairing logs. (#12779) Thanks @liuxiaopai-ai.</li>
+<li>Onboarding: QuickStart now auto-installs shell completion (prompt only in Manual).</li>
+<li>Auth: strip embedded line breaks from pasted API keys and tokens before storing/resolving credentials.</li>
+<li>Web UI: make chat refresh smoothly scroll to the latest messages and suppress new-messages badge flash during manual refresh.</li>
+<li>Tools/web_search: include provider-specific settings in the web search cache key, and pass <code>inlineCitations</code> for Grok. (#12419) Thanks @tmchow.</li>
+<li>Tools/web_search: normalize direct Perplexity model IDs while keeping OpenRouter model IDs unchanged. (#12795) Thanks @cdorsey.</li>
+<li>Model failover: treat HTTP 400 errors as failover-eligible, enabling automatic model fallback. (#1879) Thanks @orenyomtov.</li>
+<li>Errors: prevent false positive context overflow detection when conversation mentions "context overflow" topic. (#2078) Thanks @sbking.</li>
+<li>Gateway: no more post-compaction amnesia; injected transcript writes now preserve Pi session <code>parentId</code> chain so agents can remember again. (#12283) Thanks @Takhoffman.</li>
+<li>Gateway: fix multi-agent sessions.usage discovery. (#11523) Thanks @Takhoffman.</li>
+<li>Agents: recover from context overflow caused by oversized tool results (pre-emptive capping + fallback truncation). (#11579) Thanks @tyler6204.</li>
+<li>Subagents/compaction: stabilize announce timing and preserve compaction metrics across retries. (#11664) Thanks @tyler6204.</li>
+<li>Cron: share isolated announce flow and harden scheduling/delivery reliability. (#11641) Thanks @tyler6204.</li>
+<li>Cron tool: recover flat params when LLM omits the <code>job</code> wrapper for add requests. (#12124) Thanks @tyler6204.</li>
+<li>Gateway/CLI: when <code>gateway.bind=lan</code>, use a LAN IP for probe URLs and Control UI links. (#11448) Thanks @AnonO6.</li>
+<li>Hooks: fix bundled hooks broken since 2026.2.2 (tsdown migration). (#9295) Thanks @patrickshao.</li>
+<li>Routing: refresh bindings per message by loading config at route resolution so binding changes apply without restart. (#11372) Thanks @juanpablodlc.</li>
+<li>Exec approvals: render forwarded commands in monospace for safer approval scanning. (#11937) Thanks @sebslight.</li>
+<li>Config: clamp <code>maxTokens</code> to <code>contextWindow</code> to prevent invalid model configs. (#5516) Thanks @lailoo.</li>
+<li>Thinking: allow xhigh for <code>github-copilot/gpt-5.2-codex</code> and <code>github-copilot/gpt-5.2</code>. (#11646) Thanks @LatencyTDH.</li>
+<li>Discord: support forum/media thread-create starter messages, wire <code>message thread create --message</code>, and harden routing. (#10062) Thanks @jarvis89757.</li>
+<li>Paths: structurally resolve <code>OPENCLAW_HOME</code>-derived home paths and fix Windows drive-letter handling in tool meta shortening. (#12125) Thanks @mcaxtr.</li>
+<li>Memory: set Voyage embeddings <code>input_type</code> for improved retrieval. (#10818) Thanks @mcinteerj.</li>
+<li>Memory/QMD: reuse default model cache across agents instead of re-downloading per agent. (#12114) Thanks @tyler6204.</li>
+<li>Media understanding: recognize <code>.caf</code> audio attachments for transcription. (#10982) Thanks @succ985.</li>
+<li>State dir: honor <code>OPENCLAW_STATE_DIR</code> for default device identity and canvas storage paths. (#4824) Thanks @kossoy.</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.9/OpenClaw-2026.2.9.zip" length="22872529" type="application/octet-stream" sparkle:edSignature="zvgwqlgqI7J5Gsi9VSULIQTMKqLiGE5ulC6NnRLKtOPphQsHZVdYSWm0E90+Yq8mG4lpsvbxQOSSPxpl43QTAw=="/>
+        </item>
+        <item>
+            <title>2026.2.3</title>
             <pubDate>Wed, 04 Feb 2026 17:47:10 -0800</pubDate>
             <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
             <sparkle:version>8900</sparkle:version>
-            <sparkle:shortVersionString>2026.2.4</sparkle:shortVersionString>
+            <sparkle:shortVersionString>2026.2.3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.2.4</h2>
+            <description><![CDATA[<h2>OpenClaw 2026.2.3</h2>
 <h3>Changes</h3>
 <ul>
 <li>Telegram: remove last <code>@ts-nocheck</code> from <code>bot-handlers.ts</code>, use Grammy types directly, deduplicate <code>StickerMetadata</code>. Zero <code>@ts-nocheck</code> remaining in <code>src/telegram/</code>. (#9206)</li>
@@ -50,7 +106,7 @@
 </ul>
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.4/OpenClaw-2026.2.4.zip" length="22530161" type="application/octet-stream" sparkle:edSignature="7eHUaQC6cx87HWbcaPh9T437+LqfE9VtQBf4p9JBjIyBrqGYxxp9KPvI5unEjg55j9j2djCXhseSMeyyRmvYBg=="/>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.3/OpenClaw-2026.2.3.zip" length="22530161" type="application/octet-stream" sparkle:edSignature="7eHUaQC6cx87HWbcaPh9T437+LqfE9VtQBf4p9JBjIyBrqGYxxp9KPvI5unEjg55j9j2djCXhseSMeyyRmvYBg=="/>
         </item>
         <item>
             <title>2026.2.2</title>
@@ -95,72 +151,6 @@
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.2/OpenClaw-2026.2.2.zip" length="22519052" type="application/octet-stream" sparkle:edSignature="a6viD+aS5EfY/RkPIPMfoQQNkJCk6QTdV5WobXFxyYwURskUm8/nXTHVXsCh1c5+0WKUnmlDIyf0i+6IWiavAA=="/>
-        </item>
-        <item>
-            <title>2026.2.1</title>
-            <pubDate>Mon, 02 Feb 2026 03:53:03 -0800</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
-            <sparkle:version>8650</sparkle:version>
-            <sparkle:shortVersionString>2026.2.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.2.1</h2>
-<h3>Changes</h3>
-<ul>
-<li>Docs: onboarding/install/i18n/exec-approvals/Control UI/exe.dev/cacheRetention updates + misc nav/typos. (#3050, #3461, #4064, #4675, #4729, #4763, #5003, #5402, #5446, #5474, #5663, #5689, #5694, #5967, #6270, #6300, #6311, #6416, #6487, #6550, #6789)</li>
-<li>Telegram: use shared pairing store. (#6127) Thanks @obviyus.</li>
-<li>Agents: add OpenRouter app attribution headers. Thanks @alexanderatallah.</li>
-<li>Agents: add system prompt safety guardrails. (#5445) Thanks @joshp123.</li>
-<li>Agents: update pi-ai to 0.50.9 and rename cacheControlTtl -> cacheRetention (with back-compat mapping).</li>
-<li>Agents: extend CreateAgentSessionOptions with systemPrompt/skills/contextFiles.</li>
-<li>Agents: add tool policy conformance snapshot (no runtime behavior change). (#6011)</li>
-<li>Auth: update MiniMax OAuth hint + portal auth note copy.</li>
-<li>Discord: inherit thread parent bindings for routing. (#3892) Thanks @aerolalit.</li>
-<li>Gateway: inject timestamps into agent and chat.send messages. (#3705) Thanks @conroywhitney, @CashWilliams.</li>
-<li>Gateway: require TLS 1.3 minimum for TLS listeners. (#5970) Thanks @loganaden.</li>
-<li>Web UI: refine chat layout + extend session active duration.</li>
-<li>CI: add formal conformance + alias consistency checks. (#5723, #5807)</li>
-</ul>
-<h3>Fixes</h3>
-<ul>
-<li>Plugins: validate plugin/hook install paths and reject traversal-like names.</li>
-<li>Telegram: add download timeouts for file fetches. (#6914) Thanks @hclsys.</li>
-<li>Telegram: enforce thread specs for DM vs forum sends. (#6833) Thanks @obviyus.</li>
-<li>Streaming: flush block streaming on paragraph boundaries for newline chunking. (#7014)</li>
-<li>Streaming: stabilize partial streaming filters.</li>
-<li>Auto-reply: avoid referencing workspace files in /new greeting prompt. (#5706) Thanks @bravostation.</li>
-<li>Tools: align tool execute adapters/signatures (legacy + parameter order + arg normalization).</li>
-<li>Tools: treat <code>"*"</code> tool allowlist entries as valid to avoid spurious unknown-entry warnings.</li>
-<li>Skills: update session-logs paths from .clawdbot to .openclaw. (#4502)</li>
-<li>Slack: harden media fetch limits and Slack file URL validation. (#6639) Thanks @davidiach.</li>
-<li>Lint: satisfy curly rule after import sorting. (#6310)</li>
-<li>Process: resolve Windows <code>spawn()</code> failures for npm-family CLIs by appending <code>.cmd</code> when needed. (#5815) Thanks @thejhinvirtuoso.</li>
-<li>Discord: resolve PluralKit proxied senders for allowlists and labels. (#5838) Thanks @thewilloftheshadow.</li>
-<li>Tlon: add timeout to SSE client fetch calls (CWE-400). (#5926)</li>
-<li>Memory search: L2-normalize local embedding vectors to fix semantic search. (#5332)</li>
-<li>Agents: align embedded runner + typings with pi-coding-agent API updates (pi 0.51.0).</li>
-<li>Agents: ensure OpenRouter attribution headers apply in the embedded runner.</li>
-<li>Agents: cap context window resolution for compaction safeguard. (#6187) Thanks @iamEvanYT.</li>
-<li>System prompt: resolve overrides and hint using session_status for current date/time. (#1897, #1928, #2108, #3677)</li>
-<li>Agents: fix Pi prompt template argument syntax. (#6543)</li>
-<li>Subagents: fix announce failover race (always emit lifecycle end; timeout=0 means no-timeout). (#6621)</li>
-<li>Teams: gate media auth retries.</li>
-<li>Telegram: restore draft streaming partials. (#5543) Thanks @obviyus.</li>
-<li>Onboarding: friendlier Windows onboarding message. (#6242) Thanks @shanselman.</li>
-<li>TUI: prevent crash when searching with digits in the model selector.</li>
-<li>Agents: wire before_tool_call plugin hook into tool execution. (#6570, #6660) Thanks @ryancnelson.</li>
-<li>Browser: secure Chrome extension relay CDP sessions.</li>
-<li>Docker: use container port for gateway command instead of host port. (#5110) Thanks @mise42.</li>
-<li>fix(lobster): block arbitrary exec via lobsterPath/cwd injection (GHSA-4mhr-g7xj-cg8j). (#5335) Thanks @vignesh07.</li>
-<li>Security: sanitize WhatsApp accountId to prevent path traversal. (#4610)</li>
-<li>Security: restrict MEDIA path extraction to prevent LFI. (#4930)</li>
-<li>Security: validate message-tool filePath/path against sandbox root. (#6398)</li>
-<li>Security: block LD*/DYLD* env overrides for host exec. (#4896) Thanks @HassanFleyah.</li>
-<li>Security: harden web tool content wrapping + file parsing safeguards. (#4058) Thanks @VACInc.</li>
-<li>Security: enforce Twitch <code>allowFrom</code> allowlist gating (deny non-allowlisted senders). Thanks @MegaManSec.</li>
-</ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.1/OpenClaw-2026.2.1.zip" length="22458919" type="application/octet-stream" sparkle:edSignature="kA/8VQlVdtYphcB1iuFrhWczwWKgkVZMfDfQ7T9WD405D8JKTv5CZ1n8lstIVkpk4xog3UhrfaaoTG8Bf8DMAQ=="/>
         </item>
     </channel>
 </rss>

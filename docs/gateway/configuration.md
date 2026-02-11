@@ -289,7 +289,7 @@ process env is missing the key (same non-overriding rule):
 }
 ```
 
-See [/environment](/environment) for full precedence and sources.
+See [/environment](/help/environment) for full precedence and sources.
 
 ### `env.shellEnv` (optional)
 
@@ -765,7 +765,7 @@ Inbound messages are routed to an agent via bindings.
 - `bindings[]`: routes inbound messages to an `agentId`.
   - `match.channel` (required)
   - `match.accountId` (optional; `*` = any account; omitted = default account)
-  - `match.peer` (optional; `{ kind: dm|group|channel, id }`)
+  - `match.peer` (optional; `{ kind: direct|group|channel, id }`)
   - `match.guildId` / `match.teamId` (optional; channel-specific)
 
 Deterministic match order:
@@ -788,7 +788,7 @@ levels in one gateway:
 - **Read-only** tools + workspace
 - **No filesystem access** (messaging/session tools only)
 
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence and
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence and
 additional examples.
 
 Full access (no sandbox):
@@ -990,6 +990,10 @@ Controls how chat commands are enabled across connectors.
     config: false, // allow /config (writes to disk)
     debug: false, // allow /debug (runtime-only overrides)
     restart: false, // allow /restart + gateway restart tool
+    allowFrom: {
+      "*": ["user1"], // optional per-provider command allowlist
+      discord: ["user:123"],
+    },
     useAccessGroups: true, // enforce access-group allowlists/policies for commands
   },
 }
@@ -1008,9 +1012,14 @@ Notes:
 - `channels.<provider>.configWrites` gates config mutations initiated by that channel (default: true). This applies to `/config set|unset` plus provider-specific auto-migrations (Telegram supergroup ID changes, Slack channel ID changes).
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
-- `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
-- Slash commands and directives are only honored for **authorized senders**. Authorization is derived from
-  channel allowlists/pairing plus `commands.useAccessGroups`.
+- `commands.allowFrom` sets a per-provider allowlist for command execution. When configured, it is the **only**
+  authorization source for commands and directives (channel allowlists/pairing and `commands.useAccessGroups` are ignored).
+  Use `"*"` for a global default; provider-specific keys (for example `discord`) override it.
+- `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies when `commands.allowFrom`
+  is not set.
+- Slash commands and directives are only honored for **authorized senders**. If `commands.allowFrom` is set,
+  authorization comes solely from that list; otherwise it is derived from channel allowlists/pairing plus
+  `commands.useAccessGroups`.
 
 ### `web` (WhatsApp web channel runtime)
 
@@ -1310,13 +1319,14 @@ Thread session isolation:
 - `channels.slack.thread.inheritParent` controls whether new thread sessions inherit the parent channel transcript (default: false).
 
 Slack action groups (gate `slack` tool actions):
-| Action group | Default | Notes |
-| --- | --- | --- |
-| reactions | enabled | React + list reactions |
-| messages | enabled | Read/send/edit/delete |
-| pins | enabled | Pin/unpin/list |
-| memberInfo | enabled | Member info |
-| emojiList | enabled | Custom emoji list |
+
+| Action group | Default | Notes                  |
+| ------------ | ------- | ---------------------- |
+| reactions    | enabled | React + list reactions |
+| messages     | enabled | Read/send/edit/delete  |
+| pins         | enabled | Pin/unpin/list         |
+| memberInfo   | enabled | Member info            |
+| emojiList    | enabled | Custom emoji list      |
 
 ### `channels.mattermost` (bot token)
 
@@ -1452,7 +1462,7 @@ working directory). The path must exist to be used.
 
 ### `agents.defaults.skipBootstrap`
 
-Disables automatic creation of the workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`).
+Disables automatic creation of the workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md`).
 
 Use this for pre-seeded deployments where your workspace files come from a repo.
 
@@ -1547,8 +1557,8 @@ The `responsePrefix` string can include template variables that resolve dynamica
 
 | Variable          | Description            | Example                     |
 | ----------------- | ---------------------- | --------------------------- |
-| `{model}`         | Short model name       | `claude-opus-4-5`, `gpt-4o` |
-| `{modelFull}`     | Full model identifier  | `anthropic/claude-opus-4-5` |
+| `{model}`         | Short model name       | `claude-opus-4-6`, `gpt-4o` |
+| `{modelFull}`     | Full model identifier  | `anthropic/claude-opus-4-6` |
 | `{provider}`      | Provider name          | `anthropic`, `openai`       |
 | `{thinkingLevel}` | Current thinking level | `high`, `low`, `off`        |
 | `{identity.name}` | Agent identity name    | (same as `"auto"` mode)     |
@@ -1564,7 +1574,7 @@ Unresolved variables remain as literal text.
 }
 ```
 
-Example output: `[claude-opus-4-5 | think:high] Here's my response...`
+Example output: `[claude-opus-4-6 | think:high] Here's my response...`
 
 WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (deprecated:
 `messages.messagePrefix`). Default stays **unchanged**: `"[openclaw]"` when
@@ -1710,7 +1720,7 @@ Z.AI GLM-4.x models automatically enable thinking mode unless you:
 OpenClaw also ships a few built-in alias shorthands. Defaults only apply when the model
 is already present in `agents.defaults.models`:
 
-- `opus` -> `anthropic/claude-opus-4-5`
+- `opus` -> `anthropic/claude-opus-4-6`
 - `sonnet` -> `anthropic/claude-sonnet-4-5`
 - `gpt` -> `openai/gpt-5.2`
 - `gpt-mini` -> `openai/gpt-5-mini`
@@ -1719,18 +1729,18 @@ is already present in `agents.defaults.models`:
 
 If you configure the same alias name (case-insensitive) yourself, your value wins (defaults never override).
 
-Example: Opus 4.5 primary with MiniMax M2.1 fallback (hosted MiniMax):
+Example: Opus 4.6 primary with MiniMax M2.1 fallback (hosted MiniMax):
 
 ```json5
 {
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-5": { alias: "opus" },
+        "anthropic/claude-opus-4-6": { alias: "opus" },
         "minimax/MiniMax-M2.1": { alias: "minimax" },
       },
       model: {
-        primary: "anthropic/claude-opus-4-5",
+        primary: "anthropic/claude-opus-4-6",
         fallbacks: ["minimax/MiniMax-M2.1"],
       },
     },
@@ -1786,7 +1796,7 @@ Example:
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-5": { alias: "Opus" },
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
         "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
         "openrouter/deepseek/deepseek-r1:free": {},
         "zai/glm-4.7": {
@@ -1800,7 +1810,7 @@ Example:
         },
       },
       model: {
-        primary: "anthropic/claude-opus-4-5",
+        primary: "anthropic/claude-opus-4-6",
         fallbacks: [
           "openrouter/deepseek/deepseek-r1:free",
           "openrouter/meta-llama/llama-3.3-70b-instruct:free",
@@ -1977,11 +1987,13 @@ Block streaming:
 - `agents.defaults.blockStreamingChunk`: soft chunking for streamed blocks. Defaults to
   800–1200 chars, prefers paragraph breaks (`\n\n`), then newlines, then sentences.
   Example:
+
   ```json5
   {
     agents: { defaults: { blockStreamingChunk: { minChars: 800, maxChars: 1200 } } },
   }
   ```
+
 - `agents.defaults.blockStreamingCoalesce`: merge streamed blocks before sending.
   Defaults to `{ idleMs: 1000 }` and inherits `minChars` from `blockStreamingChunk`
   with `maxChars` capped to the channel text limit. Signal/Slack/Discord/Google Chat default
@@ -1995,11 +2007,13 @@ Block streaming:
   Modes: `off` (default), `natural` (800–2500ms), `custom` (use `minMs`/`maxMs`).
   Per-agent override: `agents.list[].humanDelay`.
   Example:
+
   ```json5
   {
     agents: { defaults: { humanDelay: { mode: "natural" } } },
   }
   ```
+
   See [/concepts/streaming](/concepts/streaming) for behavior + chunking details.
 
 Typing indicators:
@@ -2011,7 +2025,7 @@ Typing indicators:
 - `session.typingIntervalSeconds`: per-session override for the refresh interval.
   See [/concepts/typing-indicators](/concepts/typing-indicators) for behavior details.
 
-`agents.defaults.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
+`agents.defaults.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-6`).
 Aliases come from `agents.defaults.models.*.alias` (e.g. `Opus`).
 If you omit the provider, OpenClaw currently assumes `anthropic` as a temporary
 deprecation fallback.
@@ -2065,7 +2079,7 @@ of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 - `tools.web.fetch.readability` (default true; disable to use basic HTML cleanup only)
 - `tools.web.fetch.firecrawl.enabled` (default true when an API key is set)
 - `tools.web.fetch.firecrawl.apiKey` (optional; defaults to `FIRECRAWL_API_KEY`)
-- `tools.web.fetch.firecrawl.baseUrl` (default https://api.firecrawl.dev)
+- `tools.web.fetch.firecrawl.baseUrl` (default [https://api.firecrawl.dev](https://api.firecrawl.dev))
 - `tools.web.fetch.firecrawl.onlyMainContent` (default true)
 - `tools.web.fetch.firecrawl.maxAgeMs` (optional)
 - `tools.web.fetch.firecrawl.timeoutSeconds` (optional)
@@ -2481,11 +2495,11 @@ Select the model via `agents.defaults.model.primary` (provider/model).
 
 OpenCode Zen is a multi-model gateway with per-model endpoints. OpenClaw uses
 the built-in `opencode` provider from pi-ai; set `OPENCODE_API_KEY` (or
-`OPENCODE_ZEN_API_KEY`) from https://opencode.ai/auth.
+`OPENCODE_ZEN_API_KEY`) from [https://opencode.ai/auth](https://opencode.ai/auth).
 
 Notes:
 
-- Model refs use `opencode/<modelId>` (example: `opencode/claude-opus-4-5`).
+- Model refs use `opencode/<modelId>` (example: `opencode/claude-opus-4-6`).
 - If you enable an allowlist via `agents.defaults.models`, add each model you plan to use.
 - Shortcut: `openclaw onboard --auth-choice opencode-zen`.
 
@@ -2493,8 +2507,8 @@ Notes:
 {
   agents: {
     defaults: {
-      model: { primary: "opencode/claude-opus-4-5" },
-      models: { "opencode/claude-opus-4-5": { alias: "Opus" } },
+      model: { primary: "opencode/claude-opus-4-6" },
+      models: { "opencode/claude-opus-4-6": { alias: "Opus" } },
     },
   },
 }
@@ -2652,7 +2666,7 @@ Use MiniMax M2.1 directly without LM Studio:
   agent: {
     model: { primary: "minimax/MiniMax-M2.1" },
     models: {
-      "anthropic/claude-opus-4-5": { alias: "Opus" },
+      "anthropic/claude-opus-4-6": { alias: "Opus" },
       "minimax/MiniMax-M2.1": { alias: "Minimax" },
     },
   },
@@ -2755,13 +2769,19 @@ Controls session scoping, reset policy, reset triggers, and where the session st
     },
     resetByType: {
       thread: { mode: "daily", atHour: 4 },
-      dm: { mode: "idle", idleMinutes: 240 },
+      direct: { mode: "idle", idleMinutes: 240 },
       group: { mode: "idle", idleMinutes: 120 },
     },
     resetTriggers: ["/new", "/reset"],
     // Default is already per-agent under ~/.openclaw/agents/<agentId>/sessions/sessions.json
     // You can override with {agentId} templating:
     store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+    maintenance: {
+      mode: "warn",
+      pruneAfter: "30d",
+      maxEntries: 500,
+      rotateBytes: "10mb",
+    },
     // Direct chats collapse to agent:<agentId>:<mainKey> (default: "main").
     mainKey: "main",
     agentToAgent: {
@@ -2792,12 +2812,17 @@ Fields:
   - `mode`: `daily` or `idle` (default: `daily` when `reset` is present).
   - `atHour`: local hour (0-23) for the daily reset boundary.
   - `idleMinutes`: sliding idle window in minutes. When daily + idle are both configured, whichever expires first wins.
-- `resetByType`: per-session overrides for `dm`, `group`, and `thread`.
+- `resetByType`: per-session overrides for `direct`, `group`, and `thread`. Legacy `dm` key is accepted as an alias for `direct`.
   - If you only set legacy `session.idleMinutes` without any `reset`/`resetByType`, OpenClaw stays in idle-only mode for backward compatibility.
 - `heartbeatIdleMinutes`: optional idle override for heartbeat checks (daily reset still applies when enabled).
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
 - `sendPolicy.rules[]`: match by `channel`, `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.
+- `maintenance`: session store maintenance settings for pruning, capping, and rotation.
+  - `mode`: `"warn"` (default) warns the active session (best-effort delivery) when it would be evicted without enforcing maintenance. `"enforce"` applies pruning and rotation.
+  - `pruneAfter`: remove entries older than this duration (for example `"30m"`, `"1h"`, `"30d"`). Default "30d".
+  - `maxEntries`: cap the number of session entries kept (default 500).
+  - `rotateBytes`: rotate `sessions.json` when it exceeds this size (for example `"10kb"`, `"1mb"`, `"10mb"`). Default "10mb".
 
 ### `skills` (skills config)
 
@@ -2852,7 +2877,7 @@ Example:
 Controls plugin discovery, allow/deny, and per-plugin config. Plugins are loaded
 from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus any
 `plugins.load.paths` entries. **Config changes require a gateway restart.**
-See [/plugin](/plugin) for full usage.
+See [/plugin](/tools/plugin) for full usage.
 
 Fields:
 
@@ -3151,12 +3176,17 @@ Defaults:
     enabled: true,
     token: "shared-secret",
     path: "/hooks",
+    // Optional: restrict explicit `agentId` routing.
+    // Omit or include "*" to allow any agent.
+    // Set [] to deny all explicit `agentId` routing.
+    allowedAgentIds: ["hooks", "main"],
     presets: ["gmail"],
     transformsDir: "~/.openclaw/hooks",
     mappings: [
       {
         match: { path: "gmail" },
         action: "agent",
+        agentId: "hooks",
         wakeMode: "now",
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
@@ -3173,13 +3203,12 @@ Defaults:
 Requests must include the hook token:
 
 - `Authorization: Bearer <token>` **or**
-- `x-openclaw-token: <token>` **or**
-- `?token=<token>`
+- `x-openclaw-token: <token>`
 
 Endpoints:
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 `/hooks/agent` always posts a summary into the main session (and can optionally trigger an immediate heartbeat via `wakeMode: "now"`).
@@ -3190,6 +3219,8 @@ Mapping notes:
 - `match.source` matches a payload field (e.g. `{ source: "gmail" }`) so you can use a generic `/hooks/ingest` path.
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module that returns a hook action.
+- `agentId` can route to a specific agent; unknown IDs fall back to the default agent.
+- `hooks.allowedAgentIds` restricts explicit `agentId` routing (`*` or omitted means allow all, `[]` denies all explicit routing).
 - `deliver: true` sends the final reply to a channel; `channel` defaults to `last` (falls back to WhatsApp).
 - If there is no prior delivery route, set `channel` + `to` explicitly (required for Telegram/Discord/Google Chat/Slack/Signal/iMessage/MS Teams).
 - `model` overrides the LLM for this hook run (`provider/model` or alias; must be allowed if `agents.defaults.models` is set).
@@ -3367,7 +3398,7 @@ openclaw dns setup --apply
 }
 ```
 
-## Template variables
+## Media model template variables
 
 Template placeholders are expanded in `tools.media.*.models[].args` and `tools.media.models[].args` (and any future templated argument fields).
 
@@ -3403,9 +3434,14 @@ Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron jobs
   cron: {
     enabled: true,
     maxConcurrentRuns: 2,
+    sessionRetention: "24h",
   },
 }
 ```
+
+Fields:
+
+- `sessionRetention`: how long to keep completed cron run sessions before pruning. Accepts a duration string like `"24h"` or `"7d"`. Use `false` to disable pruning. Default is 24h.
 
 ---
 

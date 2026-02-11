@@ -6,6 +6,7 @@ export {
   stripThoughtSignatures,
 } from "./pi-embedded-helpers/bootstrap.js";
 export {
+  BILLING_ERROR_USER_MESSAGE,
   classifyFailoverReason,
   formatRawAssistantErrorForUi,
   formatAssistantErrorText,
