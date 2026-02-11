@@ -203,7 +203,7 @@ review_checkout_main() {
   local pr="$1"
   enter_worktree "$pr" false
   git fetch origin main
-  git checkout -B "temp/pr-$pr" origin/main
+  git checkout --detach origin/main
   set_review_mode main
 
   echo "review mode set to main baseline"
@@ -215,7 +215,7 @@ review_checkout_pr() {
   local pr="$1"
   enter_worktree "$pr" false
   git fetch origin "pull/$pr/head:pr-$pr" --force
-  git checkout "pr-$pr"
+  git checkout --detach "pr-$pr"
   set_review_mode pr
 
   echo "review mode set to PR head"
@@ -227,22 +227,33 @@ review_guard() {
   local pr="$1"
   enter_worktree "$pr" false
   require_artifact .local/review-mode.env
+  require_artifact .local/pr-meta.env
   # shellcheck disable=SC1091
   source .local/review-mode.env
+  # shellcheck disable=SC1091
+  source .local/pr-meta.env
 
   local branch
   branch=$(git branch --show-current)
+  local head_sha
+  head_sha=$(git rev-parse HEAD)
 
   case "${REVIEW_MODE:-}" in
     main)
-      if [ "$branch" != "temp/pr-$pr" ]; then
-        echo "Review guard failed: expected branch temp/pr-$pr for main baseline mode, got $branch"
+      local expected_main_sha
+      expected_main_sha=$(git rev-parse origin/main)
+      if [ "$head_sha" != "$expected_main_sha" ]; then
+        echo "Review guard failed: expected HEAD at origin/main ($expected_main_sha) for main baseline mode, got $head_sha"
         exit 1
       fi
       ;;
     pr)
-      if [ "$branch" != "pr-$pr" ] && [ "$branch" != "pr-$pr-review" ]; then
-        echo "Review guard failed: expected PR branch (pr-$pr or pr-$pr-review), got $branch"
+      if [ -z "${PR_HEAD_SHA:-}" ]; then
+        echo "Review guard failed: missing PR_HEAD_SHA in .local/pr-meta.env"
+        exit 1
+      fi
+      if [ "$head_sha" != "$PR_HEAD_SHA" ]; then
+        echo "Review guard failed: expected HEAD at PR_HEAD_SHA ($PR_HEAD_SHA), got $head_sha"
         exit 1
       fi
       ;;
@@ -255,6 +266,7 @@ review_guard() {
   echo "review guard passed"
   echo "mode=$REVIEW_MODE"
   echo "branch=$branch"
+  echo "head=$head_sha"
 }
 
 review_artifacts_init() {
