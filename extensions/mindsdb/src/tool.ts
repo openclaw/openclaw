@@ -340,7 +340,7 @@ export function resolveMindsdbPluginConfig(raw: unknown): MindsdbPluginConfig {
   };
 }
 
-function validateAction(action: string): MindsdbAction {
+function parseMindsdbAction(action: string): MindsdbAction {
   if ((MINDSDB_ACTIONS as readonly string[]).includes(action)) {
     return action as MindsdbAction;
   }
@@ -430,7 +430,7 @@ export function createMindsdbTool(
       "Query MindsDB's federated SQL engine to access connected databases with one tool.",
     parameters: MindsdbToolSchema,
     async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
-      const action = validateAction(readStringParam(rawParams, "action", { required: true }));
+      const action = parseMindsdbAction(readStringParam(rawParams, "action", { required: true }));
       const query = readStringParam(rawParams, "query");
       const params = readRecordParam(rawParams, "params");
       const context = readRecordParam(rawParams, "context");
