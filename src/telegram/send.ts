@@ -349,6 +349,7 @@ export async function sendMessageTelegram(
       const hasBaseParams = Object.keys(baseParams).length > 0;
 
       // When entities are provided, send with entities instead of parse_mode.
+      // Falls back to plain text if Telegram rejects the entities.
       if (opts.entities?.length) {
         const sendParams = {
           entities: opts.entities,
@@ -359,7 +360,25 @@ export async function sendMessageTelegram(
           () =>
             api.sendMessage(chatId, rawText, sendParams as Parameters<typeof api.sendMessage>[2]),
           label,
-        ).catch((err) => {
+        ).catch(async (err) => {
+          const errText = formatErrorMessage(err);
+          if (PARSE_ERR_RE.test(errText)) {
+            if (opts.verbose) {
+              console.warn(`telegram entity send failed, retrying as plain text: ${errText}`);
+            }
+            const plainParams = hasBaseParams
+              ? (baseParams as Parameters<typeof api.sendMessage>[2])
+              : undefined;
+            return await requestWithDiag(
+              () =>
+                plainParams
+                  ? api.sendMessage(chatId, rawText, plainParams)
+                  : api.sendMessage(chatId, rawText),
+              `${label}-plain`,
+            ).catch((err2) => {
+              throw wrapChatNotFound(err2);
+            });
+          }
           throw wrapChatNotFound(err);
         });
         return res;
