@@ -59,36 +59,15 @@ function forkSessionFromParent(params: {
     params.parentEntry.sessionId,
     params.parentEntry,
   );
-  console.warn(
-    `[thread-debug][fork] parentEntry.sessionId=${params.parentEntry.sessionId}` +
-      ` | parentEntry.sessionFile=${params.parentEntry.sessionFile ?? "NONE"}` +
-      ` | parentEntry.totalTokens=${params.parentEntry.totalTokens ?? "?"}` +
-      ` | resolvedParentFile=${parentSessionFile ?? "NULL"}`,
-  );
   if (!parentSessionFile || !fs.existsSync(parentSessionFile)) {
-    console.warn(
-      `[thread-debug][fork] ABORT: parentSessionFile missing` +
-        ` | parentSessionFile=${parentSessionFile ?? "NULL"}` +
-        ` | exists=${parentSessionFile ? fs.existsSync(parentSessionFile) : false}`,
-    );
     return null;
   }
   try {
     const manager = SessionManager.open(parentSessionFile);
     const leafId = manager.getLeafId();
-    console.warn(
-      `[thread-debug][fork] SessionManager opened` +
-        ` | leafId=${leafId ?? "NULL"}` +
-        ` | sessionDir=${manager.getSessionDir()}`,
-    );
     if (leafId) {
       const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
       const sessionId = manager.getSessionId();
-      console.warn(
-        `[thread-debug][fork] branched from leaf` +
-          ` | sessionFile=${sessionFile ?? "NULL"}` +
-          ` | sessionId=${sessionId ?? "NULL"}`,
-      );
       if (sessionFile && sessionId) {
         return { sessionId, sessionFile };
       }
@@ -106,14 +85,8 @@ function forkSessionFromParent(params: {
       parentSession: parentSessionFile,
     };
     fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
-    console.warn(
-      `[thread-debug][fork] fallback: created new session file` +
-        ` | sessionFile=${sessionFile}` +
-        ` | sessionId=${sessionId}`,
-    );
     return { sessionId, sessionFile };
-  } catch (err) {
-    console.warn(`[thread-debug][fork] ERROR: ${err instanceof Error ? err.message : String(err)}`);
+  } catch {
     return null;
   }
 }
@@ -334,19 +307,6 @@ export async function initSessionState(params: {
     sessionEntry.displayName = threadLabel;
   }
   const parentSessionKey = ctx.ParentSessionKey?.trim();
-  // DEBUG: thread session fork conditions
-  console.warn(
-    `[thread-debug][session-init] fork check` +
-      ` | isNewSession=${isNewSession}` +
-      ` | parentSessionKey=${parentSessionKey ?? "NONE"}` +
-      ` | sessionKey=${sessionKey}` +
-      ` | parentInStore=${parentSessionKey ? Boolean(sessionStore[parentSessionKey]) : false}` +
-      ` | parentSessionFile=${parentSessionKey && sessionStore[parentSessionKey] ? (sessionStore[parentSessionKey].sessionFile ?? "NONE") : "N/A"}` +
-      ` | ThreadLabel=${ctx.ThreadLabel ?? "NONE"}` +
-      ` | ThreadStarterBody=${ctx.ThreadStarterBody ? ctx.ThreadStarterBody.slice(0, 50) : "NONE"}` +
-      ` | MessageThreadId=${ctx.MessageThreadId ?? "NONE"}` +
-      ` | storeKeys=${Object.keys(sessionStore).length}`,
-  );
   if (
     isNewSession &&
     parentSessionKey &&
@@ -365,14 +325,7 @@ export async function initSessionState(params: {
       sessionEntry.sessionId = forked.sessionId;
       sessionEntry.sessionFile = forked.sessionFile;
       console.warn(`[session-init] forked session created: file=${forked.sessionFile}`);
-    } else {
-      console.warn(`[thread-debug][session-init] forkSessionFromParent returned null!`);
     }
-  } else if (parentSessionKey) {
-    console.warn(
-      `[thread-debug][session-init] fork SKIPPED` +
-        ` | reason=${!isNewSession ? "not-new-session" : !parentSessionKey ? "no-parent-key" : parentSessionKey === sessionKey ? "same-key" : "parent-not-in-store"}`,
-    );
   }
   if (!sessionEntry.sessionFile) {
     sessionEntry.sessionFile = resolveSessionTranscriptPath(

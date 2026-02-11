@@ -207,23 +207,6 @@ export async function prepareSlackMessage(params: {
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
-  // DEBUG: thread session context
-  if (isThreadReply) {
-    console.warn(
-      `[thread-debug][prepare] isThreadReply=true` +
-        ` | threadTs=${threadTs}` +
-        ` | baseSessionKey=${baseSessionKey}` +
-        ` | sessionKey=${sessionKey}` +
-        ` | parentSessionKey=${threadKeys.parentSessionKey ?? "NONE"}` +
-        ` | threadInheritParent=${ctx.threadInheritParent}` +
-        ` | threadHistoryScope=${ctx.threadHistoryScope}` +
-        ` | historyKey=${historyKey}` +
-        ` | effectiveReplyToMode=${effectiveReplyToMode}` +
-        ` | chatType=${chatType}` +
-        ` | messageThreadId=${threadContext.messageThreadId ?? "NONE"}`,
-    );
-  }
-
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
   const explicitlyMentioned = Boolean(
@@ -556,6 +539,7 @@ export async function prepareSlackMessage(params: {
     storePath,
     sessionKey,
     ctx: ctxPayload,
+    createIfMissing: !threadKeys.parentSessionKey,
     updateLastRoute: isDirectMessage
       ? {
           sessionKey: route.mainSessionKey,
