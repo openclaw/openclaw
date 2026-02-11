@@ -337,6 +337,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     maybeLoadDotEnvForConfig(deps.env);
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
+      // Keep behavior consistent with loadConfig(): when there is no config file,
+      // we may still want to hydrate missing API keys from the user's shell/profile.
+      if (shouldEnableShellEnvFallback(deps.env) && !shouldDeferShellEnvFallback(deps.env)) {
+        loadShellEnvFallback({
+          enabled: true,
+          env: deps.env,
+          expectedKeys: SHELL_ENV_EXPECTED_KEYS,
+          logger: deps.logger,
+          timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
+        });
+      }
+
       const hash = hashConfigRaw(null);
       const config = applyTalkApiKey(
         applyModelDefaults(

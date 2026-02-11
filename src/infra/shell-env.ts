@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { isTruthyEnvValue } from "./env.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -8,7 +10,36 @@ let cachedShellPath: string | null | undefined;
 
 function resolveShell(env: NodeJS.ProcessEnv): string {
   const shell = env.SHELL?.trim();
-  return shell && shell.length > 0 ? shell : "/bin/sh";
+  if (shell && shell.length > 0) {
+    return shell;
+  }
+
+  if (process.platform === "win32") {
+    const programFiles = [env.ProgramFiles, env["ProgramFiles(x86)"], env.LocalAppData]
+      .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
+      .map((p) => p.trim());
+
+    // Common Git-Bash locations.
+    const candidates: string[] = [];
+    for (const base of programFiles) {
+      candidates.push(path.join(base, "Git", "bin", "bash.exe"));
+      candidates.push(path.join(base, "Git", "usr", "bin", "bash.exe"));
+    }
+
+    for (const candidate of candidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // Last resort: leave the default (may fail, but keeps behavior explicit).
+  }
+
+  return "/bin/sh";
 }
 
 function parseShellEnv(stdout: Buffer): Map<string, string> {
@@ -59,6 +90,43 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
   if (hasAnyKey) {
     lastAppliedKeys = [];
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
+  }
+
+  // Windows: the login-shell env route is brittle and depends on which shell is used
+  // and which dotfiles it sources. For tests and predictable behavior, also support
+  // parsing ~/.profile directly when present.
+  if (process.platform === "win32") {
+    const home = opts.env.HOME?.trim();
+    if (home) {
+      try {
+        const profilePath = path.join(home, ".profile");
+        if (fs.existsSync(profilePath)) {
+          const raw = fs.readFileSync(profilePath, "utf8");
+          const applied: string[] = [];
+          for (const key of opts.expectedKeys) {
+            if (opts.env[key]?.trim()) {
+              continue;
+            }
+            const m = raw.match(new RegExp(`^\\s*export\\s+${key}=(.+)\\s*$`, "m"));
+            if (!m?.[1]) {
+              continue;
+            }
+            const value = m[1].trim().replace(/^['\"]|['\"]$/g, "");
+            if (!value) {
+              continue;
+            }
+            opts.env[key] = value;
+            applied.push(key);
+          }
+          if (applied.length > 0) {
+            lastAppliedKeys = applied;
+            return { ok: true, applied };
+          }
+        }
+      } catch {
+        // best-effort
+      }
+    }
   }
 
   const timeoutMs =

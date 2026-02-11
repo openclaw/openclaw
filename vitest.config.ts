@@ -18,7 +18,9 @@ export default defineConfig({
   test: {
     testTimeout: 120_000,
     hookTimeout: isWindows ? 180_000 : 120_000,
-    pool: "forks",
+    // Forked workers can be flaky on Windows (sporadic "Worker exited unexpectedly").
+    // Use threads on Windows for stability; keep forks elsewhere for isolation.
+    pool: isWindows ? "threads" : "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
     include: ["src/**/*.test.ts", "extensions/**/*.test.ts", "test/format-error.test.ts"],
     setupFiles: ["test/setup.ts"],

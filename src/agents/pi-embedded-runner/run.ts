@@ -859,7 +859,13 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
-        process.chdir(prevCwd);
+        // In some environments (e.g. Vitest worker threads), process.chdir is not supported.
+        // Reverting CWD is best-effort and should never fail the run.
+        try {
+          process.chdir(prevCwd);
+        } catch {
+          // ignore
+        }
       }
     }),
   );

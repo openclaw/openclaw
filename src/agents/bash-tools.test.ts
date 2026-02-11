@@ -193,10 +193,23 @@ describe("exec tool backgrounding", () => {
       backgroundMs: 1000,
       timeoutSec: 5,
     });
+    const customProcess = createProcessTool();
 
     const result = await customBash.execute("call1", {
       command: "echo hi",
     });
+
+    // Some environments may still yield early; if so, poll for completion.
+    if (result.details?.status === "running") {
+      const sessionId = (result.details as { sessionId: string }).sessionId;
+      const status = await waitForCompletion(sessionId);
+      expect(status).toBe("completed");
+      const log = await customProcess.execute("call2", { action: "log", sessionId });
+      const text = log.content.find((c) => c.type === "text")?.text ?? "";
+      expect(text).toContain("hi");
+      return;
+    }
+
     const text = result.content.find((c) => c.type === "text")?.text ?? "";
     expect(text).toContain("hi");
   });

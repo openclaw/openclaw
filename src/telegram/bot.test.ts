@@ -548,9 +548,10 @@ describe("createTelegramBot", () => {
       const payload = replySpy.mock.calls[0][0];
       const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
       const timestampPattern = escapeRegExp(expectedTimestamp);
+      // formatEnvelopeTimestamp may include a weekday prefix depending on runtime locale/TZ.
       expect(payload.Body).toMatch(
         new RegExp(
-          `^\\[Telegram Ada Lovelace \\(@ada_bot\\) id:1234 (\\+\\d+[smhd] )?${timestampPattern}\\]`,
+          `^\\[Telegram Ada Lovelace \\(@ada_bot\\) id:1234 (\\+\\d+[smhd] )?(?:[A-Za-z]{3} )?${timestampPattern}\\]`,
         ),
       );
       expect(payload.Body).toContain("hello world");
@@ -591,9 +592,12 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
     expect(sendMessageSpy.mock.calls[0]?.[0]).toBe(1234);
-    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Your Telegram user id: 999");
-    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Pairing code:");
-    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("PAIRME12");
+    const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+    expect(pairingText).toContain("Your Telegram user id: 999");
+    expect(pairingText).toContain("Pairing code:");
+    expect(pairingText).toContain("PAIRME12");
+    expect(pairingText).toContain("openclaw pairing approve telegram PAIRME12");
+    expect(pairingText).not.toContain("<code>");
   });
 
   it("does not resend pairing code when a request is already pending", async () => {

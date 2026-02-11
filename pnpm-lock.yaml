@@ -64,6 +64,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.90
+      '@openclaw/core-memories':
+        specifier: workspace:*
+        version: link:packages/core-memories
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
@@ -73,6 +76,18 @@ importers:
       '@slack/web-api':
         specifier: ^7.13.0
         version: 7.13.0
+      '@twurple/api':
+        specifier: ^8.0.3
+        version: 8.0.3(@twurple/auth@8.0.3)
+      '@twurple/auth':
+        specifier: ^8.0.3
+        version: 8.0.3
+      '@twurple/chat':
+        specifier: ^8.0.3
+        version: 8.0.3(@twurple/auth@8.0.3)
+      '@vector-im/matrix-bot-sdk':
+        specifier: 0.8.0-element.3
+        version: 0.8.0-element.3
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
         version: 7.0.0-rc.9(audio-decode@2.2.3)(sharp@0.34.5)
@@ -106,6 +121,9 @@ importers:
       file-type:
         specifier: ^21.3.0
         version: 21.3.0
+      google-auth-library:
+        specifier: ^10.5.0
+        version: 10.5.0
       grammy:
         specifier: ^1.40.0
         version: 1.40.0
@@ -127,12 +145,18 @@ importers:
       markdown-it:
         specifier: ^14.1.0
         version: 14.1.0
+      music-metadata:
+        specifier: ^11.12.0
+        version: 11.12.0
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10
       node-llama-cpp:
         specifier: 3.15.1
         version: 3.15.1(typescript@5.9.3)
+      nostr-tools:
+        specifier: ^2.23.0
+        version: 2.23.0(typescript@5.9.3)
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
@@ -566,6 +590,8 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  packages/core-memories: {}
 
   packages/moltbot:
     dependencies:
@@ -6672,7 +6698,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.58.0':
     dependencies:
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -6688,7 +6714,7 @@ snapshots:
     dependencies:
       '@types/node': 24.10.12
     optionalDependencies:
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
     transitivePeerDependencies:
       - debug
 
@@ -6891,7 +6917,7 @@ snapshots:
       '@azure/core-auth': 1.10.1
       '@azure/msal-node': 3.8.6
       '@microsoft/agents-activity': 1.2.3
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       jsonwebtoken: 9.0.3
       jwks-rsa: 3.2.2
       object-path: 0.11.8
@@ -7726,7 +7752,7 @@ snapshots:
       '@slack/types': 2.19.0
       '@slack/web-api': 7.13.0
       '@types/express': 5.0.6
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       express: 5.2.1
       path-to-regexp: 8.3.0
       raw-body: 3.0.2
@@ -7772,7 +7798,7 @@ snapshots:
       '@slack/types': 2.19.0
       '@types/node': 25.2.2
       '@types/retry': 0.12.0
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -8666,14 +8692,6 @@ snapshots:
 
   aws4@1.13.2: {}
 
-  axios@1.13.5:
-    dependencies:
-      follow-redirects: 1.15.11
-      form-data: 2.5.4
-      proxy-from-env: 1.1.0
-    transitivePeerDependencies:
-      - debug
-
   axios@1.13.5(debug@4.4.3):
     dependencies:
       follow-redirects: 1.15.11(debug@4.4.3)
@@ -9248,8 +9266,6 @@ snapshots:
       array-back: 3.1.0
 
   flatbuffers@24.12.23: {}
-
-  follow-redirects@1.15.11: {}
 
   follow-redirects@1.15.11(debug@4.4.3):
     optionalDependencies:
