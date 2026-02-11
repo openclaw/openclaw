@@ -29,6 +29,19 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes).toEqual([]);
   });
 
+  it("configures irc as disabled when configured via env", () => {
+    const result = applyPluginAutoEnable({
+      config: {},
+      env: {
+        IRC_HOST: "irc.libera.chat",
+        IRC_NICK: "openclaw-bot",
+      },
+    });
+
+    expect(result.config.plugins?.entries?.irc?.enabled).toBe(false);
+    expect(result.changes.join("\n")).toContain("IRC configured, not enabled yet.");
+  });
+
   it("configures provider auth plugins as disabled when profiles exist", () => {
     const result = applyPluginAutoEnable({
       config: {

@@ -493,13 +493,11 @@ describe("runHeartbeatOnce", () => {
           2,
         ),
       );
-
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
       const sendWhatsApp = vi.fn().mockResolvedValue({
         messageId: "m1",
         toJid: "jid",
       });
-
       await runHeartbeatOnce({
         cfg,
         agentId: "ops",
@@ -511,11 +509,13 @@ describe("runHeartbeatOnce", () => {
           hasActiveWebListener: () => true,
         },
       });
-
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
       expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "Final alert", expect.any(Object));
       expect(replySpy).toHaveBeenCalledWith(
-        expect.objectContaining({ Body: "Ops check", SessionKey: sessionKey }),
+        expect.objectContaining({
+          Body: expect.stringMatching(/Ops check[\s\S]*Current time: /),
+          SessionKey: sessionKey,
+        }),
         { isHeartbeat: true },
         cfg,
       );
