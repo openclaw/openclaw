@@ -470,6 +470,16 @@ export async function runEmbeddedPiAgent(
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
 
+          // Detect stopReason "length" with zero output as a silent context
+          // overflow: the prompt consumed the entire context window, leaving no
+          // room for the model to generate a response.  Treat this the same as
+          // an explicit context overflow error so auto-compaction can recover.
+          const isSilentOverflow =
+            !aborted &&
+            !promptError &&
+            lastAssistant?.stopReason === "length" &&
+            (lastAssistant.usage as UsageLike | undefined)?.output === 0;
+
           const contextOverflowError = !aborted
             ? (() => {
                 if (promptError) {
@@ -483,6 +493,12 @@ export async function runEmbeddedPiAgent(
                 }
                 if (assistantErrorText && isContextOverflowError(assistantErrorText)) {
                   return { text: assistantErrorText, source: "assistantError" as const };
+                }
+                if (isSilentOverflow) {
+                  return {
+                    text: "Context overflow: model returned stopReason=length with zero output tokens",
+                    source: "silentOverflow" as const,
+                  };
                 }
                 return null;
               })()
