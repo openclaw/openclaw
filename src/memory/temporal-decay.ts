@@ -132,21 +132,22 @@ export async function applyTemporalDecayToHybridResults<
   }
 
   const nowMs = params.nowMs ?? Date.now();
-  const timestampCache = new Map<string, Date | null>();
+  const timestampPromiseCache = new Map<string, Promise<Date | null>>();
 
   return Promise.all(
     params.results.map(async (entry) => {
       const cacheKey = `${entry.source}:${entry.path}`;
-      if (!timestampCache.has(cacheKey)) {
-        const timestamp = await extractTimestamp({
+      let timestampPromise = timestampPromiseCache.get(cacheKey);
+      if (!timestampPromise) {
+        timestampPromise = extractTimestamp({
           filePath: entry.path,
           source: entry.source,
           workspaceDir: params.workspaceDir,
         });
-        timestampCache.set(cacheKey, timestamp);
+        timestampPromiseCache.set(cacheKey, timestampPromise);
       }
 
-      const timestamp = timestampCache.get(cacheKey) ?? null;
+      const timestamp = await timestampPromise;
       if (!timestamp) {
         return entry;
       }

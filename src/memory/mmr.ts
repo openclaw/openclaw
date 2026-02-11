@@ -163,7 +163,7 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
       // Use original score as tiebreaker (higher is better)
       if (
         mmrScore > bestMMRScore ||
-        (mmrScore === bestMMRScore && (bestItem === null || candidate.score > bestItem.score))
+        (mmrScore === bestMMRScore && candidate.score > (bestItem?.score ?? -Infinity))
       ) {
         bestMMRScore = mmrScore;
         bestItem = candidate;
