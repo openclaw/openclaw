@@ -91,7 +91,7 @@ const nsfwEnabledAgents = new Set<string>();
 
 const nsfwPlugin = {
   id: "nsfw",
-  name: "NSFW – Not Satisfy For Weekend",
+  name: "NSFW",
   description: "Toggle-able system prompt injection via /nsfw command",
 
   register(api: OpenClawPluginApi) {
