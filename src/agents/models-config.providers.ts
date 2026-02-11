@@ -85,6 +85,18 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// ERNIE provider uses Qianfan (百度千帆) API
+const ERNIE_BASE_URL = "https://qianfan.baidubce.com/v2";
+export const ERNIE_DEFAULT_MODEL_ID = "ernie-5.0-thinking-preview";
+const ERNIE_DEFAULT_CONTEXT_WINDOW = 128000;
+const ERNIE_DEFAULT_MAX_TOKENS = 65536;
+const ERNIE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -427,6 +439,24 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
+export function buildErnieProvider(): ProviderConfig {
+  return {
+    baseUrl: ERNIE_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: ERNIE_DEFAULT_MODEL_ID,
+        name: "ERNIE 5.0",
+        reasoning: true,
+        input: ["text"],
+        cost: ERNIE_DEFAULT_COST,
+        contextWindow: ERNIE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ERNIE_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -557,6 +587,14 @@ export async function resolveImplicitProviders(params: {
       ...buildTogetherProvider(),
       apiKey: togetherKey,
     };
+  }
+
+  // ERNIE provider (uses Qianfan/百度千帆 API)
+  const ernieKey =
+    resolveEnvApiKeyVarName("ernie") ??
+    resolveApiKeyFromProfiles({ provider: "ernie", store: authStore });
+  if (ernieKey) {
+    providers.ernie = { ...buildErnieProvider(), apiKey: ernieKey };
   }
 
   const qianfanKey =

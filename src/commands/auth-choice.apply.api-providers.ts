@@ -15,6 +15,8 @@ import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
+  applyErnieConfig,
+  applyErnieProviderConfig,
   applyQianfanConfig,
   applyQianfanProviderConfig,
   applyKimiCodeConfig,
@@ -39,6 +41,7 @@ import {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  ERNIE_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
@@ -49,6 +52,7 @@ import {
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   setCloudflareAiGatewayConfig,
+  setErnieApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
@@ -114,6 +118,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "together-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
+    } else if (params.opts.tokenProvider === "ernie") {
+      authChoice = "ernie-api-key";
     } else if (params.opts.tokenProvider === "qianfan") {
       authChoice = "qianfan-api-key";
     }
@@ -858,6 +864,63 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyTogetherConfig,
         applyProviderConfig: applyTogetherProviderConfig,
         noteDefault: TOGETHER_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "ernie-api-key") {
+    let hasCredential = false;
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "ernie") {
+      await setErnieApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "ERNIE (百度文心) uses Qianfan API for inference.",
+          "Get your API key at: https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application",
+          "API key format: bce-v3/ALTAK-...",
+        ].join("\n"),
+        "ERNIE",
+      );
+    }
+    const envKey = resolveEnvApiKey("ernie");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing ERNIE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setErnieApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter ERNIE API key",
+        validate: validateApiKeyInput,
+      });
+      await setErnieApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "ernie:default",
+      provider: "ernie",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: ERNIE_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyErnieConfig,
+        applyProviderConfig: applyErnieProviderConfig,
+        noteDefault: ERNIE_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

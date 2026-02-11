@@ -17,6 +17,19 @@ export const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
 export const KIMI_CODING_MODEL_ID = "k2p5";
 export const KIMI_CODING_MODEL_REF = `kimi-coding/${KIMI_CODING_MODEL_ID}`;
 
+// ERNIE provider uses Qianfan (百度千帆) API
+export const ERNIE_BASE_URL = "https://qianfan.baidubce.com/v2";
+export const ERNIE_DEFAULT_MODEL_ID = "ernie-5.0-thinking-preview";
+export const ERNIE_DEFAULT_MODEL_REF = `ernie/${ERNIE_DEFAULT_MODEL_ID}`;
+export const ERNIE_DEFAULT_CONTEXT_WINDOW = 128000;
+export const ERNIE_DEFAULT_MAX_TOKENS = 65536;
+export const ERNIE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID };
 export const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;
 
@@ -94,6 +107,18 @@ export function buildMoonshotModelDefinition(): ModelDefinitionConfig {
     cost: MOONSHOT_DEFAULT_COST,
     contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+  };
+}
+
+export function buildErnieModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: ERNIE_DEFAULT_MODEL_ID,
+    name: "ERNIE 5.0",
+    reasoning: true,
+    input: ["text"],
+    cost: ERNIE_DEFAULT_COST,
+    contextWindow: ERNIE_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: ERNIE_DEFAULT_MAX_TOKENS,
   };
 }
 

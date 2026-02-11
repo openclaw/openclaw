@@ -34,6 +34,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "xai-api-key": "xai",
   "qwen-portal": "qwen-portal",
   "minimax-portal": "minimax-portal",
+  "ernie-api-key": "ernie",
   "qianfan-api-key": "qianfan",
   "custom-api-key": "custom",
 };

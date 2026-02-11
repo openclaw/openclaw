@@ -306,6 +306,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     mistral: "MISTRAL_API_KEY",
     opencode: "OPENCODE_API_KEY",
     together: "TOGETHER_API_KEY",
+    ernie: "ERNIE_API_KEY",
     qianfan: "QIANFAN_API_KEY",
     ollama: "OLLAMA_API_KEY",
   };

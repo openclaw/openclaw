@@ -96,6 +96,10 @@
       "destination": "/providers/qianfan"
     },
     {
+      "source": "/ernie",
+      "destination": "/providers/ernie"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },
@@ -1044,7 +1048,8 @@
                   "providers/glm",
                   "providers/zai",
                   "providers/synthetic",
-                  "providers/qianfan"
+                  "providers/qianfan",
+                  "providers/ernie"
                 ]
               }
             ]

@@ -18,6 +18,7 @@ export type AuthChoiceGroupId =
   | "moonshot"
   | "zai"
   | "xiaomi"
+  | "ernie"
   | "opencode-zen"
   | "minimax"
   | "synthetic"
@@ -124,6 +125,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Xiaomi",
     hint: "API key",
     choices: ["xiaomi-api-key"],
+  },
+  {
+    value: "ernie",
+    label: "ERNIE (Baidu Wenxin)",
+    hint: "API key",
+    choices: ["ernie-api-key"],
   },
   {
     value: "synthetic",
@@ -234,6 +241,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({
     value: "xiaomi-api-key",
     label: "Xiaomi API key",
+  });
+  options.push({
+    value: "ernie-api-key",
+    label: "ERNIE API key (Baidu Wenxin)",
+    hint: "Qianfan API for ERNIE-4.5",
   });
   options.push({
     value: "minimax-portal",
