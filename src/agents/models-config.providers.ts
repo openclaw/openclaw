@@ -474,7 +474,7 @@ function buildTogetherProvider(): ProviderConfig {
   return {
     baseUrl: TOGETHER_BASE_URL,
     api: "openai-completions",
-    models: [],
+    models: TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition),
   };
 }
 
