@@ -36,8 +36,8 @@ export function createLocalStorage(dir: string): StorageBackend {
       const backups: BackupEntry[] = [];
       for (const name of entries
         .filter((n) => n.endsWith(".tar.gz"))
-        .sort()
-        .reverse()) {
+        .toSorted()
+        .toReversed()) {
         const filePath = path.join(dir, name);
         try {
           const stat = await fs.stat(filePath);

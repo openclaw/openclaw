@@ -135,7 +135,7 @@ export async function createS3Storage(config: BackupStorageConfig): Promise<Stor
         backups.push(entry);
       }
 
-      return backups.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      return backups.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
 
     async delete(key: string): Promise<void> {

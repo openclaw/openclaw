@@ -43,7 +43,7 @@ export function registerBackupCli(program: Command) {
       let storage;
       if (useStorage && opts.storageType === "s3") {
         const { loadConfig } = await import("../config/config.js");
-        const config = await loadConfig();
+        const config = loadConfig();
         const backupConfig = (config as Record<string, unknown>).backup as
           | Record<string, unknown>
           | undefined;
@@ -124,7 +124,7 @@ export function registerBackupCli(program: Command) {
       let storageConfig;
       if (opts.storageType === "s3") {
         const { loadConfig } = await import("../config/config.js");
-        const config = await loadConfig();
+        const config = loadConfig();
         const backupConfig = (config as Record<string, unknown>).backup as
           | Record<string, unknown>
           | undefined;
@@ -190,7 +190,11 @@ function formatTimestamp(): string {
 }
 
 function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
