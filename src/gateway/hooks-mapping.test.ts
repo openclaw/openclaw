@@ -152,6 +152,53 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("passes agentId from mapping", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "hooks-agent",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          agentId: "hooks",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: { messages: [{ subject: "Hello" }] },
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.agentId).toBe("hooks");
+    }
+  });
+
+  it("agentId is undefined when not set", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "no-agent",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: { messages: [{ subject: "Hello" }] },
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.agentId).toBeUndefined();
+    }
+  });
+
   it("rejects missing message", async () => {
     const mappings = resolveHookMappings({
       mappings: [{ match: { path: "noop" }, action: "agent" }],
