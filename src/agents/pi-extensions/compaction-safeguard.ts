@@ -1,5 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
+import { generateText } from "@mariozechner/pi-ai";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -158,6 +161,126 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
   return `\n\n${sections.join("\n\n")}`;
 }
 
+interface ContextTransferData {
+  timestamp: string;
+  expiresAt: string;
+  nextActions: Array<{
+    priority: number;
+    action: string;
+    context?: string;
+  }>;
+  doNotTouch: string[];
+  activeTasks: Array<{
+    description: string;
+    status: "in-progress" | "blocked" | "waiting";
+    references: string[];
+  }>;
+  pendingDecisions: string[];
+  subAgents: Array<{
+    label: string;
+    sessionKey: string;
+    status: "running" | "idle" | "done";
+  }>;
+  ephemeralIds: Record<string, string>;
+  conversationMode: "deep-work" | "casual" | "debugging";
+}
+
+const CONTEXT_EXTRACTION_PROMPT = `You are analyzing a conversation history to extract structured context for session handover.
+
+Based on the conversation, extract:
+1. **Active Tasks**: Any work that's in progress, blocked, or waiting (with status and relevant references like issue numbers, file paths)
+2. **Pending Decisions**: Questions waiting for user input or choices that haven't been made yet
+3. **Sub-Agents**: Any spawned sub-agent sessions (with label, session key, and status)
+4. **Ephemeral IDs**: Message IDs, channel IDs, embed IDs, or other temporary identifiers mentioned (with purpose labels)
+5. **Next Actions**: Prescriptive steps for what should happen next (prioritized, with context)
+6. **Do-Not-Touch Items**: Things that should be left alone with reasons why
+7. **Conversation Mode**: Whether this is deep-work, casual conversation, or debugging
+
+Return ONLY a valid JSON object matching this schema:
+{
+  "nextActions": [{"priority": 1-5, "action": "...", "context": "..."}],
+  "doNotTouch": ["reason why X should not be touched"],
+  "activeTasks": [{"description": "...", "status": "in-progress|blocked|waiting", "references": ["..."]}],
+  "pendingDecisions": ["..."],
+  "subAgents": [{"label": "...", "sessionKey": "...", "status": "running|idle|done"}],
+  "ephemeralIds": {"purpose": "id"},
+  "conversationMode": "deep-work|casual|debugging"
+}
+
+If any section is empty, use an empty array or object. Be concise but capture critical context.`;
+
+async function extractAndWriteContextTransfer(
+  messages: AgentMessage[],
+  model: NonNullable<(typeof import("@mariozechner/pi-coding-agent").ExtensionContext)["model"]>,
+  apiKey: string,
+  workspaceDir: string,
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    // Use a fast/cheap model for extraction (Haiku-tier)
+    const extractionModel = {
+      ...model,
+      id: model.id.includes("sonnet") ? model.id.replace("sonnet", "haiku") : model.id,
+    };
+
+    const result = await generateText(
+      [
+        { role: "user", content: CONTEXT_EXTRACTION_PROMPT },
+        { role: "user", content: `Conversation history:\n${JSON.stringify(messages.slice(-50))}` }, // Last 50 messages for context
+      ],
+      extractionModel,
+      {
+        apiKey,
+        temperature: 0.1, // Low temperature for structured output
+        maxTokens: 2000,
+      },
+      { signal },
+    );
+
+    const extractedText = result.text.trim();
+
+    // Try to parse JSON from the response (handle cases where model includes extra text)
+    let jsonMatch = extractedText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn("Context extraction: No JSON found in response, skipping");
+      return;
+    }
+
+    const extracted = JSON.parse(jsonMatch[0]);
+
+    // Build final context transfer object
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour from now
+
+    const contextTransfer: ContextTransferData = {
+      timestamp: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      nextActions: Array.isArray(extracted.nextActions) ? extracted.nextActions : [],
+      doNotTouch: Array.isArray(extracted.doNotTouch) ? extracted.doNotTouch : [],
+      activeTasks: Array.isArray(extracted.activeTasks) ? extracted.activeTasks : [],
+      pendingDecisions: Array.isArray(extracted.pendingDecisions) ? extracted.pendingDecisions : [],
+      subAgents: Array.isArray(extracted.subAgents) ? extracted.subAgents : [],
+      ephemeralIds: typeof extracted.ephemeralIds === "object" ? extracted.ephemeralIds : {},
+      conversationMode: ["deep-work", "casual", "debugging"].includes(extracted.conversationMode)
+        ? extracted.conversationMode
+        : "casual",
+    };
+
+    // Write to .context-transfer.json in workspace
+    const transferFilePath = join(workspaceDir, ".context-transfer.json");
+    writeFileSync(transferFilePath, JSON.stringify(contextTransfer, null, 2), "utf8");
+
+    console.log(`Context transfer data written to ${transferFilePath}`);
+  } catch (error) {
+    // Graceful failure - log warning but don't break compaction
+    console.warn(
+      `Failed to extract context transfer data: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
@@ -308,6 +431,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       summary += toolFailureSection;
       summary += fileOpsSummary;
+
+      // Extract and write context transfer data
+      const workspaceDir = ctx.sessionManager.getCwd();
+      await extractAndWriteContextTransfer(allMessages, model, apiKey, workspaceDir, signal);
 
       return {
         compaction: {
