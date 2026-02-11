@@ -109,6 +109,7 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 在 **权限管理** 页面，点击 **批量导入** 按钮，粘贴以下 JSON 配置一键导入所需权限：
 
 飞书（国内版）
+
 ```json
 {
   "scopes": {
@@ -142,6 +143,7 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 ```
 
 Lark（国际版）
+
 ```json
 {
   "scopes": {

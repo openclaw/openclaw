@@ -109,6 +109,7 @@ From **Credentials & Basic Info**, copy:
 On **Permissions**, click **Batch import** and paste:
 
 Feishu (China)
+
 ```json
 {
   "scopes": {
@@ -136,6 +137,7 @@ Feishu (China)
 ```
 
 Lark (international)
+
 ```json
 {
   "scopes": {
