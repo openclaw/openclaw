@@ -305,6 +305,41 @@ describe("coerceFormValues", () => {
     expect(coerced.count).toBe("1.5");
   });
 
+  it("does not coerce non-finite numeric strings", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        timeout: { type: "number" },
+      },
+    };
+    const form = { timeout: "Infinity" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    expect(coerced.timeout).toBe("Infinity");
+  });
+
+  it("supports allOf schema composition", () => {
+    const schema: JsonSchema = {
+      allOf: [
+        {
+          type: "object",
+          properties: {
+            port: { type: "number" },
+          },
+        },
+        {
+          type: "object",
+          properties: {
+            enabled: { type: "boolean" },
+          },
+        },
+      ],
+    };
+    const form = { port: "8080", enabled: "true" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    expect(coerced.port).toBe(8080);
+    expect(coerced.enabled).toBe(true);
+  });
+
   it("recurses into object inside anyOf (nullable pattern)", () => {
     const schema: JsonSchema = {
       type: "object",

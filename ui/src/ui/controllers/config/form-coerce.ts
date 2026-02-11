@@ -1,5 +1,31 @@
 import { schemaType, type JsonSchema } from "../../views/config-form.shared.ts";
 
+function coerceNumberString(value: string, integer: boolean): number | undefined | string {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+  if (integer && !Number.isInteger(parsed)) {
+    return value;
+  }
+  return parsed;
+}
+
+function coerceBooleanString(value: string): boolean | string {
+  const trimmed = value.trim();
+  if (trimmed === "true") {
+    return true;
+  }
+  if (trimmed === "false") {
+    return false;
+  }
+  return value;
+}
+
 /**
  * Walk a form value tree alongside its JSON Schema and coerce string values
  * to their schema-defined types (number, boolean).
@@ -14,6 +40,14 @@ import { schemaType, type JsonSchema } from "../../views/config-form.shared.ts";
 export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   if (value === null || value === undefined) {
     return value;
+  }
+
+  if (schema.allOf && schema.allOf.length > 0) {
+    let next: unknown = value;
+    for (const segment of schema.allOf) {
+      next = coerceFormValues(next, segment);
+    }
+    return next;
   }
 
   const type = schemaType(schema);
@@ -33,24 +67,15 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       for (const variant of variants) {
         const variantType = schemaType(variant);
         if (variantType === "number" || variantType === "integer") {
-          const trimmed = value.trim();
-          if (trimmed === "") {
-            return undefined;
-          }
-          const parsed = Number(trimmed);
-          if (!Number.isNaN(parsed)) {
-            if (variantType === "integer" && !Number.isInteger(parsed)) {
-              continue;
-            }
-            return parsed;
+          const coerced = coerceNumberString(value, variantType === "integer");
+          if (coerced === undefined || typeof coerced === "number") {
+            return coerced;
           }
         }
         if (variantType === "boolean") {
-          if (value === "true") {
-            return true;
-          }
-          if (value === "false") {
-            return false;
+          const coerced = coerceBooleanString(value);
+          if (typeof coerced === "boolean") {
+            return coerced;
           }
         }
       }
@@ -72,16 +97,9 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
 
   if (type === "number" || type === "integer") {
     if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (trimmed === "") {
-        return undefined;
-      }
-      const parsed = Number(trimmed);
-      if (!Number.isNaN(parsed)) {
-        if (type === "integer" && !Number.isInteger(parsed)) {
-          return value;
-        }
-        return parsed;
+      const coerced = coerceNumberString(value, type === "integer");
+      if (coerced === undefined || typeof coerced === "number") {
+        return coerced;
       }
     }
     return value;
@@ -89,11 +107,9 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
 
   if (type === "boolean") {
     if (typeof value === "string") {
-      if (value === "true") {
-        return true;
-      }
-      if (value === "false") {
-        return false;
+      const coerced = coerceBooleanString(value);
+      if (typeof coerced === "boolean") {
+        return coerced;
       }
     }
     return value;

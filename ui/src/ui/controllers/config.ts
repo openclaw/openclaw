@@ -101,6 +101,13 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   }
 }
 
+function asJsonSchema(value: unknown): JsonSchema | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as JsonSchema;
+}
+
 /**
  * Serialize the form state for submission to `config.set` / `config.apply`.
  *
@@ -113,7 +120,7 @@ function serializeFormForSubmit(state: ConfigState): string {
   if (state.configFormMode !== "form" || !state.configForm) {
     return state.configRaw;
   }
-  const schema = state.configSchema as JsonSchema | null;
+  const schema = asJsonSchema(state.configSchema);
   const form = schema
     ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;

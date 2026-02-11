@@ -248,6 +248,34 @@ describe("saveConfig", () => {
     expect(parsed.gateway.enabled).toBe(false);
     expect(params.baseHash).toBe("hash-save-1");
   });
+
+  it("skips coercion when schema is not an object", async () => {
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return { config: {}, valid: true, issues: [], raw: "{\n}\n" };
+      }
+      return {};
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    state.configForm = {
+      gateway: { port: "18789" },
+    };
+    state.configSchema = "invalid-schema";
+    state.configSnapshot = { hash: "hash-save-2" };
+
+    await saveConfig(state);
+
+    expect(request.mock.calls[0]?.[0]).toBe("config.set");
+    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const parsed = JSON.parse(params.raw) as {
+      gateway: { port: unknown };
+    };
+    expect(parsed.gateway.port).toBe("18789");
+    expect(params.baseHash).toBe("hash-save-2");
+  });
 });
 
 describe("runUpdate", () => {
