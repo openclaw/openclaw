@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ShellCompletionStatus } from "../commands/doctor-completion.js";
@@ -10,6 +9,7 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../commands/doctor-completion.js";
+import { pathExists } from "../utils.js";
 
 type CompletionDeps = {
   resolveCliName: () => string;
@@ -17,15 +17,6 @@ type CompletionDeps = {
   ensureCompletionCacheExists: (binName: string) => Promise<boolean>;
   installCompletion: (shell: string, yes: boolean, binName?: string) => Promise<void>;
 };
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function resolveProfileHint(shell: ShellCompletionStatus["shell"]): Promise<string> {
   const home = process.env.HOME || os.homedir();
