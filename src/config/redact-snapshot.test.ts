@@ -123,6 +123,7 @@ describe("redactConfigSnapshot", () => {
               },
             ],
             apiKey: "sk-proj-abcdef1234567890ghij",
+            accessToken: "access-token-value-1234567890",
           },
         },
       },
@@ -130,14 +131,16 @@ describe("redactConfigSnapshot", () => {
 
     const result = redactConfigSnapshot(snapshot);
     const models = result.config.models as Record<string, unknown>;
-    const providerList = (((models.providers as Record<string, unknown>).openai as Record<string, unknown>)
-      .models ?? []) as Array<Record<string, unknown>>;
+    const providerList = ((
+      (models.providers as Record<string, unknown>).openai as Record<string, unknown>
+    ).models ?? []) as Array<Record<string, unknown>>;
     expect(providerList[0]?.maxTokens).toBe(65536);
     expect(providerList[0]?.contextTokens).toBe(200000);
     expect(providerList[0]?.maxTokensField).toBe("max_completion_tokens");
 
     const providers = (models.providers as Record<string, Record<string, string>>) ?? {};
     expect(providers.openai.apiKey).toBe(REDACTED_SENTINEL);
+    expect(providers.openai.accessToken).toBe(REDACTED_SENTINEL);
   });
 
   it("preserves hash unchanged", () => {
