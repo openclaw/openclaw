@@ -466,7 +466,7 @@ export const AgentEntrySchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
-        tools: ToolPolicySchema.optional(),
+        tools: ToolPolicySchema,
       })
       .strict()
       .optional(),

@@ -1323,8 +1323,10 @@ function renderAgentTools(params: {
     params.onOverridesChange(params.agentId, [...nextAllow], [...nextDeny]);
   };
 
-  const subagentToolIds = toolIds.filter((toolId) => !SUBAGENT_LOCKED_TOOL_IDS.has(toolId));
-  const subagentToolIdSet = new Set(subagentToolIds);
+  const subagentToolIds: string[] = toolIds.filter(
+    (toolId) => !SUBAGENT_LOCKED_TOOL_IDS.has(toolId),
+  );
+  const subagentToolIdSet = new Set<string>(subagentToolIds);
   const subagentSections = TOOL_SECTIONS.map((section) => ({
     ...section,
     tools: section.tools.filter((tool) => subagentToolIdSet.has(tool.id)),
