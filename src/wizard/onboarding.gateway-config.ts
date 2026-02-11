@@ -68,10 +68,27 @@ export async function configureGatewayForOnboarding(
             { value: "loopback", label: "Loopback (127.0.0.1)" },
             { value: "lan", label: "LAN (0.0.0.0)" },
             { value: "tailnet", label: "Tailnet (Tailscale IP)" },
+            { value: "zerotier", label: "ZeroTier (ZeroTier IP)" },
+            { value: "wireguard", label: "WireGuard (WireGuard IP)" },
+            {
+              value: "overlay",
+              label: "Overlay (auto-detect)",
+              hint: "ZeroTier, WireGuard, Nebula, or Tailscale",
+            },
             { value: "auto", label: "Auto (Loopback → LAN)" },
             { value: "custom", label: "Custom IP" },
           ],
         });
+
+  let overlayInterface: string | undefined;
+  if (bind === "overlay" && flow !== "quickstart") {
+    const input = await prompter.text({
+      message: "Overlay interface prefix (blank for auto-detect)",
+      placeholder: "e.g. zt, wg, nebula",
+      initialValue: "",
+    });
+    overlayInterface = typeof input === "string" && input.trim() ? input.trim() : undefined;
+  }
 
   let customBindHost = quickstartGateway.customBindHost;
   if (bind === "custom") {
@@ -242,6 +259,7 @@ export async function configureGatewayForOnboarding(
       port,
       bind: bind as GatewayBindMode,
       ...(bind === "custom" && customBindHost ? { customBindHost } : {}),
+      ...(bind === "overlay" && overlayInterface ? { overlayInterface } : {}),
       tailscale: {
         ...nextConfig.gateway?.tailscale,
         mode: tailscaleMode as GatewayTailscaleMode,

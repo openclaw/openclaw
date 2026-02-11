@@ -21,6 +21,9 @@ actor GatewayEndpointStore {
         "lan",
         "auto",
         "custom",
+        "overlay",
+        "zerotier",
+        "wireguard",
     ]
     private static let remoteConnectingDetail = "Connecting to remote gateway…"
     private static let staticLogger = Logger(subsystem: "ai.openclaw", category: "gateway-endpoint")
@@ -608,6 +611,9 @@ actor GatewayEndpointStore {
         switch bindMode {
         case "tailnet":
             tailscaleIP ?? "127.0.0.1"
+        case "overlay", "zerotier", "wireguard":
+            // Overlay detection happens in Node; Swift falls back to loopback
+            "127.0.0.1"
         case "auto":
             "127.0.0.1"
         case "custom":

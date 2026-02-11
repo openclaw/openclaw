@@ -42,6 +42,21 @@ export async function promptGatewayConfig(
           hint: "Bind to your Tailscale IP only (100.x.x.x)",
         },
         {
+          value: "zerotier",
+          label: "ZeroTier (ZeroTier IP)",
+          hint: "Bind to your ZeroTier IP (zt* interface)",
+        },
+        {
+          value: "wireguard",
+          label: "WireGuard (WireGuard IP)",
+          hint: "Bind to your WireGuard IP (wg* interface)",
+        },
+        {
+          value: "overlay",
+          label: "Overlay (auto-detect)",
+          hint: "Auto-detect ZeroTier, WireGuard, Nebula, or Tailscale",
+        },
+        {
           value: "auto",
           label: "Auto (Loopback → LAN)",
           hint: "Prefer loopback; fall back to all interfaces if unavailable",
@@ -60,6 +75,18 @@ export async function promptGatewayConfig(
     }),
     runtime,
   );
+
+  let overlayInterface: string | undefined;
+  if (bind === "overlay") {
+    const input = guardCancel(
+      await text({
+        message: "Overlay interface prefix (blank for auto-detect)",
+        placeholder: "e.g. zt, wg, nebula",
+      }),
+      runtime,
+    );
+    overlayInterface = typeof input === "string" && input.trim() ? input.trim() : undefined;
+  }
 
   let customBindHost: string | undefined;
   if (bind === "custom") {
@@ -212,6 +239,7 @@ export async function promptGatewayConfig(
       bind,
       auth: authConfig,
       ...(customBindHost && { customBindHost }),
+      ...(overlayInterface && { overlayInterface }),
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,

@@ -13,6 +13,7 @@ import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { pickPrimaryLanIPv4, isValidIPv4 } from "../gateway/net.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { pickOverlayIPv4 } from "../infra/overlay-net.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { isWSL } from "../infra/wsl.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -343,7 +344,9 @@ export async function detectBinary(name: string): Promise<boolean> {
 
   const command = process.platform === "win32" ? ["where", name] : ["/usr/bin/env", "which", name];
   try {
-    const result = await runCommandWithTimeout(command, { timeoutMs: 2000 });
+    const result = await runCommandWithTimeout(command, {
+      timeoutMs: 2000,
+    });
     return result.code === 0 && result.stdout.trim().length > 0;
   } catch {
     return false;
@@ -436,8 +439,9 @@ export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
 
 export function resolveControlUiLinks(params: {
   port: number;
-  bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";
+  bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet" | "overlay" | "zerotier" | "wireguard";
   customBindHost?: string;
+  overlayInterface?: string;
   basePath?: string;
 }): { httpUrl: string; wsUrl: string } {
   const port = params.port;
@@ -453,6 +457,12 @@ export function resolveControlUiLinks(params: {
     }
     if (bind === "lan") {
       return pickPrimaryLanIPv4() ?? "127.0.0.1";
+    }
+    if (bind === "zerotier" || bind === "wireguard" || bind === "overlay") {
+      const overlayIP = pickOverlayIPv4(
+        bind === "overlay" ? params.overlayInterface : bind === "zerotier" ? "zt" : "wg",
+      );
+      return overlayIP ?? "127.0.0.1";
     }
     return "127.0.0.1";
   })();

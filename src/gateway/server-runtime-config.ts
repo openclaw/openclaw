@@ -41,7 +41,15 @@ export async function resolveGatewayRuntimeConfig(params: {
   tailscale?: GatewayTailscaleConfig;
 }): Promise<GatewayRuntimeConfig> {
   const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
-  const customBindHost = params.cfg.gateway?.customBindHost;
+  // Route the right hint for each bind mode
+  const customBindHost =
+    bindMode === "overlay"
+      ? params.cfg.gateway?.overlayInterface
+      : bindMode === "zerotier"
+        ? "zt"
+        : bindMode === "wireguard"
+          ? "wg"
+          : params.cfg.gateway?.customBindHost;
   const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;

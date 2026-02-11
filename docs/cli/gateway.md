@@ -3,7 +3,7 @@ summary: "OpenClaw Gateway CLI (`openclaw gateway`) — run, query, and discover
 read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
-  - Discovering gateways via Bonjour (LAN + tailnet)
+  - Discovering gateways via Bonjour (LAN + tailnet + overlay networks)
 title: "gateway"
 ---
 
@@ -43,7 +43,7 @@ Notes:
 ### Options
 
 - `--port <port>`: WebSocket port (default comes from config/env; usually `18789`).
-- `--bind <loopback|lan|tailnet|auto|custom>`: listener bind mode.
+- `--bind <loopback|lan|tailnet|zerotier|wireguard|overlay|auto|custom>`: listener bind mode.
 - `--auth <token|password>`: auth mode override.
 - `--token <token>`: token override (also sets `OPENCLAW_GATEWAY_TOKEN` for the process).
 - `--password <password>`: password override (also sets `OPENCLAW_GATEWAY_PASSWORD` for the process).

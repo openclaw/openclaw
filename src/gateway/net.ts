@@ -1,5 +1,6 @@
 import net from "node:net";
 import os from "node:os";
+import { pickOverlayIPv4 } from "../infra/overlay-net.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 
 /**
@@ -135,6 +136,11 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
   if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
     return true;
   }
+  // Check overlay network IPs (ZeroTier, WireGuard, Nebula, or generic overlay)
+  const overlayIPv4 = pickOverlayIPv4();
+  if (overlayIPv4 && normalized === overlayIPv4.toLowerCase()) {
+    return true;
+  }
   return false;
 }
 
@@ -145,6 +151,9 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
  * - loopback: 127.0.0.1 (rarely fails, but handled gracefully)
  * - lan: always 0.0.0.0 (no fallback)
  * - tailnet: Tailnet IPv4 if available, else loopback
+ * - zerotier: ZeroTier IPv4 (zt* interface), else loopback
+ * - wireguard: WireGuard IPv4 (wg* interface), else loopback
+ * - overlay: Auto-detect any overlay network, else loopback
  * - auto: Loopback if available, else 0.0.0.0
  * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable
  *
@@ -168,6 +177,39 @@ export async function resolveGatewayBindHost(
     const tailnetIP = pickPrimaryTailnetIPv4();
     if (tailnetIP && (await canBindToHost(tailnetIP))) {
       return tailnetIP;
+    }
+    if (await canBindToHost("127.0.0.1")) {
+      return "127.0.0.1";
+    }
+    return "0.0.0.0";
+  }
+
+  if (mode === "zerotier") {
+    const ztIP = pickOverlayIPv4("zt");
+    if (ztIP && (await canBindToHost(ztIP))) {
+      return ztIP;
+    }
+    if (await canBindToHost("127.0.0.1")) {
+      return "127.0.0.1";
+    }
+    return "0.0.0.0";
+  }
+
+  if (mode === "wireguard") {
+    const wgIP = pickOverlayIPv4("wg");
+    if (wgIP && (await canBindToHost(wgIP))) {
+      return wgIP;
+    }
+    if (await canBindToHost("127.0.0.1")) {
+      return "127.0.0.1";
+    }
+    return "0.0.0.0";
+  }
+
+  if (mode === "overlay") {
+    const overlayIP = pickOverlayIPv4(customHost);
+    if (overlayIP && (await canBindToHost(overlayIP))) {
+      return overlayIP;
     }
     if (await canBindToHost("127.0.0.1")) {
       return "127.0.0.1";

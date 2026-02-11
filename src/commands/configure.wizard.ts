@@ -364,7 +364,11 @@ export async function runConfigureWizard(
           gatewayPort = Number.parseInt(String(portInput), 10);
         }
 
-        await maybeInstallDaemon({ runtime, port: gatewayPort, gatewayToken });
+        await maybeInstallDaemon({
+          runtime,
+          port: gatewayPort,
+          gatewayToken,
+        });
       }
 
       if (selected.includes("health")) {
@@ -372,6 +376,7 @@ export async function runConfigureWizard(
           bind: nextConfig.gateway?.bind ?? "loopback",
           port: gatewayPort,
           customBindHost: nextConfig.gateway?.customBindHost,
+          overlayInterface: nextConfig.gateway?.overlayInterface,
           basePath: undefined,
         });
         const remoteUrl = nextConfig.gateway?.remote?.url?.trim();
@@ -499,6 +504,7 @@ export async function runConfigureWizard(
             bind: nextConfig.gateway?.bind ?? "loopback",
             port: gatewayPort,
             customBindHost: nextConfig.gateway?.customBindHost,
+            overlayInterface: nextConfig.gateway?.overlayInterface,
             basePath: undefined,
           });
           const remoteUrl = nextConfig.gateway?.remote?.url?.trim();
@@ -550,6 +556,7 @@ export async function runConfigureWizard(
       bind,
       port: gatewayPort,
       customBindHost: nextConfig.gateway?.customBindHost,
+      overlayInterface: nextConfig.gateway?.overlayInterface,
       basePath: nextConfig.gateway?.controlUi?.basePath,
     });
     // Try both new and old passwords since gateway may still have old config.

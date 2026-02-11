@@ -377,8 +377,13 @@ export const OpenClawSchema = z
             z.literal("loopback"),
             z.literal("custom"),
             z.literal("tailnet"),
+            z.literal("overlay"),
+            z.literal("zerotier"),
+            z.literal("wireguard"),
           ])
           .optional(),
+        customBindHost: z.string().optional(),
+        overlayInterface: z.string().optional(),
         controlUi: z
           .object({
             enabled: z.boolean().optional(),

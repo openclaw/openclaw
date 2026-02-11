@@ -157,6 +157,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         port: status.gateway.port,
         bind: status.gateway.bindMode,
         customBindHost: status.gateway.customBindHost,
+        overlayInterface: status.gateway.overlayInterface,
         basePath: status.config?.daemon?.controlUi?.basePath,
       });
       defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);

@@ -200,6 +200,7 @@ export async function statusCommand(
       port: resolveGatewayPort(cfg),
       bind: cfg.gateway?.bind,
       customBindHost: cfg.gateway?.customBindHost,
+      overlayInterface: cfg.gateway?.overlayInterface,
       basePath: cfg.gateway?.controlUi?.basePath,
     });
     return links.httpUrl;
@@ -371,7 +372,10 @@ export async function statusCommand(
 
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
-    { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
+    {
+      Item: "OS",
+      Value: `${osSummary.label} · node ${process.versions.node}`,
+    },
     {
       Item: "Tailscale",
       Value:
@@ -570,7 +574,9 @@ export async function statusCommand(
       Detail: `${health.durationMs}ms`,
     });
 
-    for (const line of formatHealthChannelLines(health, { accountMode: "all" })) {
+    for (const line of formatHealthChannelLines(health, {
+      accountMode: "all",
+    })) {
       const colon = line.indexOf(":");
       if (colon === -1) {
         continue;
@@ -608,7 +614,12 @@ export async function statusCommand(
         columns: [
           { key: "Item", header: "Item", minWidth: 10 },
           { key: "Status", header: "Status", minWidth: 8 },
-          { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
+          {
+            key: "Detail",
+            header: "Detail",
+            flex: true,
+            minWidth: 28,
+          },
         ],
         rows,
       }).trimEnd(),

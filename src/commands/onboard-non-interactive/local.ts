@@ -108,9 +108,18 @@ export async function runNonInteractiveOnboardingLocal(params: {
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!opts.skipHealth) {
     const links = resolveControlUiLinks({
-      bind: gatewayResult.bind as "auto" | "lan" | "loopback" | "custom" | "tailnet",
+      bind: gatewayResult.bind as
+        | "auto"
+        | "lan"
+        | "loopback"
+        | "custom"
+        | "tailnet"
+        | "overlay"
+        | "zerotier"
+        | "wireguard",
       port: gatewayResult.port,
       customBindHost: nextConfig.gateway?.customBindHost,
+      overlayInterface: nextConfig.gateway?.overlayInterface,
       basePath: undefined,
     });
     await waitForGatewayReachable({

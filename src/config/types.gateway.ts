@@ -1,4 +1,12 @@
-export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
+export type GatewayBindMode =
+  | "auto"
+  | "lan"
+  | "loopback"
+  | "custom"
+  | "tailnet"
+  | "overlay"
+  | "zerotier"
+  | "wireguard";
 
 export type GatewayTlsConfig = {
   /** Enable TLS for the gateway server. */
@@ -225,12 +233,17 @@ export type GatewayConfig = {
    * - lan: 0.0.0.0 (all interfaces, no fallback)
    * - loopback: 127.0.0.1 (local-only)
    * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
+   * - zerotier: ZeroTier IPv4 (zt* interface), else loopback
+   * - wireguard: WireGuard IPv4 (wg* interface), else loopback
+   * - overlay: Auto-detect any overlay network (Tailscale, ZeroTier, WireGuard, Nebula), else loopback
    * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable (requires customBindHost)
    * Default: loopback (127.0.0.1).
    */
   bind?: GatewayBindMode;
   /** Custom IP address for bind="custom" mode. Fallback: 0.0.0.0. */
   customBindHost?: string;
+  /** Interface name prefix hint for bind="overlay" (e.g. "zt", "wg", "nebula"). Auto-detects if omitted. */
+  overlayInterface?: string;
   controlUi?: GatewayControlUiConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;

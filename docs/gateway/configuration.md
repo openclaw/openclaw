@@ -2987,7 +2987,8 @@ Defaults:
   gateway: {
     mode: "local", // or "remote"
     port: 18789, // WS + HTTP multiplex
-    bind: "loopback",
+    bind: "loopback", // "loopback"|"lan"|"tailnet"|"zerotier"|"wireguard"|"overlay"|"auto"|"custom"
+    // overlayInterface: "zt", // optional interface prefix hint for bind="overlay"
     // controlUi: { enabled: true, basePath: "/openclaw" }
     // auth: { mode: "token", token: "your-token" } // token gates WS + Control UI access
     // tailscale: { mode: "off" | "serve" | "funnel" }
@@ -3026,7 +3027,7 @@ Notes:
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
 - OpenAI Chat Completions endpoint: **disabled by default**; enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > default `18789`.
-- Gateway auth is required by default (token/password or Tailscale Serve identity). Non-loopback binds require a shared token/password.
+- Gateway auth is required by default (token/password or Tailscale Serve identity). Non-loopback binds (including overlay, zerotier, and wireguard) require a shared token/password.
 - The onboarding wizard generates a gateway token by default (even on loopback).
 - `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.
 
@@ -3329,8 +3330,11 @@ Defaults:
 
 Bind modes:
 
-- `lan`: `0.0.0.0` (reachable on any interface, including LAN/Wi‑Fi and Tailscale)
-- `tailnet`: bind only to the machine’s Tailscale IP (recommended for Vienna ⇄ London)
+- `lan`: `0.0.0.0` (reachable on any interface, including LAN/Wi-Fi and Tailscale)
+- `tailnet`: bind only to the machine's Tailscale IP (recommended for Vienna ⇄ London)
+- `zerotier`: bind to the ZeroTier IP (`zt*` interface)
+- `wireguard`: bind to the WireGuard IP (`wg*` interface)
+- `overlay`: auto-detect any overlay network IP (Tailscale, ZeroTier, WireGuard, Nebula)
 - `loopback`: `127.0.0.1` (local only)
 - `auto`: prefer tailnet IP if present, else `lan`
 

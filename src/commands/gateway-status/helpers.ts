@@ -1,10 +1,11 @@
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { resolveGatewayPort } from "../../config/config.js";
+import { pickOverlayIPv4 } from "../../infra/overlay-net.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";
 
-type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
+type TargetKind = "explicit" | "configRemote" | "localLoopback" | "localOverlay" | "sshTunnel";
 
 export type GatewayStatusTarget = {
   id: string;
@@ -112,18 +113,38 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   }
 
   const port = resolveGatewayPort(cfg);
+  const bindMode = cfg.gateway?.bind ?? "loopback";
+  const overlayHint =
+    bindMode === "overlay"
+      ? cfg.gateway?.overlayInterface
+      : bindMode === "zerotier"
+        ? "zt"
+        : bindMode === "wireguard"
+          ? "wg"
+          : undefined;
+  const overlayIP = overlayHint !== undefined ? pickOverlayIPv4(overlayHint) : undefined;
+
+  if (overlayIP) {
+    add({
+      id: "localOverlay",
+      kind: "localOverlay",
+      url: `ws://${overlayIP}:${port}`,
+      active: cfg.gateway?.mode !== "remote",
+    });
+  }
+
   add({
     id: "localLoopback",
     kind: "localLoopback",
     url: `ws://127.0.0.1:${port}`,
-    active: cfg.gateway?.mode !== "remote",
+    active: cfg.gateway?.mode !== "remote" && !overlayIP,
   });
 
   return targets;
 }
 
 export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
-  if (kind === "localLoopback") {
+  if (kind === "localLoopback" || kind === "localOverlay") {
     return Math.min(800, overallMs);
   }
   if (kind === "sshTunnel") {
@@ -265,11 +286,23 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 
 export function buildNetworkHints(cfg: OpenClawConfig) {
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const bindMode = cfg.gateway?.bind ?? "loopback";
+  const overlayHint =
+    bindMode === "overlay"
+      ? cfg.gateway?.overlayInterface
+      : bindMode === "zerotier"
+        ? "zt"
+        : bindMode === "wireguard"
+          ? "wg"
+          : undefined;
+  const overlayIP = overlayHint !== undefined ? pickOverlayIPv4(overlayHint) : undefined;
   const port = resolveGatewayPort(cfg);
   return {
     localLoopbackUrl: `ws://127.0.0.1:${port}`,
     localTailnetUrl: tailnetIPv4 ? `ws://${tailnetIPv4}:${port}` : null,
     tailnetIPv4: tailnetIPv4 ?? null,
+    localOverlayUrl: overlayIP ? `ws://${overlayIP}:${port}` : null,
+    overlayIPv4: overlayIP ?? null,
   };
 }
 
@@ -277,13 +310,15 @@ export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
   const kindLabel =
     target.kind === "localLoopback"
       ? "Local loopback"
-      : target.kind === "sshTunnel"
-        ? "Remote over SSH"
-        : target.kind === "configRemote"
-          ? target.active
-            ? "Remote (configured)"
-            : "Remote (configured, inactive)"
-          : "URL (explicit)";
+      : target.kind === "localOverlay"
+        ? "Local overlay"
+        : target.kind === "sshTunnel"
+          ? "Remote over SSH"
+          : target.kind === "configRemote"
+            ? target.active
+              ? "Remote (configured)"
+              : "Remote (configured, inactive)"
+            : "URL (explicit)";
   return `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`;
 }
 

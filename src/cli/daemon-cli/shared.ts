@@ -55,6 +55,7 @@ export function pickProbeHostForBind(
   bindMode: string,
   tailnetIPv4: string | undefined,
   customBindHost?: string,
+  overlayIPv4?: string,
 ) {
   if (bindMode === "custom" && customBindHost?.trim()) {
     return customBindHost.trim();
@@ -64,6 +65,9 @@ export function pickProbeHostForBind(
   }
   if (bindMode === "lan") {
     return pickPrimaryLanIPv4() ?? "127.0.0.1";
+  }
+  if (bindMode === "overlay" || bindMode === "zerotier" || bindMode === "wireguard") {
+    return overlayIPv4 ?? "127.0.0.1";
   }
   return "127.0.0.1";
 }
