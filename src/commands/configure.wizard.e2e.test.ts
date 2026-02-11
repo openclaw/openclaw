@@ -440,6 +440,11 @@ describe("runConfigureWizard", () => {
       expect(written.skills).toEqual(rawParsed.skills);
       expect(written.logging).toEqual(rawParsed.logging);
 
+      // Default-only sections (agents) that the user never set are correctly omitted.
+      // They were only in baseConfig because Zod injected defaults — the raw file
+      // never contained them. On next read, Zod will re-inject defaults.
+      expect(written.agents).toBeUndefined();
+
       // gateway was in rawParsed as minimal; since the wizard set mode=local
       // (which creates a new reference), it should use the wizard's value
       expect((written as OpenClawConfig).gateway?.mode).toBe("local");
