@@ -23,6 +23,7 @@ describe("runCommandWithTimeout", () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("ok");
+    expect(result.termination).toBe("exit");
   });
 
   it("merges custom env with process.env", async () => {
@@ -43,6 +44,7 @@ describe("runCommandWithTimeout", () => {
 
       expect(result.code).toBe(0);
       expect(result.stdout).toBe("base|ok");
+      expect(result.termination).toBe("exit");
     } finally {
       envSnapshot.restore();
     }
@@ -60,6 +62,7 @@ describe("runCommandWithTimeout", () => {
 
     const durationMs = Date.now() - startedAt;
     expect(durationMs).toBeLessThan(2_500);
+    expect(result.termination).toBe("no-output-timeout");
     expect(result.noOutputTimedOut).toBe(true);
     expect(result.code).not.toBe(0);
   });
@@ -78,7 +81,21 @@ describe("runCommandWithTimeout", () => {
     );
 
     expect(result.code).toBe(0);
+    expect(result.termination).toBe("exit");
     expect(result.noOutputTimedOut).toBe(false);
     expect(result.stdout.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("reports global timeout termination when overall timeout elapses", async () => {
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      {
+        timeoutMs: 200,
+      },
+    );
+
+    expect(result.termination).toBe("timeout");
+    expect(result.noOutputTimedOut).toBe(false);
+    expect(result.code).not.toBe(0);
   });
 });

@@ -41,6 +41,7 @@ describe("runCliAgent resume cleanup", () => {
       code: 0,
       signal: null,
       killed: false,
+      termination: "exit",
     });
 
     await runCliAgent({
@@ -86,6 +87,7 @@ describe("runCliAgent resume cleanup", () => {
       code: null,
       signal: "SIGKILL",
       killed: true,
+      termination: "no-output-timeout",
       noOutputTimedOut: true,
     });
 
@@ -102,6 +104,41 @@ describe("runCliAgent resume cleanup", () => {
         cliSessionId: "thread-123",
       }),
     ).rejects.toThrow("produced no output");
+  });
+
+  it("fails with timeout when CLI exceeds overall timeout", async () => {
+    runExecMock
+      .mockResolvedValueOnce({
+        stdout: "  1 S /bin/launchd\n",
+        stderr: "",
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+      });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: "SIGKILL",
+      killed: true,
+      termination: "timeout",
+      noOutputTimedOut: false,
+    });
+
+    await expect(
+      runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        prompt: "hi",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-1",
+        cliSessionId: "thread-123",
+      }),
+    ).rejects.toThrow("exceeded timeout");
   });
 
   it("falls back to per-agent workspace when workspaceDir is missing", async () => {
@@ -123,6 +160,7 @@ describe("runCliAgent resume cleanup", () => {
       code: 0,
       signal: null,
       killed: false,
+      termination: "exit",
     });
 
     try {
@@ -181,6 +219,55 @@ describe("runCliAgent resume cleanup", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
+  it("uses backend-configured resume watchdog timeout when provided", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "codex-cli": {
+              command: "codex",
+              reliability: {
+                watchdog: {
+                  resume: {
+                    noOutputTimeoutMs: 42_000,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    runExecMock
+      .mockResolvedValueOnce({ stdout: "  1 S /bin/launchd\n", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "ok",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: cfg,
+      prompt: "hi",
+      provider: "codex-cli",
+      model: "gpt-5.2-codex",
+      timeoutMs: 120_000,
+      runId: "run-3",
+      cliSessionId: "thread-123",
+    });
+
+    const options = runCommandWithTimeoutMock.mock.calls[0]?.[1] as { noOutputTimeoutMs?: number };
+    expect(options.noOutputTimeoutMs).toBe(42_000);
   });
 });
 
@@ -262,6 +349,48 @@ describe("cleanupResumeProcesses", () => {
     expect(runExecMock).toHaveBeenCalledTimes(1);
     const psCall = runExecMock.mock.calls[0] ?? [];
     expect(psCall[0]).toBe("ps");
+  });
+
+  it("respects configured staleSeconds override", async () => {
+    runExecMock
+      .mockResolvedValueOnce({
+        stdout:
+          "  45 S  15 codex exec resume thread-88 --color never --sandbox read-only --skip-git-repo-check",
+        stderr: "",
+      })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" });
+
+    await cleanupResumeProcesses(
+      {
+        command: "codex",
+        resumeArgs: [
+          "exec",
+          "resume",
+          "{sessionId}",
+          "--color",
+          "never",
+          "--sandbox",
+          "read-only",
+          "--skip-git-repo-check",
+        ],
+        reliability: {
+          resumeCleanup: {
+            staleSeconds: 10,
+          },
+        },
+      } as CliBackendConfig,
+      "thread-88",
+    );
+
+    if (process.platform === "win32") {
+      expect(runExecMock).not.toHaveBeenCalled();
+      return;
+    }
+
+    expect(runExecMock).toHaveBeenCalledTimes(2);
+    const killCall = runExecMock.mock.calls[1] ?? [];
+    expect(killCall[0]).toBe("kill");
+    expect(killCall[1]).toEqual(["-9", "45"]);
   });
 });
 
