@@ -42,7 +42,7 @@ import {
   resolveThreadSessionKeys,
 } from "./monitor-helpers.js";
 import { sendMessageZulip } from "./send.js";
-import { downloadZulipUpload, extractZulipUploadUrls, normalizeEmojiName } from "./uploads.js";
+import { downloadZulipUpload, extractZulipUploadUrls, normalizeZulipEmojiName } from "./uploads.js";
 
 export type MonitorZulipOpts = {
   apiKey?: string;
@@ -202,7 +202,7 @@ async function saveZulipMediaBuffer(params: {
   return { path: filePath, contentType };
 }
 
-function sleep(ms: number): Promise<void> {
+function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -263,9 +263,9 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
   const reactionConfig = account.config.reactions ?? {};
   const reactionsEnabled = reactionConfig.enabled !== false;
   const reactionClearOnFinish = reactionConfig.clearOnFinish !== false;
-  const reactionStart = normalizeEmojiName(reactionConfig.onStart ?? "eyes");
-  const reactionSuccess = normalizeEmojiName(reactionConfig.onSuccess ?? "check_mark");
-  const reactionError = normalizeEmojiName(reactionConfig.onError ?? "warning");
+  const reactionStart = normalizeZulipEmojiName(reactionConfig.onStart ?? "eyes");
+  const reactionSuccess = normalizeZulipEmojiName(reactionConfig.onSuccess ?? "check_mark");
+  const reactionError = normalizeZulipEmojiName(reactionConfig.onError ?? "warning");
 
   const handleMessage = async (message: ZulipMessage) => {
     const messageId = String(message.id ?? "");
@@ -316,7 +316,12 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
     if (uploadUrls.length > 0) {
       for (const uploadUrl of uploadUrls) {
         try {
-          const downloaded = await downloadZulipUpload(uploadUrl, baseUrl, client.authHeader, mediaMaxBytes);
+          const downloaded = await downloadZulipUpload(
+            uploadUrl,
+            baseUrl,
+            client.authHeader,
+            mediaMaxBytes,
+          );
           const saved = await saveZulipMediaBuffer({
             core,
             buffer: downloaded.buffer,
@@ -814,7 +819,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       }
 
       if (events.length === 0) {
-        await sleep(1000);
+        await delay(1000);
       }
 
       resetPollBackoff();
@@ -858,9 +863,9 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       } else {
         pollBackoffMs = Math.min(30000, pollBackoffMs * 2);
       }
-      const delay =
+      const waitMs =
         retryAfterMs && retryAfterMs > 0 ? Math.min(30000, retryAfterMs) : pollBackoffMs;
-      await sleep(delay);
+      await delay(waitMs);
     }
   }
 

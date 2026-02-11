@@ -114,15 +114,16 @@ export function resolveZulipAccount(params: {
   const configUrlTrimmed = configUrl?.trim();
   const apiKey = configApiKey || envApiKey;
   const email = configEmail || envEmail;
-  const baseUrl = normalizeZulipBaseUrl(
-    configUrlTrimmed || envUrl || envSite || envRealm,
-  );
+  const baseUrl = normalizeZulipBaseUrl(configUrlTrimmed || envUrl || envSite || envRealm);
   const requireMention = resolveZulipRequireMention(merged);
 
   const apiKeySource: ZulipTokenSource = configApiKey ? "config" : envApiKey ? "env" : "none";
   const emailSource: ZulipEmailSource = configEmail ? "config" : envEmail ? "env" : "none";
-  const baseUrlSource: ZulipBaseUrlSource =
-    configUrlTrimmed ? "config" : envUrl || envSite || envRealm ? "env" : "none";
+  const baseUrlSource: ZulipBaseUrlSource = configUrlTrimmed
+    ? "config"
+    : envUrl || envSite || envRealm
+      ? "env"
+      : "none";
 
   return {
     accountId,

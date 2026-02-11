@@ -1,6 +1,6 @@
 import path from "node:path";
 
-export function normalizeEmojiName(raw?: string | null): string {
+export function normalizeZulipEmojiName(raw?: string | null): string {
   const trimmed = raw?.trim() ?? "";
   if (!trimmed) {
     return "";

@@ -45,7 +45,7 @@ function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
-function resolveLocalPath(value: string): string | null {
+function resolveZulipLocalPath(value: string): string | null {
   if (value.startsWith("file://")) {
     return fileURLToPath(value);
   }
@@ -146,7 +146,7 @@ export async function sendMessageZulip(
   let tempFileCleanup = false;
 
   if (mediaUrl) {
-    const localPath = resolveLocalPath(mediaUrl);
+    const localPath = resolveZulipLocalPath(mediaUrl);
     const isZulipHosted = isHttpUrl(mediaUrl) && mediaUrl.startsWith(baseUrl);
     if (localPath && fs.existsSync(localPath)) {
       const upload = await uploadZulipFile(client, localPath);

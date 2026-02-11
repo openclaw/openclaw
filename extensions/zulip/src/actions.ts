@@ -270,7 +270,7 @@ function readBooleanParam(params: Record<string, unknown>, ...keys: string[]): b
   return undefined;
 }
 
-function readStringArrayParam(
+function parseStringArrayParam(
   params: Record<string, unknown>,
   key: string,
 ): Array<string | number> | undefined {
@@ -504,7 +504,7 @@ export const zulipMessageActions: ChannelMessageActionAdapter = {
         assertStringLength(description, "description", MAX_STRING_LENGTH);
       }
       const principals =
-        readStringArrayParam(params, "principals") ?? readStringArrayParam(params, "principal");
+        parseStringArrayParam(params, "principals") ?? parseStringArrayParam(params, "principal");
       const announce = readBooleanParam(params, "announce");
       const inviteOnly = readBooleanParam(
         params,
@@ -649,10 +649,10 @@ export const zulipMessageActions: ChannelMessageActionAdapter = {
         readStringParam(params, "to", { required: true });
       const target = splitStreamTarget(raw);
       let principals =
-        readStringArrayParam(params, "principals") ??
-        readStringArrayParam(params, "principal") ??
-        readStringArrayParam(params, "userIds") ??
-        readStringArrayParam(params, "users");
+        parseStringArrayParam(params, "principals") ??
+        parseStringArrayParam(params, "principal") ??
+        parseStringArrayParam(params, "userIds") ??
+        parseStringArrayParam(params, "users");
       // Support comma-separated string for userId param (message tool compat)
       if ((!principals || principals.length === 0) && typeof params.userId === "string") {
         principals = params.userId

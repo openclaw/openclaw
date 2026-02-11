@@ -94,7 +94,7 @@ function resolveRetryAfterMs(res: Response): number | undefined {
   return undefined;
 }
 
-function sleep(ms: number): Promise<void> {
+function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -203,7 +203,7 @@ export async function zulipRequestWithRetry<T>(
     const base = status === 429 ? rateLimitDelayMs : baseDelayMs;
     const backoff = Math.min(maxDelayMs, base * 2 ** attempt);
     const waitMs = retryAfterMs && retryAfterMs > 0 ? Math.min(maxDelayMs, retryAfterMs) : backoff;
-    await sleep(waitMs);
+    await delay(waitMs);
   }
 
   throw new Error("Zulip API request failed after retries");
