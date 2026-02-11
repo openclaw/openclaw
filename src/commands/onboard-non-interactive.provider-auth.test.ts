@@ -324,4 +324,34 @@ describe("onboard (non-interactive): provider auth", () => {
       });
     });
   }, 60_000);
+
+  it("infers Together auth choice from --together-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-together-infer-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          togetherApiKey: "together-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["together:default"]?.provider).toBe("together");
+      expect(cfg.auth?.profiles?.["together:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("together/zai-org/GLM-4.7");
+      await expectApiKeyProfile({
+        profileId: "together:default",
+        provider: "together",
+        key: "together-test-key",
+      });
+    });
+  }, 60_000);
 });

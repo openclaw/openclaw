@@ -1,5 +1,8 @@
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { discoverHuggingfaceModels } from "../agents/huggingface-models.js";
+import {
+  discoverHuggingfaceModels,
+  isHuggingfacePolicyLocked,
+} from "../agents/huggingface-models.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import {
   formatApiKeyPreview,
@@ -111,6 +114,13 @@ export async function applyAuthChoiceHuggingface(
               ? defaultRef
               : options[0].value,
           });
+
+  if (isHuggingfacePolicyLocked(selectedModelRef)) {
+    await params.prompter.note(
+      "Provider locked — router will choose backend by cost or speed.",
+      "Hugging Face",
+    );
+  }
 
   const applied = await applyDefaultModelChoice({
     config: nextConfig,
