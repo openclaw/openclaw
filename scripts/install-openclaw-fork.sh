@@ -7,108 +7,150 @@ set -euo pipefail
 #   OPENCLAW_REF=v2026.2.9-dreamclaw.4
 #
 # Overrides:
+#   OPENCLAW_SPEC=<npm-install-spec>       # optional direct spec (e.g. file:/path, git+https://...)
+#                                          # release tarball example:
+#                                          #   https://github.com/<org>/<repo>/releases/download/<tag>/openclaw-<tag>.tgz
 #   OPENCLAW_REPO=https://github.com/<org>/<repo>.git
 #   OPENCLAW_REF=<tag-or-commit>         # preferred (immutable)
 #   OPENCLAW_BRANCH=<branch>             # fallback for development
-#   OPENCLAW_INSTALLER=auto|npm|pnpm
+#   OPENCLAW_INSTALLER=npm|pnpm|auto
 #   OPENCLAW_BIN=openclaw|moltbot
 #   OPENCLAW_RUN_ONBOARD=1|0
 #   OPENCLAW_ONBOARD_ARGS="--install-daemon --auth-choice x402"
 #   OPENCLAW_NPM_SCRIPT_SHELL=/path/to/sh  # optional npm lifecycle shell override
 
+OPENCLAW_SPEC="${OPENCLAW_SPEC:-}"
 OPENCLAW_REPO="${OPENCLAW_REPO:-https://github.com/RedBeardEth/clawdbot.git}"
-OPENCLAW_REF="${OPENCLAW_REF:-v2026.2.9-dreamclaw.4}"
+OPENCLAW_REF="${OPENCLAW_REF:-}"
 OPENCLAW_BRANCH="${OPENCLAW_BRANCH:-}"
-OPENCLAW_INSTALLER="${OPENCLAW_INSTALLER:-auto}"
+OPENCLAW_INSTALLER="${OPENCLAW_INSTALLER:-npm}"
 OPENCLAW_BIN="${OPENCLAW_BIN:-}"
 OPENCLAW_RUN_ONBOARD="${OPENCLAW_RUN_ONBOARD:-1}"
 OPENCLAW_ONBOARD_ARGS="${OPENCLAW_ONBOARD_ARGS:---install-daemon --auth-choice x402}"
 OPENCLAW_NPM_SCRIPT_SHELL="${OPENCLAW_NPM_SCRIPT_SHELL:-}"
+
+if [[ -z "$OPENCLAW_SPEC" && -z "$OPENCLAW_REF" && -z "$OPENCLAW_BRANCH" ]]; then
+  OPENCLAW_REF="v2026.2.9-dreamclaw.4"
+fi
+
+if [[ -n "$OPENCLAW_SPEC" && ( -n "$OPENCLAW_REF" || -n "$OPENCLAW_BRANCH" ) ]]; then
+  echo "ERROR: set OPENCLAW_SPEC or OPENCLAW_REF/OPENCLAW_BRANCH, not both" >&2
+  exit 1
+fi
 
 if [[ -n "$OPENCLAW_REF" && -n "$OPENCLAW_BRANCH" ]]; then
   echo "ERROR: set only one of OPENCLAW_REF or OPENCLAW_BRANCH" >&2
   exit 1
 fi
 
-if [[ -n "$OPENCLAW_REF" ]]; then
-  TARGET_REF="$OPENCLAW_REF"
+if [[ -n "$OPENCLAW_SPEC" ]]; then
+  SPEC="$OPENCLAW_SPEC"
+  REF_KIND="spec"
+elif [[ -n "$OPENCLAW_REF" ]]; then
+  SPEC="git+${OPENCLAW_REPO}#${OPENCLAW_REF}"
   REF_KIND="ref"
 elif [[ -n "$OPENCLAW_BRANCH" ]]; then
-  TARGET_REF="$OPENCLAW_BRANCH"
+  SPEC="git+${OPENCLAW_REPO}#${OPENCLAW_BRANCH}"
   REF_KIND="branch"
 else
   echo "ERROR: provide OPENCLAW_REF (recommended) or OPENCLAW_BRANCH" >&2
   exit 1
 fi
 
-SPEC="git+${OPENCLAW_REPO}#${TARGET_REF}"
-
 echo "==> Installing from ${SPEC} (${REF_KIND})"
 
 resolve_npm_script_shell() {
   if [[ -n "$OPENCLAW_NPM_SCRIPT_SHELL" ]]; then
-    if [[ -x "$OPENCLAW_NPM_SCRIPT_SHELL" ]]; then
-      printf '%s\n' "$OPENCLAW_NPM_SCRIPT_SHELL"
+    [[ -x "$OPENCLAW_NPM_SCRIPT_SHELL" ]] || {
+      echo "ERROR: OPENCLAW_NPM_SCRIPT_SHELL is not executable: $OPENCLAW_NPM_SCRIPT_SHELL" >&2
+      return 1
+    }
+    printf '%s\n' "$OPENCLAW_NPM_SCRIPT_SHELL"
+    return 0
+  fi
+
+  local c
+  # Prefer stable absolute paths to avoid bad shell hashes/aliases.
+  for c in /bin/sh /usr/bin/sh /bin/bash /usr/bin/bash; do
+    if [[ -x "$c" ]]; then
+      printf '%s\n' "$c"
       return 0
     fi
-    echo "ERROR: OPENCLAW_NPM_SCRIPT_SHELL is not executable: $OPENCLAW_NPM_SCRIPT_SHELL" >&2
+  done
+
+  c="$(command -v sh || command -v bash || true)"
+  if [[ -n "$c" && -x "$c" ]]; then
+    printf '%s\n' "$c"
+    return 0
+  fi
+
+  return 1
+}
+
+resolve_path() {
+  local input="$1"
+  readlink -f "$input" 2>/dev/null || realpath "$input" 2>/dev/null || printf '%s\n' ""
+}
+
+run_npm() {
+  local npm_bin npm_bin_dir npm_cli npm_node
+  npm_bin="$(command -v npm || true)"
+  if [[ -z "$npm_bin" ]]; then
+    echo "ERROR: npm is not available in PATH" >&2
     return 1
   fi
 
-  # Prefer stable absolute paths to avoid bad shell hashes/aliases.
-  if [[ -x "/bin/sh" ]]; then
-    printf '%s\n' "/bin/sh"
-    return 0
-  fi
-  if [[ -x "/usr/bin/sh" ]]; then
-    printf '%s\n' "/usr/bin/sh"
-    return 0
-  fi
-  if [[ -x "/bin/bash" ]]; then
-    printf '%s\n' "/bin/bash"
-    return 0
-  fi
-  if [[ -x "/usr/bin/bash" ]]; then
-    printf '%s\n' "/usr/bin/bash"
+  npm_bin_dir="$(dirname "$npm_bin")"
+  npm_cli="$(resolve_path "$npm_bin")"
+  npm_node="${npm_bin_dir}/node"
+
+  if [[ -n "$npm_cli" && -f "$npm_cli" && -x "$npm_node" ]]; then
+    "$npm_node" "$npm_cli" "$@"
     return 0
   fi
 
-  local found
-  found="$(command -v sh || true)"
-  if [[ -n "$found" && -x "$found" ]]; then
-    printf '%s\n' "$found"
-    return 0
-  fi
-  found="$(command -v bash || true)"
-  if [[ -n "$found" && -x "$found" ]]; then
-    printf '%s\n' "$found"
-    return 0
-  fi
-  return 1
+  "$npm_bin" "$@"
 }
+
+GLOBAL_BIN_HINT=""
 
 if [[ "$OPENCLAW_INSTALLER" == "pnpm" ]] || [[ "$OPENCLAW_INSTALLER" == "auto" && -x "$(command -v pnpm || true)" ]]; then
   echo "==> Using pnpm global install"
   pnpm add -g "$SPEC"
+  GLOBAL_BIN_HINT="$(pnpm bin -g 2>/dev/null || true)"
 else
   if [[ "$OPENCLAW_INSTALLER" != "auto" && "$OPENCLAW_INSTALLER" != "npm" ]]; then
     echo "ERROR: unsupported OPENCLAW_INSTALLER='$OPENCLAW_INSTALLER' (expected auto|npm|pnpm)" >&2
     exit 1
   fi
   echo "==> Using npm global install"
-  # npm lifecycle scripts assume a POSIX shell and standard system PATH entries.
-  export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
+  # Keep the caller's PATH order to avoid Node/npm version mismatches.
   npm_shell="$(resolve_npm_script_shell || true)"
   if [[ -n "${npm_shell:-}" ]]; then
     echo "==> npm script shell: ${npm_shell}"
-    npm_config_script_shell="$npm_shell" npm install -g "$SPEC"
+    npm_config_script_shell="$npm_shell" run_npm install -g "$SPEC"
   else
     echo "==> npm script shell: default"
-    npm install -g "$SPEC"
+    run_npm install -g "$SPEC"
+  fi
+  npm_prefix="$(run_npm prefix -g 2>/dev/null || true)"
+  if [[ -n "${npm_prefix:-}" ]]; then
+    GLOBAL_BIN_HINT="${npm_prefix}/bin"
   fi
 fi
 
 resolve_cli_bin() {
+  local candidate hinted_path
+  if [[ -n "$GLOBAL_BIN_HINT" ]]; then
+    for candidate in openclaw moltbot; do
+      hinted_path="${GLOBAL_BIN_HINT}/${candidate}"
+      if [[ -x "$hinted_path" ]]; then
+        printf '%s\n' "$hinted_path"
+        return 0
+      fi
+    done
+  fi
+
   if [[ -n "$OPENCLAW_BIN" ]]; then
     if command -v "$OPENCLAW_BIN" >/dev/null 2>&1; then
       command -v "$OPENCLAW_BIN"
@@ -118,7 +160,6 @@ resolve_cli_bin() {
     return 1
   fi
 
-  local candidate
   for candidate in openclaw moltbot; do
     if command -v "$candidate" >/dev/null 2>&1; then
       command -v "$candidate"
@@ -134,12 +175,14 @@ CLI_BIN_PATH="$(resolve_cli_bin)"
 CLI_BIN_NAME="$(basename "$CLI_BIN_PATH")"
 
 echo "==> Installed CLI: ${CLI_BIN_NAME} (${CLI_BIN_PATH})"
+INSTALLED_VERSION="$("$CLI_BIN_PATH" --version 2>/dev/null || true)"
+echo "==> Installed version: ${INSTALLED_VERSION:-unknown}"
 
 if [[ "$OPENCLAW_RUN_ONBOARD" == "1" ]]; then
-  echo "==> Running onboarding: ${CLI_BIN_NAME} ${OPENCLAW_ONBOARD_ARGS}"
+  echo "==> Running onboarding: ${CLI_BIN_PATH} ${OPENCLAW_ONBOARD_ARGS}"
   # shellcheck disable=SC2086
-  "$CLI_BIN_NAME" ${OPENCLAW_ONBOARD_ARGS}
+  "$CLI_BIN_PATH" ${OPENCLAW_ONBOARD_ARGS}
 else
   echo "==> Skipping onboarding (OPENCLAW_RUN_ONBOARD=${OPENCLAW_RUN_ONBOARD})"
-  echo "    Run manually: ${CLI_BIN_NAME} ${OPENCLAW_ONBOARD_ARGS}"
+  echo "    Run manually: ${CLI_BIN_PATH} ${OPENCLAW_ONBOARD_ARGS}"
 fi
