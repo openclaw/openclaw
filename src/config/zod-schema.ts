@@ -508,6 +508,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        stuckDetection: z
+          .object({
+            enabled: z.boolean().optional(),
+            thresholdMinutes: z.number().int().positive().optional(),
+            action: z.union([z.literal("log"), z.literal("notify"), z.literal("abort")]).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
