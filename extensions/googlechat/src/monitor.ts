@@ -345,10 +345,11 @@ function resolveGroupConfig(params: {
   return { entry: entry ?? fallback, allowlistConfigured: true, fallback };
 }
 
-function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: string | null) {
+export function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: string | null) {
   const mentionAnnotations = annotations.filter((entry) => entry.type === "USER_MENTION");
   const hasAnyMention = mentionAnnotations.length > 0;
-  const botTargets = new Set(["users/app", botUser?.trim()].filter(Boolean) as string[]);
+  const trimmedBotUser = botUser?.trim() || null;
+  const botTargets = new Set(["users/app", trimmedBotUser].filter(Boolean) as string[]);
   const wasMentioned = mentionAnnotations.some((entry) => {
     const userName = entry.userMention?.user?.name;
     if (!userName) {
@@ -357,7 +358,22 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
     if (botTargets.has(userName)) {
       return true;
     }
-    return normalizeUserId(userName) === "app";
+    if (normalizeUserId(userName) === "app") {
+      return true;
+    }
+    // When botUser is not explicitly configured, fall back to checking the
+    // user.type field. Google Chat sends numeric user IDs (e.g. "users/123...")
+    // instead of "users/app" for webhook-based bots, so the type field is the
+    // only reliable signal. For multi-bot safety, only use this fallback when
+    // exactly one BOT-type mention exists — with multiple bots we can't tell
+    // which one is ours without an explicit botUser configuration.
+    if (!trimmedBotUser && entry.userMention?.user?.type?.toUpperCase() === "BOT") {
+      const botTypeMentionCount = mentionAnnotations.filter(
+        (m) => m.userMention?.user?.type?.toUpperCase() === "BOT",
+      ).length;
+      return botTypeMentionCount === 1;
+    }
+    return false;
   });
   return { hasAnyMention, wasMentioned };
 }
