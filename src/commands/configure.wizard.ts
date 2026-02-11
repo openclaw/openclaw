@@ -11,7 +11,7 @@ import { logConfigUpdated } from "../config/logging.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { resolveUserPath } from "../utils.js";
+import { isPlainObject, resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
@@ -42,6 +42,37 @@ import {
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
+
+/**
+ * Merge wizard changes into the raw parsed config, preserving keys
+ * the wizard didn't modify (#9632).
+ *
+ * Uses reference equality between baseConfig and nextConfig to detect
+ * which top-level sections the wizard touched. Unmodified sections
+ * keep their raw file values (preserving ${VAR} references, unknown
+ * sub-keys, and original formatting).
+ */
+export function mergeWizardOutput(
+  rawParsed: Record<string, unknown>,
+  baseConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): Record<string, unknown> {
+  if ("$include" in rawParsed) {
+    return nextConfig as unknown as Record<string, unknown>;
+  }
+
+  const result: Record<string, unknown> = { ...rawParsed };
+  const baseRec = baseConfig as unknown as Record<string, unknown>;
+  const nextRec = nextConfig as unknown as Record<string, unknown>;
+
+  for (const key of Object.keys(nextRec)) {
+    if (nextRec[key] !== baseRec[key]) {
+      result[key] = nextRec[key];
+    }
+  }
+
+  return result;
+}
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 
@@ -218,6 +249,8 @@ export async function runConfigureWizard(
 
     const snapshot = await readConfigFileSnapshot();
     const baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+    const rawParsed: Record<string, unknown> =
+      snapshot.exists && snapshot.valid && isPlainObject(snapshot.parsed) ? snapshot.parsed : {};
 
     if (snapshot.exists) {
       const title = snapshot.valid ? "Existing config detected" : "Invalid config";
@@ -286,7 +319,8 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await writeConfigFile(remoteConfig);
+      const merged = mergeWizardOutput(rawParsed, baseConfig, remoteConfig);
+      await writeConfigFile(merged as OpenClawConfig);
       logConfigUpdated(runtime);
       outro("Remote gateway configured.");
       return;
@@ -315,20 +349,12 @@ export async function runConfigureWizard(
       process.env.OPENCLAW_GATEWAY_TOKEN;
 
     const persistConfig = async () => {
-      // Recover top-level keys from the base config that a section handler
-      // may have dropped by not spreading the full config object.
-      for (const key of Object.keys(baseConfig)) {
-        if (!(key in nextConfig)) {
-          (nextConfig as Record<string, unknown>)[key] = (baseConfig as Record<string, unknown>)[
-            key
-          ];
-        }
-      }
       nextConfig = applyWizardMetadata(nextConfig, {
         command: opts.command,
         mode,
       });
-      await writeConfigFile(nextConfig);
+      const merged = mergeWizardOutput(rawParsed, baseConfig, nextConfig);
+      await writeConfigFile(merged as OpenClawConfig);
       logConfigUpdated(runtime);
     };
 

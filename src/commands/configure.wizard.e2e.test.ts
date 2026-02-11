@@ -98,7 +98,7 @@ vi.mock("./onboard-channels.js", () => ({
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
 import { promptGatewayConfig } from "./configure.gateway.js";
-import { runConfigureWizard } from "./configure.wizard.js";
+import { mergeWizardOutput, runConfigureWizard } from "./configure.wizard.js";
 
 /**
  * A rich config that simulates user-customized settings across many sections.
@@ -144,11 +144,12 @@ function makeRichConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function setupCommonMocks(baseConfig: OpenClawConfig) {
+function setupCommonMocks(baseConfig: OpenClawConfig, rawParsed?: Record<string, unknown>) {
   mocks.readConfigFileSnapshot.mockResolvedValue({
     exists: true,
     valid: true,
     config: baseConfig,
+    parsed: rawParsed ?? baseConfig,
     issues: [],
   });
   mocks.resolveGatewayPort.mockReturnValue(18789);
@@ -180,6 +181,7 @@ describe("runConfigureWizard", () => {
       exists: false,
       valid: true,
       config: {},
+      parsed: {},
       issues: [],
     });
     mocks.resolveGatewayPort.mockReturnValue(18789);
@@ -353,7 +355,7 @@ describe("runConfigureWizard", () => {
       expect(written.web).toEqual({ enabled: true });
     });
 
-    it("recovers dropped top-level keys when a section handler omits them", async () => {
+    it("recovers dropped top-level keys from raw parsed config when handler omits them", async () => {
       const baseConfig = makeRichConfig();
       setupCommonMocks(baseConfig);
 
@@ -382,15 +384,129 @@ describe("runConfigureWizard", () => {
       await runConfigureWizard({ command: "configure", sections: ["model"] }, testRuntime);
 
       expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-      const written = mocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+      const written = mocks.writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
 
-      // Base config keys that the handler dropped must be recovered
-      expect(written.tools?.media?.audio).toEqual(
+      // Raw parsed keys that the handler dropped are recovered from rawParsed
+      expect((written as OpenClawConfig).tools?.media?.audio).toEqual(
         expect.objectContaining({ enabled: true, language: "en" }),
       );
-      expect(written.skills?.entries?.["skill-a"]?.enabled).toBe(false);
+      expect((written as OpenClawConfig).skills?.entries?.["skill-a"]?.enabled).toBe(false);
       expect(written.logging).toEqual({ level: "info" });
       expect(written.web).toEqual({ enabled: true });
     });
+
+    it("uses raw parsed values instead of Zod-defaulted values for unmodified sections", async () => {
+      // rawParsed is what's actually in the file — minimal, no defaults
+      const rawParsed = {
+        gateway: { mode: "local", auth: { mode: "token", token: "t" } },
+        tools: { media: { audio: { enabled: true, language: "en" } } },
+        skills: { entries: { "my-skill": { enabled: false } } },
+        logging: { level: "info" },
+      };
+
+      // baseConfig (from Zod) has EXTRA defaults injected
+      const baseConfig = {
+        ...rawParsed,
+        gateway: {
+          ...rawParsed.gateway,
+          port: 18789,
+          bind: "loopback",
+          tailscale: { mode: "off", resetOnExit: false },
+        },
+        agents: {
+          defaults: { workspace: "~/.openclaw/workspace" },
+        },
+      } as OpenClawConfig;
+
+      setupCommonMocks(baseConfig, rawParsed);
+
+      vi.mocked(promptAuthConfig).mockImplementation(async (cfg) => ({
+        ...cfg,
+        auth: {
+          ...cfg.auth,
+          profiles: { "anthropic:default": { provider: "anthropic", mode: "api_key" as const } },
+        },
+      }));
+
+      mocks.clackSelect.mockResolvedValue("local");
+
+      await runConfigureWizard({ command: "configure", sections: ["model"] }, testRuntime);
+
+      expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+      const written = mocks.writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+
+      // Unmodified sections come from rawParsed, NOT baseConfig — no injected defaults
+      expect(written.tools).toEqual(rawParsed.tools);
+      expect(written.skills).toEqual(rawParsed.skills);
+      expect(written.logging).toEqual(rawParsed.logging);
+
+      // gateway was in rawParsed as minimal; since the wizard set mode=local
+      // (which creates a new reference), it should use the wizard's value
+      expect((written as OpenClawConfig).gateway?.mode).toBe("local");
+    });
+  });
+});
+
+describe("mergeWizardOutput", () => {
+  it("preserves raw values for unmodified keys", () => {
+    const raw = { gateway: { mode: "local" }, tools: { web: { enabled: true } } };
+    const shared = { mode: "local" };
+    const base = { gateway: shared } as OpenClawConfig;
+    const next = { gateway: shared } as OpenClawConfig;
+
+    const result = mergeWizardOutput(raw, base, next);
+
+    // gateway is the same reference — raw value is preserved
+    expect(result.gateway).toEqual({ mode: "local" });
+    // tools was only in raw — preserved as-is
+    expect(result.tools).toEqual({ web: { enabled: true } });
+  });
+
+  it("uses wizard values for modified keys", () => {
+    const raw = { gateway: { mode: "local", port: 18789 } };
+    const sharedGateway = { mode: "local", port: 18789 };
+    const base = { gateway: sharedGateway } as OpenClawConfig;
+    const newGateway = { mode: "local", port: 9999 };
+    const next = { gateway: newGateway } as OpenClawConfig;
+
+    const result = mergeWizardOutput(raw, base, next);
+
+    // gateway was modified (different reference) — wizard value wins
+    expect(result.gateway).toEqual({ mode: "local", port: 9999 });
+  });
+
+  it("preserves raw keys not present in nextConfig", () => {
+    const raw = { logging: { level: "debug" }, customKey: "preserve-me" };
+    const base = {} as OpenClawConfig;
+    const next = {} as OpenClawConfig;
+
+    const result = mergeWizardOutput(raw, base, next);
+
+    expect(result.logging).toEqual({ level: "debug" });
+    expect(result.customKey).toBe("preserve-me");
+  });
+
+  it("falls back to nextConfig when rawParsed has $include", () => {
+    const raw = { $include: "./other.json", gateway: { mode: "remote" } };
+    const base = { gateway: { mode: "remote" } } as OpenClawConfig;
+    const next = { gateway: { mode: "local" } } as OpenClawConfig;
+
+    const result = mergeWizardOutput(raw, base, next);
+
+    // $include present → fall back to nextConfig entirely
+    expect(result).toEqual(next as unknown as Record<string, unknown>);
+  });
+
+  it("adds keys from nextConfig missing in rawParsed", () => {
+    const raw = { gateway: { mode: "local" } };
+    const base = {} as OpenClawConfig;
+    const next = { agents: { defaults: { workspace: "/tmp/ws" } } } as OpenClawConfig;
+
+    const result = mergeWizardOutput(raw, base, next);
+
+    // agents was not in raw, but wizard added it (different reference from base)
+    expect(result.agents).toEqual({ defaults: { workspace: "/tmp/ws" } });
+    // gateway from raw is preserved
+    expect(result.gateway).toEqual({ mode: "local" });
   });
 });
