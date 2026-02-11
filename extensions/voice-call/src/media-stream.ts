@@ -114,12 +114,9 @@ export class MediaStreamHandler {
 
           case "media":
             if (session && message.media?.payload) {
-              // Skip forwarding audio to STT while TTS is playing (echo cancellation)
-              const isPlaying = this.ttsPlaying.get(session.streamSid) ?? false;
-              if (!isPlaying) {
-                const audioBuffer = Buffer.from(message.media.payload, "base64");
-                session.sttSession.sendAudio(audioBuffer);
-              }
+              // Forward audio to STT (phone-side AEC handles echo cancellation)
+              const audioBuffer = Buffer.from(message.media.payload, "base64");
+              session.sttSession.sendAudio(audioBuffer);
             }
             break;
 
