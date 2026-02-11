@@ -214,6 +214,8 @@ function ensureListener() {
     if (phase === "error") {
       const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
       entry.outcome = { status: "error", error };
+    } else if (evt.data?.aborted) {
+      entry.outcome = { status: "timeout" };
     } else {
       entry.outcome = { status: "ok" };
     }
@@ -336,7 +338,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       },
       timeoutMs: timeoutMs + 10_000,
     });
-    if (wait?.status !== "ok" && wait?.status !== "error") {
+    if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
       return;
     }
     const entry = subagentRuns.get(runId);
@@ -358,7 +360,11 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     }
     const waitError = typeof wait.error === "string" ? wait.error : undefined;
     entry.outcome =
-      wait.status === "error" ? { status: "error", error: waitError } : { status: "ok" };
+      wait.status === "error"
+        ? { status: "error", error: waitError }
+        : wait.status === "timeout"
+          ? { status: "timeout" }
+          : { status: "ok" };
     mutated = true;
     if (mutated) {
       persistSubagentRuns();
