@@ -110,6 +110,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Media: add missing `audio/aac`, `audio/flac`, `audio/opus`, and `audio/wav` MIME-to-extension mappings so Signal voice notes (and other extensionless audio) are saved with the correct file extension and transcribed automatically. (#11066)
 - Cron: scheduler reliability (timer drift, restart catch-up, lock contention, stale running markers). (#10776) Thanks @tyler6204.
 - Cron: store migration hardening (legacy field migration, parse error handling, explicit delivery mode persistence). (#10776) Thanks @tyler6204.
 - Memory: set Voyage embeddings `input_type` for improved retrieval. (#10818) Thanks @mcinteerj.
