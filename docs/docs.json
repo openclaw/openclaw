@@ -27,8 +27,8 @@
   "styling": {
     "codeblocks": {
       "theme": {
-        "dark": "rose-pine",
-        "light": "rose-pine-dawn"
+        "dark": "min-dark",
+        "light": "min-light"
       }
     }
   },
