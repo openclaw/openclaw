@@ -120,10 +120,12 @@ Setup:
 1. Run `supabase-schema.sql` in your Supabase SQL editor to create the `env_vars` table.
 2. Insert your secrets: `INSERT INTO env_vars (key, value) VALUES ('OPENAI_API_KEY', 'sk-...')`.
 3. Set only two bootstrap vars in your local `.env`:
+
    ```
    SUPABASE_URL=https://your-project.supabase.co
    SUPABASE_SERVICE_ROLE_KEY=eyJhbG...
    ```
+
 4. Start SecureClaw normally — all other secrets load from Supabase automatically.
 
 Precedence (highest to lowest): process env > `./.env` > `~/.openclaw/.env` > **Supabase `env_vars`** > `openclaw.json` `env` block.
