@@ -49,6 +49,22 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
   - **Proactive auto-compaction:** In the embedded Pi run loop, if estimated session tokens ≥ 80% of the model context window before the next turn, OpenClaw compacts once and then proceeds, reducing context-overflow errors. If compaction reports "Already compacted" (or does not reduce the session), the loop proceeds to the turn instead of retrying indefinitely.
   - **/compact scope:** `/compact` is registered with `scope: "both"` and `nativeName: "compact"` so channels that support native UI (e.g. Telegram) can show a compact button as well as the slash command.
 
+### Docker image, health checks, and helper shims
+
+- **Container helper binaries (baked into Docker image)**
+  - New `bin/` directory with:
+    - `bin/docker-health`: safe health check for all containers that:
+      - exits `127` if `docker` is not installed
+      - handles the "no containers" case cleanly
+      - prints `<container-name>: <status>` using `.State.Health.Status` when present, falling back to `.State.Status`
+    - `bin/weather`: small weather wrapper for the gateway agent that:
+      - uses `flock` on `/tmp/weather-tool.lock` to avoid thundering herd (multiple concurrent weather tool calls)
+      - prefers `wttr.in` with a 2s timeout and falls back to Open-Meteo for Jefferson, GA (Phil’s node) when needed
+    - `bin/himalaya`: Himalaya CLI v1.1.0 compatibility shim that:
+      - resolves the real binary as `himalaya-real` when available (or `/usr/local/bin/himalaya` otherwise)
+      - remaps `list` → `envelope list`, `read` → `message read`, and `envelope read` → `message read` while passing other commands through
+  - Root `Dockerfile` copies `bin/` into `/usr/local/bin/` and marks the helper scripts executable so they are always available in containerized deployments (Fly, Render, GCP, etc.).
+
 ### Scheduler and cron reliability
 
 - **Cron zombie scheduler + in-flight job persistence**
