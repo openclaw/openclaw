@@ -150,7 +150,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       cfg: config,
       channel: PLUGIN_ID,
       accountId,
-      peer: { kind: "dm", id: sender.chatId },
+      peer: { kind: "direct", id: sender.chatId },
     });
 
     // 格式化入站消息体
