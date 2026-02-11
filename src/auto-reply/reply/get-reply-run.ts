@@ -210,9 +210,6 @@ export async function runPreparedReply(
     isNewSession
       ? {
           ...sessionCtx,
-          // When ThreadHistoryBody is present (fetched from Slack API), it already
-          // includes pending messages and the thread starter, so suppress them to
-          // avoid duplicate content in the LLM context (#13912).
           ...(sessionCtx.ThreadHistoryBody?.trim()
             ? { InboundHistory: undefined, ThreadStarterBody: undefined }
             : {}),
