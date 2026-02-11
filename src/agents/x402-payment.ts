@@ -1,9 +1,9 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { MoltbotConfig } from "../config/config.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createPublicClient, createWalletClient, http, type Account, type Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia, mainnet } from "viem/chains";
+import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("agent/x402");
 
@@ -46,9 +46,13 @@ type SigningBackend =
   | { mode: "saw"; client: SawClient; ownerAddress: `0x${string}` };
 
 function parseSawConfig(apiKey: string | undefined): SawConfig | null {
-  if (!apiKey) return null;
+  if (!apiKey) {
+    return null;
+  }
   const match = SAW_SENTINEL_REGEX.exec(apiKey.trim());
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   return { walletName: match[1], socketPath: match[2] };
 }
 
@@ -155,7 +159,9 @@ const ROUTER_CONFIG_CACHE = new Map<string, RouterConfig>();
 const PERMIT_CACHE = new Map<string, CachedPermit>();
 
 function normalizePrivateKey(value: string | undefined): string | null {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
   const trimmed = value.trim();
   const normalized = trimmed.startsWith("0X") ? `0x${trimmed.slice(2)}` : trimmed;
   return PRIVATE_KEY_REGEX.test(normalized) ? normalized : null;
@@ -168,7 +174,7 @@ function normalizeRouterUrl(value?: string): string {
   return withProtocol.replace(/\/+$/, "").replace(/\/v1\/?$/, "");
 }
 
-function resolvePluginConfig(cfg?: MoltbotConfig): { permitCapUsd: number; network: string } {
+function resolvePluginConfig(cfg?: OpenClawConfig): { permitCapUsd: number; network: string } {
   const raw = cfg?.plugins?.entries?.[X402_PLUGIN_ID]?.config;
   const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const permitCapRaw = record.permitCap;
@@ -208,12 +214,16 @@ function buildPermitCacheKey(params: {
 }
 
 function getRequirementPayTo(requirement?: PaymentRequirement): string | null {
-  if (!requirement) return null;
+  if (!requirement) {
+    return null;
+  }
   return requirement.payTo || requirement.pay_to || null;
 }
 
 function getRequirementMaxAmountRequired(requirement?: PaymentRequirement): string | undefined {
-  if (!requirement?.extra) return undefined;
+  if (!requirement?.extra) {
+    return undefined;
+  }
   return (
     requirement.extra.maxAmountRequired ||
     requirement.extra.max_amount_required ||
@@ -235,7 +245,9 @@ function applyPaymentRequirement(
   config: RouterConfig,
   requirement?: PaymentRequirement,
 ): RouterConfig {
-  if (!requirement) return config;
+  if (!requirement) {
+    return config;
+  }
   const payTo = getRequirementPayTo(requirement) || config.payTo;
   const extra = requirement.extra;
   return {
@@ -252,7 +264,9 @@ function applyPaymentRequirement(
 async function fetchRouterConfig(routerUrl: string, fetchFn: typeof fetch): Promise<RouterConfig> {
   const cacheKey = resolveRouterConfigCacheKey(routerUrl);
   const cached = ROUTER_CONFIG_CACHE.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    return cached;
+  }
 
   const response = await fetchFn(`${routerUrl}/v1/config`);
   if (!response.ok) {
@@ -537,16 +551,22 @@ function wrapStreamFnWithFetch(streamFn: StreamFn, fetchImpl: typeof fetch): Str
 export function maybeWrapStreamFnWithX402Payment(params: {
   streamFn?: StreamFn;
   provider: string;
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   apiKey?: string;
 }): StreamFn | undefined {
-  if (!params.streamFn) return params.streamFn;
-  if (params.provider !== X402_PROVIDER_ID) return params.streamFn;
+  if (!params.streamFn) {
+    return params.streamFn;
+  }
+  if (params.provider !== X402_PROVIDER_ID) {
+    return params.streamFn;
+  }
 
   // Detect signing mode: SAW sentinel first, then raw private key
   const sawConfig = parseSawConfig(params.apiKey);
   const privateKey = sawConfig ? null : normalizePrivateKey(params.apiKey);
-  if (!sawConfig && !privateKey) return params.streamFn;
+  if (!sawConfig && !privateKey) {
+    return params.streamFn;
+  }
 
   const providerConfig = params.config?.models?.providers?.[X402_PROVIDER_ID];
   const routerUrl = normalizeRouterUrl(providerConfig?.baseUrl);
@@ -600,9 +620,15 @@ export function maybeWrapStreamFnWithX402Payment(params: {
 
   const fetchWithPayment: typeof fetch = async (input, init) => {
     const url = (() => {
-      if (typeof input === "string") return input;
-      if (input instanceof URL) return input.toString();
-      if (typeof Request !== "undefined" && input instanceof Request) return input.url;
+      if (typeof input === "string") {
+        return input;
+      }
+      if (input instanceof URL) {
+        return input.toString();
+      }
+      if (typeof Request !== "undefined" && input instanceof Request) {
+        return input.url;
+      }
       if (input && typeof (input as { url?: string }).url === "string") {
         return (input as { url: string }).url;
       }

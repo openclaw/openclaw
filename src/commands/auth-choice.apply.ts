@@ -13,7 +13,6 @@ import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import { applyAuthChoiceQwenPortal } from "./auth-choice.apply.qwen-portal.js";
 import { applyAuthChoiceX402 } from "./auth-choice.apply.x402.js";
-import type { AuthChoice } from "./onboard-types.js";
 
 export type ApplyAuthChoiceParams = {
   authChoice: AuthChoice;

@@ -4,13 +4,17 @@ set -euo pipefail
 # Installs OpenClaw from a fork/tag (recommended) or branch and runs onboarding.
 #
 # Recommended release usage (immutable):
-#   OPENCLAW_REF=v2026.2.9-dreamclaw.4
+#   OPENCLAW_REF=v2026.2.9-dreamclaw.7
+#
+# When OPENCLAW_REF is a tag, the script automatically checks for a prebuilt
+# release tarball at GitHub Releases. If found, it installs from the tarball
+# (fast, no build tools needed). Otherwise it falls back to git+https://
+# which triggers a source build (requires pnpm + all devDeps).
 #
 # Overrides:
 #   OPENCLAW_SPEC=<npm-install-spec>       # optional direct spec (e.g. file:/path, git+https://...)
-#                                          # release tarball example:
-#                                          #   https://github.com/<org>/<repo>/releases/download/<tag>/openclaw-<tag>.tgz
-#   OPENCLAW_REPO=https://github.com/<org>/<repo>.git
+#   OPENCLAW_RELEASE_REPO=<github-url>     # repo URL for release tarballs (default: RedBeardEth/clawdbot)
+#   OPENCLAW_REPO=https://github.com/<org>/<repo>.git  # for git+https:// fallback
 #   OPENCLAW_REF=<tag-or-commit>         # preferred (immutable)
 #   OPENCLAW_BRANCH=<branch>             # fallback for development
 #   OPENCLAW_INSTALLER=npm|pnpm|auto
@@ -30,7 +34,7 @@ OPENCLAW_ONBOARD_ARGS="${OPENCLAW_ONBOARD_ARGS:---install-daemon --auth-choice x
 OPENCLAW_NPM_SCRIPT_SHELL="${OPENCLAW_NPM_SCRIPT_SHELL:-}"
 
 if [[ -z "$OPENCLAW_SPEC" && -z "$OPENCLAW_REF" && -z "$OPENCLAW_BRANCH" ]]; then
-  OPENCLAW_REF="v2026.2.9-dreamclaw.5"
+  OPENCLAW_REF="v2026.2.9-dreamclaw.7"
 fi
 
 if [[ -n "$OPENCLAW_SPEC" && ( -n "$OPENCLAW_REF" || -n "$OPENCLAW_BRANCH" ) ]]; then
@@ -43,12 +47,35 @@ if [[ -n "$OPENCLAW_REF" && -n "$OPENCLAW_BRANCH" ]]; then
   exit 1
 fi
 
+OPENCLAW_RELEASE_REPO="${OPENCLAW_RELEASE_REPO:-https://github.com/RedBeardEth/clawdbot}"
+
+resolve_release_tarball_url() {
+  local tag="$1"
+  local repo_url="${OPENCLAW_RELEASE_REPO%.git}"
+  local tarball_url="${repo_url}/releases/download/${tag}/openclaw-${tag}.tgz"
+  # Check if the tarball exists (HEAD request, follow redirects)
+  if curl -fsSL --head --connect-timeout 5 "$tarball_url" >/dev/null 2>&1; then
+    printf '%s\n' "$tarball_url"
+    return 0
+  fi
+  return 1
+}
+
 if [[ -n "$OPENCLAW_SPEC" ]]; then
   SPEC="$OPENCLAW_SPEC"
   REF_KIND="spec"
 elif [[ -n "$OPENCLAW_REF" ]]; then
-  SPEC="git+${OPENCLAW_REPO}#${OPENCLAW_REF}"
-  REF_KIND="ref"
+  # Prefer prebuilt release tarball; fall back to git+https:// (triggers source build)
+  tarball_url="$(resolve_release_tarball_url "$OPENCLAW_REF" || true)"
+  if [[ -n "$tarball_url" ]]; then
+    SPEC="$tarball_url"
+    REF_KIND="release-tarball"
+    echo "==> Found prebuilt release tarball for ${OPENCLAW_REF}"
+  else
+    SPEC="git+${OPENCLAW_REPO}#${OPENCLAW_REF}"
+    REF_KIND="ref"
+    echo "==> No prebuilt tarball found; falling back to git source install (requires pnpm + build tools)"
+  fi
 elif [[ -n "$OPENCLAW_BRANCH" ]]; then
   SPEC="git+${OPENCLAW_REPO}#${OPENCLAW_BRANCH}"
   REF_KIND="branch"
