@@ -14,6 +14,7 @@ set -euo pipefail
 #   OPENCLAW_BIN=openclaw|moltbot
 #   OPENCLAW_RUN_ONBOARD=1|0
 #   OPENCLAW_ONBOARD_ARGS="--install-daemon --auth-choice x402"
+#   OPENCLAW_NPM_SCRIPT_SHELL=/path/to/bash  # optional npm lifecycle shell override
 
 OPENCLAW_REPO="${OPENCLAW_REPO:-https://github.com/RedBeardEth/clawdbot.git}"
 OPENCLAW_REF="${OPENCLAW_REF:-v2026.2.9-dreamclaw.2}"
@@ -22,6 +23,7 @@ OPENCLAW_INSTALLER="${OPENCLAW_INSTALLER:-auto}"
 OPENCLAW_BIN="${OPENCLAW_BIN:-}"
 OPENCLAW_RUN_ONBOARD="${OPENCLAW_RUN_ONBOARD:-1}"
 OPENCLAW_ONBOARD_ARGS="${OPENCLAW_ONBOARD_ARGS:---install-daemon --auth-choice x402}"
+OPENCLAW_NPM_SCRIPT_SHELL="${OPENCLAW_NPM_SCRIPT_SHELL:-}"
 
 if [[ -n "$OPENCLAW_REF" && -n "$OPENCLAW_BRANCH" ]]; then
   echo "ERROR: set only one of OPENCLAW_REF or OPENCLAW_BRANCH" >&2
@@ -52,7 +54,17 @@ else
     exit 1
   fi
   echo "==> Using npm global install"
-  npm install -g "$SPEC"
+  # npm lifecycle scripts assume a POSIX shell and standard system PATH entries.
+  export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
+  if [[ -n "$OPENCLAW_NPM_SCRIPT_SHELL" ]]; then
+    npm_config_script_shell="$OPENCLAW_NPM_SCRIPT_SHELL" npm install -g "$SPEC"
+  elif command -v bash >/dev/null 2>&1; then
+    npm_config_script_shell="$(command -v bash)" npm install -g "$SPEC"
+  elif command -v sh >/dev/null 2>&1; then
+    npm_config_script_shell="$(command -v sh)" npm install -g "$SPEC"
+  else
+    npm install -g "$SPEC"
+  fi
 fi
 
 resolve_cli_bin() {
