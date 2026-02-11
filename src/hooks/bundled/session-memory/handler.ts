@@ -20,6 +20,33 @@ import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 const log = createSubsystemLogger("hooks/session-memory");
 
 /**
+ * Message content block for session entries
+ */
+interface MessageContentBlock {
+  type: string;
+  text?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Session message structure
+ */
+interface SessionMessage {
+  role: string;
+  content: string | MessageContentBlock[];
+  [key: string]: unknown;
+}
+
+/**
+ * Session file entry structure
+ */
+interface SessionEntry {
+  type: string;
+  message?: SessionMessage;
+  [key: string]: unknown;
+}
+
+/**
  * Read recent messages from session file for slug generation
  */
 async function getRecentSessionContent(
@@ -34,17 +61,18 @@ async function getRecentSessionContent(
     const allMessages: string[] = [];
     for (const line of lines) {
       try {
-        const entry = JSON.parse(line);
+        const entry: SessionEntry = JSON.parse(line);
         // Session files have entries with type="message" containing a nested message object
         if (entry.type === "message" && entry.message) {
           const msg = entry.message;
           const role = msg.role;
           if ((role === "user" || role === "assistant") && msg.content) {
-            // Extract text content
+            // Extract text content with proper typing
             const text = Array.isArray(msg.content)
-              ? // oxlint-disable-next-line typescript/no-explicit-any
-                msg.content.find((c: any) => c.type === "text")?.text
-              : msg.content;
+              ? msg.content.find((c: MessageContentBlock) => c.type === "text")?.text
+              : typeof msg.content === "string" 
+                ? msg.content 
+                : undefined;
             if (text && !text.startsWith("/")) {
               allMessages.push(`${role}: ${text}`);
             }

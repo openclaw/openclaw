@@ -25,12 +25,33 @@ export type InlineActionResult =
       abortedLastRun: boolean;
     };
 
-// oxlint-disable-next-line typescript/no-explicit-any
-function extractTextFromToolResult(result: any): string | null {
+/**
+ * Structure for tool execution results
+ */
+export interface ToolResult {
+  content?: string | ToolResultContentBlock[];
+  [key: string]: unknown;
+}
+
+/**
+ * Content block structure for complex tool results
+ */
+export interface ToolResultContentBlock {
+  type: string;
+  text?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Extracts text content from tool execution results
+ * @param result Tool execution result object
+ * @returns Extracted text content or null if no text found
+ */
+function extractTextFromToolResult(result: ToolResult | null | undefined): string | null {
   if (!result || typeof result !== "object") {
     return null;
   }
-  const content = (result as { content?: unknown }).content;
+  const content = result.content;
   if (typeof content === "string") {
     const trimmed = content.trim();
     return trimmed ? trimmed : null;
@@ -44,9 +65,12 @@ function extractTextFromToolResult(result: any): string | null {
     if (!block || typeof block !== "object") {
       continue;
     }
-    const rec = block as { type?: unknown; text?: unknown };
-    if (rec.type === "text" && typeof rec.text === "string") {
-      parts.push(rec.text);
+    // Type guard to ensure we have a valid content block
+    const isValidBlock = (b: unknown): b is ToolResultContentBlock => 
+      typeof b === "object" && b !== null && "type" in b;
+    
+    if (isValidBlock(block) && block.type === "text" && typeof block.text === "string") {
+      parts.push(block.text);
     }
   }
   const out = parts.join("");
@@ -194,8 +218,7 @@ export async function handleInlineActions(params: {
           command: rawArgs,
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
-          // oxlint-disable-next-line typescript/no-explicit-any
-        } as any);
+        });
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
         return { kind: "reply", reply: { text } };
