@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "./usage.js";
+import {
+  derivePromptTokens,
+  deriveSessionTotalTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
+} from "./usage.js";
 
 describe("normalizeUsage", () => {
   it("normalizes Anthropic-style snake_case usage", () => {
@@ -46,8 +51,27 @@ describe("normalizeUsage", () => {
     expect(hasNonzeroUsage({ input: 1 })).toBe(true);
     expect(hasNonzeroUsage({ total: 1 })).toBe(true);
   });
+});
 
-  it("caps derived session total tokens to the context window", () => {
+describe("derivePromptTokens", () => {
+  it("returns only input tokens, ignoring cache tokens", () => {
+    expect(derivePromptTokens({ input: 1_200, cacheRead: 300, cacheWrite: 50 })).toBe(1_200);
+  });
+
+  it("returns undefined when input is zero even if cache tokens exist", () => {
+    expect(derivePromptTokens({ input: 0, cacheRead: 5_000, cacheWrite: 100 })).toBeUndefined();
+  });
+
+  it("returns undefined for undefined usage", () => {
+    expect(derivePromptTokens(undefined)).toBeUndefined();
+  });
+});
+
+describe("deriveSessionTotalTokens", () => {
+  it("uses input tokens only — does not inflate with cache tokens (#13853)", () => {
+    // With large cacheRead (common in Anthropic prompt caching), the old code
+    // summed input+cacheRead+cacheWrite which exceeded the context window.
+    // The fix uses only input tokens for context-window accounting.
     expect(
       deriveSessionTotalTokens({
         usage: {
@@ -58,10 +82,10 @@ describe("normalizeUsage", () => {
         },
         contextTokens: 200_000,
       }),
-    ).toBe(200_000);
+    ).toBe(27);
   });
 
-  it("uses prompt tokens when within context window", () => {
+  it("returns input tokens when within context window", () => {
     expect(
       deriveSessionTotalTokens({
         usage: {
@@ -72,6 +96,40 @@ describe("normalizeUsage", () => {
         },
         contextTokens: 200_000,
       }),
-    ).toBe(1_550);
+    ).toBe(1_200);
+  });
+
+  it("caps to context window when input exceeds it", () => {
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 250_000,
+          total: 260_000,
+        },
+        contextTokens: 200_000,
+      }),
+    ).toBe(200_000);
+  });
+
+  it("falls back to usage.total when input is missing", () => {
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          total: 5_000,
+        },
+        contextTokens: 200_000,
+      }),
+    ).toBe(5_000);
+  });
+
+  it("falls back to input (0) when no prompt tokens and no total", () => {
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 0,
+        },
+        contextTokens: 200_000,
+      }),
+    ).toBeUndefined();
   });
 });
