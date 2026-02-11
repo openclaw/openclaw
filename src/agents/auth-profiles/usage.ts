@@ -193,9 +193,16 @@ function computeNextProfileUsageStats(params: {
     if (recoveryMode === "notify") {
       // No cooldown — profile stays available for immediate retry after top-up.
       // Still record the failure for diagnostics but don't disable.
+      // Clear any stale disable/cooldown from a previous "disable" mode.
+      updatedStats.cooldownUntil = undefined;
+      updatedStats.disabledUntil = undefined;
+      updatedStats.disabledReason = undefined;
     } else if (recoveryMode === "retry") {
       // Short 5-minute cooldown for replenishable credit systems.
+      // Clear any stale long disable from a previous "disable" mode.
       updatedStats.cooldownUntil = params.now + 5 * 60 * 1000;
+      updatedStats.disabledUntil = undefined;
+      updatedStats.disabledReason = undefined;
     } else {
       // Default "disable": exponential backoff (5–24 hours).
       const billingCount = failureCounts.billing ?? 1;

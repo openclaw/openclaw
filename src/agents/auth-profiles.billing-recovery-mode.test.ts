@@ -97,4 +97,81 @@ describe("billingRecoveryMode", () => {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
+
+  it("switching from disable → notify clears stale disabledUntil", async () => {
+    const { agentDir, store } = createTempStore();
+    try {
+      // Step 1: billing failure with default "disable" mode → profile disabled for hours
+      await markAuthProfileFailure({
+        store,
+        profileId: "bifrost:fuel",
+        reason: "billing",
+        agentDir,
+      });
+
+      const afterDisable = store.usageStats?.["bifrost:fuel"];
+      expect(afterDisable?.disabledUntil).toBeDefined();
+      expect(afterDisable?.disabledReason).toBe("billing");
+
+      // Step 2: config switches to "notify" mode → next failure must clear stale state
+      await markAuthProfileFailure({
+        store,
+        profileId: "bifrost:fuel",
+        reason: "billing",
+        agentDir,
+        cfg: {
+          auth: { cooldowns: { billingRecoveryMode: "notify" } },
+        } as never,
+      });
+
+      const afterNotify = store.usageStats?.["bifrost:fuel"];
+      expect(afterNotify?.disabledUntil).toBeUndefined();
+      expect(afterNotify?.disabledReason).toBeUndefined();
+      expect(afterNotify?.cooldownUntil).toBeUndefined();
+      // Error counts should accumulate
+      expect(afterNotify?.errorCount).toBe(2);
+      expect(afterNotify?.failureCounts?.billing).toBe(2);
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("switching from disable → retry clears stale disabledUntil", async () => {
+    const { agentDir, store } = createTempStore();
+    try {
+      // Step 1: billing failure with default "disable" mode → profile disabled for hours
+      await markAuthProfileFailure({
+        store,
+        profileId: "bifrost:fuel",
+        reason: "billing",
+        agentDir,
+      });
+
+      const afterDisable = store.usageStats?.["bifrost:fuel"];
+      expect(afterDisable?.disabledUntil).toBeDefined();
+      expect(afterDisable?.disabledReason).toBe("billing");
+
+      // Step 2: config switches to "retry" mode → must clear stale disable, set short cooldown
+      const beforeRetry = Date.now();
+      await markAuthProfileFailure({
+        store,
+        profileId: "bifrost:fuel",
+        reason: "billing",
+        agentDir,
+        cfg: {
+          auth: { cooldowns: { billingRecoveryMode: "retry" } },
+        } as never,
+      });
+
+      const afterRetry = store.usageStats?.["bifrost:fuel"];
+      expect(afterRetry?.disabledUntil).toBeUndefined();
+      expect(afterRetry?.disabledReason).toBeUndefined();
+      expect(afterRetry?.cooldownUntil).toBeDefined();
+      // Should be ~5 min cooldown, not the stale hours-long disable
+      const cooldownMs = (afterRetry?.cooldownUntil as number) - beforeRetry;
+      expect(cooldownMs).toBeLessThan(6 * 60 * 1000);
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
 });
