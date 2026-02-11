@@ -49,8 +49,9 @@ export function scheduleFollowupDrain(
             if (restoreOnLock) {
               // Collect mode: restore original items instead of the synthetic merged prompt.
               restoreOnLock();
-            } else {
+            } else if (queue.items.length < queue.cap) {
               // Individual mode: re-insert at front to preserve FIFO order.
+              // Respect queue cap to prevent unbounded growth.
               queue.items.unshift(item);
             }
             queue.lastEnqueuedAt = Date.now();
@@ -108,6 +109,10 @@ export function scheduleFollowupDrain(
           }
 
           const items = queue.items.splice(0, queue.items.length);
+          // Save summary state before buildQueueSummaryPrompt clears it,
+          // so we can restore it if a lock error triggers a retry.
+          const savedDroppedCount = queue.droppedCount;
+          const savedSummaryLines = [...queue.summaryLines];
           const summary = buildQueueSummaryPrompt({ state: queue, noun: "message" });
           const run = items.at(-1)?.run ?? queue.lastRun;
           if (!run) {
@@ -140,9 +145,12 @@ export function scheduleFollowupDrain(
               originatingAccountId,
               originatingThreadId,
             },
-            // On lock, restore the original items so they can be re-collected.
+            // On lock, restore the original items and summary state so they
+            // can be re-collected on the next attempt.
             () => {
               queue.items.unshift(...items);
+              queue.droppedCount = savedDroppedCount;
+              queue.summaryLines = savedSummaryLines;
             },
           );
           continue;
