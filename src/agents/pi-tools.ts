@@ -7,9 +7,14 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { SenderTier } from "../security/heimdall/types.js";
+import type { ModelAuthMode } from "./model-auth.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
+import type { SandboxContext } from "./sandbox.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import { resolveSenderTier } from "../security/heimdall/sender-tier.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -20,7 +25,6 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
-import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
@@ -43,8 +47,6 @@ import {
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
-import type { AnyAgentTool } from "./pi-tools.types.js";
-import type { SandboxContext } from "./sandbox.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import {
   applyToolPolicyPipeline,
@@ -450,6 +452,24 @@ export function createOpenClawCodingTools(options?: {
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
+
+  // Heimdall GATE: resolve sender tier for runtime tool ACL.
+  const heimdallCfg = options?.config?.agents?.defaults?.heimdall;
+  let senderTier: SenderTier | undefined;
+  if (heimdallCfg?.enabled) {
+    // If no senderId, infer from senderIsOwner (e.g. cron runs).
+    const effectiveSenderId = options?.senderId ?? (senderIsOwner ? "cron" : "unknown");
+    senderTier = resolveSenderTier(
+      effectiveSenderId,
+      options?.senderUsername ?? undefined,
+      heimdallCfg,
+    );
+    // Override to OWNER if senderIsOwner is explicitly set (cron, CLI).
+    if (senderIsOwner && senderTier !== "owner") {
+      senderTier = "owner" as SenderTier;
+    }
+  }
+
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
@@ -483,6 +503,8 @@ export function createOpenClawCodingTools(options?: {
       agentId,
       sessionKey: options?.sessionKey,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      senderTier,
+      heimdallConfig: heimdallCfg,
     }),
   );
   const withAbort = options?.abortSignal

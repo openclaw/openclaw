@@ -1,15 +1,20 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
+import type { HeimdallConfig, SenderTier } from "../security/heimdall/types.js";
+import type { AnyAgentTool } from "./tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
-import type { AnyAgentTool } from "./tools/common.js";
 
 export type HookContext = {
   agentId?: string;
   sessionKey?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  /** Heimdall: resolved sender tier for runtime tool ACL. */
+  senderTier?: SenderTier;
+  /** Heimdall: security config for runtime tool ACL. */
+  heimdallConfig?: HeimdallConfig;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -77,6 +82,26 @@ export async function runBeforeToolCallHook(args: {
   toolCallId?: string;
   ctx?: HookContext;
 }): Promise<HookOutcome> {
+  // Heimdall: deterministic tool ACL check (feature-flagged).
+  if (args.ctx?.heimdallConfig?.enabled && args.ctx?.senderTier) {
+    const toolName = normalizeToolName(args.toolName || "tool");
+    // Lazy import to avoid circular deps and keep zero-cost when disabled.
+    const { isToolAllowed } = await import("../security/heimdall/tool-acl.js");
+    if (!isToolAllowed(toolName, args.ctx.senderTier, args.ctx.heimdallConfig)) {
+      const reason = `[heimdall] Tool "${toolName}" denied for tier "${args.ctx.senderTier}"`;
+      // Audit: log blocked tool call.
+      if (args.ctx.heimdallConfig.audit?.enabled) {
+        const { getHeimdallAuditLogger } = await import("../security/heimdall/audit.js");
+        getHeimdallAuditLogger(args.ctx.heimdallConfig.audit).logToolBlocked({
+          toolName,
+          senderTier: args.ctx.senderTier,
+          reason,
+        });
+      }
+      return { blocked: true, reason };
+    }
+  }
+
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
 

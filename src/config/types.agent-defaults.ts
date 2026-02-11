@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { HeimdallConfig } from "../security/heimdall/types.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -247,6 +248,8 @@ export type AgentDefaultsConfig = {
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
   };
+  /** Heimdall security layer (deterministic tool ACL, output redaction, input sanitization). */
+  heimdall?: HeimdallConfig;
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {
     /** Enable sandboxing for sessions. */
