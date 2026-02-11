@@ -60,6 +60,8 @@
 - Type-check/build: `pnpm build`
 - TypeScript checks: `pnpm tsgo`
 - Lint/format: `pnpm check`
+- Format check: `pnpm format` (oxfmt --check)
+- Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
 
 ## Coding Style & Naming Conventions
@@ -90,33 +92,17 @@
 
 ## Commit & Pull Request Guidelines
 
+**Full maintainer PR workflow:** `.agents/skills/PR_WORKFLOW.md` -- triage order, quality bar, rebase rules, commit/changelog conventions, co-contributor policy, and the 3-step skill pipeline (`review-pr` > `prepare-pr` > `merge-pr`).
+
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
-- Changelog workflow: keep latest released version at top (no `Unreleased`); after publishing, bump version and start a new top section.
-- PRs should summarize scope, note testing performed, and mention any user-facing changes or new flags.
 - Read this when submitting a PR: `docs/help/submitting-a-pr.md` ([Submitting a PR](https://docs.openclaw.ai/help/submitting-a-pr))
 - Read this when submitting an issue: `docs/help/submitting-an-issue.md` ([Submitting an Issue](https://docs.openclaw.ai/help/submitting-an-issue))
-- PR review flow: when given a PR link, review via `gh pr view`/`gh pr diff` and do **not** change branches.
-- PR review calls: prefer a single `gh pr view --json ...` to batch metadata/comments; run `gh pr diff` only when needed.
-- Before starting a review when a GH Issue/PR is pasted: run `git pull`; if there are local changes or unpushed commits, stop and alert the user before reviewing.
-- Goal: merge PRs. Prefer **rebase** when commits are clean; **squash** when history is messy.
-- PR merge flow: create a temp branch from `main`, merge the PR branch into it (prefer squash unless commit history is important; use rebase/merge when it is). Always try to merge the PR unless it’s truly difficult, then use another approach. If we squash, add the PR author as a co-contributor. Apply fixes, add changelog entry (include PR # + thanks), run full gate before the final commit, commit, merge back to `main`, delete the temp branch, and end on `main`.
-- If you review a PR and later do work on it, land via merge/squash (no direct-main commits) and always add the PR author as a co-contributor.
-- When working on a PR: add a changelog entry with the PR number and thank the contributor.
-- When working on an issue: reference the issue in the changelog entry.
-- When merging a PR: leave a PR comment that explains exactly what we did and include the SHA hashes.
-- When merging a PR from a new contributor: add their avatar to the README “Thanks to all clawtributors” thumbnail list.
-- After merging a PR: run `bun scripts/update-clawtributors.ts` if the contributor is missing, then commit the regenerated README.
 
 ## Shorthand Commands
 
 - `sync`: if working tree is dirty, commit all changes (pick a sensible Conventional Commit message), then `git pull --rebase`; if rebase conflicts and cannot resolve, stop; otherwise `git push`.
-
-### PR Workflow (Review vs Land)
-
-- **Review mode (PR link only):** read `gh pr view/diff`; **do not** switch branches; **do not** change code.
-- **Landing mode:** create an integration branch from `main`, bring in PR commits (**prefer rebase** for linear history; **merge allowed** when complexity/conflicts make it safer), apply fixes, add changelog (+ thanks + PR #), run full gate **locally before committing** (`pnpm build && pnpm check && pnpm test`), commit, merge back to `main`, then `git switch main` (never stay on a topic branch after landing). Important: contributor needs to be in git graph after this!
 
 ## Security & Configuration Tips
 

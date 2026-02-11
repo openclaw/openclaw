@@ -7,7 +7,6 @@ import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
 import {
   formatInboundEnvelope,
-  formatThreadStarterEnvelope,
   resolveEnvelopeFormatOptions,
 } from "../../../auto-reply/envelope.js";
 import {
@@ -464,16 +463,8 @@ export async function prepareSlackMessage(params: {
       client: ctx.app.client,
     });
     if (starter?.text) {
-      const starterUser = starter.userId ? await ctx.resolveUserName(starter.userId) : null;
-      const starterName = starterUser?.name ?? starter.userId ?? "Unknown";
-      const starterWithId = `${starter.text}\n[slack message id: ${starter.ts ?? threadTs} channel: ${message.channel}]`;
-      threadStarterBody = formatThreadStarterEnvelope({
-        channel: "Slack",
-        author: starterName,
-        timestamp: starter.ts ? Math.round(Number(starter.ts) * 1000) : undefined,
-        body: starterWithId,
-        envelope: envelopeOptions,
-      });
+      // Keep thread starter as raw text; metadata is provided out-of-band in the system prompt.
+      threadStarterBody = starter.text;
       const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
       threadLabel = `Slack thread ${roomLabel}${snippet ? `: ${snippet}` : ""}`;
       // If current message has no files but thread starter does, fetch starter's files
@@ -497,8 +488,19 @@ export async function prepareSlackMessage(params: {
   // Use thread starter media if current message has none
   const effectiveMedia = media ?? threadStarterMedia;
 
+  const inboundHistory =
+    isRoomish && ctx.historyLimit > 0
+      ? (ctx.channelHistories.get(historyKey) ?? []).map((entry) => ({
+          sender: entry.sender,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }))
+      : undefined;
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
+    BodyForAgent: rawBody,
+    InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: slackFrom,

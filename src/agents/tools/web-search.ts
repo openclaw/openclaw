@@ -103,7 +103,15 @@ type GrokConfig = {
 };
 
 type GrokSearchResponse = {
-  output_text?: string;
+  output?: Array<{
+    type?: string;
+    role?: string;
+    content?: Array<{
+      type?: string;
+      text?: string;
+    }>;
+  }>;
+  output_text?: string; // deprecated field - kept for backwards compatibility
   citations?: string[];
   inline_citations?: Array<{
     start_index: number;
@@ -122,6 +130,15 @@ type PerplexitySearchResponse = {
 };
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
+
+function extractGrokContent(data: GrokSearchResponse): string | undefined {
+  // xAI Responses API format: output[0].content[0].text
+  const fromResponses = data.output?.[0]?.content?.[0]?.text;
+  if (typeof fromResponses === "string" && fromResponses) {
+    return fromResponses;
+  }
+  return typeof data.output_text === "string" ? data.output_text : undefined;
+}
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
@@ -456,9 +473,10 @@ async function runGrokSearch(params: {
     tools: [{ type: "web_search" }],
   };
 
-  if (params.inlineCitations) {
-    body.include = ["inline_citations"];
-  }
+  // Note: xAI's /v1/responses endpoint does not support the `include`
+  // parameter (returns 400 "Argument not supported: include"). Inline
+  // citations are returned automatically when available — we just parse
+  // them from the response without requesting them explicitly (#12910).
 
   const res = await fetch(XAI_API_ENDPOINT, {
     method: "POST",
@@ -476,7 +494,7 @@ async function runGrokSearch(params: {
   }
 
   const data = (await res.json()) as GrokSearchResponse;
-  const content = data.output_text ?? "No response";
+  const content = extractGrokContent(data) ?? "No response";
   const citations = data.citations ?? [];
   const inlineCitations = data.inline_citations;
 
@@ -548,7 +566,7 @@ async function runWebSearch(params: {
       provider: params.provider,
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       tookMs: Date.now() - start,
-      content,
+      content: wrapWebContent(content),
       citations,
       inlineCitations,
     };
@@ -713,4 +731,5 @@ export const __testing = {
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
+  extractGrokContent,
 } as const;

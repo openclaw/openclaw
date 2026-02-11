@@ -83,7 +83,7 @@ export type BrowserActRequest =
       targetId?: string;
       timeoutMs?: number;
     }
-  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string }
+  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string; timeoutMs?: number }
   | { kind: "close"; targetId?: string };
 
 export type BrowserActResponse = {

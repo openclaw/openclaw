@@ -45,6 +45,7 @@ import { detectMime } from "../media/mime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import { withTimeout } from "./with-timeout.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -273,29 +274,6 @@ async function ensureBrowserControlService(): Promise<void> {
     }
   })();
   return browserControlReady;
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs?: number, label?: string): Promise<T> {
-  const resolved =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.max(1, Math.floor(timeoutMs))
-      : undefined;
-  if (!resolved) {
-    return await promise;
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`${label ?? "request"} timed out`));
-    }, resolved);
-  });
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
 }
 
 function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
@@ -790,12 +768,14 @@ async function handleInvoke(
       }
       const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
       const response = await withTimeout(
-        dispatcher.dispatch({
-          method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
-          path,
-          query,
-          body,
-        }),
+        (signal) =>
+          dispatcher.dispatch({
+            method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
+            path,
+            query,
+            body,
+            signal,
+          }),
         params.timeoutMs,
         "browser proxy request",
       );

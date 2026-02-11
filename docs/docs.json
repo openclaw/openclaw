@@ -802,7 +802,12 @@
               },
               {
                 "group": "First steps",
-                "pages": ["start/getting-started", "start/wizard", "start/onboarding"]
+                "pages": [
+                  "start/getting-started",
+                  "start/onboarding-overview",
+                  "start/wizard",
+                  "start/onboarding"
+                ]
               },
               {
                 "group": "Guides",
@@ -858,6 +863,7 @@
                   "channels/telegram",
                   "channels/grammy",
                   "channels/discord",
+                  "channels/irc",
                   "channels/slack",
                   "channels/feishu",
                   "channels/googlechat",
@@ -1232,6 +1238,16 @@
               {
                 "group": "Release notes",
                 "pages": ["reference/RELEASING", "reference/test"]
+              },
+              {
+                "group": "Experiments",
+                "pages": [
+                  "experiments/onboarding-config-protocol",
+                  "experiments/plans/cron-add-hardening",
+                  "experiments/plans/group-policy-hardening",
+                  "experiments/research/memory",
+                  "experiments/proposals/model-config"
+                ]
               }
             ]
           },
@@ -1751,6 +1767,16 @@
               {
                 "group": "发布说明",
                 "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
+              },
+              {
+                "group": "实验性功能",
+                "pages": [
+                  "zh-CN/experiments/onboarding-config-protocol",
+                  "zh-CN/experiments/plans/cron-add-hardening",
+                  "zh-CN/experiments/plans/group-policy-hardening",
+                  "zh-CN/experiments/research/memory",
+                  "zh-CN/experiments/proposals/model-config"
+                ]
               }
             ]
           },

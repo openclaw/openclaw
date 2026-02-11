@@ -539,6 +539,7 @@ export const registerTelegramNativeCommands = ({
             : (buildSenderName(msg) ?? String(senderId || chatId));
           const ctxPayload = finalizeInboundContext({
             Body: prompt,
+            BodyForAgent: prompt,
             RawBody: prompt,
             CommandBody: prompt,
             CommandArgs: commandArgs,
