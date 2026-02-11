@@ -64,9 +64,11 @@ export function createGcpSecretsProvider(options: GcpSecretsProviderOptions): Se
       client = new SecretManagerServiceClient() as SecretManagerClient;
       return client;
     } catch (err) {
-      throw new GcpSecretsProviderError(
-        `Failed to load @google-cloud/secret-manager. Is it installed? ${String(err)}`,
+      const wrapped = new GcpSecretsProviderError(
+        `Failed to load @google-cloud/secret-manager. Is it installed? ${err instanceof Error ? err.message : String(err)}`,
       );
+      wrapped.cause = err;
+      throw wrapped;
     }
   }
 

@@ -14,6 +14,7 @@ import { homedir, platform } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { SecretsProvider } from "./provider.js";
+import { SecretsProviderError } from "./errors.js";
 import { MissingSecretError } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
@@ -87,7 +88,7 @@ export function createKeyringSecretsProvider(
   return {
     name: "keyring",
     async resolve(_secretName: string): Promise<string> {
-      throw new Error(
+      throw new SecretsProviderError(
         `OS keyring secrets provider is not implemented for platform: ${os}. ` +
           `Supported: macOS (security CLI), Linux (secret-tool / libsecret). ` +
           `Contributions welcome for Windows (Credential Manager) — see src/config/secrets/keyring.ts`,
