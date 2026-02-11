@@ -8,7 +8,6 @@
  * Auto-registers as `"azure-openai-completions"` on import.
  */
 
-import { AzureOpenAI } from "openai";
 import {
   registerApiProvider,
   createAssistantMessageEventStream,
@@ -18,6 +17,7 @@ import {
   convertMessages,
   parseStreamingJson,
 } from "@mariozechner/pi-ai";
+import { AzureOpenAI } from "openai";
 
 const DEFAULT_AZURE_API_VERSION = "2024-12-01-preview";
 
@@ -304,11 +304,7 @@ export const streamAzureOpenAICompletions = (model: any, context: any, options?:
           const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
           let foundReasoningField: string | null = null;
           for (const field of reasoningFields) {
-            if (
-              delta[field] !== null &&
-              delta[field] !== undefined &&
-              delta[field].length > 0
-            ) {
+            if (delta[field] !== null && delta[field] !== undefined && delta[field].length > 0) {
               foundReasoningField = field;
               break;
             }
