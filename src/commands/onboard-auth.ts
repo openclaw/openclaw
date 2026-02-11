@@ -11,6 +11,8 @@ export {
   applyQianfanProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
+  applyLitellmConfig,
+  applyLitellmProviderConfig,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
@@ -46,11 +48,13 @@ export {
 } from "./onboard-auth.config-opencode.js";
 export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
+  setLitellmApiKey,
   setKimiCodingApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyAuthProfileConfig,
+  applyLitellmProviderConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
   applyOpencodeZenConfig,
@@ -508,6 +509,41 @@ describe("applyOpenrouterProviderConfig", () => {
       },
     });
     expect(cfg.agents?.defaults?.models?.[OPENROUTER_DEFAULT_MODEL_REF]?.alias).toBe("Router");
+  });
+});
+
+describe("applyLitellmProviderConfig", () => {
+  it("preserves existing baseUrl and api key while adding the default model", () => {
+    const cfg = applyLitellmProviderConfig({
+      models: {
+        providers: {
+          litellm: {
+            baseUrl: "https://litellm.example/v1",
+            apiKey: "  old-key  ",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000,
+                maxTokens: 100,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(cfg.models?.providers?.litellm?.baseUrl).toBe("https://litellm.example/v1");
+    expect(cfg.models?.providers?.litellm?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.litellm?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.litellm?.models.map((m) => m.id)).toEqual([
+      "custom-model",
+      "claude-opus-4-6",
+    ]);
   });
 });
 

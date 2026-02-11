@@ -12,6 +12,7 @@ export type AuthChoice =
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
+  | "litellm-api-key"
   | "ai-gateway-api-key"
   | "cloudflare-ai-gateway-api-key"
   | "moonshot-api-key"
@@ -89,6 +90,7 @@ export type OnboardOptions = {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  litellmApiKey?: string;
   aiGatewayApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;
