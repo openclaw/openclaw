@@ -27,4 +27,29 @@ describe("isBillingErrorMessage", () => {
     expect(isBillingErrorMessage("invalid api key")).toBe(false);
     expect(isBillingErrorMessage("context length exceeded")).toBe(false);
   });
+  it("does not false-positive on issue IDs or text containing 402", () => {
+    const falsePositives = [
+      "Fixed issue CHE-402 in the latest release",
+      "See ticket #402 for details",
+      "ISSUE-402 has been resolved",
+      "Room 402 is available",
+      "Error code 403 was returned, not 402-related",
+      "The building at 402 Main Street",
+    ];
+    for (const sample of falsePositives) {
+      expect(isBillingErrorMessage(sample)).toBe(false);
+    }
+  });
+  it("still matches real HTTP 402 billing errors", () => {
+    const realErrors = [
+      "HTTP 402 Payment Required",
+      "status: 402",
+      "error code 402",
+      "http 402",
+      "status=402 payment required",
+    ];
+    for (const sample of realErrors) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+    }
+  });
 });
