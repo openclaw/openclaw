@@ -520,7 +520,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.message).not.toContain("(no output)");
   });
 
-  it("forces NO_REPLY guidance when sibling subagents are still active", async () => {
+  it("uses advisory guidance when sibling subagents are still active", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:main:main" ? 2 : 0,
@@ -543,7 +543,10 @@ describe("subagent announce formatting", () => {
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     expect(msg).toContain("There are still 2 active subagent runs for this session.");
-    expect(msg).toContain("Reply ONLY: NO_REPLY.");
+    expect(msg).toContain(
+      "If they are part of the same workflow, wait for the remaining results before sending a user update.",
+    );
+    expect(msg).toContain("If they are unrelated, respond normally using only the result above.");
   });
 
   it("suppresses announce while the finished run still has active descendants", async () => {

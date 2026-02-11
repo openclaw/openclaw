@@ -485,7 +485,7 @@ export async function runSubagentAnnounceFlow(params: {
     const activeRunsLabel = remainingActiveSubagentRuns === 1 ? "run" : "runs";
     const replyInstruction =
       remainingActiveSubagentRuns > 0
-        ? `There are still ${remainingActiveSubagentRuns} active subagent ${activeRunsLabel} for this session. Do not send a user update yet. Reply ONLY: NO_REPLY.`
+        ? `There are still ${remainingActiveSubagentRuns} active subagent ${activeRunsLabel} for this session. If they are part of the same workflow, wait for the remaining results before sending a user update. If they are unrelated, respond normally using only the result above.`
         : "Reply with a natural user update; keep this internal context private (don't mention system/log/stats/session details or announce type). If no user-facing update is needed, reply ONLY: NO_REPLY.";
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
