@@ -22,6 +22,18 @@ describe("isLikelyContextOverflowError", () => {
     }
   });
 
+  it("excludes rate limit errors", () => {
+    const samples = [
+      "request reached organization TPD rate limit, current: 1506556, limit: 1500000",
+      "rate limit exceeded",
+      "429 Too Many Requests",
+      "exceeded your current quota",
+    ];
+    for (const sample of samples) {
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
+
   it("excludes context window too small errors", () => {
     const samples = [
       "Model context window too small (minimum is 128k tokens)",
