@@ -473,9 +473,10 @@ async function runGrokSearch(params: {
     tools: [{ type: "web_search" }],
   };
 
-  if (params.inlineCitations) {
-    body.include = ["inline_citations"];
-  }
+  // Note: xAI's /v1/responses endpoint does not support the `include`
+  // parameter (returns 400 "Argument not supported: include"). Inline
+  // citations are returned automatically when available — we just parse
+  // them from the response without requesting them explicitly (#12910).
 
   const res = await fetch(XAI_API_ENDPOINT, {
     method: "POST",
