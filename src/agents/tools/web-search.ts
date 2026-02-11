@@ -154,8 +154,8 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   const fromConfig =
-    search && "apiKey" in search && typeof search.apiKey === "string"
-      ? normalizeSecretInput(search.apiKey)
+    search?.brave && "apiKey" in search.brave && typeof search.brave.apiKey === "string"
+      ? normalizeSecretInput(search.brave.apiKey)
       : "";
   const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
   return fromConfig || fromEnv || undefined;

@@ -338,8 +338,11 @@ export type ToolsConfig = {
       enabled?: boolean;
       /** Search provider ("brave", "perplexity", "grok", or "tavily"). */
       provider?: "brave" | "perplexity" | "grok" | "tavily";
-      /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
-      apiKey?: string;
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Brave Search API key (defaults to BRAVE_API_KEY env var). */
+        apiKey?: string;
+      };
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */

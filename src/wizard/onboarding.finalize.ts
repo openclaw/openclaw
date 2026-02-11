@@ -432,29 +432,41 @@ export async function finalizeOnboardingWizard(
     );
   }
 
-  const webSearchKey = (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
-  const webSearchEnv = (process.env.BRAVE_API_KEY ?? "").trim();
-  const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
+  const search = nextConfig.tools?.web?.search;
+  const webSearchKey = Boolean(
+    search?.brave?.apiKey ||
+    search?.perplexity?.apiKey ||
+    search?.grok?.apiKey ||
+    search?.tavily?.apiKey,
+  );
+  const webSearchEnv = Boolean(
+    process.env.BRAVE_API_KEY ||
+    process.env.PERPLEXITY_API_KEY ||
+    process.env.OPENROUTER_API_KEY ||
+    process.env.XAI_API_KEY ||
+    process.env.TAVILY_API_KEY,
+  );
+  const hasWebSearchKey = webSearchKey || webSearchEnv;
   await prompter.note(
     hasWebSearchKey
       ? [
           "Web search is enabled, so your agent can look things up online when needed.",
           "",
           webSearchKey
-            ? "API key: stored in config (tools.web.search.apiKey)."
-            : "API key: provided via BRAVE_API_KEY env var (Gateway environment).",
+            ? "API key: stored in config."
+            : "API key: provided via environment variable (Gateway environment).",
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n")
       : [
-          "If you want your agent to be able to search the web, you’ll need an API key.",
+          "If you want your agent to be able to search the web, you'll need an API key.",
           "",
-          "OpenClaw uses Brave Search for the `web_search` tool. Without a Brave Search API key, web search won’t work.",
+          "OpenClaw supports Brave Search, Perplexity, Grok (xAI), and Tavily for the `web_search` tool.",
           "",
           "Set it up interactively:",
           `- Run: ${formatCliCommand("openclaw configure --section web")}`,
-          "- Enable web_search and paste your Brave Search API key",
+          "- Enable web_search, pick a provider, and paste your API key",
           "",
-          "Alternative: set BRAVE_API_KEY in the Gateway environment (no config changes).",
+          "Alternative: set the provider's API key in the Gateway environment (no config changes).",
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
     "Web search (optional)",

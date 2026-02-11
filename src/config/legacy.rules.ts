@@ -133,4 +133,9 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["gateway", "token"],
     message: "gateway.token is ignored; use gateway.auth.token instead (auto-migrated on load).",
   },
+  {
+    path: ["tools", "web", "search", "apiKey"],
+    message:
+      "tools.web.search.apiKey was moved to tools.web.search.brave.apiKey (auto-migrated on load).",
+  },
 ];

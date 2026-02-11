@@ -174,7 +174,7 @@ export const ToolsWebSearchSchema = z
     provider: z
       .union([z.literal("brave"), z.literal("perplexity"), z.literal("grok"), z.literal("tavily")])
       .optional(),
-    apiKey: z.string().optional(),
+    brave: z.object({ apiKey: z.string().optional() }).strict().optional(),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
