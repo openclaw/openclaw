@@ -102,6 +102,34 @@ async function readUnixListeners(
     );
     return { listeners, detail: res.stdout.trim() || undefined, errors };
   }
+  // Fallback: try `ss` (iproute2) on Linux when lsof is unavailable or fails.
+  if (process.platform === "linux") {
+    const ssRes = await runCommandSafe(["ss", "-tlnp", `sport = :${port}`]);
+    if (ssRes.code === 0) {
+      const listeners = parseSsOutput(ssRes.stdout, port);
+      if (listeners.length > 0) {
+        await Promise.all(
+          listeners.map(async (listener) => {
+            if (!listener.pid) {
+              return;
+            }
+            const [commandLine, user] = await Promise.all([
+              resolveUnixCommandLine(listener.pid),
+              resolveUnixUser(listener.pid),
+            ]);
+            if (commandLine) {
+              listener.commandLine = commandLine;
+            }
+            if (user) {
+              listener.user = user;
+            }
+          }),
+        );
+        return { listeners, detail: ssRes.stdout.trim() || undefined, errors };
+      }
+    }
+  }
+
   const stderr = res.stderr.trim();
   if (res.code === 1 && !res.error && !stderr) {
     return { listeners: [], detail: undefined, errors };
@@ -114,6 +142,44 @@ async function readUnixListeners(
     errors.push(detail);
   }
   return { listeners: [], detail: undefined, errors };
+}
+
+/**
+ * Parse `ss -tlnp sport = :PORT` output.
+ * Typical line:
+ *   LISTEN  0  4096  0.0.0.0:18789  0.0.0.0:*  users:(("node",pid=1234,fd=19))
+ */
+function parseSsOutput(output: string, port: number): PortListener[] {
+  const listeners: PortListener[] = [];
+  const portToken = `:${port}`;
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || !line.startsWith("LISTEN")) {
+      continue;
+    }
+    if (!line.includes(portToken)) {
+      continue;
+    }
+    const listener: PortListener = {};
+
+    // Extract address (4th column: local address:port)
+    const parts = line.split(/\s+/);
+    if (parts.length >= 4 && parts[3]?.includes(portToken)) {
+      listener.address = parts[3];
+    }
+
+    // Extract PID and command from users:(("cmd",pid=N,...))
+    const usersMatch = line.match(/users:\(\("([^"]*)",pid=(\d+)/);
+    if (usersMatch) {
+      listener.command = usersMatch[1];
+      const pid = Number.parseInt(usersMatch[2]!, 10);
+      if (Number.isFinite(pid)) {
+        listener.pid = pid;
+      }
+    }
+    listeners.push(listener);
+  }
+  return listeners;
 }
 
 function parseNetstatListeners(output: string, port: number): PortListener[] {
