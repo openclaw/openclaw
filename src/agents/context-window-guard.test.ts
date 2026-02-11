@@ -146,4 +146,25 @@ describe("context-window-guard", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(16_000);
     expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(32_000);
   });
+
+  it("suppresses warning when contextWindow is explicitly configured in modelsConfig", () => {
+    const info = { tokens: 20_000, source: "modelsConfig" as const };
+    const guard = evaluateContextWindowGuard({ info });
+    expect(guard.shouldWarn).toBe(false);
+    expect(guard.shouldBlock).toBe(false);
+  });
+
+  it("still warns for low context from auto-detected source", () => {
+    const info = { tokens: 20_000, source: "model" as const };
+    const guard = evaluateContextWindowGuard({ info });
+    expect(guard.shouldWarn).toBe(true);
+    expect(guard.shouldBlock).toBe(false);
+  });
+
+  it("still blocks modelsConfig values below hard minimum", () => {
+    const info = { tokens: 1000, source: "modelsConfig" as const };
+    const guard = evaluateContextWindowGuard({ info, hardMinTokens: 2000 });
+    expect(guard.shouldWarn).toBe(false);
+    expect(guard.shouldBlock).toBe(true);
+  });
 });
