@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/agentshield",
+  "version": "2026.2.2",
+  "description": "AgentShield approval gate — before-tool-call hook extension",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

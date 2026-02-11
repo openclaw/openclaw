@@ -4,7 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
-import type { AnyAgentTool } from "./tools/common.js";
+import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 export type HookContext = {
   agentId?: string;
@@ -15,7 +15,10 @@ export type HookContext = {
   loopDetection?: ToolLoopDetectionConfig;
 };
 
-type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
+type HookOutcome =
+  | { blocked: true; needsApproval?: false; reason: string }
+  | { blocked: true; needsApproval: true; reason: string }
+  | { blocked: false; params: unknown };
 
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
@@ -172,6 +175,14 @@ export async function runBeforeToolCallHook(args: {
       toolContext,
     );
 
+    if (hookResult?.needsApproval) {
+      return {
+        blocked: true,
+        needsApproval: true,
+        reason: hookResult.approvalReason || "Tool call requires approval",
+      };
+    }
+
     if (hookResult?.block) {
       return {
         blocked: true,
@@ -212,6 +223,16 @@ export function wrapToolWithBeforeToolCallHook(
         ctx,
       });
       if (outcome.blocked) {
+        if (outcome.needsApproval) {
+          return jsonResult({
+            status: "approval-pending",
+            tool: toolName,
+            agentId: ctx?.agentId ?? null,
+            sessionKey: ctx?.sessionKey ?? null,
+            reason: outcome.reason,
+            message: "Tool call requires approval. Awaiting operator decision.",
+          });
+        }
         throw new Error(outcome.reason);
       }
       if (toolCallId) {
