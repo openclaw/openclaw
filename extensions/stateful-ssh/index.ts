@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import {
   createOpenSSHSessionTool,
   createExecuteSSHCommandTool,
@@ -7,53 +7,60 @@ import {
   cleanupSSHSessions,
 } from "./src/ssh-tools.js";
 
-export default function register(api: OpenClawPluginApi) {
-  // Register all SSH tools with explicit names
-  api.registerTool(
-    (ctx) => {
-      if (ctx.sandboxed) {
-        return null;
-      }
-      return [
-        createOpenSSHSessionTool(api),
-        createExecuteSSHCommandTool(api),
-        createCloseSSHSessionTool(api),
-        createListSSHSessionsTool(api),
-      ];
-    },
-    {
-      names: ["open_ssh_session", "execute_ssh_command", "close_ssh_session", "list_ssh_sessions"],
-      optional: true
-    }
-  );
+const statefulSSHPlugin = {
+  id: "stateful-ssh",
+  name: "Stateful SSH",
+  description: "Persistent SSH session management with state preservation.",
+  register(api: OpenClawPluginApi) {
+    // Register all SSH tools with explicit names
+    api.registerTool(
+      (ctx) => {
+        const tools = [
+          createOpenSSHSessionTool(api),
+          createExecuteSSHCommandTool(api),
+          createCloseSSHSessionTool(api),
+          createListSSHSessionsTool(api),
+        ];
 
-  // Register cleanup handler
-  if (api.runtime) {
-    // Hook into the runtime shutdown process if available
-    process.on("beforeExit", () => {
-      cleanupSSHSessions().catch((err) => {
-        console.error("Error cleaning up SSH sessions:", err);
+        // Return null if any tool creation failed
+        if (tools.some(tool => !tool)) {
+          return null;
+        }
+
+        return tools;
+      },
+      { names: ["open_ssh_session", "execute_ssh_command", "close_ssh_session", "list_ssh_sessions"] }
+    );
+
+    // Register cleanup handler
+    if (api.runtime) {
+      process.on("beforeExit", () => {
+        cleanupSSHSessions().catch((err) => {
+          console.error("Error cleaning up SSH sessions:", err);
+        });
       });
-    });
 
-    process.on("SIGINT", () => {
-      cleanupSSHSessions()
-        .catch((err) => {
-          console.error("Error cleaning up SSH sessions:", err);
-        })
-        .finally(() => {
-          process.exit(0);
-        });
-    });
+      process.on("SIGINT", () => {
+        cleanupSSHSessions()
+          .catch((err) => {
+            console.error("Error cleaning up SSH sessions:", err);
+          })
+          .finally(() => {
+            process.exit(0);
+          });
+      });
 
-    process.on("SIGTERM", () => {
-      cleanupSSHSessions()
-        .catch((err) => {
-          console.error("Error cleaning up SSH sessions:", err);
-        })
-        .finally(() => {
-          process.exit(0);
-        });
-    });
-  }
-}
+      process.on("SIGTERM", () => {
+        cleanupSSHSessions()
+          .catch((err) => {
+            console.error("Error cleaning up SSH sessions:", err);
+          })
+          .finally(() => {
+            process.exit(0);
+          });
+      });
+    }
+  },
+};
+
+export default statefulSSHPlugin;
