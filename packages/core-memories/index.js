@@ -1,6 +1,8 @@
 /**
- * CoreMemories v2.1 - With MEMORY.md Integration
- * Auto-proposes important memories for curated biography updates
+ * CoreMemories v2.2
+ * Memory store + lightweight compression.
+ *
+ * Note: Optional MEMORY.md integration exists but is disabled by default.
  */
 import fs from "node:fs";
 import http from "node:http";
@@ -13,7 +15,9 @@ const DEFAULT_CONFIG = {
     autoInstall: true,
     // MEMORY.md integration
     memoryMd: {
-        enabled: true,
+        // Disabled by default: avoid implicit creation/growth of curated files.
+        enabled: false,
+        autoCreate: false,
         updateTriggers: {
             emotionalThreshold: 0.8, // Auto-flag if emotional_salience > 0.8
             decisionTypes: ["decision", "milestone", "achievement"],
@@ -83,25 +87,33 @@ function resolveWorkspaceDirFromMemoryDir(memoryDir) {
     }
     return path.dirname(openclawDir);
 }
+function resolveWorkspaceRoot() {
+    // Prefer explicit env var (used by OpenClaw gateway) so we don't depend on cwd.
+    const env = process.env.OPENCLAW_WORKSPACE;
+    if (env && typeof env === "string" && env.trim()) {
+        return path.resolve(env);
+    }
+    return null;
+}
+function resolveOpenClawDir(memoryDir) {
+    const workspace = resolveWorkspaceRoot();
+    if (workspace) {
+        return path.join(workspace, ".openclaw");
+    }
+    const derived = resolveOpenClawDirFromMemoryDir(memoryDir);
+    if (derived) {
+        return derived;
+    }
+    // Last resort: cwd-based.
+    return path.join(process.cwd(), ".openclaw");
+}
 function resolveCoreMemoriesConfigPath(memoryDir) {
-    const openclawDir = resolveOpenClawDirFromMemoryDir(memoryDir);
-    if (openclawDir) {
-        return path.join(openclawDir, "core-memories-config.json");
-    }
-    if (memoryDir) {
-        return path.join(path.resolve(memoryDir, ".."), "core-memories-config.json");
-    }
-    return path.join(".openclaw", "core-memories-config.json");
+    const openclawDir = resolveOpenClawDir(memoryDir);
+    return path.join(openclawDir, "core-memories-config.json");
 }
 function resolveTipStatePath(memoryDir) {
-    const openclawDir = resolveOpenClawDirFromMemoryDir(memoryDir);
-    if (openclawDir) {
-        return path.join(openclawDir, "memory", ".tip-state.json");
-    }
-    if (memoryDir) {
-        return path.join(path.resolve(memoryDir), ".tip-state.json");
-    }
-    return path.join(".openclaw", "memory", ".tip-state.json");
+    const openclawDir = resolveOpenClawDir(memoryDir);
+    return path.join(openclawDir, "memory", ".tip-state.json");
 }
 function sleepSync(ms) {
     if (ms <= 0) {
@@ -556,71 +568,80 @@ class AutoCompression {
         return this.ruleEngine.compress(flashEntry);
     }
 }
-// MEMORY.md Integration
+// Optional MEMORY.md Integration (disabled by default)
 class MemoryMdIntegration {
     constructor(memoryDir) {
         this.pendingUpdates = [];
         this.memoryDir = memoryDir;
+        this.pendingPath = path.join(resolveOpenClawDir(memoryDir), "core-memories-pending-memorymd.json");
+        this.loadPendingFromDisk();
     }
-    // Check if entry qualifies for MEMORY.md
+    loadPendingFromDisk() {
+        try {
+            if (!fs.existsSync(this.pendingPath)) {
+                return;
+            }
+            const raw = JSON.parse(fs.readFileSync(this.pendingPath, "utf-8"));
+            if (Array.isArray(raw)) {
+                this.pendingUpdates = raw;
+            }
+        }
+        catch {
+            // best-effort
+        }
+    }
+    persistPendingToDisk() {
+        try {
+            writeJsonAtomicSync(this.pendingPath, this.pendingUpdates);
+        }
+        catch {
+            // best-effort
+        }
+    }
     shouldProposeForMemoryMd(entry) {
         if (!CONFIG?.memoryMd?.enabled) {
             return false;
         }
         const triggers = CONFIG.memoryMd.updateTriggers;
-        // High emotional salience (Flash entries have emotionalSalience number)
         if (entry.emotionalSalience !== undefined &&
             entry.emotionalSalience >= triggers.emotionalThreshold) {
             return { reason: "high_emotion", score: entry.emotionalSalience };
         }
-        // High emotional tone (Warm entries have emotionalTone string)
         if (entry.emotionalTone === "high") {
             return { reason: "high_emotion_tone", tone: entry.emotionalTone };
         }
-        // Decision type
         if (triggers.decisionTypes.includes(entry.type || "")) {
             return { reason: "decision_type", tone: entry.type };
         }
-        // User flagged
         if (triggers.userFlagged && entry.userFlagged) {
             return { reason: "user_flagged" };
         }
         return false;
     }
-    // Extract essence for MEMORY.md
     extractEssence(entry) {
-        if (entry.hook) {
+        if (entry.hook)
             return entry.hook;
-        }
-        if (entry.summary) {
+        if (entry.summary)
             return entry.summary.substring(0, 200);
-        }
-        if (entry.content) {
+        if (entry.content)
             return entry.content.substring(0, 200);
-        }
         return "";
     }
-    // Determine which section to add to
     suggestSection(entry) {
         const sections = CONFIG?.memoryMd?.sections;
-        if (!sections) {
+        if (!sections)
             return "## Important Memories";
-        }
-        if (entry.type === "decision") {
+        if (entry.type === "decision")
             return sections["decision"];
-        }
-        if (entry.type === "milestone") {
+        if (entry.type === "milestone")
             return sections["milestone"];
-        }
         if (entry.keywords.some((k) => ["project", "product", "app", "platform"].includes(k))) {
             return sections["project"];
         }
-        if (entry.type === "learning") {
+        if (entry.type === "learning")
             return sections["learning"];
-        }
         return sections["default"];
     }
-    // Propose update (called during compression)
     proposeUpdate(entry) {
         const check = this.shouldProposeForMemoryMd(entry);
         if (!check) {
@@ -636,49 +657,74 @@ class MemoryMdIntegration {
             keywords: entry.keywords,
         };
         this.pendingUpdates.push(proposal);
-        // Note: Proposals are returned via the API; callers decide how to surface them (UI/tooling).
+        this.persistPendingToDisk();
         return proposal;
     }
-    // Actually update MEMORY.md (called after user approval)
-    async updateMemoryMd(proposal) {
+    resolveMemoryMdPath() {
+        const workspace = resolveWorkspaceRoot();
+        if (workspace) {
+            return path.join(workspace, "MEMORY.md");
+        }
         const workspaceDir = resolveWorkspaceDirFromMemoryDir(this.memoryDir);
-        const memoryMdPath = workspaceDir
-            ? path.join(workspaceDir, "MEMORY.md")
-            : path.resolve("MEMORY.md");
-        if (!fs.existsSync(memoryMdPath)) {
-            console.warn(`MEMORY.md not found at ${memoryMdPath}, cannot update`);
+        if (workspaceDir) {
+            return path.join(workspaceDir, "MEMORY.md");
+        }
+        return path.join(process.cwd(), "MEMORY.md");
+    }
+    ensureMemoryMdExists(memoryMdPath) {
+        if (fs.existsSync(memoryMdPath)) {
+            return true;
+        }
+        if (!CONFIG?.memoryMd?.enabled || !CONFIG?.memoryMd?.autoCreate) {
+            return false;
+        }
+        const skeleton = "# MEMORY\n\n## Important Memories\n";
+        try {
+            writeFileAtomicSync(memoryMdPath, skeleton);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
+    async updateMemoryMd(proposal) {
+        if (!CONFIG?.memoryMd?.enabled) {
+            return false;
+        }
+        const memoryMdPath = this.resolveMemoryMdPath();
+        if (!this.ensureMemoryMdExists(memoryMdPath)) {
+            // Silent failure when not configured; don't spam logs.
             return false;
         }
         let content = fs.readFileSync(memoryMdPath, "utf-8");
-        // Find or create section
         const sectionHeader = proposal.section;
         const entryText = `- **${new Date(proposal.timestamp).toLocaleDateString()}**: ${proposal.essence}`;
         if (content.includes(sectionHeader)) {
-            // Add to existing section
             const sectionIndex = content.indexOf(sectionHeader);
             const nextSection = content.indexOf("##", sectionIndex + 1);
             const insertIndex = nextSection === -1 ? content.length : nextSection;
             content = content.slice(0, insertIndex) + `\n${entryText}\n` + content.slice(insertIndex);
         }
         else {
-            // Create new section at end
             content += `\n${sectionHeader}\n\n${entryText}\n`;
         }
-        // Backup old version
-        const backupPath = path.join(path.dirname(memoryMdPath), `MEMORY.md.backup.${Date.now()}`);
-        fs.writeFileSync(backupPath, fs.readFileSync(memoryMdPath));
-        // Write updated version
-        fs.writeFileSync(memoryMdPath, content);
-        // MEMORY.md updated (logging handled by caller).
+        // Backup old version (best-effort)
+        try {
+            const backupPath = path.join(path.dirname(memoryMdPath), `MEMORY.md.backup.${Date.now()}`);
+            fs.writeFileSync(backupPath, fs.readFileSync(memoryMdPath));
+        }
+        catch {
+            // ignore
+        }
+        writeFileAtomicSync(memoryMdPath, content);
         return true;
     }
-    // Get pending proposals
     getPendingUpdates() {
         return this.pendingUpdates;
     }
-    // Clear pending after processing
     clearPending() {
         this.pendingUpdates = [];
+        this.persistPendingToDisk();
     }
 }
 // Main CoreMemories class

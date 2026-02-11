@@ -1,9 +1,14 @@
 /**
- * CoreMemories v2.1 - With MEMORY.md Integration
- * Auto-proposes important memories for curated biography updates
+ * CoreMemories v2.2
+ * Memory store + lightweight compression.
+ *
+ * Note: Optional MEMORY.md integration exists but is disabled by default.
  */
 export interface MemoryMdConfig {
+    /** Disabled by default: avoids implicit creation/growth of curated files. */
     enabled: boolean;
+    /** When enabled, create MEMORY.md if missing. Default false. */
+    autoCreate?: boolean;
     updateTriggers: {
         emotionalThreshold: number;
         decisionTypes: string[];
