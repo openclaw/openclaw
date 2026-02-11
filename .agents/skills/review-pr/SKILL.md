@@ -7,7 +7,7 @@ description: Review-only GitHub pull request analysis with the gh CLI. Use when 
 
 ## Overview
 
-Perform a thorough review-only PR assessment and return a structured recommendation on readiness for /preparepr.
+Perform a thorough review-only PR assessment and return a structured recommendation on readiness for /prepare-pr.
 
 ## Inputs
 
@@ -69,7 +69,7 @@ else
   cd "$WORKTREE_DIR"
 fi
 
-# Create local scratch space that persists across /reviewpr to /preparepr to /mergepr
+# Create local scratch space that persists across /review-pr to /prepare-pr to /merge-pr
 mkdir -p .local
 ```
 
@@ -170,11 +170,11 @@ Check if the PR touches code with related documentation such as README, docs, in
 Check if `CHANGELOG.md` exists and whether the PR warrants an entry.
 
 - If the project has a changelog and the PR is user-facing, flag missing entry as IMPORTANT.
-- Leave the change for /preparepr, only flag it here.
+- Leave the change for /prepare-pr, only flag it here.
 
 12. Answer the key question
 
-Decide if /preparepr can fix issues or the contributor must update the PR.
+Decide if /prepare-pr can fix issues or the contributor must update the PR.
 
 13. Save findings to the worktree
 
@@ -192,7 +192,7 @@ Produce a review that matches what you saved to `.local/review.md`.
 
 A) TL;DR recommendation
 
-- One of: READY FOR /preparepr | NEEDS WORK | NEEDS DISCUSSION | NOT USEFUL (CLOSE)
+- One of: READY FOR /prepare-pr | NEEDS WORK | NEEDS DISCUSSION | NOT USEFUL (CLOSE)
 - 1 to 3 sentences.
 
 B) What changed
