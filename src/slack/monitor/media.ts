@@ -82,7 +82,7 @@ function createSlackMediaFetch(token: string): FetchLike {
  * Slack sometimes returns HTML login pages when auth fails instead of binary media.
  * Only use leading-whitespace trim to keep prefix checks stable for binary content.
  */
-function looksLikeHtml(buffer: Buffer): boolean {
+function looksLikeHtmlBuffer(buffer: Buffer): boolean {
   const head = buffer.subarray(0, 512).toString("utf-8").replace(/^\s+/, "").toLowerCase();
   // Check for standard HTML document markers at the start of the content.
   return head.startsWith("<!doctype html") || head.startsWith("<html");
@@ -163,12 +163,10 @@ export async function resolveSlackMedia(params: {
       const fileMime = file.mimetype?.toLowerCase();
       const fileName = file.name?.toLowerCase() ?? "";
       const isExpectedHtml =
-        fileMime === "text/html" ||
-        fileName.endsWith(".html") ||
-        fileName.endsWith(".htm");
+        fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
       if (!isExpectedHtml) {
         const detectedMime = fetched.contentType?.split(";")[0]?.trim().toLowerCase();
-        if (detectedMime === "text/html" || looksLikeHtml(fetched.buffer)) {
+        if (detectedMime === "text/html" || looksLikeHtmlBuffer(fetched.buffer)) {
           const fileId = file.name ?? file.id ?? "unknown";
           logWarn(
             `slack: received HTML instead of media for file ${fileId}; possible auth failure or expired URL`,

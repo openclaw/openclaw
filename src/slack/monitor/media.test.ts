@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
-import * as logger from "../../logger.js";
 
 // Store original fetch
 const originalFetch = globalThis.fetch;
@@ -266,7 +265,8 @@ describe("resolveSlackMedia", () => {
   });
 
   it("rejects HTML response (auth failure) and returns null with warning log", async () => {
-    const logWarnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const logWarnMock = vi.fn();
+    vi.doMock("../../logger.js", () => ({ logWarn: logWarnMock }));
     const { resolveSlackMedia } = await import("./media.js");
 
     // Simulate Slack returning an HTML login page instead of the image
@@ -292,14 +292,14 @@ describe("resolveSlackMedia", () => {
     // Should reject HTML and return null
     expect(result).toBeNull();
     // Should log a warning for diagnosability
-    expect(logWarnSpy).toHaveBeenCalledWith(
+    expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringMatching(/received HTML instead of media.*test\.png/),
     );
-    logWarnSpy.mockRestore();
   });
 
   it("rejects HTML response detected by buffer content even if content-type header is missing", async () => {
-    const logWarnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const logWarnMock = vi.fn();
+    vi.doMock("../../logger.js", () => ({ logWarn: logWarnMock }));
     const { resolveSlackMedia } = await import("./media.js");
 
     // HTML content but no content-type header (edge case)
@@ -317,11 +317,12 @@ describe("resolveSlackMedia", () => {
     });
 
     expect(result).toBeNull();
-    expect(logWarnSpy).toHaveBeenCalled();
-    logWarnSpy.mockRestore();
+    expect(logWarnMock).toHaveBeenCalled();
   });
 
   it("allows genuine HTML file uploads without logging warning", async () => {
+    const logWarnMock = vi.fn();
+    vi.doMock("../../logger.js", () => ({ logWarn: logWarnMock }));
     // Mock the store module
     vi.doMock("../../media/store.js", () => ({
       saveMediaBuffer: vi.fn().mockResolvedValue({
@@ -330,7 +331,6 @@ describe("resolveSlackMedia", () => {
       }),
     }));
 
-    const logWarnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
     const { resolveSlackMedia } = await import("./media.js");
 
     // Genuine HTML file upload
@@ -356,8 +356,7 @@ describe("resolveSlackMedia", () => {
     // Should allow genuine HTML files
     expect(result).not.toBeNull();
     // Should NOT log a warning for genuine HTML files
-    expect(logWarnSpy).not.toHaveBeenCalled();
-    logWarnSpy.mockRestore();
+    expect(logWarnMock).not.toHaveBeenCalled();
   });
 
   it("allows genuine HTML file when mimetype indicates text/html", async () => {
