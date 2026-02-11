@@ -71,10 +71,9 @@ export type DiscordThreadCreate = {
   messageId?: string;
   name: string;
   autoArchiveMinutes?: number;
-  /** Initial message content — required for forum channel posts */
-  message?: { content: string };
-  /** Forum tag IDs to apply (forum channels only) */
-  appliedTags?: string[];
+  content?: string;
+  /** Discord thread type (default: PublicThread for standalone threads). */
+  type?: number;
 };
 
 export type DiscordThreadList = {

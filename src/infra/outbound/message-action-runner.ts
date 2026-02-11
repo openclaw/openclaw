@@ -28,6 +28,7 @@ import {
   type GatewayClientName,
 } from "../../utils/message-channel.js";
 import { loadWebMedia } from "../../web/media.js";
+import { throwIfAborted } from "./abort.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
@@ -279,12 +280,8 @@ function resolveAttachmentMaxBytes(params: {
   channel: ChannelId;
   accountId?: string | null;
 }): number | undefined {
-  const fallback = params.cfg.agents?.defaults?.mediaMaxMb;
-  if (params.channel !== "bluebubbles") {
-    return typeof fallback === "number" ? fallback * 1024 * 1024 : undefined;
-  }
   const accountId = typeof params.accountId === "string" ? params.accountId.trim() : "";
-  const channelCfg = params.cfg.channels?.bluebubbles;
+  const channelCfg = params.cfg.channels?.[params.channel];
   const channelObj =
     channelCfg && typeof channelCfg === "object"
       ? (channelCfg as Record<string, unknown>)
@@ -300,6 +297,7 @@ function resolveAttachmentMaxBytes(params: {
     accountCfg && typeof accountCfg === "object"
       ? (accountCfg as Record<string, unknown>).mediaMaxMb
       : undefined;
+  // Priority: account-specific > channel-level > global default
   const limitMb =
     (typeof accountMediaMax === "number" ? accountMediaMax : undefined) ??
     channelMediaMax ??
@@ -721,14 +719,6 @@ async function handleBroadcastAction(
     payload: { results },
     dryRun: Boolean(input.dryRun),
   };
-}
-
-function throwIfAborted(abortSignal?: AbortSignal): void {
-  if (abortSignal?.aborted) {
-    const err = new Error("Message send aborted");
-    err.name = "AbortError";
-    throw err;
-  }
 }
 
 async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {

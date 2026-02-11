@@ -28,6 +28,7 @@ import type { ResolvedMemoryBackendConfig, ResolvedQmdConfig } from "./backend-c
 const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
+const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 
 type QmdQueryResult = {
   docid?: string;
@@ -83,6 +84,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
+  private queuedForcedUpdate: Promise<void> | null = null;
+  private queuedForcedRuns = 0;
   private closed = false;
   private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
@@ -141,11 +144,28 @@ export class QmdMemoryManager implements MemorySearchManager {
     await fs.mkdir(this.xdgCacheHome, { recursive: true });
     await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
 
+    // QMD stores its ML models under $XDG_CACHE_HOME/qmd/models/.  Because we
+    // override XDG_CACHE_HOME to isolate the index per-agent, qmd would not
+    // find models installed at the default location (~/.cache/qmd/models/) and
+    // would attempt to re-download them on every invocation.  Symlink the
+    // default models directory into our custom cache so the index stays
+    // isolated while models are shared.
+    await this.symlinkSharedModels();
+
     this.bootstrapCollections();
     await this.ensureCollections();
 
     if (this.qmd.update.onBoot) {
-      await this.runUpdate("boot", true);
+      const bootRun = this.runUpdate("boot", true);
+      if (this.qmd.update.waitForBootSync) {
+        await bootRun.catch((err) => {
+          log.warn(`qmd boot update failed: ${String(err)}`);
+        });
+      } else {
+        void bootRun.catch((err) => {
+          log.warn(`qmd boot update failed: ${String(err)}`);
+        });
+      }
     }
     if (this.qmd.update.intervalMs > 0) {
       this.updateTimer = setInterval(() => {
@@ -172,7 +192,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     // fall back to best-effort idempotent `qmd collection add`.
     const existing = new Set<string>();
     try {
-      const result = await this.runQmd(["collection", "list", "--json"]);
+      const result = await this.runQmd(["collection", "list", "--json"], {
+        timeoutMs: this.qmd.update.commandTimeoutMs,
+      });
       const parsed = JSON.parse(result.stdout) as unknown;
       if (Array.isArray(parsed)) {
         for (const entry of parsed) {
@@ -195,15 +217,20 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       try {
-        await this.runQmd([
-          "collection",
-          "add",
-          collection.path,
-          "--name",
-          collection.name,
-          "--mask",
-          collection.pattern,
-        ]);
+        await this.runQmd(
+          [
+            "collection",
+            "add",
+            collection.path,
+            "--name",
+            collection.name,
+            "--mask",
+            collection.pattern,
+          ],
+          {
+            timeoutMs: this.qmd.update.commandTimeoutMs,
+          },
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         // Idempotency: qmd exits non-zero if the collection name already exists.
@@ -223,18 +250,24 @@ export class QmdMemoryManager implements MemorySearchManager {
     opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
   ): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
+      this.logScopeDenied(opts?.sessionKey);
       return [];
     }
     const trimmed = query.trim();
     if (!trimmed) {
       return [];
     }
-    await this.pendingUpdate?.catch(() => undefined);
+    await this.waitForPendingUpdateBeforeSearch();
     const limit = Math.min(
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
-    const args = ["query", trimmed, "--json", "-n", String(limit)];
+    const collectionFilterArgs = this.buildCollectionFilterArgs();
+    if (collectionFilterArgs.length === 0) {
+      log.warn("qmd query skipped: no managed collections configured");
+      return [];
+    }
+    const args = ["query", trimmed, "--json", "-n", String(limit), ...collectionFilterArgs];
     let stdout: string;
     try {
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
@@ -368,16 +401,34 @@ export class QmdMemoryManager implements MemorySearchManager {
       clearInterval(this.updateTimer);
       this.updateTimer = null;
     }
+    this.queuedForcedRuns = 0;
     await this.pendingUpdate?.catch(() => undefined);
+    await this.queuedForcedUpdate?.catch(() => undefined);
     if (this.db) {
       this.db.close();
       this.db = null;
     }
   }
 
-  private async runUpdate(reason: string, force?: boolean): Promise<void> {
-    if (this.pendingUpdate && !force) {
+  private async runUpdate(
+    reason: string,
+    force?: boolean,
+    opts?: { fromForcedQueue?: boolean },
+  ): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    if (this.pendingUpdate) {
+      if (force) {
+        return this.enqueueForcedUpdate(reason);
+      }
       return this.pendingUpdate;
+    }
+    if (this.queuedForcedUpdate && !opts?.fromForcedQueue) {
+      if (force) {
+        return this.enqueueForcedUpdate(reason);
+      }
+      return this.queuedForcedUpdate;
     }
     if (this.shouldSkipUpdate(force)) {
       return;
@@ -386,7 +437,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (this.sessionExporter) {
         await this.exportSessions();
       }
-      await this.runQmd(["update"], { timeoutMs: 120_000 });
+      await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
       const embedIntervalMs = this.qmd.update.embedIntervalMs;
       const shouldEmbed =
         Boolean(force) ||
@@ -394,7 +445,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         (embedIntervalMs > 0 && Date.now() - this.lastEmbedAt > embedIntervalMs);
       if (shouldEmbed) {
         try {
-          await this.runQmd(["embed"], { timeoutMs: 120_000 });
+          await this.runQmd(["embed"], { timeoutMs: this.qmd.update.embedTimeoutMs });
           this.lastEmbedAt = Date.now();
         } catch (err) {
           log.warn(`qmd embed failed (${reason}): ${String(err)}`);
@@ -407,6 +458,86 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.pendingUpdate = null;
     });
     await this.pendingUpdate;
+  }
+
+  private enqueueForcedUpdate(reason: string): Promise<void> {
+    this.queuedForcedRuns += 1;
+    if (!this.queuedForcedUpdate) {
+      this.queuedForcedUpdate = this.drainForcedUpdates(reason).finally(() => {
+        this.queuedForcedUpdate = null;
+      });
+    }
+    return this.queuedForcedUpdate;
+  }
+
+  private async drainForcedUpdates(reason: string): Promise<void> {
+    await this.pendingUpdate?.catch(() => undefined);
+    while (!this.closed && this.queuedForcedRuns > 0) {
+      this.queuedForcedRuns -= 1;
+      await this.runUpdate(`${reason}:queued`, true, { fromForcedQueue: true });
+    }
+  }
+
+  /**
+   * Symlink the default QMD models directory into our custom XDG_CACHE_HOME so
+   * that the pre-installed ML models (~/.cache/qmd/models/) are reused rather
+   * than re-downloaded for every agent.  If the default models directory does
+   * not exist, or a models directory/symlink already exists in the target, this
+   * is a no-op.
+   */
+  private async symlinkSharedModels(): Promise<void> {
+    // process.env is never modified — only this.env (passed to child_process
+    // spawn) overrides XDG_CACHE_HOME.  So reading it here gives us the
+    // user's original value, which is where `qmd` downloaded its models.
+    //
+    // On Windows, well-behaved apps (including Rust `dirs` / Go os.UserCacheDir)
+    // store caches under %LOCALAPPDATA% rather than ~/.cache.  Fall back to
+    // LOCALAPPDATA when XDG_CACHE_HOME is not set on Windows.
+    const defaultCacheHome =
+      process.env.XDG_CACHE_HOME ||
+      (process.platform === "win32" ? process.env.LOCALAPPDATA : undefined) ||
+      path.join(os.homedir(), ".cache");
+    const defaultModelsDir = path.join(defaultCacheHome, "qmd", "models");
+    const targetModelsDir = path.join(this.xdgCacheHome, "qmd", "models");
+    try {
+      // Check if the default models directory exists.
+      // Missing path is normal on first run and should be silent.
+      const stat = await fs.stat(defaultModelsDir).catch((err: unknown) => {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          return null;
+        }
+        throw err;
+      });
+      if (!stat?.isDirectory()) {
+        return;
+      }
+      // Check if something already exists at the target path
+      try {
+        await fs.lstat(targetModelsDir);
+        // Already exists (directory, symlink, or file) – leave it alone
+        return;
+      } catch {
+        // Does not exist – proceed to create symlink
+      }
+      // On Windows, creating directory symlinks requires either Administrator
+      // privileges or Developer Mode.  Fall back to a directory junction which
+      // works without elevated privileges (junctions are always absolute-path,
+      // which is fine here since both paths are already absolute).
+      try {
+        await fs.symlink(defaultModelsDir, targetModelsDir, "dir");
+      } catch (symlinkErr: unknown) {
+        const code = (symlinkErr as NodeJS.ErrnoException).code;
+        if (process.platform === "win32" && (code === "EPERM" || code === "ENOTSUP")) {
+          await fs.symlink(defaultModelsDir, targetModelsDir, "junction");
+        } else {
+          throw symlinkErr;
+        }
+      }
+      log.debug(`symlinked qmd models: ${defaultModelsDir} → ${targetModelsDir}`);
+    } catch (err) {
+      // Non-fatal: if we can't symlink, qmd will fall back to downloading
+      log.warn(`failed to symlink qmd models directory: ${String(err)}`);
+    }
   }
 
   private async runQmd(
@@ -457,6 +588,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const { DatabaseSync } = requireNodeSqlite();
     this.db = new DatabaseSync(this.indexPath, { readOnly: true });
+    // Keep QMD recall responsive when the updater holds a write lock.
+    this.db.exec("PRAGMA busy_timeout = 1");
     return this.db;
   }
 
@@ -530,9 +663,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       return cached;
     }
     const db = this.ensureDb();
-    const row = db
-      .prepare("SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1 LIMIT 1")
-      .get(`${normalized}%`) as { collection: string; path: string } | undefined;
+    let row: { collection: string; path: string } | undefined;
+    try {
+      row = db
+        .prepare("SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1 LIMIT 1")
+        .get(`${normalized}%`) as { collection: string; path: string } | undefined;
+    } catch (err) {
+      if (this.isSqliteBusyError(err)) {
+        log.debug(`qmd index is busy while resolving doc path: ${String(err)}`);
+        throw this.createQmdBusyError(err);
+      }
+      throw err;
+    }
     if (!row) {
       return null;
     }
@@ -627,6 +769,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     return fallback === "allow";
   }
 
+  private logScopeDenied(sessionKey?: string): void {
+    const channel = this.deriveChannelFromKey(sessionKey) ?? "unknown";
+    const chatType = this.deriveChatTypeFromKey(sessionKey) ?? "unknown";
+    const key = sessionKey?.trim() || "<none>";
+    log.warn(
+      `qmd search denied by scope (channel=${channel}, chatType=${chatType}, session=${key})`,
+    );
+  }
+
   private deriveChannelFromKey(key?: string) {
     if (!key) {
       return undefined;
@@ -638,7 +789,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const parts = normalized.split(":").filter(Boolean);
     if (
       parts.length >= 2 &&
-      (parts[1] === "group" || parts[1] === "channel" || parts[1] === "dm")
+      (parts[1] === "group" || parts[1] === "channel" || parts[1] === "direct" || parts[1] === "dm")
     ) {
       return parts[0]?.toLowerCase();
     }
@@ -806,5 +957,35 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     return Date.now() - this.lastUpdateAt < debounceMs;
+  }
+
+  private isSqliteBusyError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const normalized = message.toLowerCase();
+    return normalized.includes("sqlite_busy") || normalized.includes("database is locked");
+  }
+
+  private createQmdBusyError(err: unknown): Error {
+    const message = err instanceof Error ? err.message : String(err);
+    return new Error(`qmd index busy while reading results: ${message}`);
+  }
+
+  private async waitForPendingUpdateBeforeSearch(): Promise<void> {
+    const pending = this.pendingUpdate;
+    if (!pending) {
+      return;
+    }
+    await Promise.race([
+      pending.catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, SEARCH_PENDING_UPDATE_WAIT_MS)),
+    ]);
+  }
+
+  private buildCollectionFilterArgs(): string[] {
+    const names = this.qmd.collections.map((collection) => collection.name).filter(Boolean);
+    if (names.length === 0) {
+      return [];
+    }
+    return names.flatMap((name) => ["-c", name]);
   }
 }

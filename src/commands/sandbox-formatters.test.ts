@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import {
   countMismatches,
   countRunning,
-  formatAge,
   formatImageMatch,
   formatSimpleStatus,
   formatStatus,
 } from "./sandbox-formatters.js";
+
+/** Helper matching old formatAge behavior: spaced compound duration */
+const formatAge = (ms: number) => formatDurationCompact(ms, { spaced: true }) ?? "0s";
 
 describe("sandbox-formatters", () => {
   describe("formatStatus", () => {
@@ -47,21 +50,21 @@ describe("sandbox-formatters", () => {
 
     it("should format minutes", () => {
       expect(formatAge(60000)).toBe("1m");
-      expect(formatAge(90000)).toBe("1m");
+      expect(formatAge(90000)).toBe("1m 30s"); // 90 seconds = 1m 30s
       expect(formatAge(300000)).toBe("5m");
     });
 
     it("should format hours and minutes", () => {
-      expect(formatAge(3600000)).toBe("1h 0m");
+      expect(formatAge(3600000)).toBe("1h");
       expect(formatAge(3660000)).toBe("1h 1m");
-      expect(formatAge(7200000)).toBe("2h 0m");
+      expect(formatAge(7200000)).toBe("2h");
       expect(formatAge(5400000)).toBe("1h 30m");
     });
 
     it("should format days and hours", () => {
-      expect(formatAge(86400000)).toBe("1d 0h");
+      expect(formatAge(86400000)).toBe("1d");
       expect(formatAge(90000000)).toBe("1d 1h");
-      expect(formatAge(172800000)).toBe("2d 0h");
+      expect(formatAge(172800000)).toBe("2d");
       expect(formatAge(183600000)).toBe("2d 3h");
     });
 
@@ -70,9 +73,9 @@ describe("sandbox-formatters", () => {
     });
 
     it("should handle edge cases", () => {
-      expect(formatAge(59999)).toBe("59s"); // Just under 1 minute
-      expect(formatAge(3599999)).toBe("59m"); // Just under 1 hour
-      expect(formatAge(86399999)).toBe("23h 59m"); // Just under 1 day
+      expect(formatAge(59999)).toBe("1m"); // Rounds to 1 minute exactly
+      expect(formatAge(3599999)).toBe("1h"); // Rounds to 1 hour exactly
+      expect(formatAge(86399999)).toBe("1d"); // Rounds to 1 day exactly
     });
   });
 

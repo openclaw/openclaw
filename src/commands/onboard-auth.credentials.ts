@@ -118,6 +118,8 @@ export async function setVeniceApiKey(key: string, agentDir?: string) {
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-4.7";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
+export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
+export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 
 export async function setZaiApiKey(key: string, agentDir?: string) {
@@ -181,6 +183,18 @@ export async function setCloudflareAiGatewayConfig(
   });
 }
 
+export async function setLitellmApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "litellm:default",
+    credential: {
+      type: "api_key",
+      provider: "litellm",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setVercelAiGatewayApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({
     profileId: "vercel-ai-gateway:default",
@@ -199,6 +213,18 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "opencode",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setTogetherApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "together:default",
+    credential: {
+      type: "api_key",
+      provider: "together",
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),

@@ -22,7 +22,7 @@ Zalo 以插件形式提供，不包含在核心安装中。
 
 - 通过 CLI 安装：`openclaw plugins install @openclaw/zalo`
 - 或在新手引导期间选择 **Zalo** 并确认安装提示
-- 详情：[插件](/plugin)
+- 详情：[插件](/tools/plugin)
 
 ## 快速设置（初学者）
 
@@ -111,7 +111,7 @@ Zalo 是一款专注于越南市场的即时通讯应用；其 Bot API 让 Gatew
 - 通过以下方式批准：
   - `openclaw pairing list zalo`
   - `openclaw pairing approve zalo <CODE>`
-- 配对是默认的令牌交换方式。详情：[配对](/start/pairing)
+- 配对是默认的令牌交换方式。详情：[配对](/channels/pairing)
 - `channels.zalo.allowFrom` 接受数字用户 ID（无用户名查找功能）。
 
 ## 长轮询与 webhook

@@ -707,7 +707,7 @@ See [Models](/cli/models) and [OAuth](/concepts/oauth).
 
 ### Is AWS Bedrock supported
 
-Yes - via pi-ai's **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
+Yes - via pi-ai's **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
 
 ### How does Codex auth work
 
@@ -803,7 +803,7 @@ See [/channels/telegram](/channels/telegram#access-control-dms--groups).
 
 ### Can multiple people use one WhatsApp number with different OpenClaw instances
 
-Yes, via **multi-agent routing**. Bind each sender's WhatsApp **DM** (peer `kind: "dm"`, sender E.164 like `+15551234567`) to a different `agentId`, so each person gets their own workspace and session store. Replies still come from the **same WhatsApp account**, and DM access control (`channels.whatsapp.dmPolicy` / `channels.whatsapp.allowFrom`) is global per WhatsApp account. See [Multi-Agent Routing](/concepts/multi-agent) and [WhatsApp](/channels/whatsapp).
+Yes, via **multi-agent routing**. Bind each sender's WhatsApp **DM** (peer `kind: "direct"`, sender E.164 like `+15551234567`) to a different `agentId`, so each person gets their own workspace and session store. Replies still come from the **same WhatsApp account**, and DM access control (`channels.whatsapp.dmPolicy` / `channels.whatsapp.allowFrom`) is global per WhatsApp account. See [Multi-Agent Routing](/concepts/multi-agent) and [WhatsApp](/channels/whatsapp).
 
 ### Can I run a fast chat agent and an Opus for coding agent
 
@@ -1177,7 +1177,7 @@ Yes - if your private traffic is **DMs** and your public traffic is **groups**.
 
 Use `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in Docker, while the main DM session stays on-host. Then restrict what tools are available in sandboxed sessions via `tools.sandbox.tools`.
 
-Setup walkthrough + example config: [Groups: personal DMs + public groups](/concepts/groups#pattern-personal-dms-public-groups-single-agent)
+Setup walkthrough + example config: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent)
 
 Key config reference: [Gateway configuration](/gateway/configuration#agentsdefaultssandbox)
 
@@ -1427,7 +1427,7 @@ The common pattern is **one Gateway** (e.g. Raspberry Pi) plus **nodes** and **a
 - **Sub-agents:** spawn background work from a main agent when you want parallelism.
 - **TUI:** connect to the Gateway and switch agents/sessions.
 
-Docs: [Nodes](/nodes), [Remote access](/gateway/remote), [Multi-Agent Routing](/concepts/multi-agent), [Sub-agents](/tools/subagents), [TUI](/tui).
+Docs: [Nodes](/nodes), [Remote access](/gateway/remote), [Multi-Agent Routing](/concepts/multi-agent), [Sub-agents](/tools/subagents), [TUI](/web/tui).
 
 ### Can the OpenClaw browser run headless
 
@@ -1681,7 +1681,7 @@ You can also define inline env vars in config (applied only if missing from the 
 }
 ```
 
-See [/environment](/environment) for full precedence and sources.
+See [/environment](/help/environment) for full precedence and sources.
 
 ### I started the Gateway via the service and my env vars disappeared What now
 
@@ -1729,7 +1729,7 @@ openclaw models status
 ```
 
 Copilot tokens are read from `COPILOT_GITHUB_TOKEN` (also `GH_TOKEN` / `GITHUB_TOKEN`).
-See [/concepts/model-providers](/concepts/model-providers) and [/environment](/environment).
+See [/concepts/model-providers](/concepts/model-providers) and [/environment](/help/environment).
 
 ## Sessions and multiple chats
 
@@ -1902,11 +1902,11 @@ Two common causes:
 - Mention gating is on (default). You must @mention the bot (or match `mentionPatterns`).
 - You configured `channels.whatsapp.groups` without `"*"` and the group isn't allowlisted.
 
-See [Groups](/concepts/groups) and [Group messages](/concepts/group-messages).
+See [Groups](/channels/groups) and [Group messages](/channels/group-messages).
 
 ### Do groupsthreads share context with DMs
 
-Direct chats collapse to the main session by default. Groups/channels have their own session keys, and Telegram topics / Discord threads are separate sessions. See [Groups](/concepts/groups) and [Group messages](/concepts/group-messages).
+Direct chats collapse to the main session by default. Groups/channels have their own session keys, and Telegram topics / Discord threads are separate sessions. See [Groups](/channels/groups) and [Group messages](/channels/group-messages).
 
 ### How many workspaces and agents can I create
 
@@ -1994,7 +1994,7 @@ Safe options:
 
 - `/model` in chat (quick, per-session)
 - `openclaw models set ...` (updates just model config)
-- `openclaw configure --section models` (interactive)
+- `openclaw configure --section model` (interactive)
 - edit `agents.defaults.model` in `~/.openclaw/openclaw.json`
 
 Avoid `config.apply` with a partial object unless you intend to replace the whole config.
@@ -2609,7 +2609,7 @@ openclaw logs --follow
 In the TUI, use `/status` to see the current state. If you expect replies in a chat
 channel, make sure delivery is enabled (`/deliver on`).
 
-Docs: [TUI](/tui), [Slash commands](/tools/slash-commands).
+Docs: [TUI](/web/tui), [Slash commands](/tools/slash-commands).
 
 ### How do I completely stop then start the Gateway
 
@@ -2701,7 +2701,7 @@ credentials or revoke access without impacting your personal accounts.
 Start small. Give access only to the tools and accounts you actually need, and expand
 later if required.
 
-Docs: [Security](/gateway/security), [Pairing](/start/pairing).
+Docs: [Security](/gateway/security), [Pairing](/channels/pairing).
 
 ### Can I give it autonomy over my text messages and is that safe
 
