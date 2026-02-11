@@ -14,6 +14,10 @@ const {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  condenseMessagesForExtraction,
+  buildContextTransfer,
+  parseJsonFromResponse,
+  CONTEXT_EXTRACTION_PROMPT,
 } = __testing;
 
 describe("compaction-safeguard tool failures", () => {
@@ -247,5 +251,167 @@ describe("compaction-safeguard runtime registry", () => {
     setCompactionSafeguardRuntime(sm2, { maxHistoryShare: 0.8 });
     expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
     expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
+  });
+});
+
+describe("condenseMessagesForExtraction", () => {
+  it("condenses user and assistant messages", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Hello world", timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Hi there!" }],
+        timestamp: Date.now(),
+      },
+    ];
+    const result = condenseMessagesForExtraction(messages);
+    expect(result).toContain("[USER] Hello world");
+    expect(result).toContain("[ASSISTANT] Hi there!");
+  });
+
+  it("truncates long messages", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "x".repeat(1000), timestamp: Date.now() },
+    ];
+    const result = condenseMessagesForExtraction(messages);
+    expect(result.length).toBeLessThan(600);
+  });
+
+  it("handles tool results with errors", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "exec",
+        isError: true,
+        content: [{ type: "text", text: "ENOENT" }],
+        timestamp: Date.now(),
+      },
+    ];
+    const result = condenseMessagesForExtraction(messages);
+    expect(result).toContain("[TOOL:exec ERROR] ENOENT");
+  });
+
+  it("respects maxMessages limit", () => {
+    const messages: AgentMessage[] = Array.from({ length: 100 }, (_, i) => ({
+      role: "user" as const,
+      content: `message ${i}`,
+      timestamp: Date.now(),
+    }));
+    const result = condenseMessagesForExtraction(messages, 5);
+    // Should only contain last 5 messages (95-99)
+    expect(result).toContain("message 95");
+    expect(result).toContain("message 99");
+    expect(result).not.toContain("message 0");
+  });
+
+  it("returns empty string for empty messages", () => {
+    expect(condenseMessagesForExtraction([])).toBe("");
+  });
+
+  it("handles user messages with array content", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "part one" },
+          { type: "image" },
+          { type: "text", text: "part two" },
+        ],
+        timestamp: Date.now(),
+      },
+    ];
+    const result = condenseMessagesForExtraction(messages);
+    expect(result).toContain("part one");
+    expect(result).toContain("part two");
+  });
+});
+
+describe("buildContextTransfer", () => {
+  it("builds valid context transfer from extracted data", () => {
+    const extracted = {
+      nextActions: [{ priority: 1, action: "Do X", context: "because Y" }],
+      doNotTouch: ["cron job Z"],
+      activeTasks: [{ description: "Task A", status: "in-progress", references: ["#42"] }],
+      pendingDecisions: ["Close issue?"],
+      subAgents: [{ label: "agent-1", sessionKey: "key-1", status: "running" }],
+      ephemeralIds: { embedMsg: "123456" },
+      conversationMode: "debugging",
+    };
+
+    const result = buildContextTransfer(extracted);
+    expect(result.timestamp).toBeTruthy();
+    expect(result.expiresAt).toBeTruthy();
+    expect(new Date(result.expiresAt).getTime()).toBeGreaterThan(
+      new Date(result.timestamp).getTime(),
+    );
+    expect(result.nextActions).toHaveLength(1);
+    expect(result.doNotTouch).toEqual(["cron job Z"]);
+    expect(result.activeTasks[0].description).toBe("Task A");
+    expect(result.pendingDecisions).toEqual(["Close issue?"]);
+    expect(result.subAgents[0].label).toBe("agent-1");
+    expect(result.ephemeralIds).toEqual({ embedMsg: "123456" });
+    expect(result.conversationMode).toBe("debugging");
+  });
+
+  it("defaults missing fields to empty arrays/objects", () => {
+    const result = buildContextTransfer({});
+    expect(result.nextActions).toEqual([]);
+    expect(result.doNotTouch).toEqual([]);
+    expect(result.activeTasks).toEqual([]);
+    expect(result.pendingDecisions).toEqual([]);
+    expect(result.subAgents).toEqual([]);
+    expect(result.ephemeralIds).toEqual({});
+    expect(result.conversationMode).toBe("casual");
+  });
+
+  it("defaults invalid conversationMode to casual", () => {
+    const result = buildContextTransfer({ conversationMode: "invalid-mode" });
+    expect(result.conversationMode).toBe("casual");
+  });
+
+  it("sets 1 hour TTL", () => {
+    const result = buildContextTransfer({});
+    const ts = new Date(result.timestamp).getTime();
+    const exp = new Date(result.expiresAt).getTime();
+    expect(exp - ts).toBe(60 * 60 * 1000);
+  });
+});
+
+describe("parseJsonFromResponse", () => {
+  it("parses clean JSON", () => {
+    const result = parseJsonFromResponse('{"key": "value"}');
+    expect(result).toEqual({ key: "value" });
+  });
+
+  it("extracts JSON from surrounding text", () => {
+    const result = parseJsonFromResponse('Here is the result:\n{"key": "value"}\nDone.');
+    expect(result).toEqual({ key: "value" });
+  });
+
+  it("returns null for no JSON", () => {
+    expect(parseJsonFromResponse("no json here")).toBeNull();
+  });
+
+  it("returns null for invalid JSON", () => {
+    expect(parseJsonFromResponse("{invalid json}")).toBeNull();
+  });
+
+  it("handles nested JSON objects", () => {
+    const input = '{"outer": {"inner": 42}}';
+    const result = parseJsonFromResponse(input);
+    expect(result).toEqual({ outer: { inner: 42 } });
+  });
+});
+
+describe("CONTEXT_EXTRACTION_PROMPT", () => {
+  it("exists and mentions required schema fields", () => {
+    expect(CONTEXT_EXTRACTION_PROMPT).toContain("nextActions");
+    expect(CONTEXT_EXTRACTION_PROMPT).toContain("activeTasks");
+    expect(CONTEXT_EXTRACTION_PROMPT).toContain("pendingDecisions");
+    expect(CONTEXT_EXTRACTION_PROMPT).toContain("subAgents");
+    expect(CONTEXT_EXTRACTION_PROMPT).toContain("ephemeralIds");
+    expect(CONTEXT_EXTRACTION_PROMPT).toContain("doNotTouch");
+    expect(CONTEXT_EXTRACTION_PROMPT).toContain("conversationMode");
   });
 });

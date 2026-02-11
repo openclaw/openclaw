@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
-import { generateText } from "@mariozechner/pi-ai";
+import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -209,62 +209,149 @@ Return ONLY a valid JSON object matching this schema:
 
 If any section is empty, use an empty array or object. Be concise but capture critical context.`;
 
+/**
+ * Condense AgentMessages into a compact text representation for the extraction prompt.
+ * Only includes the last N messages and strips large tool results to save tokens.
+ */
+function condenseMessagesForExtraction(messages: AgentMessage[], maxMessages = 60): string {
+  const recent = messages.slice(-maxMessages);
+  const lines: string[] = [];
+
+  for (const msg of recent) {
+    const role = (msg as { role?: string }).role ?? "unknown";
+    if (role === "user") {
+      const content =
+        typeof (msg as { content?: unknown }).content === "string"
+          ? (msg as { content: string }).content
+          : Array.isArray((msg as { content?: unknown }).content)
+            ? ((msg as { content: Array<{ type?: string; text?: string }> }).content ?? [])
+                .filter((b) => b.type === "text")
+                .map((b) => b.text ?? "")
+                .join("\n")
+            : "";
+      if (content.trim()) {
+        lines.push(`[USER] ${content.slice(0, 500)}`);
+      }
+    } else if (role === "assistant") {
+      const content = (msg as { content?: unknown }).content;
+      const text = Array.isArray(content)
+        ? content
+            .filter((b: { type?: string }) => b.type === "text")
+            .map((b: { text?: string }) => b.text ?? "")
+            .join("\n")
+        : typeof content === "string"
+          ? content
+          : "";
+      if (text.trim()) {
+        lines.push(`[ASSISTANT] ${text.slice(0, 500)}`);
+      }
+    } else if (role === "toolResult") {
+      const toolName = (msg as { toolName?: string }).toolName ?? "tool";
+      const isError = (msg as { isError?: boolean }).isError;
+      const resultText = extractToolResultText((msg as { content?: unknown }).content);
+      const truncated = resultText.slice(0, 200);
+      lines.push(`[TOOL:${toolName}${isError ? " ERROR" : ""}] ${truncated}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Build a ContextTransferData object from extracted JSON, with safe defaults.
+ */
+function buildContextTransfer(extracted: Record<string, unknown>): ContextTransferData {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour TTL
+
+  return {
+    timestamp: now.toISOString(),
+    expiresAt: expiresAt.toISOString(),
+    nextActions: Array.isArray(extracted.nextActions) ? extracted.nextActions : [],
+    doNotTouch: Array.isArray(extracted.doNotTouch) ? extracted.doNotTouch : [],
+    activeTasks: Array.isArray(extracted.activeTasks) ? extracted.activeTasks : [],
+    pendingDecisions: Array.isArray(extracted.pendingDecisions) ? extracted.pendingDecisions : [],
+    subAgents: Array.isArray(extracted.subAgents) ? extracted.subAgents : [],
+    ephemeralIds:
+      extracted.ephemeralIds != null && typeof extracted.ephemeralIds === "object"
+        ? (extracted.ephemeralIds as Record<string, string>)
+        : {},
+    conversationMode: ["deep-work", "casual", "debugging"].includes(
+      extracted.conversationMode as string,
+    )
+      ? (extracted.conversationMode as ContextTransferData["conversationMode"])
+      : "casual",
+  };
+}
+
+/**
+ * Parse JSON from an LLM response, handling responses that include extra text
+ * around the JSON object.
+ */
+function parseJsonFromResponse(text: string): Record<string, unknown> | null {
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    return null;
+  }
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch {
+    return null;
+  }
+}
+
+/** The Sonnet model ID to use for context extraction */
+const EXTRACTION_MODEL_ID = "claude-sonnet-4-20250514" as const;
+
 async function extractAndWriteContextTransfer(
   messages: AgentMessage[],
-  model: NonNullable<(typeof import("@mariozechner/pi-coding-agent").ExtensionContext)["model"]>,
   apiKey: string,
   workspaceDir: string,
   signal: AbortSignal,
 ): Promise<void> {
   try {
-    // Use a fast/cheap model for extraction (Haiku-tier)
-    const extractionModel = {
-      ...model,
-      id: model.id.includes("sonnet") ? model.id.replace("sonnet", "haiku") : model.id,
-    };
+    // Use Sonnet for extraction: fast, cheap, sufficient for structured extraction
+    const extractionModel = getModel("anthropic", EXTRACTION_MODEL_ID);
 
-    const result = await generateText(
-      [
-        { role: "user", content: CONTEXT_EXTRACTION_PROMPT },
-        { role: "user", content: `Conversation history:\n${JSON.stringify(messages.slice(-50))}` }, // Last 50 messages for context
-      ],
-      extractionModel,
-      {
-        apiKey,
-        temperature: 0.1, // Low temperature for structured output
-        maxTokens: 2000,
-      },
-      { signal },
-    );
-
-    const extractedText = result.text.trim();
-
-    // Try to parse JSON from the response (handle cases where model includes extra text)
-    let jsonMatch = extractedText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      console.warn("Context extraction: No JSON found in response, skipping");
+    const condensed = condenseMessagesForExtraction(messages);
+    if (!condensed.trim()) {
+      console.log("Context extraction: no substantive messages to extract from, skipping");
       return;
     }
 
-    const extracted = JSON.parse(jsonMatch[0]);
+    const result = await completeSimple(
+      extractionModel,
+      {
+        systemPrompt: CONTEXT_EXTRACTION_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: `Conversation history:\n${condensed}` }],
+          },
+        ],
+      },
+      {
+        apiKey,
+        temperature: 0.1,
+        maxTokens: 2000,
+        signal,
+      },
+    );
 
-    // Build final context transfer object
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour from now
+    // Extract text from assistant response
+    const responseText = result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("")
+      .trim();
 
-    const contextTransfer: ContextTransferData = {
-      timestamp: now.toISOString(),
-      expiresAt: expiresAt.toISOString(),
-      nextActions: Array.isArray(extracted.nextActions) ? extracted.nextActions : [],
-      doNotTouch: Array.isArray(extracted.doNotTouch) ? extracted.doNotTouch : [],
-      activeTasks: Array.isArray(extracted.activeTasks) ? extracted.activeTasks : [],
-      pendingDecisions: Array.isArray(extracted.pendingDecisions) ? extracted.pendingDecisions : [],
-      subAgents: Array.isArray(extracted.subAgents) ? extracted.subAgents : [],
-      ephemeralIds: typeof extracted.ephemeralIds === "object" ? extracted.ephemeralIds : {},
-      conversationMode: ["deep-work", "casual", "debugging"].includes(extracted.conversationMode)
-        ? extracted.conversationMode
-        : "casual",
-    };
+    const extracted = parseJsonFromResponse(responseText);
+    if (!extracted) {
+      console.warn("Context extraction: No valid JSON found in response, skipping");
+      return;
+    }
+
+    const contextTransfer = buildContextTransfer(extracted);
 
     // Write to .context-transfer.json in workspace
     const transferFilePath = join(workspaceDir, ".context-transfer.json");
@@ -432,9 +519,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       summary += toolFailureSection;
       summary += fileOpsSummary;
 
-      // Extract and write context transfer data
+      // Extract and write context transfer data (uses Sonnet, gets its own API key)
       const workspaceDir = ctx.sessionManager.getCwd();
-      await extractAndWriteContextTransfer(allMessages, model, apiKey, workspaceDir, signal);
+      const extractionApiKey = await ctx.modelRegistry.getApiKey(
+        getModel("anthropic", EXTRACTION_MODEL_ID),
+      );
+      if (extractionApiKey) {
+        await extractAndWriteContextTransfer(allMessages, extractionApiKey, workspaceDir, signal);
+      } else {
+        // Fall back to the session model's API key (likely same provider)
+        await extractAndWriteContextTransfer(allMessages, apiKey, workspaceDir, signal);
+      }
 
       return {
         compaction: {
@@ -470,4 +565,8 @@ export const __testing = {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  condenseMessagesForExtraction,
+  buildContextTransfer,
+  parseJsonFromResponse,
+  CONTEXT_EXTRACTION_PROMPT,
 } as const;
