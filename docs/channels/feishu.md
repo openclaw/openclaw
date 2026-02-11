@@ -26,6 +26,14 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/feishu
 ```
 
+Makesure plugin is enabled:
+
+```
+openclaw plugins list
+# If plugin is disabled
+openclaw plugins enable feishu
+```
+
 ---
 
 ## Quickstart
@@ -98,8 +106,8 @@ From **Credentials & Basic Info**, copy:
 
 ### 4. Configure permissions
 
-On **Permissions**, click **Batch import** and paste:
-
+On **Permissions**, click **Batch import** and paste:  
+Feishu (China)
 ```json
 {
   "scopes": {
@@ -126,6 +134,27 @@ On **Permissions**, click **Batch import** and paste:
 }
 ```
 
+Lark (international)
+```json
+{
+  "scopes": {
+    "tenant": [
+      "application:application:self_manage",
+      "application:bot.menu:write",
+      "contact:user.employee_id:readonly",
+      "event:ip_list",
+      "im:chat.members:bot_access",
+      "im:message",
+      "im:message.group_at_msg:readonly",
+      "im:message.p2p_msg:readonly",
+      "im:message:readonly",
+      "im:message:send_as_bot",
+      "im:resource"
+    ]
+  }
+}
+```
+
 ![Configure permissions](../images/feishu-step4-permissions.png)
 
 ### 5. Enable bot capability
@@ -141,7 +170,7 @@ In **App Capability** > **Bot**:
 
 ⚠️ **Important:** before setting event subscription, make sure:
 
-1. You already ran `openclaw channels add` for Feishu
+1. You already ran `openclaw channels add` for Feishu (Please refer to Step 2: Configure OpenClaw)
 2. The gateway is running (`openclaw gateway status`)
 
 In **Event Subscription**:
