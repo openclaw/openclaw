@@ -1,5 +1,5 @@
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -73,7 +73,12 @@ function syncPiSdkAuthFile(agentDir: string): void {
     }
   }
 
+  // Guard: don't overwrite an existing auth.json with an empty object when
+  // auth-profiles has no data (avoids destroying pre-migration credentials).
   const authJsonPath = path.join(agentDir, "auth.json");
+  if (Object.keys(flat).length === 0 && existsSync(authJsonPath)) {
+    return;
+  }
   writeFileSync(authJsonPath, JSON.stringify(flat, null, 2), "utf-8");
   try {
     chmodSync(authJsonPath, 0o600);

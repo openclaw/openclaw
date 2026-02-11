@@ -129,4 +129,23 @@ describe("discoverAuthStorage", () => {
     const storage = discoverAuthStorage(tempDir);
     expect(storage.has("anthropic")).toBe(false);
   });
+
+  it("does not overwrite existing auth.json when auth-profiles is empty", () => {
+    // Pre-existing auth.json with valid credentials (pre-migration scenario)
+    const authJsonPath = path.join(tempDir, "auth.json");
+    const existing = { anthropic: { type: "api_key", key: "pre-existing-key" } };
+    fs.writeFileSync(authJsonPath, JSON.stringify(existing), "utf-8");
+
+    vi.mocked(ensureAuthProfileStore).mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
+
+    const storage = discoverAuthStorage(tempDir);
+    // The pre-existing credentials should be preserved
+    expect(storage.has("anthropic")).toBe(true);
+
+    const authJson = JSON.parse(fs.readFileSync(authJsonPath, "utf-8"));
+    expect(authJson.anthropic.key).toBe("pre-existing-key");
+  });
 });
