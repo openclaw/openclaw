@@ -245,10 +245,26 @@ export function createTelephonyTtsProvider(params: {
   runtime: TelephonyTtsRuntime;
 }): TelephonyTtsProvider {
   const { coreConfig, ttsOverride, runtime } = params;
-  const mergedConfig = applyTtsOverride(coreConfig, ttsOverride);
+
+  // STRICT CONFIG SCOPE:
+  // Voice calls must use ONLY plugins.entries.voice-call.config.tts.
+  // We do NOT read or merge core messages.tts (messaging-channel TTS).
+  if (!ttsOverride) {
+    throw new Error(
+      "voice-call TTS not configured: set plugins.entries.voice-call.config.tts (does not use messages.tts)",
+    );
+  }
+
+  const effectiveConfig: CoreConfig = {
+    ...coreConfig,
+    messages: {
+      ...coreConfig.messages,
+      tts: ttsOverride,
+    },
+  };
 
   // Check if direct streaming is available for the configured provider
-  const ttsConfig = mergedConfig.messages?.tts;
+  const ttsConfig = effectiveConfig.messages?.tts;
   const canStreamElevenLabs =
     ttsConfig?.provider === "elevenlabs" &&
     ttsConfig.elevenlabs?.apiKey &&
@@ -261,7 +277,7 @@ export function createTelephonyTtsProvider(params: {
     synthesizeForTelephony: async (text: string) => {
       const result = await runtime.textToSpeechTelephony({
         text,
-        cfg: mergedConfig,
+        cfg: effectiveConfig,
       });
 
       if (!result.success || !result.audioBuffer || !result.sampleRate) {
@@ -279,42 +295,6 @@ export function createTelephonyTtsProvider(params: {
           : streamOpenAITelephony(text, ttsConfig, signal),
     }),
   };
-}
-
-function applyTtsOverride(coreConfig: CoreConfig, override?: VoiceCallTtsConfig): CoreConfig {
-  if (!override) {
-    return coreConfig;
-  }
-
-  const base = coreConfig.messages?.tts;
-  const merged = mergeTtsConfig(base, override);
-  if (!merged) {
-    return coreConfig;
-  }
-
-  return {
-    ...coreConfig,
-    messages: {
-      ...coreConfig.messages,
-      tts: merged,
-    },
-  };
-}
-
-function mergeTtsConfig(
-  base?: VoiceCallTtsConfig,
-  override?: VoiceCallTtsConfig,
-): VoiceCallTtsConfig | undefined {
-  if (!base && !override) {
-    return undefined;
-  }
-  if (!override) {
-    return base;
-  }
-  if (!base) {
-    return override;
-  }
-  return deepMerge(base, override);
 }
 
 function deepMerge<T>(base: T, override: T): T {
