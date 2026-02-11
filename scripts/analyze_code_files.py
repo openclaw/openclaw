@@ -40,6 +40,7 @@ SKIP_DIRS = {
     ".git",
     "dist",
     "build",
+    ".build",
     "coverage",
     "__pycache__",
     ".turbo",
@@ -53,6 +54,15 @@ SKIP_DIRS = {
     "Swabble",  # Separate Swift package
     "skills",  # Standalone skill scripts
     ".pi",  # Pi editor extensions
+}
+
+# Per-file line-count threshold overrides for known large files.
+# Matched against the end of the relative path (forward-slash separated).
+# Files under their custom threshold are treated the same as files under the
+# global threshold — they won't be flagged for crossing or growing.
+FILE_THRESHOLD_OVERRIDES = {
+    "OpenClawProtocol/GatewayModels.swift": 3000,
+    "OpenClaw/MenuSessionsInjector.swift": 1300,
 }
 
 # Filename patterns to skip in short-file warnings (barrel exports, stubs)
@@ -399,12 +409,20 @@ def find_threshold_regressions(
     grew = []
 
     for file_path, current_lines in files:
-        if current_lines < threshold:
+        # Use per-file override if one matches, otherwise the global threshold
+        relative_str = str(file_path.relative_to(root_dir)).replace("\\", "/")
+        file_threshold = threshold
+        for suffix, override in FILE_THRESHOLD_OVERRIDES.items():
+            if relative_str.endswith(suffix):
+                file_threshold = override
+                break
+
+        if current_lines < file_threshold:
             continue  # Not over threshold now, skip
 
         base_lines = get_line_count_at_ref(file_path, root_dir, compare_ref)
 
-        if base_lines is None or base_lines < threshold:
+        if base_lines is None or base_lines < file_threshold:
             # New file or crossed the threshold
             crossed.append((file_path, current_lines, base_lines))
         elif current_lines > base_lines:
