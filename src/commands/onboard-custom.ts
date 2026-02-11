@@ -310,7 +310,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const normalizedApiKey =
     params.apiKey?.trim() || (existingApiKey ? existingApiKey.trim() : undefined);
 
-  let config = {
+  let config: OpenClawConfig = {
     ...params.config,
     models: {
       ...params.config.models,
@@ -326,7 +326,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         },
       },
     },
-  } satisfies OpenClawConfig;
+  };
 
   config = applyPrimaryModel(config, modelRef);
   if (alias) {

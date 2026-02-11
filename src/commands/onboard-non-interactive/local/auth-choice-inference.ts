@@ -63,7 +63,9 @@ function hasStringValue(value: unknown): boolean {
 
 // Infer auth choice from explicit provider API key flags.
 export function inferAuthChoiceFromFlags(opts: OnboardOptions): AuthChoiceInference {
-  const matches = AUTH_CHOICE_FLAG_MAP.filter(({ flag }) => hasStringValue(opts[flag]));
+  const matches: AuthChoiceFlag[] = AUTH_CHOICE_FLAG_MAP.filter(({ flag }) =>
+    hasStringValue(opts[flag]),
+  );
 
   if (
     hasStringValue(opts.customBaseUrl) ||
