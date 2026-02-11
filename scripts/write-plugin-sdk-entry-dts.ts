@@ -6,4 +6,4 @@ import path from "node:path";
 // Keep a stable `dist/plugin-sdk/index.d.ts` alongside `index.js` for TS users.
 const out = path.join(process.cwd(), "dist/plugin-sdk/index.d.ts");
 fs.mkdirSync(path.dirname(out), { recursive: true });
-fs.writeFileSync(out, 'export * from "./plugin-sdk/index";\n', "utf8");
+fs.writeFileSync(out, 'export * from "./plugin-sdk/index.js";\n', "utf8");
