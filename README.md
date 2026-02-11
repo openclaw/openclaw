@@ -23,6 +23,7 @@
 This repo is a **fork** of [OpenClaw](https://github.com/openclaw/openclaw). It tracks upstream OpenClaw and additionally:
 
 - **Integrates [ClawdBot-Next](https://github.com/ClawdBot/ClawdBot-Next)** — the agent system prompt uses ClawdBot-Next’s **prompt-engine** (`src/agents/prompt-engine/`): skills loader, triangulator, skill injector, and system directives. The main system prompt is built with `buildAgentSystemPrompt` (async, with optional `userPrompt` for triangulation) and kept in sync with upstream ClawdBot-Next where applicable, while preserving OpenClaw-specific safety, branding, and config.
+- **Uses [OpenClaw-Foundry](https://github.com/openclaw/openclaw-foundry)** — this fork is wired to work with the OpenClaw-Foundry workflows and tooling alongside the core gateway, so experiments and automation flows can be developed and exercised directly against this repo.
 - **Includes maintainer-specific changes** — customizations, fixes, and workflow tooling. Explicit listing: [FORK-CHANGES.md](FORK-CHANGES.md). Fork maintenance (VPS, service, skills): [docs/MAINTENANCE.md](docs/MAINTENANCE.md). Sync from upstream: [.agent/workflows/update_clawdbot.md](.agent/workflows/update_clawdbot.md). Pushes go only to this fork; upstream is pulled from, not pushed to.
 
 For the stock OpenClaw experience, use the official repo and [docs](https://docs.openclaw.ai). Here you get the same gateway, channels, and CLI plus the integrated prompt-engine and this fork’s updates.

@@ -4,6 +4,10 @@ FROM node:22-bookworm
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
 
+## Custom helper binaries
+COPY bin/ /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-health /usr/local/bin/weather /usr/local/bin/himalaya
+
 RUN corepack enable
 
 WORKDIR /app
