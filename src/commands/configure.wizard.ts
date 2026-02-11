@@ -51,6 +51,10 @@ import { setupSkills } from "./onboard-skills.js";
  * which top-level sections the wizard touched. Unmodified sections
  * keep their raw file values (preserving ${VAR} references, unknown
  * sub-keys, and original formatting).
+ *
+ * Sections that exist only in baseConfig (injected by Zod defaults,
+ * not in the user's raw file) are intentionally omitted — all top-level
+ * schema keys are optional and Zod re-injects defaults on next read.
  */
 export function mergeWizardOutput(
   rawParsed: Record<string, unknown>,
