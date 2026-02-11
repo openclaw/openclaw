@@ -258,4 +258,60 @@ describe("sessionsScrubCommand", () => {
     const allLogs = logCalls.map((call) => String(call[0])).join(" ");
     expect(allLogs).toMatch(/Files modified.*0/);
   });
+
+  it("multi-pass: catches patterns revealed by prior masking", async () => {
+    const mockFiles = ["/tmp/test-sessions/multi-pass.jsonl"];
+    mockFindSessionFiles.mockResolvedValue(mockFiles);
+
+    // Simulate: first pass reveals a new pattern, second pass catches it, third is stable
+    mockReadFile.mockResolvedValue('{"content":"nested-token-abc123"}');
+    let callCount = 0;
+    mockRedactSensitiveText.mockImplementation((text: string) => {
+      callCount++;
+      if (text.includes("nested-token-abc123")) {
+        return text.replace("nested-token-abc123", "***-abc123"); // partial redaction
+      }
+      if (text.includes("***-abc123")) {
+        return text.replace("***-abc123", "***"); // second pass catches remainder
+      }
+      return text; // stable
+    });
+
+    await sessionsScrubCommand(mockRuntime, { dryRun: false });
+
+    expect(mockWriteFile).toHaveBeenCalled();
+    const written = mockWriteFile.mock.calls[0][1] as string;
+    expect(written).toContain("***");
+    expect(written).not.toContain("abc123");
+  });
+
+  it("oscillation guard: detects cycling patterns and stops", async () => {
+    const mockFiles = ["/tmp/test-sessions/oscillation.jsonl"];
+    mockFindSessionFiles.mockResolvedValue(mockFiles);
+
+    mockReadFile.mockResolvedValue('{"content":"flip-flop-value"}');
+    // Simulate non-idempotent patterns: output alternates between two states
+    mockRedactSensitiveText.mockImplementation((text: string) => {
+      if (text.includes("flip-flop-value")) {
+        return text.replace("flip-flop-value", "STATE_A");
+      }
+      if (text.includes("STATE_A")) {
+        return text.replace("STATE_A", "STATE_B");
+      }
+      if (text.includes("STATE_B")) {
+        return text.replace("STATE_B", "STATE_A");
+      } // oscillates
+      return text;
+    });
+
+    await sessionsScrubCommand(mockRuntime, { dryRun: false });
+
+    // Should still write (line was modified) but not loop forever
+    expect(mockWriteFile).toHaveBeenCalled();
+    const written = mockWriteFile.mock.calls[0][1] as string;
+    // Should contain one of the two states (oscillation broken)
+    expect(written).toMatch(/STATE_A|STATE_B/);
+    // Should NOT contain the original value
+    expect(written).not.toContain("flip-flop-value");
+  });
 });

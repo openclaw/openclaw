@@ -36,14 +36,26 @@ async function scrubSessionFile(
     if (!line.trim()) {
       return line;
     }
-    // Apply redaction repeatedly until stable to catch patterns revealed by prior masking
+    // Apply redaction repeatedly until stable to catch patterns revealed by prior masking.
+    // Track seen states to detect oscillation (non-idempotent patterns producing
+    // alternating output). If detected, stop early — the line is as redacted as it can be.
+    const MAX_PASSES = 10;
     let current = line;
     let lineRedacted = false;
-    for (let pass = 0; pass < 10; pass++) {
+    const seen = new Set<string>([current]);
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
       const redacted = redactSensitiveText(current, { mode: "tools" });
       if (redacted === current) {
+        break; // stable — no further changes
+      }
+      if (seen.has(redacted)) {
+        // Oscillation detected — output is cycling between states.
+        // Use the shorter (more redacted) version and stop.
+        current = redacted.length <= current.length ? redacted : current;
+        lineRedacted = true;
         break;
       }
+      seen.add(redacted);
       current = redacted;
       lineRedacted = true;
     }
