@@ -976,8 +976,10 @@ export async function applyAuthChoiceApiProviders(
         });
         if (useSp) {
           // Service principal auth is resolved at runtime via the OIDC token exchange.
-          // Store a placeholder so the profile is registered.
-          await setDatabricksApiKey("databricks-sp-oauth", params.agentDir);
+          // Store DATABRICKS_CLIENT_ID as placeholder so the profile is registered;
+          // resolveApiKeyForProvider detects service principal env vars and exchanges
+          // for a real access token before this placeholder is ever sent to Databricks.
+          await setDatabricksApiKey("DATABRICKS_CLIENT_ID", params.agentDir);
           hasCredential = true;
         }
       }

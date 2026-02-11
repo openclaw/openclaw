@@ -207,14 +207,11 @@ export async function resolveApiKeyForProvider(params: {
     };
   }
 
-  const customKey = getCustomProviderApiKey(cfg, provider);
-  if (customKey) {
-    return { apiKey: customKey, source: "models.json", mode: "api-key" };
-  }
-
   const normalized = normalizeProviderId(provider);
 
   // Databricks service principal: exchange client_id + client_secret for an access token.
+  // Must run before the generic custom-key check so the placeholder "databricks-sp-oauth"
+  // written by resolveImplicitProviders doesn't short-circuit the real token exchange.
   if (normalized === "databricks") {
     const spConfig = resolveDatabricksServicePrincipalEnv();
     if (spConfig) {
@@ -225,6 +222,11 @@ export async function resolveApiKeyForProvider(params: {
         mode: "oauth",
       };
     }
+  }
+
+  const customKey = getCustomProviderApiKey(cfg, provider);
+  if (customKey) {
+    return { apiKey: customKey, source: "models.json", mode: "api-key" };
   }
 
   if (authOverride === undefined && normalized === "amazon-bedrock") {

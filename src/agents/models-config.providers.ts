@@ -637,9 +637,12 @@ export async function resolveImplicitProviders(params: {
       const baseUrl = normalizedHost.endsWith("/serving-endpoints")
         ? normalizedHost
         : `${normalizedHost}/serving-endpoints`;
-      // For PAT: apiKey is the env var name; for service principal: use a placeholder
-      // since the actual token is exchanged at runtime via resolveApiKeyForProvider.
-      const apiKey = databricksKey ?? "databricks-sp-oauth";
+      // For PAT: apiKey is the env var name (standard pattern).
+      // For service principal: use the DATABRICKS_CLIENT_ID env var name as the
+      // placeholder — pi-coding-agent's ModelRegistry requires a non-empty apiKey
+      // to register the provider. The real token is exchanged at runtime via
+      // resolveApiKeyForProvider → exchangeDatabricksServicePrincipalToken.
+      const apiKey = databricksKey ?? "DATABRICKS_CLIENT_ID";
       providers.databricks = { ...buildDatabricksProvider(baseUrl), apiKey };
     }
   }
