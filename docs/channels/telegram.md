@@ -16,7 +16,7 @@ Status: production-ready for bot DMs + groups via grammY. Long polling is the de
   <Card title="Channel troubleshooting" icon="wrench" href="/channels/troubleshooting">
     Cross-channel diagnostics and repair playbooks.
   </Card>
-  <Card title="Gateway configuration" icon="sliders" href="/gateway/configuration">
+  <Card title="Gateway configuration" icon="settings" href="/gateway/configuration">
     Full channel config patterns and examples.
   </Card>
 </CardGroup>
