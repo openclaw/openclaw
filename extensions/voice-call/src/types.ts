@@ -65,6 +65,7 @@ export const EndReasonSchema = z.enum([
   "no-answer",
   "busy",
   "voicemail",
+  "system-cleanup",
 ]);
 export type EndReason = z.infer<typeof EndReasonSchema>;
 
