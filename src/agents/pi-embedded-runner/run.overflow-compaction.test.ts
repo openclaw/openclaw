@@ -153,7 +153,10 @@ vi.mock("../pi-embedded-helpers.js", async () => {
     parseImageSizeError: vi.fn(() => null),
     pickFallbackThinkingLevel: vi.fn(() => null),
     isTimeoutErrorMessage: vi.fn(() => false),
+    isOverloadedErrorMessage: vi.fn(() => false),
     parseImageDimensionError: vi.fn(() => null),
+    parseImageSizeError: vi.fn(() => null),
+    BILLING_ERROR_USER_MESSAGE: "Billing error",
   };
 });
 

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import { sleepWithAbort } from "../../infra/backoff.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -37,6 +38,7 @@ import {
   isContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isOverloadedErrorMessage,
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
@@ -388,6 +390,14 @@ export async function runEmbeddedPiAgent(
       let toolResultTruncationAttempted = false;
       const usageAccumulator = createUsageAccumulator();
       let autoCompactionCount = 0;
+
+      // Transient error retry state (503 / no capacity / overloaded)
+      const TRANSIENT_RETRY_BUDGET_MS = 60_000;
+      const TRANSIENT_BACKOFF_BASE_MS = 5_000;
+      const TRANSIENT_BACKOFF_CAP_MS = 15_000;
+      let transientRetryStart = 0;
+      let transientRetryCount = 0;
+
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -731,6 +741,44 @@ export async function runEmbeddedPiAgent(
             );
           }
 
+          // Transient retry: when the error is overloaded/rate-limited (e.g. 503 "no capacity"),
+          // retry with backoff for up to ~60s before falling through to profile rotation / failover.
+          const isTransientCapacity =
+            !aborted &&
+            (rateLimitFailure || isOverloadedErrorMessage(lastAssistant?.errorMessage ?? "")) &&
+            !billingFailure &&
+            !authFailure;
+
+          if (isTransientCapacity) {
+            if (transientRetryStart === 0) {
+              transientRetryStart = Date.now();
+            }
+            const elapsed = Date.now() - transientRetryStart;
+            if (elapsed < TRANSIENT_RETRY_BUDGET_MS) {
+              transientRetryCount++;
+              const backoff = Math.min(
+                TRANSIENT_BACKOFF_BASE_MS * transientRetryCount,
+                TRANSIENT_BACKOFF_CAP_MS,
+              );
+              const statusText =
+                transientRetryCount === 1
+                  ? "Service temporarily unavailable \u2014 retrying..."
+                  : `Still waiting for capacity (attempt ${transientRetryCount})...`;
+              log.warn(
+                `Transient error on ${provider}/${modelId}: ${lastAssistant?.errorMessage ?? "unknown"}. Retry ${transientRetryCount} in ${backoff}ms.`,
+              );
+              await params.onBlockReply?.({ text: statusText });
+              await sleepWithAbort(backoff, params.abortSignal);
+              continue;
+            }
+            // Budget exhausted — reset state and fall through to rotation/failover
+            log.warn(
+              `Transient retry budget exhausted after ${transientRetryCount} attempts (${elapsed}ms). Falling through to failover.`,
+            );
+            transientRetryStart = 0;
+            transientRetryCount = 0;
+          }
+
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
           const shouldRotate = (!aborted && failoverFailure) || timedOut;
 
@@ -795,6 +843,10 @@ export async function runEmbeddedPiAgent(
               });
             }
           }
+
+          // Reset transient retry state on success
+          transientRetryStart = 0;
+          transientRetryCount = 0;
 
           const usage = toNormalizedUsage(usageAccumulator);
           const agentMeta: EmbeddedPiAgentMeta = {

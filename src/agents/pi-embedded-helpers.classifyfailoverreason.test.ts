@@ -38,4 +38,14 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
+  it("classifies 503 'no capacity' errors as rate_limit", () => {
+    expect(
+      classifyFailoverReason(
+        "Cloud Code Assist API error (503): No capacity available for model claude-opus-4-6-thinking on the server",
+      ),
+    ).toBe("rate_limit");
+  });
+  it("classifies bare 503 errors as rate_limit", () => {
+    expect(classifyFailoverReason("HTTP 503 Service Unavailable")).toBe("rate_limit");
+  });
 });
