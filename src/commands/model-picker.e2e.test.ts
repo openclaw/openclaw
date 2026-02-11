@@ -21,10 +21,12 @@ const ensureAuthProfileStore = vi.hoisted(() =>
 );
 const listProfilesForProvider = vi.hoisted(() => vi.fn(() => []));
 const upsertAuthProfile = vi.hoisted(() => vi.fn());
+const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
   listProfilesForProvider,
   upsertAuthProfile,
+  upsertAuthProfileWithLock,
 }));
 
 const resolveEnvApiKey = vi.hoisted(() => vi.fn(() => undefined));
@@ -99,9 +101,10 @@ describe("promptDefaultModel", () => {
       includeManual: false,
       includeVllm: true,
       ignoreAllowlist: true,
+      agentDir: "/tmp/openclaw-agent",
     });
 
-    expect(upsertAuthProfile).toHaveBeenCalledWith(
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledWith(
       expect.objectContaining({
         profileId: "vllm:default",
         credential: expect.objectContaining({ provider: "vllm" }),
