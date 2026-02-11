@@ -22,6 +22,7 @@ export function createGatewayCloseHandler(params: {
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
+  memoryMonitorInterval: ReturnType<typeof setInterval>;
   agentUnsub: (() => void) | null;
   heartbeatUnsub: (() => void) | null;
   chatRunState: { clear: () => void };
@@ -91,6 +92,7 @@ export function createGatewayCloseHandler(params: {
     if (params.mediaCleanup) {
       clearInterval(params.mediaCleanup);
     }
+    clearInterval(params.memoryMonitorInterval);
     if (params.agentUnsub) {
       try {
         params.agentUnsub();
