@@ -398,17 +398,25 @@ export function formatTerminalLink(
 }
 
 /**
- * URL detection regex - matches http(s) URLs.
+ * URL detection pattern - matches http(s) URLs.
  * Used for link preview security controls.
+ * Note: We create fresh regex instances to avoid global regex lastIndex state bugs.
  */
-const URL_REGEX = /https?:\/\/[^\s<>[\]()]+/gi;
+const URL_PATTERN = "https?://[^\\s<>[\\]()]+";
+
+/**
+ * Creates a fresh URL regex instance to avoid global regex lastIndex mutation.
+ */
+function createUrlRegex(global = true): RegExp {
+  return new RegExp(URL_PATTERN, global ? "gi" : "i");
+}
 
 /**
  * Detects URLs in text that could trigger link previews.
  * Returns array of matched URLs.
  */
 export function detectUrls(text: string): string[] {
-  const matches = text.match(URL_REGEX);
+  const matches = text.match(createUrlRegex(true));
   return matches ?? [];
 }
 
@@ -416,7 +424,7 @@ export function detectUrls(text: string): string[] {
  * Checks if text contains any URLs that could trigger link previews.
  */
 export function containsUrls(text: string): boolean {
-  return URL_REGEX.test(text);
+  return createUrlRegex(false).test(text);
 }
 
 /**
@@ -425,7 +433,7 @@ export function containsUrls(text: string): boolean {
  * This format is commonly used to suppress auto-previews in chat clients.
  */
 export function mangleUrlsForPreview(text: string): string {
-  return text.replace(URL_REGEX, (url) => {
+  return text.replace(createUrlRegex(true), (url) => {
     // Don't double-wrap if already wrapped
     const beforeMatch = text.indexOf(url);
     if (beforeMatch > 0 && text[beforeMatch - 1] === "<") {

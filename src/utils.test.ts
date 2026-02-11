@@ -263,6 +263,21 @@ describe("URL detection utilities", () => {
     it("returns false when no URLs", () => {
       expect(containsUrls("No links here")).toBe(false);
     });
+
+    it("works correctly on repeated calls (no global regex lastIndex bug)", () => {
+      // This tests the fix for the stateful regex bug where global regex
+      // with .test() mutates lastIndex and can return false on repeated calls
+      const text = "Visit https://example.com today";
+      expect(containsUrls(text)).toBe(true);
+      expect(containsUrls(text)).toBe(true);
+      expect(containsUrls(text)).toBe(true);
+
+      // Also verify it works after detectUrls/mangleUrlsForPreview calls
+      detectUrls(text);
+      expect(containsUrls(text)).toBe(true);
+      mangleUrlsForPreview(text);
+      expect(containsUrls(text)).toBe(true);
+    });
   });
 
   describe("mangleUrlsForPreview", () => {
