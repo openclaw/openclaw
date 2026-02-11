@@ -58,17 +58,76 @@ function matchesAny(name: string, patterns: CompiledPattern[]): boolean {
   return false;
 }
 
-function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
+/**
+ * Check if an exec command matches a scoped pattern like "exec:gog calendar*"
+ */
+function matchesScopedExec(
+  execCommand: string | undefined,
+  patterns: string[] | undefined,
+): boolean {
+  if (!patterns) {
+    return false;
+  }
+  for (const pattern of patterns) {
+    if (!pattern.startsWith("exec:")) {
+      continue;
+    }
+    const commandPattern = pattern.slice(5); // Remove "exec:"
+    if (commandPattern === "*") {
+      return true;
+    }
+    if (!execCommand) {
+      continue;
+    }
+    if (commandPattern.endsWith("*")) {
+      const prefix = commandPattern.slice(0, -1);
+      if (execCommand.startsWith(prefix)) {
+        return true;
+      }
+    } else if (execCommand === commandPattern) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if any pattern in the list is a scoped exec pattern (including exec:*)
+ */
+function hasScopedExecPatterns(patterns: string[] | undefined): boolean {
+  if (!patterns) {
+    return false;
+  }
+  return patterns.some((p) => p.startsWith("exec:") && p.length > 5);
+}
+
+function makeToolPolicyMatcher(policy: SandboxToolPolicy, execCommand?: string) {
   const deny = compilePatterns(policy.deny);
   const allow = compilePatterns(policy.allow);
+  const hasExecScoping = hasScopedExecPatterns(policy.allow);
+
   return (name: string) => {
     const normalized = normalizeToolName(name);
+
+    // Check deny patterns first (including scoped exec deny)
     if (matchesAny(normalized, deny)) {
-      return false;
+      // But allow if there's a scoped exec pattern that matches
+      if (normalized === "exec" && execCommand && matchesScopedExec(execCommand, policy.allow)) {
+        // Scoped allow overrides general deny
+      } else {
+        return false;
+      }
     }
+
     if (allow.length === 0) {
       return true;
     }
+
+    // For exec tool with scoped patterns, require command match
+    if (normalized === "exec" && hasExecScoping) {
+      return matchesScopedExec(execCommand, policy.allow);
+    }
+
     if (matchesAny(normalized, allow)) {
       return true;
     }
@@ -108,11 +167,15 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig): SandboxToolPoli
   return { allow, deny };
 }
 
-export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
+export function isToolAllowedByPolicyName(
+  name: string,
+  policy?: SandboxToolPolicy,
+  execCommand?: string,
+): boolean {
   if (!policy) {
     return true;
   }
-  return makeToolPolicyMatcher(policy)(name);
+  return makeToolPolicyMatcher(policy, execCommand)(name);
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
@@ -399,6 +462,7 @@ export function resolveGroupToolPolicy(params: {
 export function isToolAllowedByPolicies(
   name: string,
   policies: Array<SandboxToolPolicy | undefined>,
+  execCommand?: string,
 ) {
-  return policies.every((policy) => isToolAllowedByPolicyName(name, policy));
+  return policies.every((policy) => isToolAllowedByPolicyName(name, policy, execCommand));
 }
