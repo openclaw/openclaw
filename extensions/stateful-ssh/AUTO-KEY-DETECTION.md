@@ -12,17 +12,26 @@ The Stateful SSH plugin now **automatically detects and uses SSH keys** from `~/
 
 When you open an SSH session **without** providing a `password` or `privateKey` parameter, the plugin automatically:
 
-1. Searches `~/.ssh/` for private keys
-2. Tries keys in this order:
-   - `bot_key` (our custom bot key)
-   - `id_ed25519` (modern, recommended)
-   - `id_ecdsa` (ECDSA)
-   - `id_rsa` (classic RSA)
-   - `id_dsa` (legacy, deprecated)
+1. **Checks SSH Config** (`~/.ssh/config`)
+   - Looks for matching `Host` entry
+   - Extracts host-specific `IdentityFile`
+   - ⭐ **NEW**: Supports hostnames, host-specific keys, wildcards!
+
+2. **Falls back to standard keys** (if no config match)
+   - Searches `~/.ssh/` for private keys
+   - Tries keys in this order:
+     - `bot_key` (our custom bot key)
+     - `id_ed25519` (modern, recommended)
+     - `id_ecdsa` (ECDSA)
+     - `id_rsa` (classic RSA)
+     - `id_dsa` (legacy, deprecated)
+
 3. Uses the first readable key it finds
 4. Connects to the server
 
-**This mimics standard SSH client behavior!**
+**This mimics standard SSH client behavior exactly!**
+
+💡 **See also:** [SSH-CONFIG-SUPPORT.md](./SSH-CONFIG-SUPPORT.md) for host-specific key configuration
 
 ---
 
