@@ -440,10 +440,9 @@ describe("runConfigureWizard", () => {
       expect(written.skills).toEqual(rawParsed.skills);
       expect(written.logging).toEqual(rawParsed.logging);
 
-      // Default-only sections (agents) that the user never set are correctly omitted.
-      // They were only in baseConfig because Zod injected defaults — the raw file
-      // never contained them. On next read, Zod will re-inject defaults.
-      expect(written.agents).toBeUndefined();
+      // Default-only sections (agents) are carried forward from baseConfig even
+      // though they weren't in the raw file — prevents dropping Zod-injected config.
+      expect(written.agents).toEqual(baseConfig.agents);
 
       // gateway was in rawParsed as minimal; since the wizard set mode=local
       // (which creates a new reference), it should use the wizard's value
@@ -500,6 +499,20 @@ describe("mergeWizardOutput", () => {
 
     // $include present → fall back to nextConfig entirely
     expect(result).toEqual(next as unknown as Record<string, unknown>);
+  });
+
+  it("carries forward default-only sections not in rawParsed", () => {
+    const raw = { gateway: { mode: "local" } };
+    const sharedAgents = { defaults: { workspace: "/tmp/ws" } };
+    const base = { gateway: { mode: "local" }, agents: sharedAgents } as OpenClawConfig;
+    // Wizard didn't touch agents — same reference as base
+    const next = { gateway: { mode: "local" }, agents: sharedAgents } as OpenClawConfig;
+
+    const result = mergeWizardOutput(raw, base, next);
+
+    // agents not in rawParsed but unmodified (same ref) → carried from baseConfig
+    expect(result.agents).toEqual({ defaults: { workspace: "/tmp/ws" } });
+    expect(result.gateway).toEqual({ mode: "local" });
   });
 
   it("adds keys from nextConfig missing in rawParsed", () => {
