@@ -28,6 +28,7 @@ import { resolveMedia } from "./bot/delivery.js";
 import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
+  hasBotMention,
   resolveTelegramForumThreadId,
 } from "./bot/helpers.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
@@ -41,6 +42,35 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
+
+/** Media types silently skipped in group chats when ignoreMediaTypes is not explicitly configured. */
+const GROUP_DEFAULT_IGNORE_MEDIA_TYPES: readonly string[] = ["video_note", "video"];
+
+/** Resolve the Telegram media type string from a message, or null if no media. */
+function resolveTelegramMediaType(msg: Message): string | null {
+  if (msg.video_note) {
+    return "video_note";
+  }
+  if (msg.voice) {
+    return "voice";
+  }
+  if (msg.audio) {
+    return "audio";
+  }
+  if (msg.video) {
+    return "video";
+  }
+  if (msg.document) {
+    return "document";
+  }
+  if (msg.photo) {
+    return "photo";
+  }
+  if (msg.sticker) {
+    return "sticker";
+  }
+  return null;
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -204,8 +234,22 @@ export const registerTelegramHandlers = ({
       const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
       const primaryEntry = captionMsg ?? entry.messages[0];
 
+      // Media groups only occur in groups. Check if any message in the album mentions the bot.
+      const groupBotUsername = primaryEntry?.ctx.me?.username?.toLowerCase();
+      const albumHasMention = groupBotUsername
+        ? entry.messages.some(({ msg: m }) => hasBotMention(m, groupBotUsername))
+        : false;
+      const groupIgnoreList = telegramCfg.ignoreMediaTypes ?? GROUP_DEFAULT_IGNORE_MEDIA_TYPES;
+
       const allMedia: TelegramMediaRef[] = [];
       for (const { ctx } of entry.messages) {
+        const groupMsg = ctx.message;
+        if (groupMsg && !albumHasMention && groupIgnoreList.length) {
+          const mediaType = resolveTelegramMediaType(groupMsg);
+          if (mediaType && groupIgnoreList.includes(mediaType as any)) {
+            continue;
+          }
+        }
         const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
         if (media) {
           allMedia.push({
@@ -869,25 +913,49 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      let media: Awaited<ReturnType<typeof resolveMedia>> = null;
-      try {
-        media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
-      } catch (mediaErr) {
-        const errMsg = String(mediaErr);
-        if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {
-          const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
-          await withTelegramApiErrorLogging({
-            operation: "sendMessage",
-            runtime,
-            fn: () =>
-              bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
-                reply_to_message_id: msg.message_id,
-              }),
-          }).catch(() => {});
-          logger.warn({ chatId, error: errMsg }, "media exceeds size limit");
+      // Check ignoreMediaTypes — skip download for ignored types.
+      // In groups: default to skipping video_note + video (unless bot is @mentioned).
+      // In DMs: no default filtering. Explicit config always takes precedence.
+      const detectedMediaType = resolveTelegramMediaType(msg);
+      const botUsername = ctx.me?.username?.toLowerCase();
+      const mentionedInGroup = isGroup && botUsername ? hasBotMention(msg, botUsername) : false;
+      const effectiveIgnoreList =
+        telegramCfg.ignoreMediaTypes ?? (isGroup ? GROUP_DEFAULT_IGNORE_MEDIA_TYPES : []);
+      const isIgnoredMediaType =
+        detectedMediaType != null &&
+        !mentionedInGroup &&
+        effectiveIgnoreList.includes(detectedMediaType as any);
+
+      if (isIgnoredMediaType) {
+        const hasTextContent = Boolean((msg.text ?? msg.caption ?? "").trim());
+        if (!hasTextContent) {
+          logVerbose(`telegram: skipping ${detectedMediaType} message (ignoreMediaTypes)`);
           return;
         }
-        throw mediaErr;
+        // Has caption text — fall through but skip media download
+      }
+
+      let media: Awaited<ReturnType<typeof resolveMedia>> = null;
+      if (!isIgnoredMediaType) {
+        try {
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        } catch (mediaErr) {
+          const errMsg = String(mediaErr);
+          if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {
+            const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
+                  reply_to_message_id: msg.message_id,
+                }),
+            }).catch(() => {});
+            logger.warn({ chatId, error: errMsg }, "media exceeds size limit");
+            return;
+          }
+          throw mediaErr;
+        }
       }
 
       // Skip sticker-only messages where the sticker was skipped (animated/video)
