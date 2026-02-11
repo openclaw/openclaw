@@ -51,6 +51,11 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import {
+  buildGitSshSigningWarning,
+  detectGitSshSigning,
+  parseGitSigningCommand,
+} from "./git-signing-detect.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -1501,6 +1506,19 @@ export function createExecTool(
               allowlistEval.segments[0]?.resolution?.resolvedPath,
             );
           }
+        }
+      }
+
+      // Detect git SSH signing and warn before execution (#14134).
+      const gitSubcommand = parseGitSigningCommand(params.command);
+      if (gitSubcommand && !sandbox) {
+        try {
+          const signingInfo = await detectGitSshSigning(workdir);
+          if (signingInfo.sshSigning) {
+            warnings.push(buildGitSshSigningWarning(gitSubcommand));
+          }
+        } catch {
+          // Detection failure should never block execution.
         }
       }
 
