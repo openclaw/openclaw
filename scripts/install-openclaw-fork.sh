@@ -30,7 +30,7 @@ OPENCLAW_ONBOARD_ARGS="${OPENCLAW_ONBOARD_ARGS:---install-daemon --auth-choice x
 OPENCLAW_NPM_SCRIPT_SHELL="${OPENCLAW_NPM_SCRIPT_SHELL:-}"
 
 if [[ -z "$OPENCLAW_SPEC" && -z "$OPENCLAW_REF" && -z "$OPENCLAW_BRANCH" ]]; then
-  OPENCLAW_REF="v2026.2.9-dreamclaw.4"
+  OPENCLAW_REF="v2026.2.9-dreamclaw.5"
 fi
 
 if [[ -n "$OPENCLAW_SPEC" && ( -n "$OPENCLAW_REF" || -n "$OPENCLAW_BRANCH" ) ]]; then
@@ -60,9 +60,15 @@ fi
 echo "==> Installing from ${SPEC} (${REF_KIND})"
 
 resolve_npm_script_shell() {
+  shell_works() {
+    local candidate="$1"
+    [[ -n "$candidate" && -x "$candidate" ]] || return 1
+    "$candidate" -c "exit 0" >/dev/null 2>&1
+  }
+
   if [[ -n "$OPENCLAW_NPM_SCRIPT_SHELL" ]]; then
-    [[ -x "$OPENCLAW_NPM_SCRIPT_SHELL" ]] || {
-      echo "ERROR: OPENCLAW_NPM_SCRIPT_SHELL is not executable: $OPENCLAW_NPM_SCRIPT_SHELL" >&2
+    shell_works "$OPENCLAW_NPM_SCRIPT_SHELL" || {
+      echo "ERROR: OPENCLAW_NPM_SCRIPT_SHELL is not executable/usable: $OPENCLAW_NPM_SCRIPT_SHELL" >&2
       return 1
     }
     printf '%s\n' "$OPENCLAW_NPM_SCRIPT_SHELL"
@@ -70,16 +76,26 @@ resolve_npm_script_shell() {
   fi
 
   local c
+  if shell_works "${BASH:-}"; then
+    printf '%s\n' "$BASH"
+    return 0
+  fi
+
   # Prefer stable absolute paths to avoid bad shell hashes/aliases.
   for c in /bin/sh /usr/bin/sh /bin/bash /usr/bin/bash; do
-    if [[ -x "$c" ]]; then
+    if shell_works "$c"; then
       printf '%s\n' "$c"
       return 0
     fi
   done
 
   c="$(command -v sh || command -v bash || true)"
-  if [[ -n "$c" && -x "$c" ]]; then
+  if shell_works "$c"; then
+    printf '%s\n' "$c"
+    return 0
+  fi
+  c="$(command -v bash || true)"
+  if shell_works "$c"; then
     printf '%s\n' "$c"
     return 0
   fi
@@ -126,13 +142,13 @@ else
   echo "==> Using npm global install"
   # Keep the caller's PATH order to avoid Node/npm version mismatches.
   npm_shell="$(resolve_npm_script_shell || true)"
-  if [[ -n "${npm_shell:-}" ]]; then
-    echo "==> npm script shell: ${npm_shell}"
-    npm_config_script_shell="$npm_shell" run_npm install -g "$SPEC"
-  else
-    echo "==> npm script shell: default"
-    run_npm install -g "$SPEC"
+  if [[ -z "${npm_shell:-}" ]]; then
+    echo "ERROR: could not find a usable shell for npm lifecycle scripts." >&2
+    echo "Set OPENCLAW_NPM_SCRIPT_SHELL to a valid shell path (example: command -v bash)." >&2
+    exit 1
   fi
+  echo "==> npm script shell: ${npm_shell}"
+  npm_config_script_shell="$npm_shell" run_npm install -g "$SPEC"
   npm_prefix="$(run_npm prefix -g 2>/dev/null || true)"
   if [[ -n "${npm_prefix:-}" ]]; then
     GLOBAL_BIN_HINT="${npm_prefix}/bin"
