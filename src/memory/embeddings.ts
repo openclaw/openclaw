@@ -24,6 +24,7 @@ export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 export type EmbeddingProvider = {
   id: string;
   model: string;
+  maxInputTokens?: number;
   embedQuery: (text: string) => Promise<number[]>;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
