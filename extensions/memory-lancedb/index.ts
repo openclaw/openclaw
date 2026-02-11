@@ -10,36 +10,7 @@ import type * as LanceDB from "@lancedb/lancedb";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
-type OpenAIClient = {
-  embeddings: {
-    create: (opts: { model: string; input: string }) => Promise<{ data: { embedding: number[] }[] }>;
-  };
-};
-
-let openaiCtorPromise:
-  | Promise<(opts: { apiKey: string }) => OpenAIClient>
-  | null = null;
-
-const loadOpenAIClientFactory = async (): Promise<(opts: { apiKey: string }) => OpenAIClient> => {
-  if (!openaiCtorPromise) {
-    openaiCtorPromise = import("openai")
-      .then((mod) => {
-        const Ctor = (mod as { default?: unknown }).default;
-        if (typeof Ctor !== "function") {
-          throw new Error("memory-lancedb: invalid OpenAI module export");
-        }
-        return (opts: { apiKey: string }) => new (Ctor as any)(opts) as OpenAIClient;
-      })
-      .catch((err) => {
-        throw new Error(
-          "memory-lancedb: OpenAI SDK not installed. Install the `openai` package to enable embeddings.",
-          { cause: err },
-        );
-      });
-  }
-  return await openaiCtorPromise;
-};
-import { stringEnum } from "openclaw/plugin-sdk";
+import OpenAI from "openai";
 import {
   MEMORY_CATEGORIES,
   type MemoryCategory,
@@ -189,25 +160,17 @@ class MemoryDB {
 // ============================================================================
 
 class Embeddings {
-  private client: OpenAIClient | null = null;
+  private client: OpenAI;
 
   constructor(
-    private apiKey: string,
+    apiKey: string,
     private model: string,
-  ) {}
-
-  private async getClient(): Promise<OpenAIClient> {
-    if (this.client) {
-      return this.client;
-    }
-    const createClient = await loadOpenAIClientFactory();
-    this.client = createClient({ apiKey: this.apiKey });
-    return this.client;
+  ) {
+    this.client = new OpenAI({ apiKey });
   }
 
   async embed(text: string): Promise<number[]> {
-    const client = await this.getClient();
-    const response = await client.embeddings.create({
+    const response = await this.client.embeddings.create({
       model: this.model,
       input: text,
     });
@@ -353,7 +316,12 @@ const memoryPlugin = {
         parameters: Type.Object({
           text: Type.String({ description: "Information to remember" }),
           importance: Type.Optional(Type.Number({ description: "Importance 0-1 (default: 0.7)" })),
-          category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+          category: Type.Optional(
+            Type.Unsafe<MemoryCategory>({
+              type: "string",
+              enum: [...MEMORY_CATEGORIES],
+            }),
+          ),
         }),
         async execute(_toolCallId, params) {
           const {
