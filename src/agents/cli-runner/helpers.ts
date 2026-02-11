@@ -18,30 +18,80 @@ import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
+const RESUME_STALE_SECONDS = 120;
 
-function buildLooseArgOrderRegex(tokens: string[]): RegExp {
-  // Scan `ps` output lines. Keep matching flexible, but require whitespace arg boundaries
-  // to avoid substring matches like `codexx` or `/path/to/codexx`.
-  const [head, ...rest] = tokens.map((t) => String(t ?? "").trim()).filter(Boolean);
-  if (!head) {
-    return /$^/;
+type PsProcessEntry = {
+  pid: number;
+  stat: string;
+  etimesSec?: number;
+  command: string;
+};
+
+function parsePsLine(line: string, opts?: { hasElapsed?: boolean }): PsProcessEntry | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
   }
 
-  const headEscaped = escapeRegExp(head);
-  const headFragment = `(?:^|\\s)(?:${headEscaped}|\\S+\\/${headEscaped})(?=\\s|$)`;
-  const restFragments = rest.map((t) => `(?:^|\\s)${escapeRegExp(t)}(?=\\s|$)`);
-  return new RegExp([headFragment, ...restFragments].join(".*"));
+  if (opts?.hasElapsed) {
+    const withElapsed = /^(\d+)\s+(\S+)\s+(\d+)\s+(.*)$/.exec(trimmed);
+    if (!withElapsed) {
+      return null;
+    }
+    const pid = Number(withElapsed[1]);
+    const etimesSec = Number(withElapsed[3]);
+    if (!Number.isFinite(pid) || !Number.isFinite(etimesSec)) {
+      return null;
+    }
+    return {
+      pid,
+      stat: withElapsed[2] ?? "",
+      etimesSec,
+      command: withElapsed[4] ?? "",
+    };
+  }
+
+  const withoutElapsed = /^(\d+)\s+(\S+)\s+(.*)$/.exec(trimmed);
+  if (!withoutElapsed) {
+    return null;
+  }
+  const pid = Number(withoutElapsed[1]);
+  if (!Number.isFinite(pid)) {
+    return null;
+  }
+  return {
+    pid,
+    stat: withoutElapsed[2] ?? "",
+    command: withoutElapsed[3] ?? "",
+  };
 }
 
-async function psWithFallback(argsA: string[], argsB: string[]): Promise<string> {
-  try {
-    const { stdout } = await runExec("ps", argsA);
-    return stdout;
-  } catch {
-    // fallthrough
+function buildResumeMatcher(backend: CliBackendConfig, sessionId: string): RegExp | null {
+  const resumeArgs = backend.resumeArgs ?? [];
+  if (resumeArgs.length === 0) {
+    return null;
   }
-  const { stdout } = await runExec("ps", argsB);
-  return stdout;
+  if (!resumeArgs.some((arg) => arg.includes("{sessionId}"))) {
+    return null;
+  }
+  const commandToken = path.basename(backend.command ?? "").trim();
+  if (!commandToken) {
+    return null;
+  }
+
+  const resumeTokens = resumeArgs.map((arg) => arg.replaceAll("{sessionId}", sessionId));
+  const tokens = [commandToken, ...resumeTokens].filter(Boolean);
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  const pattern = tokens
+    .map((token, index) => {
+      const tokenPattern = escapeRegExp(token);
+      return index === 0 ? `(?:^|\\s)${tokenPattern}` : `\\s+${tokenPattern}`;
+    })
+    .join("");
+  return pattern ? new RegExp(pattern) : null;
 }
 
 export async function cleanupResumeProcesses(
@@ -51,75 +101,33 @@ export async function cleanupResumeProcesses(
   if (process.platform === "win32") {
     return;
   }
-  const resumeArgs = backend.resumeArgs ?? [];
-  if (resumeArgs.length === 0) {
-    return;
-  }
-  if (!resumeArgs.some((arg) => arg.includes("{sessionId}"))) {
-    return;
-  }
-  const commandToken = path.basename(backend.command ?? "").trim();
-  if (!commandToken) {
-    return;
-  }
-
-  const resumeTokens = resumeArgs.map((arg) => arg.replaceAll("{sessionId}", sessionId));
-  const pattern = [commandToken, ...resumeTokens]
-    .filter(Boolean)
-    .map((token) => escapeRegExp(token))
-    .join(".*");
-  if (!pattern) {
+  const matcher = buildResumeMatcher(backend, sessionId);
+  if (!matcher) {
     return;
   }
 
   try {
-    const stdout = await psWithFallback(
-      ["-axww", "-o", "pid=,ppid=,command="],
-      ["-ax", "-o", "pid=,ppid=,command="],
-    );
-    const patternRegex = buildLooseArgOrderRegex([commandToken, ...resumeTokens]);
-    const toKill: number[] = [];
-
+    const { stdout } = await runExec("ps", ["-ax", "-o", "pid=,stat=,etimes=,command="]);
+    const candidates: number[] = [];
     for (const line of stdout.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) {
+      const entry = parsePsLine(line, { hasElapsed: true });
+      if (!entry || entry.pid === process.pid) {
         continue;
       }
-      const match = /^(\d+)\s+(\d+)\s+(.*)$/.exec(trimmed);
-      if (!match) {
+      if (!matcher.test(entry.command)) {
         continue;
       }
-      const pid = Number(match[1]);
-      const ppid = Number(match[2]);
-      const cmd = match[3] ?? "";
-      if (!Number.isFinite(pid)) {
-        continue;
+      const isStopped = entry.stat.includes("T");
+      const isStale = (entry.etimesSec ?? 0) >= RESUME_STALE_SECONDS;
+      if (isStopped || isStale) {
+        candidates.push(entry.pid);
       }
-      if (ppid !== process.pid) {
-        continue;
-      }
-      if (!patternRegex.test(cmd)) {
-        continue;
-      }
-      toKill.push(pid);
     }
-
-    if (toKill.length > 0) {
-      const pidArgs = toKill.map((pid) => String(pid));
-      try {
-        await runExec("kill", ["-TERM", ...pidArgs]);
-      } catch {
-        // ignore
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      try {
-        await runExec("kill", ["-9", ...pidArgs]);
-      } catch {
-        // ignore
-      }
+    if (candidates.length > 0) {
+      await runExec("kill", ["-9", ...candidates.map((pid) => String(pid))]);
     }
   } catch {
-    // ignore errors - best effort cleanup
+    // ignore ps/kill errors - best effort cleanup
   }
 }
 
@@ -185,37 +193,20 @@ export async function cleanupSuspendedCliProcesses(
   }
 
   try {
-    const stdout = await psWithFallback(
-      ["-axww", "-o", "pid=,ppid=,stat=,command="],
-      ["-ax", "-o", "pid=,ppid=,stat=,command="],
-    );
+    const { stdout } = await runExec("ps", ["-ax", "-o", "pid=,stat=,command="]);
     const suspended: number[] = [];
     for (const line of stdout.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) {
+      const entry = parsePsLine(line);
+      if (!entry) {
         continue;
       }
-      const match = /^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(trimmed);
-      if (!match) {
+      if (!entry.stat.includes("T")) {
         continue;
       }
-      const pid = Number(match[1]);
-      const ppid = Number(match[2]);
-      const stat = match[3] ?? "";
-      const command = match[4] ?? "";
-      if (!Number.isFinite(pid)) {
+      if (!matchers.some((matcher) => matcher.test(entry.command))) {
         continue;
       }
-      if (ppid !== process.pid) {
-        continue;
-      }
-      if (!stat.includes("T")) {
-        continue;
-      }
-      if (!matchers.some((matcher) => matcher.test(command))) {
-        continue;
-      }
-      suspended.push(pid);
+      suspended.push(entry.pid);
     }
 
     if (suspended.length > threshold) {
@@ -229,11 +220,14 @@ export async function cleanupSuspendedCliProcesses(
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   const prior = CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
   const chained = prior.catch(() => undefined).then(task);
-  const tracked = chained.finally(() => {
-    if (CLI_RUN_QUEUE.get(key) === tracked) {
-      CLI_RUN_QUEUE.delete(key);
-    }
-  });
+  // Keep queue continuity even when a run rejects, without emitting unhandled rejections.
+  const tracked = chained
+    .catch(() => undefined)
+    .finally(() => {
+      if (CLI_RUN_QUEUE.get(key) === tracked) {
+        CLI_RUN_QUEUE.delete(key);
+      }
+    });
   CLI_RUN_QUEUE.set(key, tracked);
   return chained;
 }

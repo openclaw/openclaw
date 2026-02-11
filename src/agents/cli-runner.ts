@@ -31,6 +31,21 @@ import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-he
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
+const RESUME_NO_OUTPUT_TIMEOUT_MIN_MS = 60_000;
+const RESUME_NO_OUTPUT_TIMEOUT_MAX_MS = 180_000;
+const FRESH_NO_OUTPUT_TIMEOUT_MIN_MS = 180_000;
+const FRESH_NO_OUTPUT_TIMEOUT_MAX_MS = 600_000;
+
+function resolveCliNoOutputTimeoutMs(params: { timeoutMs: number; useResume: boolean }): number {
+  const ratio = params.useResume ? 0.3 : 0.8;
+  const minMs = params.useResume ? RESUME_NO_OUTPUT_TIMEOUT_MIN_MS : FRESH_NO_OUTPUT_TIMEOUT_MIN_MS;
+  const maxMs = params.useResume ? RESUME_NO_OUTPUT_TIMEOUT_MAX_MS : FRESH_NO_OUTPUT_TIMEOUT_MAX_MS;
+  const byTimeoutRatio = Math.floor(params.timeoutMs * ratio);
+  const base = Math.min(maxMs, Math.max(minMs, byTimeoutRatio));
+  // Keep watchdog strictly below overall timeout for normal values, but still valid for very low test timeouts.
+  const cap = Math.max(1_000, params.timeoutMs - 1_000);
+  return Math.min(base, cap);
+}
 
 export async function runCliAgent(params: {
   sessionId: string;
@@ -232,9 +247,14 @@ export async function runCliAgent(params: {
       if (useResume && cliSessionIdToSend) {
         await cleanupResumeProcesses(backend, cliSessionIdToSend);
       }
+      const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
+        timeoutMs: params.timeoutMs,
+        useResume,
+      });
 
       const result = await runCommandWithTimeout([backend.command, ...args], {
         timeoutMs: params.timeoutMs,
+        noOutputTimeoutMs,
         cwd: workspaceDir,
         env,
         input: stdinPayload,
@@ -260,6 +280,15 @@ export async function runCliAgent(params: {
       }
 
       if (result.code !== 0) {
+        if (result.noOutputTimedOut) {
+          const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
+          throw new FailoverError(timeoutReason, {
+            reason: "timeout",
+            provider: params.provider,
+            model: modelId,
+            status: resolveFailoverStatus("timeout"),
+          });
+        }
         const err = stderr || stdout || "CLI failed.";
         const reason = classifyFailoverReason(err) ?? "unknown";
         const status = resolveFailoverStatus(reason);

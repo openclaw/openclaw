@@ -47,4 +47,38 @@ describe("runCommandWithTimeout", () => {
       envSnapshot.restore();
     }
   });
+
+  it("kills command when no output timeout elapses", async () => {
+    const startedAt = Date.now();
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      {
+        timeoutMs: 5_000,
+        noOutputTimeoutMs: 300,
+      },
+    );
+
+    const durationMs = Date.now() - startedAt;
+    expect(durationMs).toBeLessThan(2_500);
+    expect(result.noOutputTimedOut).toBe(true);
+    expect(result.code).not.toBe(0);
+  });
+
+  it("resets no output timer when command keeps emitting output", async () => {
+    const result = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        'let i=0; const t=setInterval(() => { process.stdout.write("."); i += 1; if (i >= 5) { clearInterval(t); process.exit(0); } }, 50);',
+      ],
+      {
+        timeoutMs: 5_000,
+        noOutputTimeoutMs: 200,
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.noOutputTimedOut).toBe(false);
+    expect(result.stdout.length).toBeGreaterThanOrEqual(5);
+  });
 });
