@@ -148,6 +148,38 @@ export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): strin
   return entry?.identity?.name?.trim() || undefined;
 }
 
+export function normalizeStreamKey(value: string | undefined | null): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+export function isMonitoredStream(params: {
+  monitoredStreams?: string[] | null;
+  streamName?: string | null;
+  streamId?: string | null;
+}): boolean {
+  const monitored = params.monitoredStreams ?? [];
+  if (monitored.length === 0) {
+    return true;
+  }
+
+  const normalized = new Set(monitored.map((entry) => normalizeStreamKey(entry)).filter(Boolean));
+  if (normalized.has("*")) {
+    return true;
+  }
+
+  const streamName = normalizeStreamKey(params.streamName);
+  if (streamName && normalized.has(streamName)) {
+    return true;
+  }
+
+  const streamId = (params.streamId ?? "").trim();
+  if (streamId && monitored.includes(streamId)) {
+    return true;
+  }
+
+  return false;
+}
+
 export function resolveThreadSessionKeys(params: {
   baseSessionKey: string;
   threadId?: string | null;

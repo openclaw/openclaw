@@ -39,6 +39,7 @@ import {
 import {
   createDedupeCache,
   formatInboundFromLabel,
+  isMonitoredStream,
   resolveThreadSessionKeys,
 } from "./monitor-helpers.js";
 import { sendMessageZulip } from "./send.js";
@@ -260,6 +261,27 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
         (cfg.channels?.zulip as { mediaMaxMb?: number })?.mediaMaxMb,
     }) ?? 5 * 1024 * 1024;
 
+  const monitoredStreams = account.streams ?? ["*"];
+  const streamNameCache = new Map<string, string>();
+
+  const resolveStreamName = async (streamId: string): Promise<string> => {
+    const cached = streamNameCache.get(streamId);
+    if (cached) {
+      return cached;
+    }
+    try {
+      const stream = await fetchZulipStream(client, streamId);
+      const name = stream.name?.trim();
+      if (name) {
+        streamNameCache.set(streamId, name);
+        return name;
+      }
+    } catch {
+      // ignore resolution errors; we'll fall back to stream id
+    }
+    return "";
+  };
+
   const reactionConfig = account.config.reactions ?? {};
   const reactionsEnabled = reactionConfig.enabled !== false;
   const reactionClearOnFinish = reactionConfig.clearOnFinish !== false;
@@ -302,7 +324,22 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       if (typeof message.display_recipient === "string") {
         streamName = message.display_recipient;
       }
+      if (!streamName && streamId) {
+        streamName = await resolveStreamName(streamId);
+      }
       topic = message.subject?.trim() || DEFAULT_TOPIC;
+
+      if (
+        !isMonitoredStream({
+          monitoredStreams,
+          streamName,
+          streamId,
+        })
+      ) {
+        // Registering a broad Zulip queue (no narrow) is required when monitoring multiple
+        // streams (Zulip narrows are ANDed), so enforce the stream allowlist here.
+        return;
+      }
     }
 
     const rawText = stripHtmlToText(message.content ?? "");
@@ -759,7 +796,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
   };
 
   // Register event queue
-  const streams = account.streams ?? ["*"];
+  const streams = monitoredStreams;
   const queue = await registerZulipQueue(client, {
     eventTypes: ["message"],
     streams, // Pass ["*"] to trigger all_public_streams=true in registerZulipQueue
