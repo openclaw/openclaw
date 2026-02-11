@@ -33,6 +33,6 @@ describe("extractMessagingToolSend", () => {
 
     expect(result?.tool).toBe("message");
     expect(result?.provider).toBe("slack");
-    expect(result?.to).toBe("channel:c1");
+    expect(result?.to).toBe("channel:C1");
   });
 });
