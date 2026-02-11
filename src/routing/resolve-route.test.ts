@@ -9,7 +9,7 @@ describe("resolveAgentRoute", () => {
       cfg,
       channel: "whatsapp",
       accountId: null,
-      peer: { kind: "dm", id: "+15551234567" },
+      peer: { kind: "direct", id: "+15551234567" },
     });
     expect(route.agentId).toBe("main");
     expect(route.accountId).toBe("default");
@@ -25,9 +25,9 @@ describe("resolveAgentRoute", () => {
       cfg,
       channel: "whatsapp",
       accountId: null,
-      peer: { kind: "dm", id: "+15551234567" },
+      peer: { kind: "direct", id: "+15551234567" },
     });
-    expect(route.sessionKey).toBe("agent:main:dm:+15551234567");
+    expect(route.sessionKey).toBe("agent:main:direct:+15551234567");
   });
 
   test("dmScope=per-channel-peer isolates DM sessions per channel and sender", () => {
@@ -38,9 +38,9 @@ describe("resolveAgentRoute", () => {
       cfg,
       channel: "whatsapp",
       accountId: null,
-      peer: { kind: "dm", id: "+15551234567" },
+      peer: { kind: "direct", id: "+15551234567" },
     });
-    expect(route.sessionKey).toBe("agent:main:whatsapp:dm:+15551234567");
+    expect(route.sessionKey).toBe("agent:main:whatsapp:direct:+15551234567");
   });
 
   test("identityLinks collapses per-peer DM sessions across providers", () => {
@@ -56,9 +56,9 @@ describe("resolveAgentRoute", () => {
       cfg,
       channel: "telegram",
       accountId: null,
-      peer: { kind: "dm", id: "111111111" },
+      peer: { kind: "direct", id: "111111111" },
     });
-    expect(route.sessionKey).toBe("agent:main:dm:alice");
+    expect(route.sessionKey).toBe("agent:main:direct:alice");
   });
 
   test("identityLinks applies to per-channel-peer DM sessions", () => {
@@ -74,9 +74,9 @@ describe("resolveAgentRoute", () => {
       cfg,
       channel: "discord",
       accountId: null,
-      peer: { kind: "dm", id: "222222222222222222" },
+      peer: { kind: "direct", id: "222222222222222222" },
     });
-    expect(route.sessionKey).toBe("agent:main:discord:dm:alice");
+    expect(route.sessionKey).toBe("agent:main:discord:direct:alice");
   });
 
   test("peer binding wins over account binding", () => {
@@ -87,7 +87,7 @@ describe("resolveAgentRoute", () => {
           match: {
             channel: "whatsapp",
             accountId: "biz",
-            peer: { kind: "dm", id: "+1000" },
+            peer: { kind: "direct", id: "+1000" },
           },
         },
         {
@@ -100,7 +100,7 @@ describe("resolveAgentRoute", () => {
       cfg,
       channel: "whatsapp",
       accountId: "biz",
-      peer: { kind: "dm", id: "+1000" },
+      peer: { kind: "direct", id: "+1000" },
     });
     expect(route.agentId).toBe("a");
     expect(route.sessionKey).toBe("agent:a:main");
@@ -177,7 +177,7 @@ describe("resolveAgentRoute", () => {
       cfg,
       channel: "whatsapp",
       accountId: undefined,
-      peer: { kind: "dm", id: "+1000" },
+      peer: { kind: "direct", id: "+1000" },
     });
     expect(defaultRoute.agentId).toBe("defaultacct");
     expect(defaultRoute.matchedBy).toBe("binding.account");
@@ -186,7 +186,7 @@ describe("resolveAgentRoute", () => {
       cfg,
       channel: "whatsapp",
       accountId: "biz",
-      peer: { kind: "dm", id: "+1000" },
+      peer: { kind: "direct", id: "+1000" },
     });
     expect(otherRoute.agentId).toBe("main");
   });
@@ -204,7 +204,7 @@ describe("resolveAgentRoute", () => {
       cfg,
       channel: "whatsapp",
       accountId: "biz",
-      peer: { kind: "dm", id: "+1000" },
+      peer: { kind: "direct", id: "+1000" },
     });
     expect(route.agentId).toBe("any");
     expect(route.matchedBy).toBe("binding.channel");
@@ -220,7 +220,7 @@ describe("resolveAgentRoute", () => {
       cfg,
       channel: "whatsapp",
       accountId: "biz",
-      peer: { kind: "dm", id: "+1000" },
+      peer: { kind: "direct", id: "+1000" },
     });
     expect(route.agentId).toBe("home");
     expect(route.sessionKey).toBe("agent:home:main");
@@ -235,9 +235,9 @@ test("dmScope=per-account-channel-peer isolates DM sessions per account, channel
     cfg,
     channel: "telegram",
     accountId: "tasks",
-    peer: { kind: "dm", id: "7550356539" },
+    peer: { kind: "direct", id: "7550356539" },
   });
-  expect(route.sessionKey).toBe("agent:main:telegram:tasks:dm:7550356539");
+  expect(route.sessionKey).toBe("agent:main:telegram:tasks:direct:7550356539");
 });
 
 test("dmScope=per-account-channel-peer uses default accountId when not provided", () => {
@@ -248,9 +248,9 @@ test("dmScope=per-account-channel-peer uses default accountId when not provided"
     cfg,
     channel: "telegram",
     accountId: null,
-    peer: { kind: "dm", id: "7550356539" },
+    peer: { kind: "direct", id: "7550356539" },
   });
-  expect(route.sessionKey).toBe("agent:main:telegram:default:dm:7550356539");
+  expect(route.sessionKey).toBe("agent:main:telegram:default:direct:7550356539");
 });
 
 describe("parentPeer binding inheritance (thread support)", () => {
@@ -407,5 +407,31 @@ describe("parentPeer binding inheritance (thread support)", () => {
     });
     expect(route.agentId).toBe("main");
     expect(route.matchedBy).toBe("default");
+  });
+});
+
+describe("backward compatibility: peer.kind dm → direct", () => {
+  test("legacy dm in config matches runtime direct peer", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "alex",
+          match: {
+            channel: "whatsapp",
+            // Legacy config uses "dm" instead of "direct"
+            peer: { kind: "dm", id: "+15551234567" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: null,
+      // Runtime uses canonical "direct"
+      peer: { kind: "direct", id: "+15551234567" },
+    });
+    expect(route.agentId).toBe("alex");
+    expect(route.matchedBy).toBe("binding.peer");
   });
 });

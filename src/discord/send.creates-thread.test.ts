@@ -1,5 +1,5 @@
 import { RateLimitError } from "@buape/carbon";
-import { Routes } from "discord-api-types/v10";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addRoleDiscord,
@@ -60,59 +60,80 @@ describe("sendMessageDiscord", () => {
   });
 
   it("creates a thread", async () => {
-    const { rest, postMock } = makeRest();
+    const { rest, getMock, postMock } = makeRest();
     postMock.mockResolvedValue({ id: "t1" });
     await createThreadDiscord("chan1", { name: "thread", messageId: "m1" }, { rest, token: "t" });
+    expect(getMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledWith(
       Routes.threads("chan1", "m1"),
       expect.objectContaining({ body: { name: "thread" } }),
     );
   });
 
-  it("creates a forum thread with empty appliedTags", async () => {
-    const { rest, postMock } = makeRest();
+  it("creates forum threads with an initial message", async () => {
+    const { rest, getMock, postMock } = makeRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildForum });
     postMock.mockResolvedValue({ id: "t1" });
-    await createThreadDiscord(
-      "chan1",
-      {
-        name: "Forum Thread",
-        message: { content: "Initial post" },
-        appliedTags: [],
-      },
-      { rest, token: "t" },
-    );
+    await createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" });
+    expect(getMock).toHaveBeenCalledWith(Routes.channel("chan1"));
     expect(postMock).toHaveBeenCalledWith(
-      Routes.threads("chan1", undefined),
+      Routes.threads("chan1"),
       expect.objectContaining({
         body: {
-          name: "Forum Thread",
-          message: { content: "Initial post" },
-          applied_tags: [],
+          name: "thread",
+          message: { content: "thread" },
         },
       }),
     );
   });
 
-  it("creates a forum thread with appliedTags", async () => {
-    const { rest, postMock } = makeRest();
+  it("creates media threads with provided content", async () => {
+    const { rest, getMock, postMock } = makeRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildMedia });
     postMock.mockResolvedValue({ id: "t1" });
     await createThreadDiscord(
       "chan1",
-      {
-        name: "Tagged Forum Thread",
-        message: { content: "Initial post" },
-        appliedTags: ["tag1", "tag2"],
-      },
+      { name: "thread", content: "initial forum post" },
       { rest, token: "t" },
     );
     expect(postMock).toHaveBeenCalledWith(
-      Routes.threads("chan1", undefined),
+      Routes.threads("chan1"),
       expect.objectContaining({
         body: {
-          name: "Tagged Forum Thread",
-          message: { content: "Initial post" },
-          applied_tags: ["tag1", "tag2"],
+          name: "thread",
+          message: { content: "initial forum post" },
         },
+      }),
+    );
+  });
+
+  it("falls back when channel lookup is unavailable", async () => {
+    const { rest, getMock, postMock } = makeRest();
+    getMock.mockRejectedValue(new Error("lookup failed"));
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" });
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: expect.objectContaining({ name: "thread", type: ChannelType.PublicThread }),
+      }),
+    );
+  });
+
+  it("respects explicit thread type for standalone threads", async () => {
+    const { rest, getMock, postMock } = makeRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", type: ChannelType.PrivateThread },
+      { rest, token: "t" },
+    );
+    expect(getMock).toHaveBeenCalledWith(Routes.channel("chan1"));
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: expect.objectContaining({ name: "thread", type: ChannelType.PrivateThread }),
       }),
     );
   });

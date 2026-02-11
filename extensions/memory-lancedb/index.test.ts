@@ -92,70 +92,28 @@ describe("memory plugin e2e", () => {
     }).toThrow("embedding.apiKey is required");
   });
 
-  test("shouldCapture filters correctly", async () => {
-    // Test the capture filtering logic by checking the rules
-    const triggers = [
-      { text: "I prefer dark mode", shouldMatch: true },
-      { text: "Remember that my name is John", shouldMatch: true },
-      { text: "My email is test@example.com", shouldMatch: true },
-      { text: "Call me at +1234567890123", shouldMatch: true },
-      { text: "We decided to use TypeScript", shouldMatch: true },
-      { text: "I always want verbose output", shouldMatch: true },
-      { text: "Just a random short message", shouldMatch: false },
-      { text: "x", shouldMatch: false }, // Too short
-      { text: "<relevant-memories>injected</relevant-memories>", shouldMatch: false }, // Skip injected
-    ];
+  test("shouldCapture applies real capture rules", async () => {
+    const { shouldCapture } = await import("./index.js");
 
-    // The shouldCapture function is internal, but we can test via the capture behavior
-    // For now, just verify the patterns we expect to match
-    for (const { text, shouldMatch } of triggers) {
-      const hasPreference = /prefer|radši|like|love|hate|want/i.test(text);
-      const hasRemember = /zapamatuj|pamatuj|remember/i.test(text);
-      const hasEmail = /[\w.-]+@[\w.-]+\.\w+/.test(text);
-      const hasPhone = /\+\d{10,}/.test(text);
-      const hasDecision = /rozhodli|decided|will use|budeme/i.test(text);
-      const hasAlways = /always|never|important/i.test(text);
-      const isInjected = text.includes("<relevant-memories>");
-      const isTooShort = text.length < 10;
-
-      const wouldCapture =
-        !isTooShort &&
-        !isInjected &&
-        (hasPreference || hasRemember || hasEmail || hasPhone || hasDecision || hasAlways);
-
-      if (shouldMatch) {
-        expect(wouldCapture).toBe(true);
-      }
-    }
+    expect(shouldCapture("I prefer dark mode")).toBe(true);
+    expect(shouldCapture("Remember that my name is John")).toBe(true);
+    expect(shouldCapture("My email is test@example.com")).toBe(true);
+    expect(shouldCapture("Call me at +1234567890123")).toBe(true);
+    expect(shouldCapture("I always want verbose output")).toBe(true);
+    expect(shouldCapture("x")).toBe(false);
+    expect(shouldCapture("<relevant-memories>injected</relevant-memories>")).toBe(false);
+    expect(shouldCapture("<system>status</system>")).toBe(false);
+    expect(shouldCapture("Here is a short **summary**\n- bullet")).toBe(false);
   });
 
-  test("detectCategory classifies correctly", async () => {
-    // Test category detection patterns
-    const cases = [
-      { text: "I prefer dark mode", expected: "preference" },
-      { text: "We decided to use React", expected: "decision" },
-      { text: "My email is test@example.com", expected: "entity" },
-      { text: "The server is running on port 3000", expected: "fact" },
-    ];
+  test("detectCategory classifies using production logic", async () => {
+    const { detectCategory } = await import("./index.js");
 
-    for (const { text, expected } of cases) {
-      const lower = text.toLowerCase();
-      let category: string;
-
-      if (/prefer|radši|like|love|hate|want/i.test(lower)) {
-        category = "preference";
-      } else if (/rozhodli|decided|will use|budeme/i.test(lower)) {
-        category = "decision";
-      } else if (/\+\d{10,}|@[\w.-]+\.\w+|is called|jmenuje se/i.test(lower)) {
-        category = "entity";
-      } else if (/is|are|has|have|je|má|jsou/i.test(lower)) {
-        category = "fact";
-      } else {
-        category = "other";
-      }
-
-      expect(category).toBe(expected);
-    }
+    expect(detectCategory("I prefer dark mode")).toBe("preference");
+    expect(detectCategory("We decided to use React")).toBe("decision");
+    expect(detectCategory("My email is test@example.com")).toBe("entity");
+    expect(detectCategory("The server is running on port 3000")).toBe("fact");
+    expect(detectCategory("Random note")).toBe("other");
   });
 });
 

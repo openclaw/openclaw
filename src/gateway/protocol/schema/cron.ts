@@ -107,6 +107,7 @@ export const CronJobStateSchema = Type.Object(
     ),
     lastError: Type.Optional(Type.String()),
     lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );

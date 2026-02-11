@@ -118,10 +118,17 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
       job.state.runningAtMs = undefined;
       changed = true;
     }
-    const newNext = computeJobNextRunAtMs(job, now);
-    if (job.state.nextRunAtMs !== newNext) {
-      job.state.nextRunAtMs = newNext;
-      changed = true;
+    // Only recompute if nextRunAtMs is missing or already past-due.
+    // Preserving a still-future nextRunAtMs avoids accidentally advancing
+    // a job that hasn't fired yet (e.g. during restart recovery).
+    const nextRun = job.state.nextRunAtMs;
+    const isDueOrMissing = nextRun === undefined || now >= nextRun;
+    if (isDueOrMissing) {
+      const newNext = computeJobNextRunAtMs(job, now);
+      if (job.state.nextRunAtMs !== newNext) {
+        job.state.nextRunAtMs = newNext;
+        changed = true;
+      }
     }
   }
   return changed;
@@ -380,6 +387,9 @@ function mergeCronDelivery(
 }
 
 export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {
+  if (!job.state) {
+    job.state = {};
+  }
   if (typeof job.state.runningAtMs === "number") {
     return false;
   }

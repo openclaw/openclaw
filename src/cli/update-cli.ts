@@ -15,6 +15,8 @@ import {
   resolveUpdateAvailability,
 } from "../commands/status.update.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
+import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { trimLogTail } from "../infra/restart-sentinel.js";
 import { parseSemver } from "../infra/runtime-guard.js";
@@ -54,6 +56,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { pathExists } from "../utils.js";
 import { replaceCliName, resolveCliName } from "./cli-name.js";
 import { formatCliCommand } from "./command-format.js";
 import { installCompletion } from "./completion-cli.js";
@@ -126,7 +129,6 @@ const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 const CLI_NAME = resolveCliName();
 const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
-const DEFAULT_GIT_DIR = path.join(os.homedir(), ".openclaw");
 
 function normalizeTag(value?: string | null): string | null {
   if (!value) {
@@ -200,15 +202,6 @@ async function readPackageName(root: string): Promise<string | null> {
 async function isCorePackage(root: string): Promise<boolean> {
   const name = await readPackageName(root);
   return Boolean(name && CORE_PACKAGE_NAMES.has(name));
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.stat(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
@@ -313,7 +306,7 @@ function resolveGitInstallDir(): string {
 }
 
 function resolveDefaultGitDir(): string {
-  return DEFAULT_GIT_DIR;
+  return resolveStateDir(process.env, os.homedir);
 }
 
 function resolveNodeRunner(): string {
@@ -575,7 +568,7 @@ function createUpdateProgress(enabled: boolean): ProgressController {
       }
 
       const label = getStepLabel(step);
-      const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
+      const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
       const icon = step.exitCode === 0 ? theme.success("\u2713") : theme.error("\u2717");
 
       currentSpinner.stop(`${icon} ${label} ${duration}`);
@@ -601,14 +594,6 @@ function createUpdateProgress(enabled: boolean): ProgressController {
       }
     },
   };
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-  const seconds = (ms / 1000).toFixed(1);
-  return `${seconds}s`;
 }
 
 function formatStepStatus(exitCode: number | null): string {
@@ -668,7 +653,7 @@ function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
     defaultRuntime.log(theme.heading("Steps:"));
     for (const step of result.steps) {
       const status = formatStepStatus(step.exitCode);
-      const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
+      const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
       defaultRuntime.log(`  ${status} ${step.name} ${duration}`);
 
       if (step.exitCode !== 0 && step.stderrTail) {
@@ -683,7 +668,7 @@ function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
   }
 
   defaultRuntime.log("");
-  defaultRuntime.log(`Total time: ${theme.muted(formatDuration(result.durationMs))}`);
+  defaultRuntime.log(`Total time: ${theme.muted(formatDurationPrecise(result.durationMs))}`);
 }
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {

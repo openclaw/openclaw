@@ -107,7 +107,7 @@ Should show **only port 22** (SSH) open. All other services (gateway, Docker) ar
 
 Docker is installed for **agent sandboxes** (isolated tool execution), not for running the gateway itself. The gateway binds to localhost only and is accessible via Tailscale VPN.
 
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for sandbox configuration.
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for sandbox configuration.
 
 ## Manual Installation
 
@@ -205,4 +205,4 @@ For detailed security architecture and troubleshooting:
 - [openclaw-ansible](https://github.com/openclaw/openclaw-ansible) — full deployment guide
 - [Docker](/install/docker) — containerized gateway setup
 - [Sandboxing](/gateway/sandboxing) — agent sandbox configuration
-- [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) — per-agent isolation
+- [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) — per-agent isolation

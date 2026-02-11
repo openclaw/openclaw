@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveFetch } from "../infra/fetch.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 
 export type SignalRpcOptions = {
   baseUrl: string;
@@ -38,18 +39,12 @@ function normalizeBaseUrl(url: string): string {
   return `http://${trimmed}`.replace(/\/+$/, "");
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+function getRequiredFetch(): typeof fetch {
   const fetchImpl = resolveFetch();
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+  return fetchImpl;
 }
 
 export async function signalRpcRequest<T = unknown>(
@@ -73,6 +68,7 @@ export async function signalRpcRequest<T = unknown>(
       body,
     },
     opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    getRequiredFetch(),
   );
   if (res.status === 201) {
     return undefined as T;
@@ -96,7 +92,12 @@ export async function signalCheck(
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const normalized = normalizeBaseUrl(baseUrl);
   try {
-    const res = await fetchWithTimeout(`${normalized}/api/v1/check`, { method: "GET" }, timeoutMs);
+    const res = await fetchWithTimeout(
+      `${normalized}/api/v1/check`,
+      { method: "GET" },
+      timeoutMs,
+      getRequiredFetch(),
+    );
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }

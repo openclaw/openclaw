@@ -88,6 +88,13 @@ export type MessagesConfig = {
 
 export type NativeCommandsSetting = boolean | "auto";
 
+/**
+ * Per-provider allowlist for command authorization.
+ * Keys are channel IDs (e.g., "discord", "whatsapp") or "*" for global default.
+ * Values are arrays of sender IDs allowed to use commands on that channel.
+ */
+export type CommandAllowFrom = Record<string, Array<string | number>>;
+
 export type CommandsConfig = {
   /** Enable native command registration when supported (default: "auto"). */
   native?: NativeCommandsSetting;
@@ -109,6 +116,13 @@ export type CommandsConfig = {
   useAccessGroups?: boolean;
   /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;
+  /**
+   * Per-provider allowlist restricting who can use slash commands.
+   * If set, overrides the channel's allowFrom for command authorization.
+   * Use "*" key for global default, provider-specific keys override the global.
+   * Example: { "*": ["user1"], discord: ["user:123"] }
+   */
+  allowFrom?: CommandAllowFrom;
 };
 
 export type ProviderCommandsConfig = {

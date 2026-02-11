@@ -68,8 +68,6 @@ export function buildGroupIntro(params: {
 }): string {
   const activation =
     normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
-  const subject = params.sessionCtx.GroupSubject?.trim();
-  const members = params.sessionCtx.GroupMembers?.trim();
   const rawProvider = params.sessionCtx.Provider?.trim();
   const providerKey = rawProvider?.toLowerCase() ?? "";
   const providerId = normalizeChannelId(rawProvider);
@@ -85,16 +83,16 @@ export function buildGroupIntro(params: {
     }
     return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
   })();
-  const subjectLine = subject
-    ? `You are replying inside the ${providerLabel} group "${subject}".`
-    : `You are replying inside a ${providerLabel} group chat.`;
-  const membersLine = members ? `Group members: ${members}.` : undefined;
+  // Do not embed attacker-controlled labels (group subject, members) in system prompts.
+  // These labels are provided as user-role "untrusted context" blocks instead.
+  const subjectLine = `You are replying inside a ${providerLabel} group chat.`;
   const activationLine =
     activation === "always"
       ? "Activation: always-on (you receive every group message)."
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
   const groupId = params.sessionEntry?.groupId ?? extractGroupId(params.sessionCtx.From);
-  const groupChannel = params.sessionCtx.GroupChannel?.trim() ?? subject;
+  const groupChannel =
+    params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim();
   const groupSpace = params.sessionCtx.GroupSpace?.trim();
   const providerIdsLine = providerId
     ? getChannelDock(providerId)?.groups?.resolveGroupIntroHint?.({
@@ -119,7 +117,6 @@ export function buildGroupIntro(params: {
     "Write like a human. Avoid Markdown tables. Don't type literal \\n sequences; use real line breaks sparingly.";
   return [
     subjectLine,
-    membersLine,
     activationLine,
     providerIdsLine,
     silenceLine,

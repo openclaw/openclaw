@@ -25,7 +25,7 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/twitch
 ```
 
-Details: [Plugins](/plugin)
+Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 

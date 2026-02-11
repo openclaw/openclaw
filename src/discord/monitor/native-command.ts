@@ -740,7 +740,7 @@ async function dispatchDiscordCommandInteraction(params: {
     accountId,
     guildId: interaction.guild?.id ?? undefined,
     peer: {
-      kind: isDirectMessage ? "dm" : isGroupDm ? "group" : "channel",
+      kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
       id: isDirectMessage ? user.id : channelId,
     },
     parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
@@ -753,6 +753,7 @@ async function dispatchDiscordCommandInteraction(params: {
   });
   const ctxPayload = finalizeInboundContext({
     Body: prompt,
+    BodyForAgent: prompt,
     RawBody: prompt,
     CommandBody: prompt,
     CommandArgs: commandArgs,
