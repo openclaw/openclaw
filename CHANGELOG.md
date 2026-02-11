@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 - Ollama: use configured `models.providers.ollama.baseUrl` for model discovery and normalize `/v1` endpoints to the native Ollama API root. (#14131) Thanks @shtse8.
 - Slack: detect control commands when channel messages start with bot mention prefixes (for example, `@Bot /new`). (#14142) Thanks @beefiker.
+- Discord tests: use a partial @buape/carbon mock in slash command coverage. (#13262) Thanks @arosstale.
 - CLI/Wizard: exit with code 1 when `configure`, `agents add`, or interactive `onboard` wizards are canceled, so `set -e` automation stops correctly. (#14156) Thanks @0xRaini.
 
 ## 2026.2.9
