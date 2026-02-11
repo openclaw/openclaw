@@ -60,7 +60,7 @@ export function mergeWizardOutput(
   baseConfig: OpenClawConfig,
   nextConfig: OpenClawConfig,
 ): Record<string, unknown> {
-  if ("$include" in rawParsed) {
+  if (Object.hasOwn(rawParsed, "$include")) {
     return nextConfig as unknown as Record<string, unknown>;
   }
 
