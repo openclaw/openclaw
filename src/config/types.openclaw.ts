@@ -4,6 +4,7 @@ import type { AuthConfig } from "./types.auth.js";
 import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
+import type { ContactsConfig } from "./types.contacts.js";
 import type { CronConfig } from "./types.cron.js";
 import type {
   CanvasHostConfig,
@@ -90,6 +91,12 @@ export type OpenClawConfig = {
   session?: SessionConfig;
   web?: WebConfig;
   channels?: ChannelsConfig;
+  /**
+   * Contact registry and groups.
+   * Enables single-source-of-truth contact management and group-based policies.
+   * Referenced in toolsBySender via "@groupname" syntax.
+   */
+  contacts?: ContactsConfig;
   cron?: CronConfig;
   hooks?: HooksConfig;
   discovery?: DiscoveryConfig;

@@ -1,5 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "./config.js";
+import type { ContactsConfig } from "./types.contacts.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
@@ -67,13 +68,149 @@ function normalizeSenderKey(value: string): string {
   if (!trimmed) {
     return "";
   }
-  const withoutAt = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
-  return withoutAt.toLowerCase();
+  // Don't strip @ for group references — handle those separately
+  if (trimmed.startsWith("@")) {
+    return trimmed.toLowerCase();
+  }
+  return trimmed.toLowerCase();
+}
+
+function normalizePhoneKey(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.toLowerCase();
+}
+
+/**
+ * Merge two tool policies, with override taking precedence.
+ * Used to combine group-level and reference-site policies.
+ */
+function mergeToolPolicies(
+  base: GroupToolPolicyConfig | undefined,
+  override: GroupToolPolicyConfig | undefined,
+): GroupToolPolicyConfig | undefined {
+  if (!base && !override) {
+    return undefined;
+  }
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+
+  // Override takes precedence for allow/deny, but we merge alsoAllow
+  const result: GroupToolPolicyConfig = {};
+
+  const allow = override.allow ?? base.allow;
+  if (allow) {
+    result.allow = allow;
+  }
+
+  const deny = override.deny ?? base.deny;
+  if (deny) {
+    result.deny = deny;
+  }
+
+  const alsoAllow = [...(base.alsoAllow ?? []), ...(override.alsoAllow ?? [])].filter(
+    (v, i, a) => a.indexOf(v) === i,
+  );
+  if (alsoAllow.length > 0) {
+    result.alsoAllow = alsoAllow;
+  }
+
+  return result;
+}
+
+/**
+ * Resolve a group member to a phone number.
+ * If the member is an entry key, looks it up in contacts.entries.
+ * If it looks like a phone number (starts with +), uses it directly.
+ */
+function resolveMemberToPhone(
+  member: string,
+  contacts: ContactsConfig | undefined,
+): string | undefined {
+  const trimmed = member.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // If it looks like a phone number, use directly
+  if (trimmed.startsWith("+")) {
+    return trimmed;
+  }
+  // Otherwise, look up in entries
+  const entry = contacts?.entries?.[trimmed];
+  return entry?.phone;
+}
+
+/**
+ * Get entry-level tool policy for a phone number.
+ * Returns the tools config if the phone matches an entry.
+ */
+function getEntryToolsForPhone(
+  phone: string,
+  contacts: ContactsConfig | undefined,
+): GroupToolPolicyConfig | undefined {
+  if (!contacts?.entries) {
+    return undefined;
+  }
+  const normalizedPhone = normalizePhoneKey(phone);
+  for (const entry of Object.values(contacts.entries)) {
+    if (normalizePhoneKey(entry.phone) === normalizedPhone) {
+      return entry.tools;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Expand a group reference to a map of phone numbers -> policies.
+ * Handles entry-level overrides and group-level defaults.
+ */
+function expandGroupReference(
+  groupName: string,
+  referenceSitePolicy: GroupToolPolicyConfig | undefined,
+  contacts: ContactsConfig | undefined,
+): Map<string, GroupToolPolicyConfig> {
+  const result = new Map<string, GroupToolPolicyConfig>();
+
+  if (!contacts?.groups) {
+    return result;
+  }
+
+  const group = contacts.groups[groupName];
+  if (!group) {
+    return result;
+  }
+
+  // Base policy = group-level merged with reference-site policy
+  const basePolicy = mergeToolPolicies(group.tools, referenceSitePolicy);
+
+  for (const member of group.members) {
+    const phone = resolveMemberToPhone(member, contacts);
+    if (!phone) {
+      continue;
+    }
+
+    // Entry-level tools override group-level
+    const entryTools = getEntryToolsForPhone(phone, contacts);
+    const finalPolicy = entryTools ?? basePolicy;
+
+    if (finalPolicy) {
+      result.set(normalizePhoneKey(phone), finalPolicy);
+    }
+  }
+
+  return result;
 }
 
 export function resolveToolsBySender(
   params: {
     toolsBySender?: GroupToolPolicyBySenderConfig;
+    contacts?: ContactsConfig;
   } & GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
   const toolsBySender = params.toolsBySender;
@@ -85,8 +222,11 @@ export function resolveToolsBySender(
     return undefined;
   }
 
-  const normalized = new Map<string, GroupToolPolicyConfig>();
+  // Build lookup map, expanding group references in config order.
+  // First match wins, so order in config determines priority.
+  const phoneLookup = new Map<string, GroupToolPolicyConfig>();
   let wildcard: GroupToolPolicyConfig | undefined;
+
   for (const [rawKey, policy] of entries) {
     if (!policy) {
       continue;
@@ -95,15 +235,33 @@ export function resolveToolsBySender(
     if (!key) {
       continue;
     }
+
+    // Handle wildcard
     if (key === "*") {
       wildcard = policy;
       continue;
     }
-    if (!normalized.has(key)) {
-      normalized.set(key, policy);
+
+    // Handle group references (start with @)
+    if (key.startsWith("@")) {
+      const groupName = key.slice(1);
+      const expanded = expandGroupReference(groupName, policy, params.contacts);
+      for (const [phone, groupPolicy] of expanded) {
+        // First match wins — don't overwrite existing entries
+        if (!phoneLookup.has(phone)) {
+          phoneLookup.set(phone, groupPolicy);
+        }
+      }
+      continue;
+    }
+
+    // Handle direct phone/sender entries
+    if (!phoneLookup.has(key)) {
+      phoneLookup.set(key, policy);
     }
   }
 
+  // Build candidate list from sender info
   const candidates: string[] = [];
   const pushCandidate = (value?: string | null) => {
     const trimmed = value?.trim();
@@ -117,16 +275,18 @@ export function resolveToolsBySender(
   pushCandidate(params.senderUsername);
   pushCandidate(params.senderName);
 
+  // Look up sender in the expanded map
   for (const candidate of candidates) {
-    const key = normalizeSenderKey(candidate);
+    const key = normalizePhoneKey(candidate);
     if (!key) {
       continue;
     }
-    const match = normalized.get(key);
+    const match = phoneLookup.get(key);
     if (match) {
       return match;
     }
   }
+
   return wildcard;
 }
 
@@ -268,6 +428,7 @@ export function resolveChannelGroupToolsPolicy(
   const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
   const groupSenderPolicy = resolveToolsBySender({
     toolsBySender: groupConfig?.toolsBySender,
+    contacts: params.cfg.contacts,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
@@ -281,6 +442,7 @@ export function resolveChannelGroupToolsPolicy(
   }
   const defaultSenderPolicy = resolveToolsBySender({
     toolsBySender: defaultConfig?.toolsBySender,
+    contacts: params.cfg.contacts,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
@@ -309,6 +471,7 @@ export function resolveChannelDMToolsPolicy(
     verified
       ? resolveToolsBySender({
           toolsBySender,
+          contacts: cfg.contacts,
           senderId: params.senderId,
           senderName: params.senderName,
           senderUsername: params.senderUsername,
