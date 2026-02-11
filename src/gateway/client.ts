@@ -112,6 +112,8 @@ export class GatewayClient {
       maxPayload: 25 * 1024 * 1024,
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
+      // Self-signed certs require disabling CA chain validation; the pinned
+      // SHA-256 fingerprint serves as the sole trust anchor instead.
       wsOptions.rejectUnauthorized = false;
       wsOptions.checkServerIdentity = ((_host: string, cert: CertMeta) => {
         const fingerprintValue =

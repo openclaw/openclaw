@@ -131,7 +131,7 @@ export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] 
 
   const configDir = path.dirname(CONFIG_PATH);
   const transformsDir = hooks?.transformsDir
-    ? resolvePath(configDir, hooks.transformsDir)
+    ? path.resolve(configDir, hooks.transformsDir)
     : configDir;
 
   return mappings.map((mapping, index) => normalizeHookMapping(mapping, index, transformsDir));
@@ -342,10 +342,16 @@ function resolvePath(baseDir: string, target: string): string {
   if (!target) {
     return baseDir;
   }
-  if (path.isAbsolute(target)) {
-    return target;
+  const resolved = path.isAbsolute(target) ? target : path.join(baseDir, target);
+  const normalized = path.resolve(resolved);
+  const normalizedBase = path.resolve(baseDir);
+  const rel = path.relative(normalizedBase, normalized);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(
+      `hook transform path escapes base directory: ${target} (resolved to ${normalized})`,
+    );
   }
-  return path.join(baseDir, target);
+  return normalized;
 }
 
 function normalizeMatchPath(raw?: string): string | undefined {

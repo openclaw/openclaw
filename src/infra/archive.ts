@@ -108,8 +108,19 @@ export async function extractArchive(params: {
 
   const label = kind === "zip" ? "extract zip" : "extract tar";
   if (kind === "tar") {
+    const destDir = params.destDir;
     await withTimeout(
-      tar.x({ file: params.archivePath, cwd: params.destDir }),
+      tar.x({
+        file: params.archivePath,
+        cwd: destDir,
+        filter: (entryPath) => {
+          const resolved = path.resolve(destDir, entryPath);
+          if (!resolved.startsWith(destDir + path.sep) && resolved !== destDir) {
+            return false;
+          }
+          return true;
+        },
+      }),
       params.timeoutMs,
       label,
     );
