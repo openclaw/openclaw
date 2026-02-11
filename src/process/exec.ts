@@ -29,6 +29,19 @@ function resolveCommand(command: string): string {
   return command;
 }
 
+/**
+ * Returns true when the resolved command is a shell script (.cmd / .bat)
+ * that requires `shell: true` to execute on Windows.
+ * Direct executables (.exe or extensionless) do NOT need a shell wrapper;
+ * using one breaks argument quoting for values that contain cmd.exe
+ * metacharacters (parentheses, pipes, quotes, etc.).
+ */
+function needsShell(resolvedCommand: string): boolean {
+  if (process.platform !== "win32") return false;
+  const ext = path.extname(resolvedCommand).toLowerCase();
+  return ext === ".cmd" || ext === ".bat";
+}
+
 // Simple promise-wrapped execFile with optional verbosity logging.
 export async function runExec(
   command: string,
@@ -44,7 +57,11 @@ export async function runExec(
           encoding: "utf8" as const,
         };
   try {
-    const { stdout, stderr } = await execFileAsync(resolveCommand(command), args, options);
+    const resolved = resolveCommand(command);
+    const { stdout, stderr } = await execFileAsync(resolved, args, {
+      ...options,
+      ...(needsShell(resolved) ? { shell: true } : {}),
+    });
     if (shouldLogVerbose()) {
       if (stdout.trim()) {
         logDebug(stdout.trim());
@@ -111,11 +128,13 @@ export async function runCommandWithTimeout(
   }
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const child = spawn(resolveCommand(argv[0]), argv.slice(1), {
+  const resolvedCmd = resolveCommand(argv[0]);
+  const child = spawn(resolvedCmd, argv.slice(1), {
     stdio,
     cwd,
     env: resolvedEnv,
     windowsVerbatimArguments,
+    ...(needsShell(resolvedCmd) ? { shell: true } : {}),
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
