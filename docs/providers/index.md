@@ -59,6 +59,7 @@ See [Venice AI](/providers/venice).
 
 ## Community tools
 
+- [ClawPool](/providers/clawpool) - $8/mo flat-rate Claude API access via pooled Max capacity
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - Use Claude Max/Pro subscription as an OpenAI-compatible API endpoint
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
