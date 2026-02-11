@@ -192,7 +192,11 @@ echo "  - Gateway token: $OPENCLAW_GATEWAY_TOKEN"
 echo "  - Tailscale exposure: Off"
 echo "  - Install Gateway daemon: No"
 echo ""
-docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --no-install-daemon
+if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --no-install-daemon --skip-health --skip-ui; then
+  echo ""
+  echo "Onboarding cancelled or failed. Exiting."
+  exit 1
+fi
 
 echo ""
 echo "==> Provider setup (optional)"
