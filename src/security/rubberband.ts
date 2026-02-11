@@ -31,6 +31,7 @@ export type RubberBandConfig = {
     block: number;
   };
   allowedDestinations: string[];
+  notifyChannel?: boolean;
 };
 
 // ============ DEFAULT CONFIG ============
@@ -810,7 +811,8 @@ export type RubberBandCheckContext = {
   notifySessionKey?: string;
   rbNotifyCfg?: unknown;
   emitExecSystemEvent: (text: string, opts: { sessionKey?: string }) => void;
-  notifyUserChannel: (text: string, opts: { sessionKey?: string; cfg: unknown }) => Promise<void>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  notifyUserChannel: (text: string, opts: { sessionKey?: string; cfg: any }) => Promise<void>;
 };
 
 /**
