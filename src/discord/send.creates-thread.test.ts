@@ -114,7 +114,9 @@ describe("sendMessageDiscord", () => {
     await createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" });
     expect(postMock).toHaveBeenCalledWith(
       Routes.threads("chan1"),
-      expect.objectContaining({ body: { name: "thread" } }),
+      expect.objectContaining({
+        body: expect.objectContaining({ name: "thread", type: ChannelType.PublicThread }),
+      }),
     );
   });
 
