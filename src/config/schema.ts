@@ -735,6 +735,10 @@ const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.dm.allowFrom=["*"].',
 };
 
+// Merge rate-limits metadata immediately so buildBaseHints() sees them
+Object.assign(FIELD_LABELS, LIMITS_FIELD_LABELS);
+Object.assign(FIELD_HELP, LIMITS_FIELD_HELP);
+
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
@@ -1087,10 +1091,6 @@ export function buildConfigSchema(params?: {
 function buildUiHints(): ConfigUiHints {
   return applySensitiveHints(buildBaseHints());
 }
-
-// Merging extracted schemas (to keep file size down)
-Object.assign(FIELD_LABELS, LIMITS_FIELD_LABELS);
-Object.assign(FIELD_HELP, LIMITS_FIELD_HELP);
 
 export const OPENCLAW_CONFIG_SCHEMA_RESPONSE: ConfigSchemaResponse = {
   schema: OpenClawSchema.toJSONSchema(),
