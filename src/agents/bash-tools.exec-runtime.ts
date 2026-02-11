@@ -149,11 +149,13 @@ export const execSchema = Type.Object({
 
 type PtyExitEvent = { exitCode: number; signal?: number };
 type PtyListener<T> = (event: T) => void;
+type PtyDisposable = { dispose: () => void };
 type PtyHandle = {
   pid: number;
   write: (data: string | Buffer) => void;
-  onData: (listener: PtyListener<string>) => void;
-  onExit: (listener: PtyListener<PtyExitEvent>) => void;
+  onData: (listener: PtyListener<string>) => PtyDisposable | void;
+  onExit: (listener: PtyListener<PtyExitEvent>) => PtyDisposable | void;
+  kill: () => void;
 };
 type PtySpawn = (
   file: string,
@@ -486,6 +488,48 @@ export async function runExecProcess(opts: {
   let timedOut = false;
   const timeoutFinalizeMs = 1000;
   let resolveFn: ((outcome: ExecProcessOutcome) => void) | null = null;
+  let ptyDataDisposable: PtyDisposable | null = null;
+  let ptyExitDisposable: PtyDisposable | null = null;
+  let ptyKilled = false;
+  let ptyDisposed = false;
+
+  const killPty = () => {
+    if (!pty || ptyKilled) {
+      return;
+    }
+    ptyKilled = true;
+    try {
+      pty.kill();
+    } catch {
+      // ignore PTY kill errors
+    }
+  };
+
+  const disposePty = () => {
+    if (ptyDisposed) {
+      return;
+    }
+    ptyDisposed = true;
+    try {
+      ptyDataDisposable?.dispose();
+    } catch {
+      // ignore PTY listener dispose errors
+    }
+    try {
+      ptyExitDisposable?.dispose();
+    } catch {
+      // ignore PTY listener dispose errors
+    }
+    ptyDataDisposable = null;
+    ptyExitDisposable = null;
+  };
+
+  const cleanupPty = (options?: { kill?: boolean }) => {
+    if (options?.kill) {
+      killPty();
+    }
+    disposePty();
+  };
 
   const settle = (outcome: ExecProcessOutcome) => {
     if (settled) {
@@ -499,6 +543,7 @@ export async function runExecProcess(opts: {
     if (session.exited) {
       return;
     }
+    cleanupPty({ kill: true });
     markExited(session, null, "SIGKILL", "failed");
     maybeNotifyOnExit(session, "failed");
     const aggregated = session.aggregated.trim();
@@ -517,6 +562,7 @@ export async function runExecProcess(opts: {
   const onTimeout = () => {
     timedOut = true;
     killSession(session);
+    killPty();
     if (!timeoutFinalizeTimer) {
       timeoutFinalizeTimer = setTimeout(() => {
         finalizeTimeout();
@@ -567,16 +613,17 @@ export async function runExecProcess(opts: {
 
   if (pty) {
     const cursorResponse = buildCursorPositionResponse();
-    pty.onData((data) => {
-      const raw = data.toString();
-      const { cleaned, requests } = stripDsrRequests(raw);
-      if (requests > 0) {
-        for (let i = 0; i < requests; i += 1) {
-          pty.write(cursorResponse);
+    ptyDataDisposable =
+      pty.onData((data) => {
+        const raw = data.toString();
+        const { cleaned, requests } = stripDsrRequests(raw);
+        if (requests > 0) {
+          for (let i = 0; i < requests; i += 1) {
+            pty.write(cursorResponse);
+          }
         }
-      }
-      handleStdout(cleaned);
-    });
+        handleStdout(cleaned);
+      }) ?? null;
   } else if (child) {
     child.stdout.on("data", handleStdout);
     child.stderr.on("data", handleStderr);
@@ -591,6 +638,7 @@ export async function runExecProcess(opts: {
       if (timeoutFinalizeTimer) {
         clearTimeout(timeoutFinalizeTimer);
       }
+      cleanupPty();
       const durationMs = Date.now() - startedAt;
       const wasSignal = exitSignal != null;
       const isSuccess = code === 0 && !wasSignal && !timedOut;
@@ -636,11 +684,12 @@ export async function runExecProcess(opts: {
     };
 
     if (pty) {
-      pty.onExit((event) => {
-        const rawSignal = event.signal ?? null;
-        const normalizedSignal = rawSignal === 0 ? null : rawSignal;
-        handleExit(event.exitCode ?? null, normalizedSignal);
-      });
+      ptyExitDisposable =
+        pty.onExit((event) => {
+          const rawSignal = event.signal ?? null;
+          const normalizedSignal = rawSignal === 0 ? null : rawSignal;
+          handleExit(event.exitCode ?? null, normalizedSignal);
+        }) ?? null;
     } else if (child) {
       child.once("close", (code, exitSignal) => {
         handleExit(code, exitSignal);
@@ -653,6 +702,7 @@ export async function runExecProcess(opts: {
         if (timeoutFinalizeTimer) {
           clearTimeout(timeoutFinalizeTimer);
         }
+        cleanupPty({ kill: true });
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
         const aggregated = session.aggregated.trim();
@@ -675,6 +725,9 @@ export async function runExecProcess(opts: {
     startedAt,
     pid: session.pid ?? undefined,
     promise,
-    kill: () => killSession(session),
+    kill: () => {
+      killPty();
+      killSession(session);
+    },
   };
 }
