@@ -7,7 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "💾",
-        "events": ["command:new"],
+        "events": ["command:new", "session:auto-reset"],
         "requires": { "config": ["workspace.dir"] },
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },

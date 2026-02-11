@@ -67,8 +67,10 @@ async function getRecentSessionContent(
  * Save session context to memory when /new command is triggered
  */
 const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on 'new' command
-  if (event.type !== "command" || event.action !== "new") {
+  // Trigger on /new command OR automatic session resets (SESSION-001)
+  const isNewCommand = event.type === "command" && event.action === "new";
+  const isAutoReset = event.type === "session" && event.action === "auto-reset";
+  if (!isNewCommand && !isAutoReset) {
     return;
   }
 

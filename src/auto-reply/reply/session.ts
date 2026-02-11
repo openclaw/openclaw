@@ -42,6 +42,7 @@ export type SessionInitResult = {
   sessionId: string;
   isNewSession: boolean;
   resetTriggered: boolean;
+  autoResetTriggered: boolean;
   systemSent: boolean;
   abortedLastRun: boolean;
   storePath: string;
@@ -195,7 +196,7 @@ export async function initSessionState(params: {
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
+  // previousSessionEntry moved below freshEntry (SESSION-001 patch)
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -240,6 +241,8 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  const autoResetTriggered = isNewSession && !resetTriggered && previousSessionEntry != null;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
@@ -381,6 +384,7 @@ export async function initSessionState(params: {
     sessionId: sessionId ?? crypto.randomUUID(),
     isNewSession,
     resetTriggered,
+    autoResetTriggered,
     systemSent,
     abortedLastRun,
     storePath,

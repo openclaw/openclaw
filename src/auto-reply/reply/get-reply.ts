@@ -10,6 +10,7 @@ import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -149,6 +150,7 @@ export async function getReplyFromConfig(
     sessionId,
     isNewSession,
     resetTriggered,
+    autoResetTriggered,
     systemSent,
     abortedLastRun,
     storePath,
@@ -158,6 +160,16 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  // SESSION-001: Save session memory on daily/idle auto-resets
+  if (autoResetTriggered && previousSessionEntry) {
+    const hookEvent = createInternalHookEvent("session", "auto-reset", sessionKey, {
+      sessionEntry,
+      previousSessionEntry,
+      cfg,
+    });
+    await triggerInternalHook(hookEvent);
+  }
 
   await applyResetModelOverride({
     cfg,
