@@ -19,6 +19,11 @@ describe("buildPairingReply", () => {
 
   const cases = [
     {
+      channel: "telegram",
+      idLine: "Your Telegram user id: 42",
+      code: "QRS678",
+    },
+    {
       channel: "discord",
       idLine: "Your Discord user id: 1",
       code: "ABC123",
