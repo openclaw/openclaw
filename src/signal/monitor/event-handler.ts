@@ -28,6 +28,7 @@ import { createTypingCallbacks } from "../../channels/typing.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -426,6 +427,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .filter(Boolean)
         .join(":");
       enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+
+      // Check if we should wake the session for this reaction
+      const reactionWake = deps.reactionWake;
+      const shouldWake =
+        reactionWake === true || (Array.isArray(reactionWake) && reactionWake.includes(emojiLabel));
+      if (shouldWake) {
+        requestHeartbeatNow({ reason: `signal:reaction:${emojiLabel}` });
+      }
       return;
     }
     if (!dataMessage) {
