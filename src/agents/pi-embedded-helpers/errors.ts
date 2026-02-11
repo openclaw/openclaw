@@ -473,7 +473,7 @@ const ERROR_PATTERNS = {
   overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
   timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
   billing: [
-    /(?:status|code|http|error)\s*[:=]?\s*402\b|^\s*402\s+payment/i,
+    /(?:status|code|http|error)"?\s*[:=]\s*"?402\b|^\s*402\s+payment/i,
     "payment required",
     "insufficient credits",
     "credit balance",
