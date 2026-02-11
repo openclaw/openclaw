@@ -6,6 +6,8 @@ export const ModelApiSchema = z.union([
   z.literal("openai-responses"),
   z.literal("anthropic-messages"),
   z.literal("google-generative-ai"),
+  z.literal("google-vertex"),
+  z.literal("google-antigravity"),
   z.literal("github-copilot"),
   z.literal("bedrock-converse-stream"),
 ]);
@@ -41,6 +43,8 @@ export const ModelDefinitionSchema = z
     contextWindow: z.number().positive().optional(),
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
+    streaming: z.boolean().optional(),
     compat: ModelCompatSchema,
   })
   .strict();
@@ -53,6 +57,8 @@ export const ModelProviderSchema = z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
+    project: z.string().optional(),
+    location: z.string().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),

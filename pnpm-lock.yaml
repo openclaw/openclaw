@@ -28,6 +28,9 @@ importers:
       '@clack/prompts':
         specifier: ^1.0.0
         version: 1.0.0
+      '@google/genai':
+        specifier: ^1.40.0
+        version: 1.40.0
       '@grammyjs/runner':
         specifier: ^2.0.3
         version: 2.0.3(grammy@1.40.0)
@@ -106,6 +109,9 @@ importers:
       file-type:
         specifier: ^21.3.0
         version: 21.3.0
+      google-auth-library:
+        specifier: ^10.5.0
+        version: 10.5.0
       grammy:
         specifier: ^1.40.0
         version: 1.40.0
@@ -1107,7 +1113,7 @@ packages:
     resolution: {integrity: sha512-vHL6w3ecZsky+8P5MD+eFfaGTyCeOHUIFYMGpQGbrBTSmNNoxv0if69rEZ5giu36weC5saFuznL411gRX7bJDw==}
     engines: {node: '>=18.14.1'}
     peerDependencies:
-      hono: ^4
+      hono: 4.11.7
 
   '@huggingface/jinja@0.5.4':
     resolution: {integrity: sha512-VoQJywjpjy2D88Oj0BTHRuS8JCbUgoOg5t1UGgbtGh2fRia9Dx/k6Wf8FqrEWIvWK9fAkfJeeLB9fcSpCNPCpw==}
