@@ -31,6 +31,18 @@ const WhatsAppAckReactionSchema = z
   .strict()
   .optional();
 
+/**
+ * Link preview policy for outbound messages.
+ * - "allow": Send messages as-is, link previews may be generated (default)
+ * - "warn": Log a security warning when URLs are detected in outbound messages
+ * - "mangle": Wrap URLs in angle brackets to suppress link previews
+ *
+ * Security context: Link previews can potentially be exploited for data exfiltration
+ * if an attacker can influence the agent to include a URL pointing to their server.
+ * The preview fetch would include the URL path, which could encode sensitive data.
+ */
+export const LinkPreviewPolicySchema = z.enum(["allow", "warn", "mangle"]).optional();
+
 const WhatsAppSharedSchema = z.object({
   capabilities: z.array(z.string()).optional(),
   markdown: MarkdownConfigSchema,
@@ -54,6 +66,8 @@ const WhatsAppSharedSchema = z.object({
   ackReaction: WhatsAppAckReactionSchema,
   debounceMs: z.number().int().nonnegative().optional().default(0),
   heartbeat: ChannelHeartbeatVisibilitySchema,
+  /** Link preview policy for outbound messages. See LinkPreviewPolicySchema for details. */
+  linkPreviewPolicy: LinkPreviewPolicySchema,
 });
 
 function enforceOpenDmPolicyAllowFromStar(params: {

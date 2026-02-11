@@ -397,5 +397,43 @@ export function formatTerminalLink(
   return `\u001b]8;;${safeUrl}\u0007${safeLabel}\u001b]8;;\u0007`;
 }
 
+/**
+ * URL detection regex - matches http(s) URLs.
+ * Used for link preview security controls.
+ */
+const URL_REGEX = /https?:\/\/[^\s<>[\]()]+/gi;
+
+/**
+ * Detects URLs in text that could trigger link previews.
+ * Returns array of matched URLs.
+ */
+export function detectUrls(text: string): string[] {
+  const matches = text.match(URL_REGEX);
+  return matches ?? [];
+}
+
+/**
+ * Checks if text contains any URLs that could trigger link previews.
+ */
+export function containsUrls(text: string): boolean {
+  return URL_REGEX.test(text);
+}
+
+/**
+ * Mangles URLs in text to suppress link previews.
+ * Wraps URLs in angle brackets: https://example.com -> <https://example.com>
+ * This format is commonly used to suppress auto-previews in chat clients.
+ */
+export function mangleUrlsForPreview(text: string): string {
+  return text.replace(URL_REGEX, (url) => {
+    // Don't double-wrap if already wrapped
+    const beforeMatch = text.indexOf(url);
+    if (beforeMatch > 0 && text[beforeMatch - 1] === "<") {
+      return url;
+    }
+    return `<${url}>`;
+  });
+}
+
 // Configuration root; can be overridden via OPENCLAW_STATE_DIR.
 export const CONFIG_DIR = resolveConfigDir();

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { LinkPreviewPolicy } from "../config/types.whatsapp.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { getChildLogger } from "../logging/logger.js";
@@ -6,11 +7,12 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { markdownToWhatsApp } from "../markdown/whatsapp.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
-import { toWhatsappJid } from "../utils.js";
+import { toWhatsappJid, containsUrls, detectUrls, mangleUrlsForPreview } from "../utils.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
+const securityLog = createSubsystemLogger("gateway/channels/whatsapp").child("security");
 
 export async function sendMessageWhatsApp(
   to: string,
@@ -37,6 +39,33 @@ export async function sendMessageWhatsApp(
   });
   text = convertMarkdownTables(text ?? "", tableMode);
   text = markdownToWhatsApp(text);
+
+  // Apply link preview policy for security
+  const accountConfig = cfg.channels?.whatsapp?.accounts?.[resolvedAccountId ?? ""];
+  const linkPreviewPolicy: LinkPreviewPolicy =
+    accountConfig?.linkPreviewPolicy ?? cfg.channels?.whatsapp?.linkPreviewPolicy ?? "allow";
+
+  if (linkPreviewPolicy !== "allow" && containsUrls(text)) {
+    const detectedUrls = detectUrls(text);
+    if (linkPreviewPolicy === "warn") {
+      securityLog.warn(
+        `⚠️ Outbound message contains ${detectedUrls.length} URL(s) that may trigger link previews. ` +
+          `Set channels.whatsapp.linkPreviewPolicy="mangle" to suppress previews.`,
+        {
+          to,
+          urlCount: detectedUrls.length,
+          urls: detectedUrls.slice(0, 5), // Log first 5 URLs max
+        },
+      );
+    } else if (linkPreviewPolicy === "mangle") {
+      text = mangleUrlsForPreview(text);
+      securityLog.debug(`Mangled ${detectedUrls.length} URL(s) to suppress link previews`, {
+        to,
+        urlCount: detectedUrls.length,
+      });
+    }
+  }
+
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,

@@ -4,6 +4,14 @@ import type {
   GroupPolicy,
   MarkdownConfig,
 } from "./types.base.js";
+
+/**
+ * Link preview policy for outbound messages.
+ * - "allow": Send messages as-is, link previews may be generated (default)
+ * - "warn": Log a security warning when URLs are detected in outbound messages
+ * - "mangle": Wrap URLs in angle brackets to suppress link previews
+ */
+export type LinkPreviewPolicy = "allow" | "warn" | "mangle";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
@@ -101,6 +109,13 @@ export type WhatsAppConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Link preview policy for outbound messages.
+   * - "allow": Send messages as-is (default)
+   * - "warn": Log security warning when URLs detected
+   * - "mangle": Wrap URLs in <> to suppress previews
+   */
+  linkPreviewPolicy?: LinkPreviewPolicy;
 };
 
 export type WhatsAppAccountConfig = {
@@ -149,4 +164,11 @@ export type WhatsAppAccountConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this account. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Link preview policy for outbound messages.
+   * - "allow": Send messages as-is (default)
+   * - "warn": Log security warning when URLs detected
+   * - "mangle": Wrap URLs in <> to suppress previews
+   */
+  linkPreviewPolicy?: LinkPreviewPolicy;
 };

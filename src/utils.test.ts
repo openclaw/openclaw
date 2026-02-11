@@ -5,8 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertWebChannel,
   CONFIG_DIR,
+  containsUrls,
+  detectUrls,
   ensureDir,
   jidToE164,
+  mangleUrlsForPreview,
   normalizeE164,
   normalizePath,
   resolveConfigDir,
@@ -221,5 +224,68 @@ describe("resolveUserPath", () => {
   it("keeps blank paths blank", () => {
     expect(resolveUserPath("")).toBe("");
     expect(resolveUserPath("   ")).toBe("");
+  });
+});
+
+describe("URL detection utilities", () => {
+  describe("detectUrls", () => {
+    it("detects http URLs", () => {
+      expect(detectUrls("Check http://example.com for info")).toEqual(["http://example.com"]);
+    });
+
+    it("detects https URLs", () => {
+      expect(detectUrls("Visit https://example.com/path?q=1")).toEqual([
+        "https://example.com/path?q=1",
+      ]);
+    });
+
+    it("detects multiple URLs", () => {
+      const text = "See https://a.com and https://b.com/path";
+      expect(detectUrls(text)).toEqual(["https://a.com", "https://b.com/path"]);
+    });
+
+    it("returns empty array when no URLs", () => {
+      expect(detectUrls("No links here")).toEqual([]);
+    });
+
+    it("handles URLs with various characters", () => {
+      expect(detectUrls("https://example.com/path/to/page#section")).toEqual([
+        "https://example.com/path/to/page#section",
+      ]);
+    });
+  });
+
+  describe("containsUrls", () => {
+    it("returns true when URLs present", () => {
+      expect(containsUrls("Check https://example.com")).toBe(true);
+    });
+
+    it("returns false when no URLs", () => {
+      expect(containsUrls("No links here")).toBe(false);
+    });
+  });
+
+  describe("mangleUrlsForPreview", () => {
+    it("wraps URLs in angle brackets", () => {
+      expect(mangleUrlsForPreview("Visit https://example.com today")).toBe(
+        "Visit <https://example.com> today",
+      );
+    });
+
+    it("handles multiple URLs", () => {
+      expect(mangleUrlsForPreview("See https://a.com and https://b.com")).toBe(
+        "See <https://a.com> and <https://b.com>",
+      );
+    });
+
+    it("preserves text without URLs", () => {
+      expect(mangleUrlsForPreview("No links here")).toBe("No links here");
+    });
+
+    it("does not double-wrap already wrapped URLs", () => {
+      expect(mangleUrlsForPreview("Already <https://example.com> wrapped")).toBe(
+        "Already <https://example.com> wrapped",
+      );
+    });
   });
 });
