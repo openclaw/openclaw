@@ -85,7 +85,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
   }
 
   try {
-    log.debug("Hook triggered for /new command");
+    log.debug("Hook triggered", { type: event.type, action: event.action });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
@@ -142,7 +142,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
       // Topic session: save to memory/topics/topic-{id}/YYYY-MM-DD.md
       const topicDir = path.join(memoryDir, "topics", `topic-${topicId}`);
       await fs.mkdir(topicDir, { recursive: true });
-      memoryFilePath = path.join(topicDir, `${dateStr}.md`);
+      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "").slice(0, 4);
+      memoryFilePath = path.join(topicDir, `${dateStr}-${timeSlug}.md`);
       log.debug("Topic memory path resolved", {
         topicId,
         path: memoryFilePath.replace(os.homedir(), "~"),
