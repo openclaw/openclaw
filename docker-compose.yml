@@ -29,6 +29,7 @@ services:
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    network_mode: "service:openclaw-gateway"
     environment:
       HOME: /home/node
       TERM: xterm-256color
