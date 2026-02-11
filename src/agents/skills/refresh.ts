@@ -30,7 +30,7 @@ let globalVersion = 0;
  * Only these files trigger a skills snapshot refresh when modified.
  * This prevents FD exhaustion on macOS when skills contain large asset
  * trees (e.g. icon packs with tens of thousands of SVG files).
- * See: https://github.com/openclaw/openclaw/issues/XXX
+ * See: https://github.com/openclaw/openclaw/pull/14023
  */
 const SKILLS_WATCH_RELEVANT_EXTENSIONS = new Set([
   ".md",
