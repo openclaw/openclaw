@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
 
 const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
 const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -65,7 +65,7 @@ export async function applyAuthChoiceVllm(
   const modelId = String(modelIdRaw ?? "").trim();
   const modelRef = `vllm/${modelId}`;
 
-  upsertAuthProfile({
+  await upsertAuthProfileWithLock({
     profileId: "vllm:default",
     credential: { type: "api_key", provider: "vllm", key: apiKey },
     agentDir: params.agentDir,

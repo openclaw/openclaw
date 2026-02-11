@@ -3,7 +3,7 @@ import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import {
   ensureAuthProfileStore,
   listProfilesForProvider,
-  upsertAuthProfile,
+  upsertAuthProfileWithLock,
 } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
@@ -200,7 +200,8 @@ export async function promptDefaultModel(
     models = models.filter((entry) => entry.provider === preferredProvider);
   }
 
-  const authStore = ensureAuthProfileStore(params.agentDir, {
+  const agentDir = params.agentDir;
+  const authStore = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
   const authCache = new Map<string, boolean>();
@@ -228,7 +229,7 @@ export async function promptDefaultModel(
   if (includeManual) {
     options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
   }
-  if (includeVllm) {
+  if (includeVllm && agentDir) {
     options.push({
       value: VLLM_VALUE,
       label: "vLLM (custom)",
@@ -319,6 +320,13 @@ export async function promptDefaultModel(
     });
   }
   if (selection === VLLM_VALUE) {
+    if (!agentDir) {
+      await params.prompter.note(
+        "vLLM setup requires an agent directory context.",
+        "vLLM not available",
+      );
+      return {};
+    }
     const baseUrlRaw = await params.prompter.text({
       message: "vLLM base URL",
       initialValue: VLLM_DEFAULT_BASE_URL,
@@ -342,10 +350,10 @@ export async function promptDefaultModel(
     const apiKey = String(apiKeyRaw ?? "").trim();
     const modelId = String(modelIdRaw ?? "").trim();
 
-    upsertAuthProfile({
+    await upsertAuthProfileWithLock({
       profileId: "vllm:default",
       credential: { type: "api_key", provider: "vllm", key: apiKey },
-      agentDir: params.agentDir,
+      agentDir,
     });
 
     const nextConfig: OpenClawConfig = {
