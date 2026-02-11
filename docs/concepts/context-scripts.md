@@ -99,7 +99,7 @@ Add scripts or ignore global ones for a specific agent:
 1. Start with `defaults.subagents.contextScripts.run[]`
 2. Remove any IDs listed in `agent.subagents.contextScripts.ignore[]`
 3. Append `agent.subagents.contextScripts.run[]`
-4. Deduplicate by `id` (first occurrence wins)
+4. Deduplicate by `id` (agent-specific entries override defaults with the same ID)
 5. Sort by `priority` (highest first, stable sort)
 
 ## Script Entry Schema

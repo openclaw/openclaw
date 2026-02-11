@@ -48,15 +48,12 @@ export function resolveContextScripts(
   // Merge: [...filteredDefaults, ...agentScripts]
   const merged = [...filteredDefaults, ...agentScripts];
 
-  // Dedupe by id — first occurrence wins
-  const seenIds = new Set<string>();
-  const deduped: ContextScriptEntry[] = [];
+  // Dedupe by id — last occurrence wins (agent scripts override defaults with same id)
+  const dedupMap = new Map<string, ContextScriptEntry>();
   for (const script of merged) {
-    if (!seenIds.has(script.id)) {
-      seenIds.add(script.id);
-      deduped.push(script);
-    }
+    dedupMap.set(script.id, script);
   }
+  const deduped: ContextScriptEntry[] = Array.from(dedupMap.values());
 
   // Apply defaults for optional fields
   const resolved: ResolvedScript[] = deduped.map((script) => ({
@@ -217,14 +214,11 @@ async function executeScriptRaw(
   variables: Record<string, unknown>,
 ): Promise<string> {
   // Build args from argMap
-  const argValues: unknown[] = [];
   const argObject: Record<string, unknown> = {};
 
   if (script.argMap) {
     for (const [key, varName] of Object.entries(script.argMap)) {
-      const value = variables[varName];
-      argObject[key] = value;
-      argValues.push(value);
+      argObject[key] = variables[varName];
     }
   }
 
@@ -234,9 +228,9 @@ async function executeScriptRaw(
   let output: string;
 
   if (isHttp) {
-    output = await executeHttpScript(script, argObject, argValues);
+    output = await executeHttpScript(script, argObject);
   } else {
-    output = await executeLocalScript(script, argObject, argValues);
+    output = await executeLocalScript(script, argObject);
   }
 
   return output;
@@ -354,7 +348,6 @@ function detectStandardErrors(obj: Record<string, unknown>, scriptId: string): v
 async function executeLocalScript(
   script: ResolvedScript,
   argObject: Record<string, unknown>,
-  argValues: unknown[],
 ): Promise<string> {
   // Resolve ~ in URI path
   let resolvedPath = script.uri;
@@ -365,8 +358,8 @@ async function executeLocalScript(
   }
 
   if (script.format === "arguments") {
-    // Spawn the script with argMap values as positional arguments
-    const args = argValues.map((v: unknown) => String(v));
+    // Spawn the script with named key="value" arguments from argMap
+    const args = Object.entries(argObject).map(([k, v]) => `${k}=${String(v ?? "")}`);
     const result = await execFileAsync(resolvedPath, args, {
       timeout: 10000,
       encoding: "utf-8",
@@ -434,7 +427,6 @@ function executeLocalScriptWithStdin(scriptPath: string, input: string): Promise
 async function executeHttpScript(
   script: ResolvedScript,
   argObject: Record<string, unknown>,
-  _argValues: unknown[],
 ): Promise<string> {
   const method = (script.method || "GET").toUpperCase();
 
