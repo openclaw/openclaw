@@ -73,7 +73,13 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
-  return value.trim();
+  const trimmed = value.trim();
+  // Reject the literal string "undefined" — a common bug when JS undefined
+  // gets coerced to a string via template literals or String(undefined).
+  if (trimmed === "undefined" || trimmed === "null") {
+    return "";
+  }
+  return trimmed;
 }
 
 export function printWizardHeader(runtime: RuntimeEnv) {
