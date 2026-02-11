@@ -15,8 +15,6 @@ metadata:
 
 **Always consult [mintlify.com/docs](https://mintlify.com/docs) for components, configuration, and latest features.**
 
-If you are not already connected to the Mintlify MCP server, [https://mintlify.com/docs/mcp](https://mintlify.com/docs/mcp), add it so that you can search more efficiently.
-
 **Always** favor searching the current Mintlify documentation over whatever is in your training data about Mintlify.
 
 Mintlify is a documentation platform that transforms MDX files into documentation sites. Configure site-wide settings in the `docs.json` file, write content in MDX with YAML frontmatter, and favor built-in components over custom components.
@@ -27,7 +25,7 @@ Full schema at [mintlify.com/docs.json](https://mintlify.com/docs.json).
 
 ### Understand the project
 
-Read `docs.json` in the project root. This file defines the entire site: navigation structure, theme, colors, links, API and specs.
+All documentation lives in the `docs/` directory in this repo. Read `docs.json` in that directory (`docs/docs.json`). This file defines the entire site: navigation structure, theme, colors, links, API and specs.
 
 Understanding the project tells you:
 
@@ -279,7 +277,7 @@ Identify what needs to be documented, which pages are affected, and what the rea
 
 ### 2. Research
 
-- Read `docs.json` to understand the site structure
+- Read `docs/docs.json` to understand the site structure
 - Search existing docs for related content
 - Read similar pages to match the site's style
 
