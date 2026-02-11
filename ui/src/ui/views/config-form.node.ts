@@ -20,6 +20,45 @@ import {
   type JsonSchema,
 } from "./config-form.shared.ts";
 
+function comparableValueKey(value: unknown): string {
+  if (value === undefined) {
+    return "undefined";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return `${typeof value}:${String(value)}`;
+  }
+  const serialized = jsonValue(value);
+  if (serialized) {
+    return `json:${serialized}`;
+  }
+  return Object.prototype.toString.call(value);
+}
+
+function displayValueText(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  const serialized = jsonValue(value);
+  if (serialized) {
+    return serialized;
+  }
+  return Object.prototype.toString.call(value);
+}
+
 export function renderNode(params: {
   schema: JsonSchema;
   value: unknown;
@@ -85,14 +124,14 @@ export function renderNode(params: {
                 <button
                   type="button"
                   class="cfg-segmented__btn ${
-                    literal === resolvedValue || String(literal) === String(resolvedValue)
+                    comparableValueKey(literal) === comparableValueKey(resolvedValue)
                       ? "active"
                       : ""
                   }"
                   ?disabled=${disabled}
                   @click=${() => onPatch(path, literal)}
                 >
-                  ${String(literal)}
+                  ${displayValueText(literal)}
                 </button>
               `,
             )}
@@ -158,14 +197,12 @@ export function renderNode(params: {
                 <button
                   type="button"
                   class="cfg-segmented__btn ${
-                    option === resolvedValue || String(option) === String(resolvedValue)
-                      ? "active"
-                      : ""
+                    comparableValueKey(option) === comparableValueKey(resolvedValue) ? "active" : ""
                   }"
                   ?disabled=${disabled}
                   @click=${() => onPatch(path, option)}
                 >
-                  ${String(option)}
+                  ${displayValueText(option)}
                 </button>
               `,
             )}
@@ -252,7 +289,7 @@ function renderTextInput(params: {
     (isSensitive
       ? "******"
       : schema.default !== undefined
-        ? `Default: ${String(schema.default)}`
+        ? `Default: ${displayValueText(schema.default)}`
         : "");
   const displayValue = value ?? "";
 
@@ -264,7 +301,7 @@ function renderTextInput(params: {
           type=${isSensitive ? "password" : inputType}
           class="cfg-input"
           placeholder=${placeholder}
-          .value=${displayValue == null ? "" : String(displayValue)}
+          .value=${displayValueText(displayValue)}
           ?disabled=${disabled}
           @input=${(event: Event) => {
             const raw = (event.target as HTMLInputElement).value;
@@ -342,7 +379,7 @@ function renderNumberInput(params: {
         <input
           type="number"
           class="cfg-number__input"
-          .value=${displayValue == null ? "" : String(displayValue)}
+          .value=${displayValueText(displayValue)}
           ?disabled=${disabled}
           @input=${(event: Event) => {
             const raw = (event.target as HTMLInputElement).value;
@@ -380,7 +417,7 @@ function renderSelect(params: {
   const helpText = buildHelpText(schema, hint?.help);
   const resolvedValue = value ?? schema.default;
   const currentIndex = options.findIndex(
-    (option) => option === resolvedValue || String(option) === String(resolvedValue),
+    (option) => comparableValueKey(option) === comparableValueKey(resolvedValue),
   );
   const unset = "__unset__";
 
@@ -399,7 +436,7 @@ function renderSelect(params: {
         <option value=${unset}>Select...</option>
         ${options.map(
           (option, index) => html`
-            <option value=${String(index)}>${String(option)}</option>
+            <option value=${String(index)}>${displayValueText(option)}</option>
           `,
         )}
       </select>

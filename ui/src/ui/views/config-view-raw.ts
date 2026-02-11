@@ -108,6 +108,34 @@ export function setRawTreeExpanded(target: EventTarget | null, expand: boolean):
   });
 }
 
+function unknownTokenText(value: unknown): string {
+  if (value === undefined) {
+    return "undefined";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  if (typeof value === "symbol") {
+    return value.toString();
+  }
+  if (typeof value === "function") {
+    return "[Function]";
+  }
+  try {
+    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
 function renderRawToken(value: unknown): TemplateResult {
   if (typeof value === "string") {
     return html`<span class="config-raw-token config-raw-token--string">${JSON.stringify(value)}</span>`;
@@ -130,7 +158,9 @@ function renderRawToken(value: unknown): TemplateResult {
       <span class="config-raw-token config-raw-token--null">null</span>
     `;
   }
-  return html`<span class="config-raw-token config-raw-token--unknown">${String(value)}</span>`;
+  return html`
+    <span class="config-raw-token config-raw-token--unknown">${unknownTokenText(value)}</span>
+  `;
 }
 
 function renderRawKey(label: string, indexed = false): TemplateResult {

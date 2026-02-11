@@ -526,7 +526,7 @@ export function analyzeConfigSchemaCached(raw: unknown) {
   if (!raw || typeof raw !== "object") {
     return analyzeConfigSchema(raw);
   }
-  const key = raw as object;
+  const key = raw;
   const cached = schemaAnalysisCache.get(key);
   if (cached) {
     return cached;
