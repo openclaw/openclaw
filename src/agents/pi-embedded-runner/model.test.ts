@@ -207,6 +207,41 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds a google-antigravity forward-compat fallback for claude-opus-4-6-thinking", () => {
+    const templateModel = {
+      id: "claude-opus-4-5-thinking",
+      name: "Claude Opus 4.5 Thinking",
+      provider: "google-antigravity",
+      api: "google-gemini-cli",
+      baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000000,
+      maxTokens: 64000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "google-antigravity" && modelId === "claude-opus-4-5-thinking") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("google-antigravity", "claude-opus-4-6-thinking", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google-antigravity",
+      id: "claude-opus-4-6-thinking",
+      api: "google-gemini-cli",
+      baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
+      reasoning: true,
+    });
+  });
+
   it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
     const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
     expect(result.model).toBeUndefined();
