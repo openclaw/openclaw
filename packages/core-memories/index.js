@@ -244,6 +244,38 @@ function calculateEmotionalSalience(text) {
     ];
     const hasEmotion = emotionalWords.some((word) => text.toLowerCase().includes(word));
     return hasEmotion ? 0.8 : 0.5;
+
+// Phase 1: Redaction for secrets
+function redactSecrets(content) {
+  if (!content || typeof content !== "string") return { redacted: content || "", wasRedacted: false };
+  let redacted = content, wasRedacted = false;
+  // API keys
+  [/\b(sk-[a-zA-Z0-9]{48,})\b/g, /\b([a-zA-Z0-9]{40,})\b/g].forEach(p => {
+    redacted = redacted.replace(p, () => { wasRedacted = true; return "[API_KEY_REDACTED]"; });
+  });
+  // Emails
+  redacted = redacted.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, () => { wasRedacted = true; return "[EMAIL_REDACTED]"; });
+  // PEM keys
+  redacted = redacted.replace(/-----BEGIN [A-Z\s]+-----[\s\S]*-----END [A-Z\s]+-----/gi, () => { wasRedacted = true; return "[PEM_KEY_REDACTED]"; });
+  return { redacted, wasRedacted };
+}
+
+// Jaccard deduplication
+function calculateJaccardSimilarity(t1, t2) {
+  const n = t => new Set(t.toLowerCase().replace(/[^a-z0-9]/g, " ").split(/\s+/).filter(w => w.length > 2));
+  const s1 = n(t1), s2 = n(t2); if (!s1.size || !s2.size) return 0;
+  return [...s1].filter(x => s2.has(x)).length / new Set([...s1, ...s2]).size;
+}
+function shouldDeduplicate(e, entries, opts = {}) {
+  const win = opts.windowMs || 600000, thr = opts.threshold || 0.85, cut = Date.now() - win;
+  for (const ex of entries) {
+    if (new Date(ex.timestamp).getTime() > cut && calculateJaccardSimilarity(e.content, ex.content) >= thr) {
+      return { shouldDeduplicate: true, duplicateOf: ex.id };
+    }
+  }
+  return { shouldDeduplicate: false };
+}
+
 }
 // Check if user said "remember this"
 function checkUserFlagged(text) {
