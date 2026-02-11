@@ -105,7 +105,7 @@ describe("movePathToTrash", () => {
       const trashFilesDir = path.join(xdgDataHome, "Trash", "files");
       const trashedEntries = fs.readdirSync(trashFilesDir);
       expect(trashedEntries.length).toBe(1);
-      expect(fs.existsSync(path.join(trashFilesDir, trashedEntries[0]!))).toBe(true);
+      expect(fs.existsSync(path.join(trashFilesDir, trashedEntries[0]))).toBe(true);
 
       // A .trashinfo file should exist in the info directory.
       const infoFile = path.join(xdgDataHome, "Trash", "info", `${trashedEntries[0]}.trashinfo`);
