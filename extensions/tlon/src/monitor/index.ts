@@ -371,6 +371,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: body,
+      BodyForAgent: messageText,
       RawBody: messageText,
       CommandBody: messageText,
       From: isGroup ? `tlon:group:${groupChannel}` : `tlon:${senderShip}`,
