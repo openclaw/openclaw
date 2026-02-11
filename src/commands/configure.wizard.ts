@@ -315,6 +315,15 @@ export async function runConfigureWizard(
       process.env.OPENCLAW_GATEWAY_TOKEN;
 
     const persistConfig = async () => {
+      // Recover top-level keys from the base config that a section handler
+      // may have dropped by not spreading the full config object.
+      for (const key of Object.keys(baseConfig)) {
+        if (!(key in nextConfig)) {
+          (nextConfig as Record<string, unknown>)[key] = (baseConfig as Record<string, unknown>)[
+            key
+          ];
+        }
+      }
       nextConfig = applyWizardMetadata(nextConfig, {
         command: opts.command,
         mode,
