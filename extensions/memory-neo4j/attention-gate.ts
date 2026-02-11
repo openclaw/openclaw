@@ -62,6 +62,30 @@ const MIN_CAPTURE_CHARS = 30;
 /** Minimum word count — short contextual phrases lack standalone meaning. */
 const MIN_WORD_COUNT = 8;
 
+/** Shared checks applied by both user and assistant attention gates. */
+function failsSharedGateChecks(trimmed: string): boolean {
+  // Injected context from the memory system itself
+  if (trimmed.includes("<relevant-memories>") || trimmed.includes("<core-memory-refresh>")) {
+    return true;
+  }
+
+  // Noise patterns
+  if (NOISE_PATTERNS.some((r) => r.test(trimmed))) {
+    return true;
+  }
+
+  // Excessive emoji (likely reaction, not substance)
+  const emojiCount = (
+    trimmed.match(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1FA00}-\u{1FAFF}]/gu) ||
+    []
+  ).length;
+  if (emojiCount > 3) {
+    return true;
+  }
+
+  return false;
+}
+
 export function passesAttentionGate(text: string): boolean {
   const trimmed = text.trim();
 
@@ -76,22 +100,7 @@ export function passesAttentionGate(text: string): boolean {
     return false;
   }
 
-  // Injected context from the memory system itself
-  if (trimmed.includes("<relevant-memories>") || trimmed.includes("<core-memory-refresh>")) {
-    return false;
-  }
-
-  // Noise patterns
-  if (NOISE_PATTERNS.some((r) => r.test(trimmed))) {
-    return false;
-  }
-
-  // Excessive emoji (likely reaction, not substance)
-  const emojiCount = (
-    trimmed.match(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1FA00}-\u{1FAFF}]/gu) ||
-    []
-  ).length;
-  if (emojiCount > 3) {
+  if (failsSharedGateChecks(trimmed)) {
     return false;
   }
 
@@ -183,27 +192,12 @@ export function passesAssistantAttentionGate(text: string): boolean {
     return false;
   }
 
-  // Injected context from the memory system itself
-  if (trimmed.includes("<relevant-memories>") || trimmed.includes("<core-memory-refresh>")) {
-    return false;
-  }
-
-  // Noise patterns (same as user gate)
-  if (NOISE_PATTERNS.some((r) => r.test(trimmed))) {
+  if (failsSharedGateChecks(trimmed)) {
     return false;
   }
 
   // Assistant-specific narration patterns (play-by-play self-talk)
   if (ASSISTANT_NARRATION_PATTERNS.some((r) => r.test(trimmed))) {
-    return false;
-  }
-
-  // Excessive emoji (likely reaction, not substance)
-  const emojiCount = (
-    trimmed.match(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1FA00}-\u{1FAFF}]/gu) ||
-    []
-  ).length;
-  if (emojiCount > 3) {
     return false;
   }
 

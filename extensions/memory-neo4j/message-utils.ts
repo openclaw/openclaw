@@ -8,14 +8,18 @@
  */
 
 // ============================================================================
-// User Message Extraction
+// Core Extraction
 // ============================================================================
 
 /**
- * Extract user message texts from the event.messages array.
- * Handles both string content and content block arrays.
+ * Extract text blocks from messages with a given role, apply a strip function,
+ * and filter out short results. Handles both string content and content block arrays.
  */
-export function extractUserMessages(messages: unknown[]): string[] {
+function extractMessagesByRole(
+  messages: unknown[],
+  role: string,
+  stripFn: (text: string) => string,
+): string[] {
   const texts: string[] = [];
 
   for (const msg of messages) {
@@ -24,8 +28,7 @@ export function extractUserMessages(messages: unknown[]): string[] {
     }
     const msgObj = msg as Record<string, unknown>;
 
-    // Only process user messages for auto-capture
-    if (msgObj.role !== "user") {
+    if (msgObj.role !== role) {
       continue;
     }
 
@@ -51,8 +54,18 @@ export function extractUserMessages(messages: unknown[]): string[] {
     }
   }
 
-  // Strip wrappers then filter by length
-  return texts.map(stripMessageWrappers).filter((t) => t.length >= 10);
+  return texts.map(stripFn).filter((t) => t.length >= 10);
+}
+
+// ============================================================================
+// User Message Extraction
+// ============================================================================
+
+/**
+ * Extract user message texts from the event.messages array.
+ */
+export function extractUserMessages(messages: unknown[]): string[] {
+  return extractMessagesByRole(messages, "user", stripMessageWrappers);
 }
 
 /**
@@ -84,9 +97,7 @@ export function stripMessageWrappers(text: string): string {
   s = s.replace(/---\s*Queued #\d+\s*/g, "");
   // Telegram wrapper — may now be at start after previous strips
   s = s.replace(/^\s*\[Telegram\s[^\]]+\]\s*/i, "");
-  // "[message_id: NNN]" suffix (Telegram)
-  s = s.replace(/\n?\[message_id:\s*\d+\]\s*$/i, "");
-  // "[message_id: UUID]" suffix (non-numeric Telegram/channel IDs)
+  // "[message_id: ...]" suffix (Telegram and other channel IDs)
   s = s.replace(/\n?\[message_id:\s*[^\]]+\]\s*$/i, "");
   // Slack wrapper — "[Slack <workspace> #channel @user] MESSAGE [slack message id: ...]"
   s = s.replace(/^\s*\[Slack\s[^\]]+\]\s*/i, "");
@@ -118,42 +129,7 @@ export function stripAssistantWrappers(text: string): string {
 
 /**
  * Extract assistant message texts from the event.messages array.
- * Handles both string content and content block arrays.
  */
 export function extractAssistantMessages(messages: unknown[]): string[] {
-  const texts: string[] = [];
-
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object") {
-      continue;
-    }
-    const msgObj = msg as Record<string, unknown>;
-
-    if (msgObj.role !== "assistant") {
-      continue;
-    }
-
-    const content = msgObj.content;
-    if (typeof content === "string") {
-      texts.push(content);
-      continue;
-    }
-
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (
-          block &&
-          typeof block === "object" &&
-          "type" in block &&
-          (block as Record<string, unknown>).type === "text" &&
-          "text" in block &&
-          typeof (block as Record<string, unknown>).text === "string"
-        ) {
-          texts.push((block as Record<string, unknown>).text as string);
-        }
-      }
-    }
-  }
-
-  return texts.map(stripAssistantWrappers).filter((t) => t.length >= 10);
+  return extractMessagesByRole(messages, "assistant", stripAssistantWrappers);
 }

@@ -7,7 +7,7 @@
 
 import type { Driver } from "neo4j-driver";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { StoreMemoryInput, MergeEntityInput } from "./schema.js";
+import type { StoreMemoryInput } from "./schema.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
 
 // ============================================================================
@@ -867,10 +867,10 @@ describe("Neo4jMemoryClient", () => {
   });
 
   // ------------------------------------------------------------------------
-  // promoteToCore() / demoteFromCore()
+  // promoteToCore()
   // ------------------------------------------------------------------------
 
-  describe("Core promotion/demotion", () => {
+  describe("Core promotion", () => {
     it("should promote memories to core category", async () => {
       mockSession.run.mockResolvedValue({
         records: [{ get: vi.fn().mockReturnValue(2) }],
@@ -885,26 +885,10 @@ describe("Neo4jMemoryClient", () => {
       );
     });
 
-    it("should demote memories from core category", async () => {
-      mockSession.run.mockResolvedValue({
-        records: [{ get: vi.fn().mockReturnValue(1) }],
-      });
-
-      const result = await client.demoteFromCore(["m1"]);
-
-      expect(result).toBe(1);
-      expect(mockSession.run).toHaveBeenCalledWith(
-        expect.stringContaining("category = 'fact'"),
-        expect.objectContaining({ ids: ["m1"] }),
-      );
-    });
-
     it("should handle empty ID arrays", async () => {
       const promoteResult = await client.promoteToCore([]);
-      const demoteResult = await client.demoteFromCore([]);
 
       expect(promoteResult).toBe(0);
-      expect(demoteResult).toBe(0);
     });
   });
 
@@ -1158,115 +1142,6 @@ describe("Neo4jMemoryClient", () => {
   });
 
   // ------------------------------------------------------------------------
-  // Entity and Tag operations
-  // ------------------------------------------------------------------------
-
-  describe("Entity operations", () => {
-    it("should merge entity idempotently", async () => {
-      mockSession.run.mockResolvedValue({
-        records: [
-          {
-            get: vi.fn((key) => {
-              const data: Record<string, any> = { id: "e1", name: "tarun" };
-              return data[key];
-            }),
-          },
-        ],
-      });
-
-      const input: MergeEntityInput = {
-        id: "e1",
-        name: "Tarun",
-        type: "person",
-        aliases: ["boss"],
-        description: "CEO",
-      };
-
-      const result = await client.mergeEntity(input);
-
-      expect(result).toEqual({ id: "e1", name: "tarun" });
-      expect(mockSession.run).toHaveBeenCalledWith(
-        expect.stringContaining("MERGE (e:Entity {name: $name})"),
-        expect.objectContaining({
-          name: "tarun", // normalized
-        }),
-      );
-    });
-
-    it("should create MENTIONS relationship", async () => {
-      mockSession.run.mockResolvedValue({ records: [] });
-
-      await client.createMentions("mem-1", "Tarun", "context", 0.95);
-
-      expect(mockSession.run).toHaveBeenCalledWith(
-        expect.stringContaining("MERGE (m)-[r:MENTIONS]->(e)"),
-        expect.objectContaining({
-          memoryId: "mem-1",
-          entityName: "tarun", // normalized
-          role: "context",
-          confidence: 0.95,
-        }),
-      );
-    });
-
-    it("should create entity relationships with validated type", async () => {
-      mockSession.run.mockResolvedValue({ records: [] });
-
-      await client.createEntityRelationship("Alice", "Acme", "WORKS_AT", 0.9);
-
-      expect(mockSession.run).toHaveBeenCalledWith(
-        expect.stringContaining("MERGE (e1)-[r:WORKS_AT]->(e2)"),
-        expect.objectContaining({
-          sourceName: "alice",
-          targetName: "acme",
-          confidence: 0.9,
-        }),
-      );
-    });
-
-    it("should reject invalid relationship types", async () => {
-      await client.createEntityRelationship("a", "b", "INVALID_TYPE", 0.9);
-
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.stringContaining("rejected invalid relationship type"),
-      );
-      expect(mockSession.run).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("Tag operations", () => {
-    it("should tag memory with normalized tag name", async () => {
-      mockSession.run.mockResolvedValue({ records: [] });
-
-      await client.tagMemory("mem-1", "Neo4j", "technology", 0.95);
-
-      expect(mockSession.run).toHaveBeenCalledWith(
-        expect.stringContaining("MERGE (t:Tag {name: $tagName})"),
-        expect.objectContaining({
-          memoryId: "mem-1",
-          tagName: "neo4j", // normalized
-          tagCategory: "technology",
-          confidence: 0.95,
-        }),
-      );
-    });
-
-    it("should update memory category only when current is 'other'", async () => {
-      mockSession.run.mockResolvedValue({ records: [] });
-
-      await client.updateMemoryCategory("mem-1", "fact");
-
-      expect(mockSession.run).toHaveBeenCalledWith(
-        expect.stringContaining("WHERE m.category = 'other'"),
-        expect.objectContaining({
-          id: "mem-1",
-          category: "fact",
-        }),
-      );
-    });
-  });
-
-  // ------------------------------------------------------------------------
   // Extraction status tracking
   // ------------------------------------------------------------------------
 
@@ -1294,16 +1169,6 @@ describe("Neo4jMemoryClient", () => {
         expect.stringContaining("m.extractionRetries"),
         expect.any(Object),
       );
-    });
-
-    it("should get extraction retry count", async () => {
-      mockSession.run.mockResolvedValue({
-        records: [{ get: vi.fn().mockReturnValue(3) }],
-      });
-
-      const result = await client.getExtractionRetries("mem-1");
-
-      expect(result).toBe(3);
     });
 
     it("should count memories by extraction status", async () => {

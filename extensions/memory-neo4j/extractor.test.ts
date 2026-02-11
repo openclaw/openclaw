@@ -8,19 +8,22 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ExtractionConfig } from "./config.js";
+import { passesAttentionGate, passesAssistantAttentionGate } from "./attention-gate.js";
 import {
-  extractUserMessages,
-  extractAssistantMessages,
-  stripAssistantWrappers,
   extractEntities,
   runBackgroundExtraction,
   rateImportance,
   resolveConflict,
   isSemanticDuplicate,
-  isTransientError,
-  runSleepCycle,
+  SEMANTIC_DEDUP_VECTOR_THRESHOLD,
 } from "./extractor.js";
-import { passesAttentionGate, passesAssistantAttentionGate } from "./index.js";
+import { isTransientError } from "./llm-client.js";
+import {
+  extractUserMessages,
+  extractAssistantMessages,
+  stripAssistantWrappers,
+} from "./message-utils.js";
+import { runSleepCycle } from "./sleep-cycle.js";
 
 // ============================================================================
 // passesAttentionGate()
@@ -1756,7 +1759,6 @@ describe("runSleepCycle", () => {
       calculateAllEffectiveScores: vi.fn().mockResolvedValue([]),
       calculateParetoThreshold: vi.fn().mockReturnValue(0.5),
       promoteToCore: vi.fn().mockResolvedValue(0),
-      demoteFromCore: vi.fn().mockResolvedValue(0),
       findDecayedMemories: vi.fn().mockResolvedValue([]),
       pruneMemories: vi.fn().mockResolvedValue(0),
       countByExtractionStatus: vi
@@ -1768,11 +1770,6 @@ describe("runSleepCycle", () => {
       findOrphanTags: vi.fn().mockResolvedValue([]),
       deleteOrphanTags: vi.fn().mockResolvedValue(0),
       updateExtractionStatus: vi.fn().mockResolvedValue(undefined),
-      mergeEntity: vi.fn().mockResolvedValue({ id: "e1", name: "test" }),
-      createMentions: vi.fn().mockResolvedValue(undefined),
-      createEntityRelationship: vi.fn().mockResolvedValue(undefined),
-      tagMemory: vi.fn().mockResolvedValue(undefined),
-      updateMemoryCategory: vi.fn().mockResolvedValue(undefined),
     };
   });
 
@@ -2252,64 +2249,7 @@ describe("runSleepCycle", () => {
     });
   });
 
-  // Phase 4: Demotion
-  describe("Phase 4: Core Demotion", () => {
-    it("should demote core memories below threshold", async () => {
-      const scores = [
-        {
-          id: "m1",
-          text: "test",
-          category: "core",
-          importance: 0.3,
-          retrievalCount: 1,
-          ageDays: 30,
-          effectiveScore: 0.3,
-        },
-        {
-          id: "m2",
-          text: "test",
-          category: "core",
-          importance: 0.9,
-          retrievalCount: 10,
-          ageDays: 5,
-          effectiveScore: 0.95,
-        },
-      ];
-      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
-      mockDb.calculateParetoThreshold.mockReturnValue(0.7);
-      mockDb.demoteFromCore.mockResolvedValue(1);
-
-      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
-
-      // m1 should be demoted (category=core, score=0.30 < 0.70)
-      expect(mockDb.demoteFromCore).toHaveBeenCalledWith(["m1"]);
-      expect(result.demotion.candidatesFound).toBe(1);
-      expect(result.demotion.demoted).toBe(1);
-    });
-
-    it("should not demote regular memories", async () => {
-      const scores = [
-        {
-          id: "m1",
-          text: "test",
-          category: "fact",
-          importance: 0.2,
-          retrievalCount: 0,
-          ageDays: 50,
-          effectiveScore: 0.1,
-        },
-      ];
-      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
-      mockDb.calculateParetoThreshold.mockReturnValue(0.7);
-
-      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
-
-      expect(result.demotion.candidatesFound).toBe(0);
-      expect(mockDb.demoteFromCore).not.toHaveBeenCalled();
-    });
-  });
-
-  // Phase 5: Extraction
+  // Phase 4: Extraction
   describe("Phase 5: Entity Extraction", () => {
     it("should process pending extractions in batches", async () => {
       mockDb.countByExtractionStatus.mockResolvedValue({
@@ -2606,7 +2546,6 @@ describe("runSleepCycle", () => {
       expect(onPhaseStart).toHaveBeenCalledWith("semanticDedup");
       expect(onPhaseStart).toHaveBeenCalledWith("pareto");
       expect(onPhaseStart).toHaveBeenCalledWith("promotion");
-      expect(onPhaseStart).toHaveBeenCalledWith("demotion");
       expect(onPhaseStart).toHaveBeenCalledWith("extraction");
       expect(onPhaseStart).toHaveBeenCalledWith("decay");
       expect(onPhaseStart).toHaveBeenCalledWith("cleanup");
@@ -2642,7 +2581,6 @@ describe("runSleepCycle", () => {
       expect(result).toHaveProperty("semanticDedup");
       expect(result).toHaveProperty("pareto");
       expect(result).toHaveProperty("promotion");
-      expect(result).toHaveProperty("demotion");
       expect(result).toHaveProperty("decay");
       expect(result).toHaveProperty("extraction");
       expect(result).toHaveProperty("cleanup");
@@ -2667,6 +2605,208 @@ describe("runSleepCycle", () => {
 
 // ============================================================================
 // isTransientError()
+// ============================================================================
+
+// ============================================================================
+// isSemanticDuplicate
+// ============================================================================
+
+describe("isSemanticDuplicate", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const enabledConfig: ExtractionConfig = {
+    enabled: true,
+    apiKey: "test-key",
+    model: "test-model",
+    baseUrl: "https://test.ai/api/v1",
+    temperature: 0.0,
+    maxRetries: 0,
+  };
+
+  const disabledConfig: ExtractionConfig = {
+    ...enabledConfig,
+    enabled: false,
+  };
+
+  it("should return false when extraction is disabled", async () => {
+    const result = await isSemanticDuplicate("new text", "existing text", disabledConfig);
+    expect(result).toBe(false);
+  });
+
+  it("should return true when LLM says duplicate", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({ verdict: "duplicate", reason: "same fact" }),
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await isSemanticDuplicate("I like Neo4j", "User prefers Neo4j", enabledConfig);
+    expect(result).toBe(true);
+  });
+
+  it("should return false when LLM says unique", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({ verdict: "unique", reason: "different topic" }),
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await isSemanticDuplicate("I like coffee", "User lives in NYC", enabledConfig);
+    expect(result).toBe(false);
+  });
+
+  it("should skip LLM call when vector similarity is below threshold", async () => {
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy;
+
+    const result = await isSemanticDuplicate(
+      "text a",
+      "text b",
+      enabledConfig,
+      SEMANTIC_DEDUP_VECTOR_THRESHOLD - 0.01,
+    );
+    expect(result).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("should call LLM when vector similarity is at or above threshold", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({ verdict: "duplicate", reason: "same" }),
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await isSemanticDuplicate(
+      "text a",
+      "text b",
+      enabledConfig,
+      SEMANTIC_DEDUP_VECTOR_THRESHOLD,
+    );
+    expect(result).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalled();
+  });
+
+  it("should call LLM when no vector similarity is provided", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({ verdict: "unique", reason: "different" }),
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await isSemanticDuplicate("text a", "text b", enabledConfig);
+    expect(result).toBe(false);
+    expect(globalThis.fetch).toHaveBeenCalled();
+  });
+
+  it("should return false on fetch error (fail-open)", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new DOMException("signal timed out", "TimeoutError"));
+
+    const result = await isSemanticDuplicate("text a", "text b", enabledConfig);
+    expect(result).toBe(false);
+  });
+
+  it("should return false on invalid JSON response", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: "not valid json" } }],
+        }),
+    });
+
+    const result = await isSemanticDuplicate("text a", "text b", enabledConfig);
+    expect(result).toBe(false);
+  });
+
+  it("should return false when verdict is missing from response", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({ reason: "no verdict field" }),
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await isSemanticDuplicate("text a", "text b", enabledConfig);
+    expect(result).toBe(false);
+  });
+
+  it("should return false when LLM returns null content", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: null } }],
+        }),
+    });
+
+    const result = await isSemanticDuplicate("text a", "text b", enabledConfig);
+    expect(result).toBe(false);
+  });
+
+  it("should respect abort signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    globalThis.fetch = vi.fn().mockRejectedValue(new DOMException("signal aborted", "AbortError"));
+
+    const result = await isSemanticDuplicate(
+      "text a",
+      "text b",
+      enabledConfig,
+      undefined,
+      controller.signal,
+    );
+    expect(result).toBe(false);
+  });
+});
+
+// ============================================================================
+// isTransientError
 // ============================================================================
 
 describe("isTransientError", () => {
