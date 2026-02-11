@@ -207,7 +207,6 @@ export function registerLogsCli(program: Command) {
     .option("--plain", "Plain text output (no ANSI styling)", false)
     .option("--no-color", "Disable ANSI colors")
     .option("--local-time", "Display timestamps in local timezone", false)
-    .option("--localTime", "Alias for --local-time", false)
     .addHelpText(
       "after",
       () =>
