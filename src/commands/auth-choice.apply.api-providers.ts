@@ -7,11 +7,7 @@ import {
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
-import {
-  applyDigitalOceanGradientAuthChoice,
-  applyDigitalOceanGradientConfig,
-  applyDigitalOceanGradientProviderConfig,
-} from "./digitalocean-gradient-config.js";
+import { applyDigitalOceanGradientAuthChoice } from "./digitalocean-gradient-config.js";
 import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
