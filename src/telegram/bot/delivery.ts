@@ -44,7 +44,7 @@ function splitTextWithEntities(
   if (text.length <= limit) {
     return [{ text, entities }];
   }
-  const sorted = [...entities].sort((a, b) => a.offset - b.offset);
+  const sorted = [...entities].toSorted((a, b) => a.offset - b.offset);
   const chunks: Array<{ text: string; entities: MessageEntity[] }> = [];
   let offset = 0;
   while (offset < text.length) {
@@ -61,10 +61,14 @@ function splitTextWithEntities(
       const nl = text.lastIndexOf("\n", end - 1);
       if (nl > offset) {
         const nlSafe = sorted.every((e) => !(e.offset <= nl && e.offset + e.length > nl));
-        if (nlSafe) end = nl + 1;
+        if (nlSafe) {
+          end = nl + 1;
+        }
       }
       // Safeguard: ensure forward progress.
-      if (end <= offset) end = Math.min(offset + limit, text.length);
+      if (end <= offset) {
+        end = Math.min(offset + limit, text.length);
+      }
     }
     const chunkEntities: MessageEntity[] = [];
     for (const e of sorted) {
