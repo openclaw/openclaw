@@ -107,6 +107,22 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("defaults route-less text-channel threads to public", async () => {
+    const { rest, getMock, postMock } = makeRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" });
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: {
+          name: "thread",
+          type: ChannelType.PublicThread,
+        },
+      }),
+    );
+  });
+
   it("falls back when channel lookup is unavailable", async () => {
     const { rest, getMock, postMock } = makeRest();
     getMock.mockRejectedValue(new Error("lookup failed"));
@@ -114,7 +130,12 @@ describe("sendMessageDiscord", () => {
     await createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" });
     expect(postMock).toHaveBeenCalledWith(
       Routes.threads("chan1"),
-      expect.objectContaining({ body: { name: "thread" } }),
+      expect.objectContaining({
+        body: {
+          name: "thread",
+          type: ChannelType.PublicThread,
+        },
+      }),
     );
   });
 

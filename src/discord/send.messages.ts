@@ -121,6 +121,8 @@ export async function createThreadDiscord(
   if (isForumLike) {
     const starterContent = payload.content?.trim() ? payload.content : payload.name;
     body.message = { content: starterContent };
+  } else if (!payload.messageId) {
+    body.type = ChannelType.PublicThread;
   }
   const route = payload.messageId
     ? Routes.threads(channelId, payload.messageId)
