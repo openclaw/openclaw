@@ -8,9 +8,9 @@ function getSessionManager(api: OpenClawPluginApi): SSHSessionManager {
   if (!sessionManager) {
     const config = api.pluginConfig || {};
     sessionManager = new SSHSessionManager({
-      maxSessions: config.maxSessions,
-      sessionTimeoutMs: config.sessionTimeoutMs,
-      commandTimeoutMs: config.commandTimeoutMs,
+      maxSessions: config.maxSessions as number | undefined,
+      sessionTimeoutMs: config.sessionTimeoutMs as number | undefined,
+      commandTimeoutMs: config.commandTimeoutMs as number | undefined,
     });
   }
   return sessionManager;
@@ -82,7 +82,7 @@ Example usage:
 2. When done: close_ssh_session(session_id="${sessionId}")`;
 
         return {
-          content: [{ type: "text", text: message }],
+          content: [{ type: "text" as const, text: message }],
           details: {
             session_id: sessionId,
             host: config.host,
@@ -92,7 +92,7 @@ Example usage:
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
         return {
-          content: [{ type: "text", text: `Failed to open SSH session: ${errorMessage}` }],
+          content: [{ type: "text" as const, text: `Failed to open SSH session: ${errorMessage}` }],
           isError: true,
         };
       }
@@ -132,7 +132,7 @@ export function createExecuteSSHCommandTool(api: OpenClawPluginApi) {
         const output = await manager.executeCommand(sessionId, command);
 
         return {
-          content: [{ type: "text", text: output || "(command executed, no output)" }],
+          content: [{ type: "text" as const, text: output || "(command executed, no output)" }],
           details: {
             session_id: sessionId,
             command,
@@ -144,7 +144,7 @@ export function createExecuteSSHCommandTool(api: OpenClawPluginApi) {
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: `Failed to execute command: ${errorMessage}`,
             },
           ],
@@ -181,7 +181,7 @@ export function createCloseSSHSessionTool(api: OpenClawPluginApi) {
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: `SSH session ${sessionId} closed successfully.`,
             },
           ],
@@ -194,7 +194,7 @@ export function createCloseSSHSessionTool(api: OpenClawPluginApi) {
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: `Failed to close session: ${errorMessage}`,
             },
           ],
@@ -220,7 +220,7 @@ export function createListSSHSessionsTool(api: OpenClawPluginApi) {
 
         if (sessions.length === 0) {
           return {
-            content: [{ type: "text", text: "No active SSH sessions." }],
+            content: [{ type: "text" as const, text: "No active SSH sessions." }],
             details: { sessions: [] },
           };
         }
@@ -235,7 +235,7 @@ export function createListSSHSessionsTool(api: OpenClawPluginApi) {
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: `Active SSH Sessions (${sessions.length}):\n\n${sessionList}`,
             },
           ],
@@ -246,7 +246,7 @@ export function createListSSHSessionsTool(api: OpenClawPluginApi) {
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: `Failed to list sessions: ${errorMessage}`,
             },
           ],
