@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import type { CallMode, VoiceCallConfig } from "./config.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
   type CallId,
   type CallRecord,
@@ -481,13 +480,13 @@ export class CallManager {
 
       case "allowlist":
       case "pairing": {
-        const normalized = normalizePhoneNumber(from);
-        if (!normalized) {
+        if (!from) {
           console.log("[voice-call] Inbound call rejected: missing caller ID");
           return false;
         }
 
-        const allowed = isAllowlistedCaller(normalized, allowFrom);
+        const normalized = from.replace(/\D/g, "");
+        const allowed = (allowFrom || []).some((num) => num.replace(/\D/g, "") === normalized);
 
         const status = allowed ? "accepted" : "rejected";
         console.log(

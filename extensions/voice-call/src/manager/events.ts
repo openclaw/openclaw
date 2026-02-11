@@ -94,22 +94,7 @@ export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): v
 
   if (!call && event.direction === "inbound" && event.providerCallId) {
     if (!shouldAcceptInbound(ctx.config, event.from)) {
-      if (ctx.provider && event.providerCallId) {
-        // Early-reject happens before an internal callId exists; hang up by providerCallId.
-        void ctx.provider
-          .hangupCall({
-            callId: event.providerCallId ?? event.callId,
-            providerCallId: event.providerCallId,
-            reason: "hangup-bot",
-          })
-          .catch((err) => {
-            console.warn(
-              `[voice-call] Failed to reject inbound call ${event.providerCallId}: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
-          });
-      }
+      // TODO: Could hang up the call here.
       return;
     }
 
@@ -119,25 +104,23 @@ export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): v
       from: event.from || "unknown",
       to: event.to || ctx.config.fromNumber || "unknown",
     });
-  }
 
-  let evt = event;
-  if (call && call.callId !== event.callId) {
-    evt = { ...event, callId: call.callId };
+    // Normalize event to internal ID for downstream consumers.
+    event.callId = call.callId;
   }
 
   if (!call) {
     return;
   }
 
-  if (evt.providerCallId && !call.providerCallId) {
-    call.providerCallId = evt.providerCallId;
-    ctx.providerCallIdMap.set(evt.providerCallId, call.callId);
+  if (event.providerCallId && !call.providerCallId) {
+    call.providerCallId = event.providerCallId;
+    ctx.providerCallIdMap.set(event.providerCallId, call.callId);
   }
 
-  call.processedEventIds.push(evt.id);
+  call.processedEventIds.push(event.id);
 
-  switch (evt.type) {
+  switch (event.type) {
     case "call.initiated":
       transitionState(call, "initiated");
       break;
@@ -147,7 +130,7 @@ export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): v
       break;
 
     case "call.answered":
-      call.answeredAt = evt.timestamp;
+      call.answeredAt = event.timestamp;
       transitionState(call, "answered");
       startMaxDurationTimer({
         ctx,
@@ -167,19 +150,19 @@ export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): v
       break;
 
     case "call.speech":
-      if (evt.isFinal) {
-        addTranscriptEntry(call, "user", evt.transcript);
-        resolveTranscriptWaiter(ctx, call.callId, evt.transcript);
+      if (event.isFinal) {
+        addTranscriptEntry(call, "user", event.transcript);
+        resolveTranscriptWaiter(ctx, call.callId, event.transcript);
       }
       transitionState(call, "listening");
       break;
 
     case "call.ended":
-      call.endedAt = evt.timestamp;
-      call.endReason = evt.reason;
-      transitionState(call, evt.reason as CallState);
+      call.endedAt = event.timestamp;
+      call.endReason = event.reason;
+      transitionState(call, event.reason as CallState);
       clearMaxDurationTimer(ctx, call.callId);
-      rejectTranscriptWaiter(ctx, call.callId, `Call ended: ${evt.reason}`);
+      rejectTranscriptWaiter(ctx, call.callId, `Call ended: ${event.reason}`);
       ctx.activeCalls.delete(call.callId);
       if (call.providerCallId) {
         ctx.providerCallIdMap.delete(call.providerCallId);
@@ -187,12 +170,12 @@ export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): v
       break;
 
     case "call.error":
-      if (!evt.retryable) {
-        call.endedAt = evt.timestamp;
+      if (!event.retryable) {
+        call.endedAt = event.timestamp;
         call.endReason = "error";
         transitionState(call, "error");
         clearMaxDurationTimer(ctx, call.callId);
-        rejectTranscriptWaiter(ctx, call.callId, `Call error: ${evt.error}`);
+        rejectTranscriptWaiter(ctx, call.callId, `Call error: ${event.error}`);
         ctx.activeCalls.delete(call.callId);
         if (call.providerCallId) {
           ctx.providerCallIdMap.delete(call.providerCallId);
