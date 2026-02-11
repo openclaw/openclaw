@@ -146,4 +146,77 @@ describe("openclaw-tools: subagents", () => {
     // Session should be deleted
     expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
+
+  it("sessions_spawn reports timed out when agent.wait returns timeout", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        return {
+          runId: `run-${agentCallCount}`,
+          status: "accepted",
+          acceptedAt: 5000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        return {
+          runId: params?.runId ?? "run-1",
+          status: "timeout",
+          startedAt: 6000,
+          endedAt: 7000,
+        };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "still working" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
+
+    const result = await tool.execute("call-timeout", {
+      task: "do thing",
+      runTimeoutSeconds: 1,
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+
+    await sleep(0);
+    await sleep(0);
+    await sleep(0);
+
+    const mainAgentCall = calls
+      .filter((call) => call.method === "agent")
+      .find((call) => {
+        const params = call.params as { lane?: string } | undefined;
+        return params?.lane !== "subagent";
+      });
+    const mainMessage = (mainAgentCall?.params as { message?: string } | undefined)?.message ?? "";
+
+    expect(mainMessage).toContain("timed out");
+    expect(mainMessage).not.toContain("completed successfully");
+  });
 });
