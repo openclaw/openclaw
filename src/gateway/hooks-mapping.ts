@@ -128,7 +128,7 @@ export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] 
 
   const configDir = path.dirname(CONFIG_PATH);
   const transformsDir = hooks?.transformsDir
-    ? resolvePath(configDir, hooks.transformsDir)
+    ? path.resolve(configDir, hooks.transformsDir)
     : configDir;
 
   return mappings.map((mapping, index) => normalizeHookMapping(mapping, index, transformsDir));
