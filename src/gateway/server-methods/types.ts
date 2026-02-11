@@ -64,7 +64,10 @@ export type GatewayRequestContext = {
   chatAbortedRuns: Map<string, number>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
-  addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
+  addChatRun: (
+    sessionId: string,
+    entry: { sessionKey: string; clientRunId: string; startedAt: number },
+  ) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,

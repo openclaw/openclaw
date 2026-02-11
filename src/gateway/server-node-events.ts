@@ -60,6 +60,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       ctx.addChatRun(sessionId, {
         sessionKey,
         clientRunId: `voice-${randomUUID()}`,
+        startedAt: Date.now(),
       });
 
       void agentCommand(

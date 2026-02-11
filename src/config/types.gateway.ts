@@ -211,9 +211,20 @@ export type GatewayNodesConfig = {
   denyCommands?: string[];
 };
 
+export type GatewayStuckDetectionConfig = {
+  /** Enable stuck session detection (default: true). */
+  enabled?: boolean;
+  /** Threshold in minutes before a run is considered stuck (default: 5). */
+  thresholdMinutes?: number;
+  /** Action to take when a stuck run is detected (default: 'log'). */
+  action?: "log" | "notify" | "abort";
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
+  /** Stuck run detection configuration. */
+  stuckDetection?: GatewayStuckDetectionConfig;
   /**
    * Explicit gateway mode. When set to "remote", local gateway start is disabled.
    * When set to "local", the CLI may start the gateway locally.

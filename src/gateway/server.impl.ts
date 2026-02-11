@@ -430,14 +430,17 @@ export async function startGatewayServer(
     getHealthVersion,
     refreshGatewayHealthSnapshot,
     logHealth,
+    logStuck: { warn: (msg, meta) => logGateway.warn({ ...meta }, msg) },
     dedupe,
     chatAbortControllers,
     chatRunState,
+    chatRunRegistry: chatRunState.registry,
     chatRunBuffers,
     chatDeltaSentAt,
     removeChatRun,
     agentRunSeq,
     nodeSendToSession,
+    stuckDetection: cfgAtStart.gateway?.stuckDetection,
   });
 
   const agentUnsub = onAgentEvent(

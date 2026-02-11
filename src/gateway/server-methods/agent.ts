@@ -290,6 +290,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         context.addChatRun(idem, {
           sessionKey: requestedSessionKey,
           clientRunId: idem,
+          startedAt: Date.now(),
         });
         bestEffortDeliver = true;
       }

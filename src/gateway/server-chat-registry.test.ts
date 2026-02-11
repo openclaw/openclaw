@@ -5,8 +5,8 @@ describe("chat run registry", () => {
   test("queues and removes runs per session", () => {
     const registry = createChatRunRegistry();
 
-    registry.add("s1", { sessionKey: "main", clientRunId: "c1" });
-    registry.add("s1", { sessionKey: "main", clientRunId: "c2" });
+    registry.add("s1", { sessionKey: "main", clientRunId: "c1", startedAt: Date.now() });
+    registry.add("s1", { sessionKey: "main", clientRunId: "c2", startedAt: Date.now() });
 
     expect(registry.peek("s1")?.clientRunId).toBe("c1");
     expect(registry.shift("s1")?.clientRunId).toBe("c1");

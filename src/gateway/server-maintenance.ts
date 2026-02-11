@@ -1,5 +1,6 @@
 import type { HealthSummary } from "../commands/health.js";
-import type { ChatRunEntry } from "./server-chat.js";
+import type { GatewayStuckDetectionConfig } from "../config/types.gateway.js";
+import type { ChatRunEntry, ChatRunRegistry } from "./server-chat.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
@@ -10,6 +11,8 @@ import {
 } from "./server-constants.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+
+const DEFAULT_STUCK_THRESHOLD_MINUTES = 5;
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -25,9 +28,11 @@ export function startGatewayMaintenanceTimers(params: {
   getHealthVersion: () => number;
   refreshGatewayHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   logHealth: { error: (msg: string) => void };
+  logStuck?: { warn: (msg: string, meta?: Record<string, unknown>) => void };
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: { abortedRuns: Map<string, number> };
+  chatRunRegistry: ChatRunRegistry;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   removeChatRun: (
@@ -37,6 +42,7 @@ export function startGatewayMaintenanceTimers(params: {
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  stuckDetection?: GatewayStuckDetectionConfig;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
@@ -113,6 +119,56 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunState.abortedRuns.delete(runId);
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
+    }
+
+    // Stuck run detection
+    const stuckConfig = params.stuckDetection;
+    if (stuckConfig?.enabled !== false) {
+      const thresholdMs =
+        (stuckConfig?.thresholdMinutes ?? DEFAULT_STUCK_THRESHOLD_MINUTES) * 60 * 1000;
+      const action = stuckConfig?.action ?? "log";
+
+      for (const [sessionId, entries] of params.chatRunRegistry.entries()) {
+        for (const entry of entries) {
+          const elapsed = now - entry.startedAt;
+          if (elapsed > thresholdMs) {
+            const elapsedMin = Math.round(elapsed / 60_000);
+            const meta = {
+              sessionId,
+              sessionKey: entry.sessionKey,
+              clientRunId: entry.clientRunId,
+              elapsedMinutes: elapsedMin,
+            };
+
+            if (action === "log" || action === "notify") {
+              params.logStuck?.warn(
+                `Stuck run detected: ${entry.clientRunId} (${elapsedMin}m)`,
+                meta,
+              );
+            }
+
+            if (action === "abort") {
+              params.logStuck?.warn(
+                `Aborting stuck run: ${entry.clientRunId} (${elapsedMin}m)`,
+                meta,
+              );
+              abortChatRunById(
+                {
+                  chatAbortControllers: params.chatAbortControllers,
+                  chatRunBuffers: params.chatRunBuffers,
+                  chatDeltaSentAt: params.chatDeltaSentAt,
+                  chatAbortedRuns: params.chatRunState.abortedRuns,
+                  removeChatRun: params.removeChatRun,
+                  agentRunSeq: params.agentRunSeq,
+                  broadcast: params.broadcast,
+                  nodeSendToSession: params.nodeSendToSession,
+                },
+                { runId: entry.clientRunId, sessionKey: entry.sessionKey, stopReason: "stuck" },
+              );
+            }
+          }
+        }
+      }
     }
   }, 60_000);
 

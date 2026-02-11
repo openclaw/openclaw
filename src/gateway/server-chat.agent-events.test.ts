@@ -15,7 +15,11 @@ describe("agent event handler", () => {
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
-    chatRunState.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
+    chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+      startedAt: Date.now(),
+    });
 
     const handler = createAgentEventHandler({
       broadcast,
