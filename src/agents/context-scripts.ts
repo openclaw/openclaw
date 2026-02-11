@@ -311,7 +311,8 @@ function detectStandardErrors(obj: Record<string, unknown>, scriptId: string): v
     }
     if (typeof obj.error === "object" && obj.error !== null) {
       const errObj = obj.error as Record<string, unknown>;
-      const msg = String(errObj.message ?? errObj.type ?? JSON.stringify(obj.error));
+      const rawMsg = errObj.message ?? errObj.type;
+      const msg = typeof rawMsg === "string" ? rawMsg : JSON.stringify(obj.error);
       throw new Error(`Script ${scriptId} returned error: ${msg}`);
     }
   }
@@ -359,7 +360,10 @@ async function executeLocalScript(
 
   if (script.format === "arguments") {
     // Spawn the script with named key="value" arguments from argMap
-    const args = Object.entries(argObject).map(([k, v]) => `${k}=${String(v ?? "")}`);
+    const args = Object.entries(argObject).map(([k, v]) => {
+      const val = typeof v === "string" ? v : v == null ? "" : JSON.stringify(v);
+      return `${k}=${val}`;
+    });
     const result = await execFileAsync(resolvedPath, args, {
       timeout: 10000,
       encoding: "utf-8",
