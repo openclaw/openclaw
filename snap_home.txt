@@ -1,0 +1,16 @@
+[?25l│
+◒  Gateway browser.request[1G[J◇  
+[?25h- button [ref=e1]
+- link "我的个人学术档案" [ref=e2]
+- link "我的图书馆" [ref=e3]
+- link "实验室" [ref=e4]
+- textbox "搜索" [ref=e5]
+- button "搜索" [ref=e6]
+- button "dd" [ref=e7]
+- radio "不限语言" [ref=e8] [checked]
+- radio "中文网页" [ref=e9]
+- radio "简体中文网页" [ref=e10]
+- button "ZH-CN" [ref=e11]
+- link "隐私权" [ref=e12]
+- link "条款" [ref=e13]
+- button "帮助" [ref=e14]

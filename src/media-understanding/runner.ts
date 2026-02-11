@@ -306,7 +306,7 @@ async function resolveLocalWhisperEntry(): Promise<MediaUnderstandingModelConfig
     command: "whisper",
     args: [
       "--model",
-      "turbo",
+      "base",
       "--output_format",
       "txt",
       "--output_dir",

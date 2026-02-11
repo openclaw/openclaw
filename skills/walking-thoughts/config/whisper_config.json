@@ -1,0 +1,22 @@
+{
+  "model_size": "base",
+  "language": "zh",
+  "task": "transcribe",
+  "temperature": 0.0,
+  "best_of": 5,
+  "beam_size": 5,
+  "patience": 1.0,
+  "length_penalty": 1.0,
+  "suppress_tokens": "-1",
+  "initial_prompt": "这是一段散步时的思考录音，包含自然的口语表达、思考停顿和不完整的句子。请尽量保持原始语气和思考过程。",
+  "word_timestamps": true,
+  "prepend_punctuations": "\"'“¿([{-",
+  "append_punctuations": "\"'.。,，!！?？:：”)]}、",
+
+  "processing": {
+    "segment_duration": 30,
+    "min_silence_duration": 0.5,
+    "silence_threshold": -40,
+    "max_segment_length": 200
+  }
+}

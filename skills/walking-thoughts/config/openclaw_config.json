@@ -1,0 +1,25 @@
+{
+  "openclaw_integration": {
+    "enabled": true,
+    "auto_process_voice": true,
+    "response_format": "简洁",
+    "notify_on_complete": true
+  },
+  "processing": {
+    "whisper_model": "base",
+    "enable_deep_analysis": false,
+    "archive_original": true,
+    "keep_incoming": false
+  },
+  "paths": {
+    "scripts_dir": "/Users/lizhihong/散步思考记录系统/scripts",
+    "data_dir": "/Users/lizhihong/散步思考记录系统/data",
+    "logs_dir": "/Users/lizhihong/散步思考记录系统/logs"
+  },
+  "monthly_analysis": {
+    "enabled": true,
+    "schedule": "0 9 1 * *",
+    "timezone": "Asia/Shanghai",
+    "generate_timestamped_reports": true
+  }
+}

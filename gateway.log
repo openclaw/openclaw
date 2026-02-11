@@ -1,0 +1,16 @@
+
+> openclaw@2026.2.2-1 openclaw /Users/lizhihong/claw
+> node scripts/run-node.mjs gateway --bind loopback --port 18789
+
+Config was last written by a newer OpenClaw (2026.2.2-1); current version is 0.0.0.
+(node:21253) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+2026-02-04T02:11:07.781Z Gateway failed to start: gateway already running (pid 16416); lock timeout after 5000ms
+If the gateway is supervised, stop it with: openclaw gateway stop
+2026-02-04T02:11:07.828Z Port 18789 is already in use.
+2026-02-04T02:11:07.828Z - pid 16416 lizhihong: openclaw-gateway (127.0.0.1:18789)
+2026-02-04T02:11:07.828Z - Gateway already running locally. Stop it (openclaw gateway stop) or use a different port.
+2026-02-04T02:11:07.833Z Gateway service appears loaded. Stop it first.
+2026-02-04T02:11:07.834Z Tip: openclaw gateway stop
+2026-02-04T02:11:07.834Z Or: launchctl bootout gui/$UID/ai.openclaw.gateway
+ ELIFECYCLE  Command failed with exit code 1.

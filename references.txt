@@ -1,0 +1,95 @@
+[1]陈冬梅, 王俐珍, 陈安霓. 数字化与战略管理理论——回顾、挑战与展望[J]. 管理世界, 2020, 36(5): 220-236.
+[2]郑鸿, 徐勇. 创业团队信任的维持机制及其对团队绩效的影响研究[J]. 南开管理评论, 2017, 20(5): 29-40.
+[3]刘喜怀. 自反视角下高管团队过程、团队信任对决策绩效的影响[J]. 科研管理, 2016, 37(10): 112-120.
+[4]李忆, 喻靓茹, 邱东. 人与人工智能协作模式综述[J]. 情报杂志, 2020, 39(10): 137-143.
+[5]张海, 刘畅, 王东波, 等. ChatGPT 用户使用意愿影响因素研究[J]. 情报理论与实践, 2023, 46(4): 15-22.
+[6]陈锐, 江奕辉. 生成式 AI 的治理研究——以 ChatGPT 为例[J]. 科学学研究, 2024, 42(1): 21-30.
+[7]陈潭, 陈芸. 面向人工智能时代的政府未来[J]. 中国行政管理, 2020(6): 57-64.
+[8]段哲哲, 焦嘉欣. 可解释性何以影响基层公务员的算法决策采纳偏好[J]. 公共行政评论, 2024(6): 78-98.
+[9]江路远, 曹李梅, 秦昕, 等. 人工智能决策的公平感知[J]. 心理科学进展, 2022, 30(5): 1078-1092.
+[10]谢才凤, 邬家骅, 许丽颖, 等. 算法决策趋避的过程动机理论[J]. 心理科学进展, 2023, 31(1): 60-77.
+[11]尹萌, 牛雄鹰. 与 AI“共舞”: 系统化视角下的 AI—员工协作[J]. 心理科学进展, 2024, 32(1): 162-176.
+[12]谢小云, 左玉涵, 胡琼晶. 数字化时代的人力资源管理——基于人与技术交互的视角[J]. 管理世界, 2021, 37(1): 200-229.
+[13]刘潇肖, 鲁辰扬, 薛贺. 求职者对 AI 面试的接受度及其影响因素——基于公平视角的质性研究[J]. 中国人力资源开发, 2023, 40(3): 117-130.
+[14]高记, 乔玉. 揭开神秘面纱？AI 面试透明性对求职者公平感的影响研究[J]. 中国人力资源开发, 2024, 41(11): 97-112.
+[15]韩敏, 陈晓曦. 组织选拔情境中 AI 招聘的公平威胁及其提升策略[J]. 中国人力资源开发, 2025, 42(9): 6-17.
+[16]周洪宇, 李晓明. 算法决策的可解释性：概念、路径与治理意义[J]. 管理世界, 2020, 36(10): 146-156.
+[17]梁正, 刘善仕. 人工智能决策的程序正义问题：机制、风险与制度回应[J]. 管理科学学报, 2021, 24(1): 1-10.
+[18]王重鸣, 谢小云. 智能化决策支持系统的信任基础与管理挑战[J]. 科研管理, 2020, 41(4): 1-9.
+[19]李纾, 张慧. 自动化决策中的公平感知与责任归因[J]. 心理学报, 2021, 53(6): 650-662.
+[20]周晓虹, 张艳. 算法治理视角下的人工智能信任机制研究[J]. 中国行政管理, 2022(2): 134-142.
+[21]赵宇翔, 刘畅. 人机交互中算法透明度对用户采纳意愿的影响[J]. 情报学报, 2022, 41(2): 182-196.
+[22]陈劲, 王瑞芳. 人工智能赋能公共决策：机理、风险与治理框架[J]. 公共管理学报, 2020, 17(2): 1-11.
+[23]杜纲, 黄少安. 智能决策系统的可解释性困境及其制度回应[J]. 系统工程理论与实践, 2021, 41(12): 3101-3112.
+[24]刘力, 王珊珊. 数字政府背景下智能决策采纳的影响因素研究[J]. 情报杂志, 2022, 41(6): 185-192.
+[25]宋月萍, 李国平. 算法决策中的公众信任：透明性与公平性的作用机制[J]. 科研管理, 2023, 44(8): 1-10.
+[26]黄光国, 林以正. 技术信任的心理基础及其在智能系统中的应用[J]. 心理科学进展, 2019, 27(10): 1691-1702.
+[27]关健, 李文朴, 何国华, 张新安. 人工智能反馈：文献述评与研究展望[J]. 外国经济与管理, 2025, 47(3): 83-100.
+[28]樊博, 李晶晶. 算法透明何以提升公众的政府信任？[J]. 公共行政评论, 2024, 17(1): 4-24.
+[29]齐玥, 陈俊廷, 秦邵天, 杜峰. 通用人工智能时代的人与 AI 信任[J]. 心理科学进展, 2024, 32(12): 2124-2136.
+[30]任明, 贾君枝. 基于协作智能的数字人文领域知识图谱构建[J]. 图书情报工作, 2023, 67(4): 124-133.
+[31]孙凯, 刘承林, 刘鲁川. 多重沟通情境下电商直播消费者弹幕使用意愿的形成机理[J]. 管理学报, 2023, 20(5): 676-683.
+[32]熊强, 李文元, 陈晓燕, 等. 在线教学平台交互性、体验价值和持续使用意愿的关系研究[J]. 管理评论, 2022, 34(6): 153-161.
+[33]胡德强, 党延忠, 岳鑫. 人际信任对团队绩效的影响——深度计算实验方法[J]. 系统工程理论与实践, 2020, 40(4): 1001-1015.
+[34]葛晓永, 吴青熹, 赵曙明. 基于科技型企业的学习导向、团队信任与企业创新绩效关系的研究[J]. 管理学报, 2016, 13(7): 996-1002.
+[35]李迁, 姜霞, 盛昭瀚. 团队信任、共享领导力与新产品开发创新绩效关系[J]. 科研管理, 2019, 40(12): 292-300.
+[36]戴万亮, 路文玲, 姚亚男, 等. 面子意识、建设性争辩与团队成员创造力——团队信任的跨层次调节作用[J]. 管理评论, 2022, 34(7): 139-149.
+[37]Davis F D. Perceived usefulness, perceived ease of use, and user acceptance of information technology[J]. MIS Quarterly, 1989, 13(3): 319-340.
+[38]Venkatesh V, Morris M G, Davis G B, Davis F D. User acceptance of information technology: Toward a unified view[J]. MIS Quarterly, 2003, 27(3): 425-478.
+[39]Mayer R C, Davis J H, Schoorman F D. An integrative model of organizational trust[J]. Academy of Management Review, 1995, 20(3): 709-734.
+[40]McKnight D H, Choudhury V, Kacmar C. Developing and validating trust measures for e-commerce: An integrative typology[J]. Information Systems Research, 2002, 13(3): 334-359.
+[41]Glikson E, Woolley A W. Human trust in artificial intelligence: Review of empirical research[J]. Academy of Management Annals, 2020, 14(2): 627-660.
+[42]Shin D. The effects of explainability and causability on perception, trust, and acceptance: Implications for explainable AI[J]. International Journal of Human-Computer Studies, 2021, 146: 102551.
+[43]Miller T. Explanation in artificial intelligence: Insights from the social sciences[J]. Artificial Intelligence, 2019, 267: 1-38.
+[44]Barredo Arrieta A, Díaz-Rodríguez N, Del Ser J, et al. Explainable artificial intelligence (XAI): Concepts, taxonomies, opportunities and challenges toward responsible AI[J]. Information Fusion, 2020, 58: 82-115.
+[45]Dietvorst B J, Simmons J P, Massey C. Algorithm aversion: People erroneously avoid algorithms after seeing them err[J]. Journal of Experimental Psychology: General, 2015, 144(1): 114-126.
+[46]Lee J D, See K A. Trust in automation: Designing for appropriate reliance[J]. Human Factors, 2004, 46(1): 50-80.
+[47]Hoff K A, Bashir M. Trust in automation: Integrating empirical evidence on factors that influence trust[J]. Human Factors, 2015, 57(3): 407-434.
+[48]Hevner A R, March S T, Park J, Ram S. Design science in information systems research[J]. MIS Quarterly, 2004, 28(1): 75-105.
+[49]Peffers K, Tuunanen T, Rothenberger M A, Chatterjee S. A design science research methodology for information systems research[J]. Journal of Management Information Systems, 2007, 24(3): 45-77.
+[50]Hattie J, Timperley H. The power of feedback[J]. Review of Educational Research, 2007, 77(1): 81-112.
+[51]Suen H Y, Chen M Y, Lu S H. Building trust in automatic video interviews using various AI interfaces: Tangibility, immediacy, and transparency[J]. Computers in Human Behavior, 2023, 139: 107765.
+[52]Langer M, König C J, Hemsing V. Is anybody listening? The impact of automatic evaluation algorithms on job interview performance and anxiety[J]. European Journal of Work and Organizational Psychology, 2020, 29(3): 353-370.
+[53]Ribeiro M T, Singh S, Guestrin C. “Why should I trust you?”: Explaining the predictions of any classifier[C]//Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining. New York: ACM, 2016: 1135-1144.
+[54]Lundberg S M, Lee S I. A unified approach to interpreting model predictions[C]//Advances in Neural Information Processing Systems. Red Hook: Curran Associates, 2017, 30: 4765-4774.
+[55]Rudin C. Stop explaining black box machine learning models for high stakes decisions and use interpretable models instead[J]. Nature Machine Intelligence, 2019, 1(5): 206-215.
+[56]Amershi S, Weld D, Vorvoreanu M, et al. Guidelines for human-AI interaction[C]//Proceedings of the 2019 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2019: 1-13.
+[57]Abdul A, Vermeulen J, Wang D, Lim B Y, Kankanhalli M. Trends and trajectories for explainable, accountable and intelligible systems[C]//Proceedings of the 2018 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2018: 1-18.
+[58]Kizilcec R F. How much information? Effects of transparency on trust in an algorithmic interface[C]//Proceedings of the 2016 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2016: 2390-2395.
+[59]Binns R, Van Kleek M, Veale M, et al. “It’s reducing a human being to a percentage”: Perceptions of justice in algorithmic decisions[C]//Proceedings of the 2018 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2018: 1-14.
+[60]Logg J M, Minson J A, Moore D A. Algorithm appreciation: People prefer algorithmic to human judgment[J]. Management Science, 2019, 65(6): 2945-2968.
+[61]Acikgoz Y, Davison K H, Compagnone M, Laske M. Justice perceptions of artificial intelligence in selection[J]. International Journal of Selection and Assessment, 2020, 28(4): 399-416.
+[62]Newman D T, Fast N J, Harmon D J. When eliminating bias isn’t fair: Algorithmic reductionism and procedural justice in human resource decisions[J]. Organizational Behavior and Human Decision Processes, 2020, 160: 149-167.
+[63]Seeber I, Bittner E, Briggs R O, et al. Machines as teammates: A research agenda on AI in team collaboration[J]. Information & Management, 2020, 57(2): 103174.
+[64]Cai C J, Winter S, Stevenson J, Murphy S, Chi E H. “Hello AI”: Uncertainty, control, and responsibility in human-AI collaboration[C]//Proceedings of the 2019 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2019: 1-13.
+[65]Xu W, Chen Y, Bian J, Cheng Y. Establishing appropriate trust via critical states: A hybrid human–AI workflow for medical decision-making[J]. Proceedings of the ACM on Human-Computer Interaction, 2022, 6(CSCW2): 1-25.
+[66]Conijn R, Kahr P, Snijders C. The effects of explanations in automated essay scoring systems on student trust and motivation[J]. Journal of Learning Analytics, 2023, 10(1): 37-53.
+[67]Suen H Y, Hung K E. Revealing the influence of AI and its interfaces on job candidates’ honest and deceptive impression management in asynchronous video interviews[J]. Technological Forecasting and Social Change, 2024, 198: 123011.
+[68]Dennis A R, Lakhiwal A, Sachdeva A. AI agents as team members: Effects on satisfaction, conflict, trustworthiness, and willingness to work with[J]. Journal of Management Information Systems, 2023, 40(2): 307-337.
+[69]Zhang G, Chong L, Kotovsky K, et al. Trust in an AI versus a human teammate: The effects of teammate identity and performance on human–AI cooperation[J]. Computers in Human Behavior, 2023, 139: 107536.
+[70]Liu B. In AI we trust? Effects of agency locus and transparency on uncertainty reduction in human–AI interaction[J]. Journal of Computer-Mediated Communication, 2021, 26(6): 384-402.
+[71]Leichtmann B, Humer C, Hinterreiter A, et al. Effects of explainable artificial intelligence on trust and human behavior in a high-risk decision task[J]. Computers in Human Behavior, 2023, 139: 107539.
+[72]Liao Q V, Gruen D, Miller S. Questioning the AI: Informing design for explainable AI user experiences[C]//Proceedings of the 2020 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2020: 1-15.
+[73]Ehsan U, Liao Q V, Mueller M, et al. Expanding explainability: Towards social transparency in AI systems[C]//Proceedings of the 2021 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2021: 1-13.
+[74]Bitzer T, Wiener M, Morana S. The role of algorithmic transparency in contact-tracing app adoption[C]//Proceedings of the 42nd International Conference on Information Systems. Atlanta: ICIS, 2021: 1-17.
+[75]Guidotti R, Monreale A, Ruggieri S, et al. A survey of methods for explaining black box models[J]. ACM Computing Surveys, 2018, 51(5): 93.
+[76]van Esch P, Black J S, Ferolie J. Marketing AI recruitment: The next phase in job application and selection[J]. Computers in Human Behavior, 2019, 90: 215-222.
+[77]Köchling A, Wehner M C. Discriminated by an algorithm: A systematic review of discrimination and fairness by algorithmic decision-making in HR recruitment and HR development[J]. Business Research, 2020, 13(3): 795-848.
+[78]Malin C, Fleiß J, Ortlieb R, Thalmann S. Rejected by an AI? Comparing job applicants’ fairness perceptions of AI vs. human personnel selection[J]. Frontiers in Artificial Intelligence, 2025, 8: 1671997.
+[79]Hosain M S, Amin M B, Debnath G C, Rahaman M A. The use of artificial intelligence in the hiring process: Job applicants’ perceptions of procedural justice[J]. Computers in Human Behavior Reports, 2025, 19: 100713.
+[80]Luo W, Zhang Y, Mu M. Why might AI-enabled interviews reduce candidates’ job application intention? The role of procedural justice and organizational attractiveness[J]. Humanities and Social Sciences Communications, 2025, 12: 1278.
+[81]Kunkel J, Besold T R, Schmidt-Thieme L, Ziegler J. Let me explain: Impact of personal and impersonal explanations on trust in recommender systems[C]//Proceedings of the 24th International Conference on Intelligent User Interfaces. New York: ACM, 2019: 518-528.
+[82]Lee M K, Baykal S. Algorithmic mediation in group decisions: Fairness perceptions of algorithmically mediated vs. discussion-based decisions[C]//Proceedings of the 2017 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2017: 2395-2405.
+[83]Seeber I, Waizenegger L, Seidel S, et al. Collaborating with artificial intelligence: Investigating AI as a teammate[J]. Information Systems Research, 2023, 34(2): 777-796.
+[84]Cai C J, Jongejan J, Holbrook J. The effects of example-based explanations in AI-supported decision making[J]. Proceedings of the ACM on Human-Computer Interaction, 2022, 6(CSCW2): 1-26.
+[85]Wang D, Yang Q, Abdul A, Mueller M. Designing for transparency and trust in algorithmic systems[C]//Extended Abstracts of the 2019 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2019: 1-6.
+[86]Holstein K, Wortman Vaughan J, Daumé III H, Dudík M, Wallach H. Improving fairness in machine learning systems: What do industry practitioners need?[C]//Proceedings of the 2019 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2019: 1-16.
+[87]Glikson E, Cheshin A. Human–AI interaction: Trust, transparency, and social dynamics[J]. Computers in Human Behavior, 2023, 142: 107678.
+[88]Kizilcec R F, Lee H. Algorithmic transparency in education: Effects on trust and perceived fairness[J]. Computers & Education, 2020, 145: 103721.
+[89]Logg J M. The psychology of big data and artificial intelligence[J]. Current Opinion in Psychology, 2022, 45: 101289. Miller S, Howe P, Sonenberg L. Explainable AI: Beware of inmates running the asylum[J]. AI Magazine, 2017, 38(2): 1-14.
+[90]Ribeiro M T, Wu T, Guestrin C, Singh S. Beyond accuracy: Behavioral testing of black-box machine learning models[C]//Proceedings of the 32nd AAAI Conference on Artificial Intelligence. Palo Alto: AAAI, 2018: 1-8.
+[91]Doshi-Velez F, Kim B. Considerations for evaluating interpretability of machine learning models[C]//Proceedings of the 2017 ICML Workshop on Human Interpretability in Machine Learning. Sydney: ICML, 2017: 1-8.
+[92]Siau K, Wang W. Building trust in artificial intelligence, machine learning, and robotics[J]. Cutter Business Technology Journal, 2018, 31(2): 47-53.
+[93]Logg J M, Moore D A. Algorithmic decision-making and the psychology of trust[J]. Journal of Behavioral Decision Making, 2021, 34(1): 1-14.
+[94]Shin D, Park Y J. Role of fairness, accountability, and transparency in algorithmic decision making[J]. Computers in Human Behavior, 2019, 98: 277-284.
+[95]Bansal G, Wu T, Zhou J, et al. Does the whole exceed its parts? The effect of AI explanations on complementary team performance[C]//Proceedings of the 2019 CHI Conference on Human Factors in Computing Systems. New York: ACM, 2019: 1-16.

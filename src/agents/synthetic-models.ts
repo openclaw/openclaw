@@ -1,7 +1,7 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
 
 export const SYNTHETIC_BASE_URL = "https://api.synthetic.new/anthropic";
-export const SYNTHETIC_DEFAULT_MODEL_ID = "hf:MiniMaxAI/MiniMax-M2.1";
+export const SYNTHETIC_DEFAULT_MODEL_ID = "hf:Qwen/Qwen3-Coder-480B-A35B-Instruct";
 export const SYNTHETIC_DEFAULT_MODEL_REF = `synthetic/${SYNTHETIC_DEFAULT_MODEL_ID}`;
 export const SYNTHETIC_DEFAULT_COST = {
   input: 0,
@@ -35,46 +35,7 @@ export const SYNTHETIC_MODEL_CATALOG = [
     contextWindow: 198000,
     maxTokens: 128000,
   },
-  {
-    id: "hf:deepseek-ai/DeepSeek-R1-0528",
-    name: "DeepSeek R1 0528",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 8192,
-  },
-  {
-    id: "hf:deepseek-ai/DeepSeek-V3-0324",
-    name: "DeepSeek V3 0324",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 8192,
-  },
-  {
-    id: "hf:deepseek-ai/DeepSeek-V3.1",
-    name: "DeepSeek V3.1",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 8192,
-  },
-  {
-    id: "hf:deepseek-ai/DeepSeek-V3.1-Terminus",
-    name: "DeepSeek V3.1 Terminus",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 8192,
-  },
-  {
-    id: "hf:deepseek-ai/DeepSeek-V3.2",
-    name: "DeepSeek V3.2",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 159000,
-    maxTokens: 8192,
-  },
+
   {
     id: "hf:meta-llama/Llama-3.3-70B-Instruct",
     name: "Llama 3.3 70B Instruct",
@@ -155,14 +116,7 @@ export const SYNTHETIC_MODEL_CATALOG = [
     contextWindow: 198000,
     maxTokens: 128000,
   },
-  {
-    id: "hf:deepseek-ai/DeepSeek-V3",
-    name: "DeepSeek V3",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 8192,
-  },
+
   {
     id: "hf:Qwen/Qwen3-235B-A22B-Thinking-2507",
     name: "Qwen3 235B A22B Thinking 2507",

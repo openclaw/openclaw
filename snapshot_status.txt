@@ -1,0 +1,5 @@
+[?25l│
+◇  
+[?25h- generic [active]:
+  - generic:
+    - document
