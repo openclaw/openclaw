@@ -19,31 +19,24 @@ Observed symptoms:
 - Broad cleanup patterns (`pkill -f`) could kill unrelated processes.
 - Timeout handling mixed multiple failure modes into one bucket.
 
-The recent hardening PR improved this by:
+This proposal is written for the pre-rewrite baseline.
 
-- Replacing broad kill patterns with targeted PID cleanup via parsed `ps` output.
-- Adding no output watchdog behavior.
-- Distinguishing termination causes (`timeout`, `no-output-timeout`, `signal`, `exit`).
-- Improving PTY lifecycle cleanup across exit paths.
-- Adding backend reliability knobs for watchdog and stale resume cleanup.
+Current baseline problems:
 
-This is a strong production hardening step. It is not the final architecture.
+- Cleanup relies on process table and command text matching, which is heuristic.
+- PTY and non PTY lifecycle handling is split, increasing drift and leaks.
+- Timeout and cancel paths are not unified under a single cancellation primitive.
+- Failure reasons are not normalized enough for reliable ops and incident triage.
+- There is no durable ownership model for spawned runs.
 
-## What Is Good Now
+## Why A Full Rewrite
 
-- Better safety: we no longer blast kill by loose command patterns.
-- Better diagnostics: termination reasons are explicit and logged.
-- Better control: watchdog and stale cleanup are configurable per backend.
-- Better PTY hygiene: listeners and PTY handles are cleaned up consistently.
+Incremental fixes can reduce immediate incidents, but they do not remove the root issue:
+we do not have deterministic ownership and supervision for processes.
 
-## Current Caveats
-
-The current design still depends on process table string matching:
-
-- `ps` parsing is platform sensitive and can be brittle.
-- Command line regex matching is still heuristic.
-- Cleanup and policy logic live in the same module, which mixes concerns.
-- Timeout and cancel flow still uses ad hoc timers, not one cancellation primitive.
+Without ownership, cleanup becomes guesswork.
+Without one lifecycle, edge cases multiply.
+Without one cancellation model, timeout races remain.
 
 ## North Star
 
@@ -172,26 +165,26 @@ On startup or supervisor crash recovery:
 
 ### Phase 1
 
-- Keep current behavior.
-- Introduce `RunRegistry` and register new runs in parallel.
-- Emit lifecycle telemetry without changing kill semantics.
+- Introduce explicit run ownership (`RunRegistry`) and lifecycle telemetry.
+- Add normalized termination reasons for all exits.
+- Keep existing behavior operational while recording enough data to validate migration.
 
 ### Phase 2
 
-- Route all new cancel and timeout paths through `TerminationController`.
-- Start using targeted pid or process group kills for registered runs.
-- Keep `ps` based cleanup as fallback only.
+- Route all new cancel and timeout paths through `TerminationController` (`AbortController`).
+- Move PTY and non PTY execution behind one supervisor contract.
+- Use targeted pid or process group termination for owned runs.
 
 ### Phase 3
 
-- Enable orphan reconciliation from registry.
-- Remove default `ps` regex cleanup path.
-- Retain fallback behind emergency flag only.
+- Enable orphan reconciliation from the registry at startup.
+- Remove default heuristic process matching cleanup.
+- Retain heuristic fallback only behind an emergency feature flag.
 
 ### Phase 4
 
-- Consolidate PTY and non PTY execution into shared supervisor entry points.
-- Move reliability policy into config driven policy modules.
+- Harden cross platform adapters (POSIX process groups, Windows job boundary abstraction).
+- Finalize policy modules and remove legacy lifecycle paths.
 
 ## Testing Strategy
 
@@ -223,7 +216,5 @@ Add counters and structured events:
 These make regression detection and incident triage straightforward.
 
 ## Decision Summary
-
-Short term hardening was correct and necessary.
 
 Long term elegant implementation is a supervisor architecture with explicit ownership, one lifecycle model, one cancellation model, and deterministic cleanup. That is the path that removes process matching heuristics and makes PTY reliability truly production grade.
