@@ -35,7 +35,13 @@ export function buildGatewayAuthConfig(params: {
   }
 
   if (params.mode === "token") {
+    if (!params.token) {
+      throw new Error("Gateway token is required for token auth mode");
+    }
     return { ...base, mode: "token", token: params.token };
+  }
+  if (!params.password) {
+    throw new Error("Gateway password is required for password auth mode");
   }
   return { ...base, mode: "password", password: params.password };
 }

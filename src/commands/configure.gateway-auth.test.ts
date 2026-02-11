@@ -43,4 +43,31 @@ describe("buildGatewayAuthConfig", () => {
 
     expect(result).toEqual({ mode: "password", password: "secret" });
   });
+
+  it("throws when token is undefined", () => {
+    expect(() =>
+      buildGatewayAuthConfig({
+        mode: "token",
+        token: undefined,
+      }),
+    ).toThrow("Gateway token is required");
+  });
+
+  it("throws when token is empty string", () => {
+    expect(() =>
+      buildGatewayAuthConfig({
+        mode: "token",
+        token: "",
+      }),
+    ).toThrow("Gateway token is required");
+  });
+
+  it("throws when password is undefined", () => {
+    expect(() =>
+      buildGatewayAuthConfig({
+        mode: "password",
+        password: undefined,
+      }),
+    ).toThrow("Gateway password is required");
+  });
 });

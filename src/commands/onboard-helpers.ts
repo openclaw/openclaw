@@ -73,7 +73,8 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
-  return value.trim();
+  const trimmed = value.trim();
+  return trimmed === "undefined" || trimmed === "null" ? "" : trimmed;
 }
 
 export function printWizardHeader(runtime: RuntimeEnv) {
