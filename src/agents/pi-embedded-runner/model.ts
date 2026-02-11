@@ -111,7 +111,19 @@ function resolveAnthropicOpus46ForwardCompatModel(
     } as Model<Api>);
   }
 
-  return undefined;
+  // Hardcoded fallback when no template model exists in the registry (mirrors Codex fallback).
+  return normalizeModelCompat({
+    id: trimmedModelId,
+    name: trimmedModelId,
+    api: "anthropic-messages",
+    provider: normalizedProvider,
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: DEFAULT_CONTEXT_TOKENS,
+    maxTokens: DEFAULT_CONTEXT_TOKENS,
+  } as Model<Api>);
 }
 
 export function buildInlineProviderModels(
