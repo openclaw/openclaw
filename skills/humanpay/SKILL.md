@@ -168,5 +168,5 @@ A payout can also become `deleted` or `expired` at any point.
 ## Notes
 
 - Amounts are strings (e.g. `"100.00"`, not `100`)
-- Minimum payout amount is `0.1`
+- Minimum payout amount is `"0.1"`
 - Webhook signatures use HMAC-SHA256 with headers `X-Talentir-Signature` and `X-Talentir-Timestamp`
