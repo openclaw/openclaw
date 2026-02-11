@@ -63,6 +63,8 @@ const MOONSHOT_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const TOGETHER_BASE_URL = "https://api.together.xyz/v1";
+
 const QWEN_PORTAL_BASE_URL = "https://portal.qwen.ai/v1";
 const QWEN_PORTAL_OAUTH_PLACEHOLDER = "qwen-oauth";
 const QWEN_PORTAL_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -467,6 +469,14 @@ function buildMoonshotProvider(): ProviderConfig {
         maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
       },
     ],
+  };
+}
+
+function buildTogetherProvider(): ProviderConfig {
+  return {
+    baseUrl: TOGETHER_BASE_URL,
+    api: "openai-completions",
+    models: [],
   };
 }
 
