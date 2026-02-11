@@ -36,12 +36,7 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.j
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
-import {
-  enqueueFollowupRun,
-  scheduleFollowupDrain,
-  type FollowupRun,
-  type QueueSettings,
-} from "./queue.js";
+import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -345,11 +340,11 @@ export async function runReplyAgent(params: {
           `Session locked, queuing message for retry: ${sessionKey ?? followupRun.run.sessionId}`,
         );
         enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
-        // Schedule a delayed drain to process the queued message once the lock is released.
+        // Wait before returning so the drain loop doesn't immediately retry.
+        // If we just re-enqueue and return, the drain loop retries after only
+        // debounceMs (~1s) instead of the intended backoff.
         const LOCK_RETRY_DELAY_MS = 5_000;
-        setTimeout(() => {
-          scheduleFollowupDrain(queueKey, runFollowupTurn);
-        }, LOCK_RETRY_DELAY_MS);
+        await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
         typing.cleanup();
         return undefined;
       }
