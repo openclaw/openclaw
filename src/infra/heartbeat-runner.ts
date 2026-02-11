@@ -583,18 +583,13 @@ export async function runHeartbeatOnce(opts: {
   const pendingEvents = isExecEvent || isCronEvent ? peekSystemEvents(sessionKey) : [];
   const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
   const hasCronEvents = isCronEvent && pendingEvents.length > 0;
-
   const prompt = hasExecCompletion
     ? EXEC_EVENT_PROMPT
     : hasCronEvents
       ? CRON_EVENT_PROMPT
       : resolveHeartbeatPrompt(cfg, heartbeat);
-
-  // Keep heartbeats consistent with cron: include an explicit "Current time: ..."
-  // line so the model has stable "now" awareness even outside channel envelopes.
-  const promptWithTime = appendCronStyleCurrentTimeLine(prompt, cfg, startedAt);
   const ctx = {
-    Body: promptWithTime,
+    Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
     To: sender,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
