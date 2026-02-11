@@ -4,7 +4,8 @@
   "description": "OpenClaw Zalo Personal Account plugin via zca-cli",
   "type": "module",
   "dependencies": {
-    "@sinclair/typebox": "0.34.48"
+    "@sinclair/typebox": "0.34.48",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "openclaw": "workspace:*"
