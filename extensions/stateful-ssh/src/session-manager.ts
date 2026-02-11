@@ -58,7 +58,7 @@ export class SSHSessionManager {
       const configContent = await readFile(sshConfigPath, "utf-8");
       const lines = configContent.split("\n");
 
-      let currentHost: string | null = null;
+      let currentHostPatterns: string[] = [];
       let currentHostName: string | null = null;
       let identityFile: string | null = null;
 
@@ -74,12 +74,13 @@ export class SSHSessionManager {
         const hostMatch = trimmed.match(/^Host\s+(.+)$/i);
         if (hostMatch) {
           // Check if previous host matched and had an IdentityFile
-          if (currentHost && identityFile && this.matchesHost(host, currentHost, currentHostName)) {
+          if (currentHostPatterns.length > 0 && identityFile && this.matchesAnyHostPattern(host, currentHostPatterns, currentHostName)) {
             return await this.expandAndReadKey(identityFile);
           }
 
-          // Start new host block
-          currentHost = hostMatch[1].trim();
+          // Start new host block - split multiple patterns by whitespace
+          const patternsString = hostMatch[1].trim();
+          currentHostPatterns = patternsString.split(/\s+/);
           currentHostName = null;
           identityFile = null;
           continue;
@@ -87,21 +88,21 @@ export class SSHSessionManager {
 
         // Parse "HostName" directive
         const hostNameMatch = trimmed.match(/^HostName\s+(.+)$/i);
-        if (hostNameMatch && currentHost) {
+        if (hostNameMatch && currentHostPatterns.length > 0) {
           currentHostName = hostNameMatch[1].trim();
           continue;
         }
 
         // Parse "IdentityFile" directive
         const identityMatch = trimmed.match(/^IdentityFile\s+(.+)$/i);
-        if (identityMatch && currentHost) {
+        if (identityMatch && currentHostPatterns.length > 0) {
           identityFile = identityMatch[1].trim();
           continue;
         }
       }
 
       // Check last host block
-      if (currentHost && identityFile && this.matchesHost(host, currentHost, currentHostName)) {
+      if (currentHostPatterns.length > 0 && identityFile && this.matchesAnyHostPattern(host, currentHostPatterns, currentHostName)) {
         return await this.expandAndReadKey(identityFile);
       }
 
@@ -115,25 +116,29 @@ export class SSHSessionManager {
   }
 
   /**
-   * Checks if the given host matches a Host pattern or HostName.
+   * Checks if the given host matches any of the Host patterns or HostName.
+   * SSH config allows multiple patterns in one Host line: "Host pattern1 pattern2 pattern3"
    */
-  private matchesHost(targetHost: string, hostPattern: string, hostName: string | null): boolean {
-    // Direct match with Host pattern
-    if (targetHost === hostPattern) {
-      return true;
+  private matchesAnyHostPattern(targetHost: string, hostPatterns: string[], hostName: string | null): boolean {
+    // Check each Host pattern
+    for (const pattern of hostPatterns) {
+      // Direct match with Host pattern
+      if (targetHost === pattern) {
+        return true;
+      }
+
+      // Support wildcard patterns (simple implementation)
+      if (pattern.includes("*")) {
+        const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
+        if (regex.test(targetHost)) {
+          return true;
+        }
+      }
     }
 
     // Match with HostName if specified
     if (hostName && targetHost === hostName) {
       return true;
-    }
-
-    // Support wildcard patterns (simple implementation)
-    if (hostPattern.includes("*")) {
-      const regex = new RegExp("^" + hostPattern.replace(/\*/g, ".*") + "$");
-      if (regex.test(targetHost)) {
-        return true;
-      }
     }
 
     return false;
