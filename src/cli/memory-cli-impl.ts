@@ -238,7 +238,7 @@ async function scanMemorySources(params: {
   return { sources: scans, totalFiles, issues };
 }
 
-export async function runMemoryStatus(opts: MemoryCommandOptions) {
+export async function runMemoryStatusImpl(opts: MemoryCommandOptions) {
   setVerbose(Boolean(opts.verbose));
   const cfg = loadConfig();
   const agentIds = resolveAgentIds(cfg, opts.agent);

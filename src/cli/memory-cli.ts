@@ -11,7 +11,7 @@ export async function runMemoryStatus(opts: {
   verbose?: boolean;
 }) {
   const impl = await import("./memory-cli-impl.js");
-  return impl.runMemoryStatus(opts);
+  return impl.runMemoryStatusImpl(opts);
 }
 
 export function registerMemoryCli(program: Command) {
@@ -33,7 +33,7 @@ export function registerMemoryCli(program: Command) {
     .option("--index", "Reindex if dirty (implies --deep)")
     .option("--verbose", "Verbose logging", false)
     .action(async (opts) => {
-      const { runMemoryStatus: run } = await import("./memory-cli-impl.js");
+      const { runMemoryStatusImpl: run } = await import("./memory-cli-impl.js");
       await run(opts);
     });
 

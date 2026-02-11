@@ -1,7 +1,4 @@
 import type { Command } from "commander";
-import { danger } from "../../globals.js";
-import { defaultRuntime } from "../../runtime.js";
-import { shortenHomePath } from "../../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import { resolveBrowserActionContext } from "./shared.js";
 
@@ -23,6 +20,8 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (paths: string[], opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
@@ -65,6 +64,9 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (outPath: string | undefined, opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { shortenHomePath } = await import("../../utils.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
@@ -105,6 +107,9 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (ref: string, outPath: string, opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { shortenHomePath } = await import("../../utils.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
@@ -147,6 +152,8 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const accept = opts.accept ? true : opts.dismiss ? false : undefined;
       if (accept === undefined) {
