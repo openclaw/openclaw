@@ -23,7 +23,11 @@ import {
   resolveSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentMessageContext,
+  resolveAnnounceTargetFromKey,
+  resolvePingPongTurns,
+} from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -252,12 +256,13 @@ export function createSessionsSendTool(opts?: {
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
+      const targetChannel = resolveAnnounceTargetFromKey(resolvedKey)?.channel;
       const sendParams = {
         message,
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
-        channel: INTERNAL_MESSAGE_CHANNEL,
+        channel: targetChannel ?? INTERNAL_MESSAGE_CHANNEL,
         lane: AGENT_LANE_NESTED,
         extraSystemPrompt: agentMessageContext,
       };
