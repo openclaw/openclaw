@@ -307,6 +307,8 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("routes group reactions to group session using dataMessage.groupInfo", async () => {
+    // Save original config to restore after test (avoid leaking state)
+    const originalConfig = config;
     config = {
       ...config,
       channels: {
@@ -380,6 +382,9 @@ describe("monitorSignalProvider tool results", () => {
     });
     const dmEvents = peekSystemEvents(dmRoute.sessionKey);
     expect(dmEvents.some((text) => text.includes("Signal reaction added"))).toBe(false);
+
+    // Restore original config to avoid leaking state to other tests
+    config = originalConfig;
   });
 
   it("notifies on own reactions when target includes uuid + phone", async () => {
