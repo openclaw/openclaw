@@ -1949,10 +1949,10 @@ auto-compaction, instructing the model to store durable memories on disk (e.g.
 `memory/YYYY-MM-DD.md`). It triggers when the session token estimate crosses a
 soft threshold below the compaction limit.
 
-Legacy defaults:
+Defaults:
 
 - `memoryFlush.mode`: `durable` (recommended) or `off`
-- `memoryFlush.enabled`: `true`
+- `memoryFlush.enabled` (legacy boolean): `true`
 - `memoryFlush.softThresholdTokens`: `4000`
 - `memoryFlush.prompt` / `memoryFlush.systemPrompt`: built-in defaults with `NO_REPLY`
 - Note: memory flush is skipped when the session workspace is read-only
