@@ -491,8 +491,20 @@ export async function runReplyAgent(params: {
       }
     }
 
-    // If verbose is enabled and this is a new session, prepend a session hint.
+    // If the run fell back to a different provider, prepend a subtle note.
     let finalPayloads = replyPayloads;
+    const defaultProvider = followupRun.run.provider;
+    if (fallbackProvider && fallbackProvider !== defaultProvider) {
+      const fallbackLabel = fallbackModel
+        ? `${fallbackProvider}/${fallbackModel}`
+        : fallbackProvider;
+      finalPayloads = [
+        { text: `🔄 Fell back to ${fallbackLabel} (primary model unavailable).` },
+        ...finalPayloads,
+      ];
+    }
+
+    // If verbose is enabled and this is a new session, prepend a session hint.
     const verboseEnabled = resolvedVerboseLevel !== "off";
     if (autoCompactionCompleted) {
       const count = await incrementCompactionCount({

@@ -11,9 +11,11 @@ import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
+  isBillingErrorMessage,
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isRateLimitErrorMessage,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -579,11 +581,17 @@ export async function runAgentTurnWithFallback(params: {
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
       const trimmedMessage = message.replace(/\.\s*$/, "");
+      const isBilling = isBillingErrorMessage(message);
+      const isRateLimit = isRateLimitErrorMessage(message);
       const fallbackText = isContextOverflow
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+          : isBilling
+            ? "⚠️ All configured models failed due to billing limits. Check your provider billing dashboards and top up credits."
+            : isRateLimit
+              ? "⚠️ All configured models are currently rate-limited. Please wait a moment and try again."
+              : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
