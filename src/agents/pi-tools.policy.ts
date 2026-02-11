@@ -3,9 +3,11 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { getChannelDock } from "../channels/dock.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
+import { SUBAGENT_DEFAULT_TOOL_DENY } from "./subagent-tool-deny.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
 type CompiledPattern =
@@ -76,29 +78,10 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
   };
 }
 
-const DEFAULT_SUBAGENT_TOOL_DENY = [
-  // Session management - main agent orchestrates
-  "sessions_list",
-  "sessions_history",
-  "sessions_send",
-  "sessions_spawn",
-  // System admin - dangerous from subagent
-  "gateway",
-  "agents_list",
-  // Interactive setup - not a task
-  "whatsapp_login",
-  // Status/scheduling - main agent coordinates
-  "session_status",
-  "cron",
-  // Memory - pass relevant info in spawn prompt instead
-  "memory_search",
-  "memory_get",
-];
-
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const deny = [
-    ...DEFAULT_SUBAGENT_TOOL_DENY,
+    ...SUBAGENT_DEFAULT_TOOL_DENY,
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
@@ -233,10 +216,15 @@ export function resolveEffectiveToolPolicy(params: {
   modelProvider?: string;
   modelId?: string;
 }) {
+  const subagentSession = isSubagentSessionKey(params.sessionKey);
   const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
   const agentConfig =
     params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
-  const agentTools = agentConfig?.tools;
+  const subagentTools = subagentSession ? agentConfig?.subagents?.tools : undefined;
+  // Allow sub-agent sessions to have their own policy block without inheriting
+  // parent `agents.list[].tools` deny/allow rules.
+  const agentTools = subagentTools ?? agentConfig?.tools;
+  const agentToolsByProvider = subagentTools ? undefined : agentConfig?.tools?.byProvider;
   const globalTools = params.config?.tools;
 
   const profile = agentTools?.profile ?? globalTools?.profile;
@@ -246,7 +234,7 @@ export function resolveEffectiveToolPolicy(params: {
     modelId: params.modelId,
   });
   const agentProviderPolicy = resolveProviderToolPolicy({
-    byProvider: agentTools?.byProvider,
+    byProvider: agentToolsByProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });

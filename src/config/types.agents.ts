@@ -7,7 +7,7 @@ import type {
   SandboxDockerSettings,
   SandboxPruneSettings,
 } from "./types.sandbox.js";
-import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
+import type { AgentToolsConfig, MemorySearchConfig, ToolPolicyConfig } from "./types.tools.js";
 
 export type AgentModelConfig =
   | string
@@ -39,6 +39,11 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
+    /**
+     * Sub-agent-specific tool policy for sessions spawned under this agent.
+     * When set, sub-agent sessions use this policy instead of inheriting `agents.list[].tools`.
+     */
+    tools?: ToolPolicyConfig;
   };
   sandbox?: {
     mode?: "off" | "non-main" | "all";
