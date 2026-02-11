@@ -72,9 +72,10 @@ def _validate_place_id(place_id: str) -> None:
     """
     Validate Google Places API place_id format to prevent path traversal.
     
-    Google Place IDs are alphanumeric strings that may contain specific special
-    characters (+, =, /, _, -). This validation prevents path traversal attacks
-    (e.g., ../../../etc/passwd) while allowing all legitimate place_id formats.
+    Google Place IDs are base64-like alphanumeric strings that may contain
+    specific special characters (+, =, _, -). This validation prevents path
+    traversal attacks (e.g., ../../../etc/passwd) while allowing all
+    legitimate place_id formats.
     
     Args:
         place_id: The place ID string to validate
@@ -105,42 +106,41 @@ def _validate_place_id(place_id: str) -> None:
     normalized = place_id.lower()
     normalized = normalized.replace('%2e', '.')
     normalized = normalized.replace('%2f', '/')
-    normalized = normalized.replace('%5c', '\\')
+    normalized = normalized.replace('%5c', r'\\')
     
     # Check for path traversal patterns in the normalized string
+    # Note: We already decoded %2e, %2f, %5c above, so we only need to check
+    # for the actual characters, not the encoded forms
     traversal_patterns = [
-        r'\.\.',           # Double dots
-        r'//',             # Double slashes
-        r'\\\\',           # Double backslashes
-        r'\.\/',           # Dot-slash
-        r'\.\\',           # Dot-backslash
-        r'%2e%2e',         # URL-encoded .. (after normalization this checks for residual encoding)
-        r'%2f%2f',         # URL-encoded //
-        r'%5c%5c',         # URL-encoded \\
+        r'\.\.',           # Double dots (.. or %2e%2e after normalization)
+        r'//',             # Double slashes (// or %2f%2f after normalization)
+        r'\\\\',           # Double backslashes (\\ or %5c%5c after normalization)
+        r'\.\/',           # Dot-slash (./  )
+        r'\.\\',           # Dot-backslash (.\ )
     ]
     
     for pattern in traversal_patterns:
         if re.search(pattern, normalized, re.IGNORECASE):
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid place_id format: contains path traversal pattern '{pattern}'.",
+                detail=f"Invalid place_id format: contains path traversal pattern.",
             )
     
     # Block dangerous special characters that could be used for injection
-    # Using double quotes for the string to avoid escaping issues with single quotes
-    if re.search(r"[\s?#<>|*%$&'`;]", place_id):
+    # Fixed: Escaped the single quote properly
+    if re.search(r"[\s?#<>|*%$&\'`;]", place_id):
         raise HTTPException(
             status_code=400,
             detail="Invalid place_id format: contains disallowed special characters.",
         )
     
-    # Only allow alphanumeric characters and specific Google Place ID characters: + = / _ -
-    # Note: / is allowed as it appears in legitimate Google Place IDs, but we've already
-    # blocked dangerous patterns like // and ../ above
-    if not re.match(r'^[A-Za-z0-9+=/_-]+$', place_id):
+    # Only allow alphanumeric characters and specific Google Place ID characters: + = _ -
+    # Note: Forward slash (/) is NOT included as Google Place IDs don't contain slashes
+    # Real examples: ChIJN1t_tDeuEmsRUsoyG83frY4, Ei1Tb21lIFBsYWNlIE5hbWU
+    if not re.match(r'^[A-Za-z0-9+=_-]+$', place_id):
         raise HTTPException(
             status_code=400,
-            detail="Invalid place_id format: must contain only alphanumeric characters and +, =, /, _, -",
+            detail="Invalid place_id format: must contain only alphanumeric characters and +, =, _, -",
         )
 
 
