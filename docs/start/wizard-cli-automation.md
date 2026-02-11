@@ -106,6 +106,23 @@ Add `--json` for a machine-readable summary.
       --gateway-bind loopback
     ```
   </Accordion>
+  <Accordion title="Custom provider example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice custom-api-key \
+      --custom-base-url "https://llm.example.com/v1" \
+      --custom-model-id "foo-large" \
+      --custom-api-key "$CUSTOM_API_KEY" \
+      --custom-provider-id "my-custom" \
+      --custom-compatibility anthropic \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+
+    `--custom-api-key` is optional. If omitted, onboarding checks `CUSTOM_API_KEY`.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Add another agent
