@@ -36,7 +36,12 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.j
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
-import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  scheduleFollowupDrain,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -343,8 +348,14 @@ export async function runReplyAgent(params: {
         // Wait before returning so the drain loop doesn't immediately retry.
         // If we just re-enqueue and return, the drain loop retries after only
         // debounceMs (~1s) instead of the intended backoff.
+        // Wait before retrying so we don't spam the lock.
         const LOCK_RETRY_DELAY_MS = 5_000;
         await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
+        // Schedule a drain to pick up the re-enqueued item. This is a no-op
+        // when the drain loop is already running (it will naturally pick it up
+        // after the await above), but is necessary for direct (non-drain) calls
+        // where no active drainer exists.
+        scheduleFollowupDrain(queueKey, runFollowupTurn);
         typing.cleanup();
         return undefined;
       }
