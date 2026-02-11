@@ -97,11 +97,13 @@ export function derivePromptTokens(usage?: {
   if (!usage) {
     return undefined;
   }
+  // Use only `input` for context-window accounting.
+  // `cacheRead` and `cacheWrite` are informational metrics for cost tracking —
+  // cached tokens are already part of the prompt and don't consume additional
+  // context window capacity.  Including them inflated context % and triggered
+  // premature auto-compaction (see #13853).
   const input = usage.input ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
-  const sum = input + cacheRead + cacheWrite;
-  return sum > 0 ? sum : undefined;
+  return input > 0 ? input : undefined;
 }
 
 export function deriveSessionTotalTokens(params: {

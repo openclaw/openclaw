@@ -35,7 +35,7 @@ describe("buildStatusMessage", () => {
                 {
                   id: "pi:opus",
                   cost: {
-                    input: 1,
+                    input: 1000,
                     output: 1,
                     cacheRead: 0,
                     cacheWrite: 0,
@@ -323,7 +323,7 @@ describe("buildStatusMessage", () => {
                 {
                   id: "claude-opus-4-5",
                   cost: {
-                    input: 1,
+                    input: 1000,
                     output: 1,
                     cacheRead: 0,
                     cacheWrite: 0,
@@ -368,7 +368,7 @@ describe("buildStatusMessage", () => {
                 role: "assistant",
                 model: "claude-opus-4-5",
                 usage: {
-                  input: 1,
+                  input: 1000,
                   output: 2,
                   cacheRead: 1000,
                   cacheWrite: 0,
@@ -427,7 +427,7 @@ describe("buildStatusMessage", () => {
                 role: "assistant",
                 model: "claude-opus-4-5",
                 usage: {
-                  input: 1,
+                  input: 1000,
                   output: 2,
                   cacheRead: 1000,
                   cacheWrite: 0,
@@ -486,7 +486,7 @@ describe("buildStatusMessage", () => {
                 role: "assistant",
                 model: "claude-opus-4-5",
                 usage: {
-                  input: 2,
+                  input: 1200,
                   output: 3,
                   cacheRead: 1200,
                   cacheWrite: 0,
