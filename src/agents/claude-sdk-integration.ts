@@ -130,6 +130,9 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
   );
 
   try {
+    // Accumulate assistant text for cases where result.text is empty (e.g. plan mode)
+    let lastAssistantText = "";
+
     for await (const msg of query({ prompt: params.prompt, options })) {
       if (msg.type === "system" && "subtype" in msg && msg.subtype === "init" && "tools" in msg) {
         log.info(
@@ -156,6 +159,14 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
       }
 
       if (msg.type === "assistant") {
+        // Capture text blocks from assistant messages (plan mode returns content here, not in result)
+        const textBlocks = msg.message?.content?.filter(
+          (b: { type: string }) => b.type === "text",
+        ) as Array<{ text: string }> | undefined;
+        if (textBlocks?.length) {
+          lastAssistantText = textBlocks.map((b) => b.text).join("\n");
+        }
+
         const toolUses = msg.message?.content?.filter(
           (b: { type: string }) => b.type === "tool_use",
         ) as Array<{ name: string }> | undefined;
@@ -188,7 +199,7 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
             numTurns: msg.num_turns,
           });
           return {
-            text: msg.result,
+            text: msg.result || lastAssistantText,
             sessionId: msg.session_id,
             durationMs: msg.duration_ms,
             numTurns: msg.num_turns,
