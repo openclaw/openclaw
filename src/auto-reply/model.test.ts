@@ -57,6 +57,14 @@ describe("extractModelDirective", () => {
       expect(result.rawProfile).toBeUndefined();
     });
 
+    it("preserves @ in middle of path segment", () => {
+      // e.g. provider/foo@bar/baz should not split on @
+      const result = extractModelDirective("/model provider/foo@bar/baz");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("provider/foo@bar/baz");
+      expect(result.rawProfile).toBeUndefined();
+    });
+
     it("returns no directive for plain text", () => {
       const result = extractModelDirective("hello world");
       expect(result.hasDirective).toBe(false);
