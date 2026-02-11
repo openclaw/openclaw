@@ -100,7 +100,7 @@ export async function runCli(argv: string[] = process.argv) {
   const primary = getPrimaryCommand(parseArgv);
 
   let commandRegistered = false;
-  if (primary && shouldRegisterPrimarySubcommand(parseArgv)) {
+  if (primary && primary !== "help" && shouldRegisterPrimarySubcommand(parseArgv)) {
     const { registerSubCliByName } = await import("./program/register.subclis.js");
     commandRegistered = await registerSubCliByName(program, primary);
 
@@ -117,11 +117,13 @@ export async function runCli(argv: string[] = process.argv) {
     await registerProgramCommands(program, ctx, parseArgv);
   }
 
-  const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
-    argv: parseArgv,
-    primary,
-    hasBuiltinPrimary: commandRegistered,
-  });
+  const shouldSkipPluginRegistration =
+    primary === "help" ||
+    shouldSkipPluginCommandRegistration({
+      argv: parseArgv,
+      primary,
+      hasBuiltinPrimary: commandRegistered,
+    });
   if (!shouldSkipPluginRegistration) {
     // Register plugin CLI commands before parsing
     const { registerPluginCliCommands } = await import("../plugins/cli.js");
@@ -129,7 +131,7 @@ export async function runCli(argv: string[] = process.argv) {
     registerPluginCliCommands(program, loadConfig());
   }
 
-  if (!hasHelpOrVersion(parseArgv)) {
+  if (!hasHelpOrVersion(parseArgv) && primary !== "help") {
     const { enableConsoleCapture } = await import("../logging.js");
     enableConsoleCapture();
   }
