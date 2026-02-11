@@ -26,7 +26,7 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/feishu
 ```
 
-Makesure plugin is enabled:
+Make sure plugin is enabled:
 
 ```
 openclaw plugins list
@@ -106,7 +106,8 @@ From **Credentials & Basic Info**, copy:
 
 ### 4. Configure permissions
 
-On **Permissions**, click **Batch import** and paste:  
+On **Permissions**, click **Batch import** and paste:
+
 Feishu (China)
 ```json
 {
