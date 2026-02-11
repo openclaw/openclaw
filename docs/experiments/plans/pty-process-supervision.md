@@ -72,6 +72,41 @@ That requires one supervisor model for PTY and non PTY execution.
 5. `ProcessReaper`
    - OS aware targeted termination for owned process trees.
 
+### Packaging And Placement
+
+This rewrite should be implemented as a standalone internal workspace package:
+
+- Path: `packages/process-supervisor`
+- Package type: internal (private) workspace module
+- Consumers: core runtime paths (CLI runner, PTY runner, future process based tooling)
+
+It must **not** be implemented under `extensions/*`.
+
+Rationale:
+
+- `extensions/*` are plugin surfaces for channels and optional features.
+- Process supervision is core infra and must be available to core execution paths.
+- Core infra needs strict lifecycle guarantees and cross platform contracts that should not depend on extension loading.
+- Keeping it in `packages/*` preserves clear boundaries and allows shared use across core modules.
+
+Initial API boundary for the package:
+
+- `spawn(input): ManagedRun`
+- `cancel(runId, reason)`
+- `reconcileOrphans()`
+- `subscribeLifecycleEvents(listener)`
+- typed models (`RunRecord`, `RunExit`, `TerminationReason`, policy config)
+
+Extraction criteria (future):
+
+Only consider moving to a separate repo/package registry after all are true:
+
+- API has stabilized across multiple releases.
+- More than one product/repo needs it directly.
+- We can maintain semver, docs, and Linux/macOS/Windows CI as a library owner.
+
+Until then, keep it as an internal workspace package in this monorepo.
+
 ### Proposed Interfaces
 
 ```ts
