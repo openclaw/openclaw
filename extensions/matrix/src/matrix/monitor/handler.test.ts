@@ -63,6 +63,23 @@ describe("resolveMatrixSessionKey", () => {
     });
   });
 
+  it("keeps thread isolation when sessionScope is agent", () => {
+    const resolved = resolveMatrixSessionKey({
+      sessionScope: "agent",
+      route: {
+        agentId: "Main-Agent",
+        sessionKey: "agent:main-agent:matrix:channel:!room:example.org",
+      },
+      threadRootId: "$ThreadRoot:Example.Org",
+      isDirectMessage: false,
+    });
+
+    expect(resolved).toEqual({
+      sessionKey: "agent:main-agent:matrix:main:thread:$threadroot:example.org",
+      parentSessionKey: "agent:main-agent:matrix:main",
+    });
+  });
+
   it("does not create thread session for direct messages", () => {
     const resolved = resolveMatrixSessionKey({
       sessionScope: "room",
