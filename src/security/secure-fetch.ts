@@ -57,8 +57,8 @@ function shouldBypassProxy(url: string): boolean {
  * method, headers, and body from the original request.
  */
 async function secureFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  // Only intercept if we're in secure mode
-  if (process.env.OPENCLAW_SECURE_MODE !== "1") {
+  // Only intercept when running inside the container (PROXY_URL is injected by Docker flow)
+  if (!PROXY_URL) {
     return originalFetch(input, init);
   }
 
@@ -122,8 +122,7 @@ async function secureFetch(input: RequestInfo | URL, init?: RequestInit): Promis
 
   // Route through proxy, preserving all request details
   // Spread init first, then override with proxy-specific fields
-  // PROXY_URL is guaranteed to be set in secure mode (we throw at startup if not)
-  return originalFetch(PROXY_URL!, {
+  return originalFetch(PROXY_URL, {
     ...init,
     method,
     headers,
@@ -133,26 +132,19 @@ async function secureFetch(input: RequestInfo | URL, init?: RequestInit): Promis
 
 /**
  * Installs the secure fetch wrapper globally.
- * Call this at the very start of your application in secure mode.
+ * Only activates when PROXY_URL is set (injected by the Docker secure flow).
+ * Safe to call unconditionally at startup — no-op on the host.
  */
 export function installSecureFetch(): void {
-  if (process.env.OPENCLAW_SECURE_MODE !== "1") {
-    return;
-  }
-
   PROXY_URL = process.env.PROXY_URL;
   if (!PROXY_URL) {
-    console.warn(
-      "[secure-fetch] OPENCLAW_SECURE_MODE=1 but PROXY_URL is not set; " +
-        "skipping fetch wrapper installation (proxy unavailable)",
-    );
     return;
   }
 
   // Replace global fetch
   globalThis.fetch = secureFetch as typeof fetch;
 
-  console.log("[secure-fetch] Installed fetch wrapper, routing through:", PROXY_URL);
+  // Activated — routing all fetch() calls through the host secrets proxy.
 }
 
 /**

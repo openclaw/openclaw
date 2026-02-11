@@ -56,7 +56,7 @@ export function collectAnthropicApiKeys(): string[] {
     add(value);
   }
 
-  if (seen.size === 0 && process.env.OPENCLAW_SECURE_MODE === "1") {
+  if (seen.size === 0 && process.env.PROXY_URL) {
     return ["{{ANTHROPIC_API_KEY}}"];
   }
 

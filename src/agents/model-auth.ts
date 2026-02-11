@@ -5,6 +5,10 @@ import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types
 import { formatCliCommand } from "../cli/command-format.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
+  normalizeOptionalSecretInput,
+  normalizeSecretInput,
+} from "../utils/normalize-secret-input.js";
+import {
   type AuthProfileStore,
   ensureAuthProfileStore,
   listProfilesForProvider,
@@ -48,8 +52,7 @@ export function getCustomProviderApiKey(
   provider: string,
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
-  const key = entry?.apiKey?.trim();
-  return key || undefined;
+  return normalizeOptionalSecretInput(entry?.apiKey);
 }
 
 function resolveProviderAuthOverride(
@@ -236,9 +239,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
-    const value = process.env[envVar]?.trim();
+    const value = normalizeOptionalSecretInput(process.env[envVar]);
     if (!value) {
-      if (process.env.OPENCLAW_SECURE_MODE === "1") {
+      // Only emit placeholders inside the container (where PROXY_URL is injected)
+      if (process.env.PROXY_URL) {
         return { apiKey: `{{${envVar}}}`, source: "secure proxy placeholder" };
       }
       return null;
@@ -305,6 +309,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     venice: "VENICE_API_KEY",
     mistral: "MISTRAL_API_KEY",
     opencode: "OPENCODE_API_KEY",
+    together: "TOGETHER_API_KEY",
     qianfan: "QIANFAN_API_KEY",
     ollama: "OLLAMA_API_KEY",
   };
@@ -390,7 +395,7 @@ export async function getApiKeyForModel(params: {
 }
 
 export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {
-  const key = auth.apiKey?.trim();
+  const key = normalizeSecretInput(auth.apiKey);
   if (key) {
     return key;
   }

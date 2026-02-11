@@ -12,6 +12,8 @@ export type GatewayContainerOptions = {
   gatewayPort: number;
   /** Port the relay listens on inside the internal network */
   proxyPort: number;
+  /** Port the host proxy is listening on (defaults to proxyPort if not set) */
+  hostProxyPort?: number;
   /** Unix socket path to the host proxy (Linux/macOS). Mutually exclusive with TCP mode. */
   proxySocketPath?: string;
   env?: Record<string, string | undefined>;
@@ -61,7 +63,11 @@ async function removeSecureNetwork(): Promise<void> {
  *   socat TCP-LISTEN → TCP:host.docker.internal:port
  *   Proxy is on 127.0.0.1, reachable only via Docker Desktop's host gateway.
  */
-async function startRelayContainer(proxyPort: number, proxySocketPath?: string): Promise<void> {
+async function startRelayContainer(
+  proxyPort: number,
+  hostProxyPort: number,
+  proxySocketPath?: string,
+): Promise<void> {
   // Remove any existing relay
   try {
     await execDocker(["rm", "-f", RELAY_CONTAINER_NAME], { allowFailure: true });
@@ -69,9 +75,10 @@ async function startRelayContainer(proxyPort: number, proxySocketPath?: string):
     // ignore
   }
 
-  // Socket mode: start directly on internal network (no bridge exposure)
-  // TCP mode: must start on bridge to reach host.docker.internal
-  const network = proxySocketPath ? SECURE_NETWORK_NAME : "bridge";
+  // Always start on the internal network — never on bridge.
+  // On Docker Desktop (Windows), host.docker.internal resolves from any network,
+  // so there's no need to start on bridge and then hot-swap networks.
+  const network = SECURE_NETWORK_NAME;
 
   const args = [
     "run", "-d",
@@ -94,19 +101,13 @@ async function startRelayContainer(proxyPort: number, proxySocketPath?: string):
       "--add-host", "host.docker.internal:host-gateway",
       SOCAT_IMAGE,
       `TCP-LISTEN:${proxyPort},fork,reuseaddr`,
-      `TCP:host.docker.internal:${proxyPort}`,
+      `TCP:host.docker.internal:${hostProxyPort}`,
     );
   }
 
   await execDocker(args);
 
-  // TCP mode: also connect relay to the internal network so the gateway container can reach it
-  // Socket mode: relay already started on internal network, no extra connect needed
-  if (!proxySocketPath) {
-    await execDocker(["network", "connect", SECURE_NETWORK_NAME, RELAY_CONTAINER_NAME]);
-  }
-
-  const mode = proxySocketPath ? `socket:${proxySocketPath}` : `tcp:host.docker.internal:${proxyPort}`;
+  const mode = proxySocketPath ? `socket:${proxySocketPath}` : `tcp:host.docker.internal:${hostProxyPort}`;
   logger.info(`Relay container started: ${RELAY_CONTAINER_NAME} (${mode} → port ${proxyPort})`);
 }
 
@@ -140,7 +141,7 @@ export async function startGatewayContainer(opts: GatewayContainerOptions): Prom
 
   // Set up network isolation: internal network + relay
   await ensureSecureNetwork();
-  await startRelayContainer(opts.proxyPort, opts.proxySocketPath);
+  await startRelayContainer(opts.proxyPort, opts.hostProxyPort ?? opts.proxyPort, opts.proxySocketPath);
 
   const filteredEnv = filterSecretEnv(opts.env || process.env);
 
@@ -192,11 +193,11 @@ export async function startGatewayContainer(opts: GatewayContainerOptions): Prom
   // Add bind mounts for tools/skills
   for (const bind of opts.binds || []) {
     // Validate bind mount format
-    if (bind.includes(":")) {
+    if (/^[^:]+:[^:]+(:(ro|rw))?$/.test(bind)) {
       args.push("-v", bind);
       logger.info(`Adding bind mount: ${bind}`);
     } else {
-      logger.warn(`Invalid bind mount format (expected host:container[:ro]): ${bind}`);
+      logger.warn(`Invalid bind mount format (expected host:container[:ro|rw]): ${bind}`);
     }
   }
 
@@ -361,7 +362,7 @@ function filterSecretEnv(env: Record<string, string | undefined>): Record<string
 
     // Allow OpenClaw-specific env vars needed for gateway operation
     if (ALLOWED_SECRET_ENV_VARS.has(upperKey)) {
-      filtered[upperKey] = value;
+      filtered[key] = value;
       continue;
     }
 
@@ -385,7 +386,7 @@ function filterSecretEnv(env: Record<string, string | undefined>): Record<string
       continue;
     }
 
-    filtered[upperKey] = value;
+    filtered[key] = value;
   }
 
   return filtered;

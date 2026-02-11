@@ -185,6 +185,15 @@ export async function createSecretsRegistry(agentDir?: string): Promise<SecretRe
   // Load auth profiles
   const { oauthProfiles, apiKeys, tokens, authStore } = loadAuthProfiles(agentDir);
 
+  // SECURITY: loadConfig() must read the REAL host config, never the sanitized
+  // mount copy.  If OPENCLAW_SECURE_MODE is set but PROXY_URL is also present,
+  // we are inside the container and must not run the registry from there.
+  if (process.env.PROXY_URL) {
+    throw new Error(
+      "createSecretsRegistry must run on the HOST, not inside the container (PROXY_URL is set)",
+    );
+  }
+
   // Load config secrets
   const config = loadConfig();
   const { channelSecrets, gatewaySecrets, toolSecrets, envVars } = loadConfigSecrets(config);

@@ -117,6 +117,8 @@ async function replacePlaceholders(text: string, registry: SecretRegistry): Prom
   let limitHit = false;
   const startTime = Date.now();
 
+  // Each .replace() callback below is invoked once per regex match.
+  // count++ inside each callback ensures the limit is enforced per individual match.
   const checkLimits = () => {
     if (limitHit) return true;
     if (Date.now() - startTime > PLACEHOLDER_LIMITS.timeoutMs) {
@@ -124,8 +126,7 @@ async function replacePlaceholders(text: string, registry: SecretRegistry): Prom
       limitHit = true;
       return true;
     }
-    count++;
-    if (count > PLACEHOLDER_LIMITS.maxReplacements) {
+    if (count >= PLACEHOLDER_LIMITS.maxReplacements) {
       logger.warn(`Placeholder replacement limit reached (${PLACEHOLDER_LIMITS.maxReplacements})`);
       limitHit = true;
       return true;
@@ -138,6 +139,7 @@ async function replacePlaceholders(text: string, registry: SecretRegistry): Prom
     if (checkLimits()) {
       return match;
     }
+    count++;
     const value = resolveConfigPath(path, registry);
     if (value === null || value === undefined) {
       logger.warn(`Config secret not found: ${path}`);
@@ -153,6 +155,7 @@ async function replacePlaceholders(text: string, registry: SecretRegistry): Prom
     if (checkLimits()) {
       break;
     }
+    count++;
     const profileId = match[1];
     const token = await resolveOAuthToken(registry, profileId);
     if (token) {
@@ -168,6 +171,7 @@ async function replacePlaceholders(text: string, registry: SecretRegistry): Prom
     if (checkLimits()) {
       return match;
     }
+    count++;
     const cred = registry.authStore.profiles[profileId];
     if (cred?.type !== "oauth" || !cred?.refresh) {
       logger.warn(`OAuth refresh token not found for profile: ${profileId}`);
@@ -181,6 +185,7 @@ async function replacePlaceholders(text: string, registry: SecretRegistry): Prom
     if (checkLimits()) {
       return match;
     }
+    count++;
     const key = registry.apiKeys.get(profileId);
     if (!key) {
       logger.warn(`API key not found for profile: ${profileId}`);
@@ -194,6 +199,7 @@ async function replacePlaceholders(text: string, registry: SecretRegistry): Prom
     if (checkLimits()) {
       return match;
     }
+    count++;
     const token = registry.tokens.get(profileId);
     if (!token) {
       logger.warn(`Token not found for profile: ${profileId}`);
@@ -207,6 +213,7 @@ async function replacePlaceholders(text: string, registry: SecretRegistry): Prom
     if (checkLimits()) {
       return match;
     }
+    count++;
     return process.env[name] ?? registry.envVars[name] ?? "";
   });
 
@@ -222,7 +229,7 @@ export type SecretsProxyOptions = {
   socketPath?: string;
   registry: SecretRegistry;
   /** Shared secret token that clients must send in X-Proxy-Token header. */
-  authToken?: string;
+  authToken: string;
 };
 
 /** Generate a random proxy auth token. */
@@ -232,6 +239,10 @@ export function generateProxyAuthToken(): string {
 
 export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http.Server> {
   const { registry, authToken } = opts;
+
+  if (!authToken) {
+    throw new Error("authToken is required — the secrets proxy must not run without authentication");
+  }
 
   const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // Cached allowlist: re-reads from disk only when config file mtime changes
@@ -248,7 +259,8 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
     try {
       // Authenticate client via shared secret (prevents untrusted local processes from using the proxy)
       if (authToken) {
-        const clientToken = req.headers["x-proxy-token"];
+        const rawToken = req.headers["x-proxy-token"];
+        const clientToken = Array.isArray(rawToken) ? rawToken[0] : rawToken;
         if (clientToken !== authToken) {
           logger.warn(`Rejected unauthenticated proxy request from ${req.socket.remoteAddress}`);
           res.statusCode = 403;

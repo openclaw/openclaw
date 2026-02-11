@@ -288,26 +288,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         `Loaded ${registry.oauthProfiles.size} OAuth profiles, ${registry.apiKeys.size} API keys`,
       );
 
-      // Start secrets proxy first
-      // Detect Docker bridge gateway IP — still needed for prepareSanitizedMounts config rewriting
-      let dockerBridgeIp = "172.17.0.1"; // fallback default
-      try {
-        const { execFileSync } = await import("child_process");
-        const output = execFileSync(
-          "docker",
-          ["network", "inspect", "bridge", "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}"],
-          {
-            encoding: "utf8",
-            timeout: 5000,
-          },
-        ).trim();
-        if (output && /^\d+\.\d+\.\d+\.\d+$/.test(output)) {
-          dockerBridgeIp = output;
-        }
-      } catch {
-        gatewayLog.warn(`Could not detect Docker bridge IP, using default ${dockerBridgeIp}`);
-      }
-
+      // Start secrets proxy
       // Generate shared secret for proxy client auth
       const proxyAuthToken = generateProxyAuthToken();
 
@@ -347,7 +328,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       gatewayLog.info("Preparing sanitized config mounts...");
       let sanitizedMounts;
       try {
-        sanitizedMounts = await prepareSanitizedMounts({ dockerBridgeIp });
+        sanitizedMounts = await prepareSanitizedMounts();
         gatewayLog.info(`Prepared ${sanitizedMounts.binds.length} bind mounts`);
       } catch (err) {
         gatewayLog.error(`Failed to prepare sanitized mounts: ${String(err)}`);

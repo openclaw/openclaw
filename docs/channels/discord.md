@@ -356,7 +356,7 @@ ack reaction after the bot replies.
   - `roles` (role add/remove, default `false`)
   - `moderation` (timeout/kick/ban, default `false`)
   - `presence` (bot status/activity, default `false`)
-- `execApprovals`: Discord-only exec approval DMs (button UI). Supports `enabled`, `approvers`, `agentFilter`, `sessionFilter`.
+- `execApprovals`: Discord-only exec approval DMs (button UI). Supports `enabled`, `approvers`, `agentFilter`, `sessionFilter`, `cleanupAfterResolve`.
 
 Reaction notifications use `guilds.<id>.reactionNotifications`:
 

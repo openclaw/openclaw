@@ -9,8 +9,8 @@ export function sanitizeConfigSecrets(
   cfg: OpenClawConfig,
   opts?: { force?: boolean },
 ): OpenClawConfig {
-  // Don't modify if not in secure mode (unless forced)
-  if (!opts?.force && process.env.OPENCLAW_SECURE_MODE !== "1") {
+  // Only sanitize when explicitly requested by the caller.
+  if (!opts?.force) {
     return cfg;
   }
 
