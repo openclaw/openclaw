@@ -187,7 +187,7 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "packageManager": "pnpm@10.23.0",
+  "packageManager": "pnpm@10.29.3",
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
