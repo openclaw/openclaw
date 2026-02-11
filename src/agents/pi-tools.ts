@@ -322,6 +322,32 @@ export function createOpenClawCodingTools(options?: {
     cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
     scopeKey,
   });
+
+  // Wrap exec tool with scoped command policy check
+  const scopedExecPolicies = [
+    profilePolicyWithAlsoAllow,
+    providerProfilePolicyWithAlsoAllow,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    sandbox?.tools,
+    subagentPolicy,
+  ];
+  const wrappedExecTool: AnyAgentTool = {
+    ...execTool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const command = (params as { command?: string })?.command;
+      if (command && !isToolAllowedByPolicies("exec", scopedExecPolicies, command)) {
+        return {
+          status: "error" as const,
+          output: `exec command blocked by policy: ${command.slice(0, 50)}${command.length > 50 ? "..." : ""}`,
+        };
+      }
+      return execTool.execute(toolCallId, params, signal, onUpdate);
+    },
+  } as AnyAgentTool;
   const applyPatchTool =
     !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)
       ? null
@@ -343,7 +369,7 @@ export function createOpenClawCodingTools(options?: {
         : []
       : []),
     ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
-    execTool as unknown as AnyAgentTool,
+    wrappedExecTool,
     processTool as unknown as AnyAgentTool,
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...listChannelAgentTools({ cfg: options?.config }),
