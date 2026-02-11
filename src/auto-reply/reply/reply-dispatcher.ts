@@ -150,18 +150,23 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
         await options.deliver(normalized, { kind });
 
-        // Trigger message:sent hook after successful delivery
-        const hookEvent = createInternalHookEvent("message", "sent", options.sessionKey ?? "", {
-          text: normalized.text,
-          channel: options.channel,
-          chatType: options.chatType,
-          kind,
-          mediaUrl: normalized.mediaUrl,
-          mediaUrls: normalized.mediaUrls,
-        });
-        void triggerInternalHook(hookEvent).catch((err) => {
-          logVerbose(`reply-dispatcher: message:sent hook failed: ${String(err)}`);
-        });
+        // Trigger message:sent hook after successful delivery.
+        // Only emit when session context is available (some call sites like
+        // webchat may not inject sessionKey/channel, and emitting incomplete
+        // events would be unreliable for consumers).
+        if (options.sessionKey) {
+          const hookEvent = createInternalHookEvent("message", "sent", options.sessionKey, {
+            text: normalized.text,
+            channel: options.channel ?? "unknown",
+            chatType: options.chatType ?? "unknown",
+            kind,
+            mediaUrl: normalized.mediaUrl,
+            mediaUrls: normalized.mediaUrls,
+          });
+          void triggerInternalHook(hookEvent).catch((err) => {
+            logVerbose(`reply-dispatcher: message:sent hook failed: ${String(err)}`);
+          });
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });
