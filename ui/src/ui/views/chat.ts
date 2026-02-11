@@ -273,19 +273,6 @@ export function renderChat(props: ChatProps) {
 
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
 
-      <div class="callout" style="margin-bottom: 12px;">
-        <strong>Active Tasks</strong>
-        ${
-          activeTasks.length === 0
-            ? html`<div class="muted" style="margin-top: 6px;">No active tasks yet. Assign P0/P1 tasks in Task Management.</div>`
-            : html`
-                <ul style="margin: 8px 0 0 18px; padding: 0;">
-                  ${activeTasks.map(
-                    (task) => html`<li style="margin-bottom: 6px;"><span class="mono">${task.priority}</span> ${task.title} <span class="muted">(${laneLabel(task.lane)} · ${task.assignedAgent || "unassigned"})</span></li>`,
-                  )}
-                </ul>
-              `
-        }
       </div>
 
       ${
@@ -313,6 +300,23 @@ export function renderChat(props: ChatProps) {
         >
           ${thread}
         </div>
+
+        ${!sidebarOpen ? html`
+          <aside class="chat-tasks-rail">
+            <div class="chat-tasks-rail__title">Active Tasks</div>
+            ${
+              activeTasks.length === 0
+                ? html`<div class="muted">No active tasks yet.</div>`
+                : html`
+                    <ul class="chat-tasks-rail__list">
+                      ${activeTasks.map(
+                        (task) =>
+                          html`<li><span class="mono">${task.priority}</span> ${task.title} <span class="muted">(${laneLabel(task.lane)} / ${task.assignedAgent || "unassigned"})</span></li>`,
+                      )}
+                    </ul>`
+            }
+          </aside>
+        ` : nothing}
 
         ${
           sidebarOpen

@@ -115,3 +115,47 @@
     border-left: none;
   }
 }
+
+/* Active tasks right rail (chat) */
+.chat-tasks-rail {
+  width: 320px;
+  min-width: 280px;
+  max-width: 360px;
+  border-left: 1px solid var(--border);
+  padding: 14px 12px;
+  overflow: auto;
+  background: var(--panel);
+}
+
+.chat-tasks-rail__title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.chat-tasks-rail__list {
+  margin: 0;
+  padding: 0 0 0 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.chat-tasks-rail__list li {
+  line-height: 1.35;
+  font-size: 13px;
+}
+
+@media (max-width: 1200px) {
+  .chat-tasks-rail {
+    width: 280px;
+    min-width: 240px;
+  }
+}
+
+@media (max-width: 900px) {
+  .chat-tasks-rail {
+    display: none;
+  }
+}
