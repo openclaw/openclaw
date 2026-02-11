@@ -537,10 +537,20 @@ export function resolveSessionModelRef(
       });
   let provider = resolved.provider;
   let model = resolved.model;
+
+  // Priority 1: User-initiated override (from /model command or sessions_patch)
   const storedModelOverride = entry?.modelOverride?.trim();
   if (storedModelOverride) {
     provider = entry?.providerOverride?.trim() || provider;
     model = storedModelOverride;
+  } else {
+    // Priority 2: Actual model used in the last run (set by cron jobs, auto-reply, etc.)
+    // This reflects the real model after fallback resolution, provider routing, etc.
+    const lastRunModel = entry?.model?.trim();
+    if (lastRunModel) {
+      provider = entry?.modelProvider?.trim() || provider;
+      model = lastRunModel;
+    }
   }
   return { provider, model };
 }

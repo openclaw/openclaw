@@ -211,8 +211,14 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-  const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
+  const currentProvider =
+    params.sessionEntry?.providerOverride?.trim() ||
+    params.sessionEntry?.modelProvider?.trim() ||
+    configDefault.provider;
+  const currentModel =
+    params.sessionEntry?.modelOverride?.trim() ||
+    params.sessionEntry?.model?.trim() ||
+    configDefault.model;
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -371,7 +377,10 @@ export function createSessionStatusTool(opts?: {
       }
 
       const agentDir = resolveAgentDir(cfg, agentId);
-      const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
+      const providerForCard =
+        resolved.entry.providerOverride?.trim() ||
+        resolved.entry.modelProvider?.trim() ||
+        configured.provider;
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;
       if (usageProvider) {
