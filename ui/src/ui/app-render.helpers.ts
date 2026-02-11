@@ -360,7 +360,7 @@ export function renderChatControls(state: AppViewState) {
       <button
         class="btn btn--sm"
         ?disabled=${!state.connected}
-        title="Emergency pause: disables cron-based agent loops"
+        title="Pause agent loops (non-destructive)"
         @click=${async () => {
           if (!window.confirm("Pause all agent loops? This will disable cron jobs until resumed manually.")) {
             return;
@@ -374,23 +374,28 @@ export function renderChatControls(state: AppViewState) {
       >
         Pause
       </button>
-      <button
-        class="btn btn--sm"
-        ?disabled=${!state.connected}
-        title="Emergency halt: pause loops + terminate active non-main sessions"
-        @click=${async () => {
-          if (!window.confirm("HALT all agents? This pauses loops and terminates active non-main sessions.")) {
-            return;
-          }
-          try {
-            await haltAllAgents(state);
-          } catch (err) {
-            state.lastError = `Halt failed: ${String(err)}`;
-          }
-        }}
-      >
-        Halt
-      </button>
+      <details class="emergency-glass" ?disabled=${!state.connected}>
+        <summary class="btn btn--sm" title="Emergency controls (guarded)">🚨 Emergency</summary>
+        <div style="margin-top: 8px;">
+          <button
+            class="btn btn--sm"
+            ?disabled=${!state.connected}
+            title="Emergency halt: pause loops + terminate active non-main sessions"
+            @click=${async () => {
+              if (!window.confirm("HALT all agents? This pauses loops and terminates active non-main sessions.")) {
+                return;
+              }
+              try {
+                await haltAllAgents(state);
+              } catch (err) {
+                state.lastError = `Halt failed: ${String(err)}`;
+              }
+            }}
+          >
+            Halt
+          </button>
+        </div>
+      </details>
     </div>
   `;
 }
