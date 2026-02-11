@@ -122,6 +122,10 @@
 - Environment variables: see `~/.profile`.
 - Never commit or publish real phone numbers, videos, or live configuration values. Use obviously fake placeholders in docs, tests, and examples.
 - Release flow: always read `docs/reference/RELEASING.md` and `docs/platforms/mac/release.md` before any release work; do not ask routine questions once those docs answer them.
+- **Token comparison**: always use `safeEqual()` from `src/security/safe-equal.ts` for secret/token comparisons. Never use `===`/`!==` for tokens — it leaks timing information. The shared utility uses Node's `timingSafeEqual` under the hood.
+- **Browser control API auth**: the browser control server (`src/browser/server.ts`) requires Bearer token auth by default. Config: `browser.auth.enabled` (default: `true`), `browser.auth.token` (auto-generated if omitted). When writing tests that use `startBrowserControlServerFromConfig()`, add `auth: { enabled: false }` to the mock browser config.
+- **Hook token security**: hook auth tokens should be passed via `Authorization: Bearer <token>` or `X-OpenClaw-Token` header, not query strings. Config: `hooks.allowQueryToken` (default: `true`, deprecated — will change to `false`).
+- **DNS rebinding protection**: the browser control server validates `Host` headers, rejecting non-loopback hosts. When adding new localhost HTTP servers, apply the same Host header validation pattern.
 
 ## Troubleshooting
 
