@@ -105,13 +105,15 @@ export function buildReplyPayloads(params: {
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
     ? []
-    : params.blockStreamingEnabled
-      ? dedupedPayloads.filter((payload) => !params.blockReplyPipeline?.hasSentPayload(payload))
-      : params.directlySentBlockKeys?.size
-        ? dedupedPayloads.filter(
-            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyPayloadKey(payload)),
-          )
-        : dedupedPayloads;
+    : dedupedPayloads.filter((payload) => {
+        const key = createBlockReplyPayloadKey(payload);
+        // Check both the pipeline (if enabled) AND the direct set (if populated).
+        // It's possible to have both if the pipeline was created late or intermittent.
+        const sentViaPipeline =
+          params.blockStreamingEnabled && params.blockReplyPipeline?.hasSentPayload(payload);
+        const sentDirectly = params.directlySentBlockKeys?.has(key);
+        return !sentViaPipeline && !sentDirectly;
+      });
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
   return {
