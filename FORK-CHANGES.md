@@ -87,6 +87,7 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
 
 - **Ollama**
   - Support `OLLAMA_HOST` for cloud/remote discovery and requests (`8cb58d65d`). When `OLLAMA_HOST` is set, discovery uses a 15s timeout (vs 5s for local) to reduce timeouts on VPS/remote.
+  - After merging upstream (openclaw#14131), both behaviors are preserved: (1) **Configured base URL** — when an explicit `baseUrl` is provided (e.g. via config or `explicitProviders.ollama.baseUrl`), it is used for discovery and the provider; (2) **OLLAMA_HOST fallback** — when no base URL is configured, `OLLAMA_HOST` (or the default localhost) is used. `resolveOllamaApiBase(configuredBaseUrl?)` and `buildOllamaProvider(configuredBaseUrl?)` in `src/agents/models-config.providers.ts` implement this; tests cover both “OLLAMA_HOST for provider baseUrl” and “preserve explicit ollama baseUrl on implicit provider injection”.
 
 - _(Add further customizations, fixes, or config here as you make them.)_
 

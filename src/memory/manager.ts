@@ -27,6 +27,8 @@ import {
   runOpenAiEmbeddingBatches,
 } from "./batch-openai.js";
 import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
+import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
+import { estimateUtf8Bytes } from "./embedding-input-limits.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
 import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
@@ -87,7 +89,6 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_APPROX_CHARS_PER_TOKEN = 1;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
@@ -1543,20 +1544,13 @@ export class MemoryIndexManager implements MemorySearchManager {
       .run(META_KEY, value);
   }
 
-  private estimateEmbeddingTokens(text: string): number {
-    if (!text) {
-      return 0;
-    }
-    return Math.ceil(text.length / EMBEDDING_APPROX_CHARS_PER_TOKEN);
-  }
-
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
     const batches: MemoryChunk[][] = [];
     let current: MemoryChunk[] = [];
     let currentTokens = 0;
 
     for (const chunk of chunks) {
-      const estimate = this.estimateEmbeddingTokens(chunk.text);
+      const estimate = estimateUtf8Bytes(chunk.text);
       const wouldExceed =
         current.length > 0 && currentTokens + estimate > EMBEDDING_BATCH_MAX_TOKENS;
       if (wouldExceed) {
@@ -2206,8 +2200,11 @@ export class MemoryIndexManager implements MemorySearchManager {
     options: { source: MemorySource; content?: string },
   ) {
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-    const chunks = chunkMarkdown(content, this.settings.chunking).filter(
-      (chunk) => chunk.text.trim().length > 0,
+    const chunks = enforceEmbeddingMaxInputTokens(
+      this.provider,
+      chunkMarkdown(content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
+      ),
     );
     if (options.source === "sessions" && "lineMap" in entry) {
       remapChunkLines(chunks, entry.lineMap);

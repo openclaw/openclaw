@@ -9,6 +9,11 @@ export type VoyageEmbeddingClient = {
 
 export const DEFAULT_VOYAGE_EMBEDDING_MODEL = "voyage-4-large";
 const DEFAULT_VOYAGE_BASE_URL = "https://api.voyageai.com/v1";
+const VOYAGE_MAX_INPUT_TOKENS: Record<string, number> = {
+  "voyage-3": 32000,
+  "voyage-3-lite": 16000,
+  "voyage-code-3": 32000,
+};
 
 export function normalizeVoyageModel(model: string): string {
   const trimmed = model.trim();
@@ -59,6 +64,7 @@ export async function createVoyageEmbeddingProvider(
     provider: {
       id: "voyage",
       model: client.model,
+      maxInputTokens: VOYAGE_MAX_INPUT_TOKENS[client.model],
       embedQuery: async (text) => {
         const [vec] = await embed([text], "query");
         return vec ?? [];
