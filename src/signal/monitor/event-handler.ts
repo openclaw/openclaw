@@ -387,8 +387,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         return;
       }
 
-      const groupId = reaction.groupInfo?.groupId ?? undefined;
-      const groupName = reaction.groupInfo?.groupName ?? undefined;
+      // Group context may be in reaction.groupInfo OR dataMessage.groupInfo (signal-cli uses the latter)
+      const groupId = reaction.groupInfo?.groupId ?? dataMessage?.groupInfo?.groupId ?? undefined;
+      const groupName =
+        reaction.groupInfo?.groupName ?? dataMessage?.groupInfo?.groupName ?? undefined;
       const isGroup = Boolean(groupId);
       const senderPeerId = resolveSignalPeerId(sender);
       const route = resolveAgentRoute({
