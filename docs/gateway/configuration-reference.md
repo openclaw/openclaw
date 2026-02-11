@@ -1,654 +1,63 @@
 ---
-summary: "Complete field-by-field reference for ~/.openclaw/openclaw.json"
-read_when:
-  - Adding or modifying config fields
-  - Looking up exact config key names and accepted values
-  - Building or validating a complete configuration
 title: "Configuration Reference"
+description: "Complete field-by-field reference for ~/.openclaw/openclaw.json"
 ---
 
 # Configuration Reference
 
-Complete field-by-field reference for `~/.openclaw/openclaw.json`. For common tasks and quick setup, see [Configuration](/gateway/configuration).
+Every field available in `~/.openclaw/openclaw.json`. For a task-oriented overview, see [Configuration](/gateway/configuration).
+
+Config format is **JSON5** (comments + trailing commas allowed). All fields are optional — OpenClaw uses safe defaults when omitted.
+
+---
+
+## Channels
+
+Each channel starts automatically when its config section exists (unless `enabled: false`).
+
+### DM and group access
+
+All channels support DM policies and group policies:
+
+| DM policy           | Behavior                                                        |
+| ------------------- | --------------------------------------------------------------- |
+| `pairing` (default) | Unknown senders get a one-time pairing code; owner must approve |
+| `allowlist`         | Only senders in `allowFrom` (or paired allow store)             |
+| `open`              | Allow all inbound DMs (requires `allowFrom: ["*"]`)             |
+| `disabled`          | Ignore all inbound DMs                                          |
+
+| Group policy          | Behavior                                               |
+| --------------------- | ------------------------------------------------------ |
+| `allowlist` (default) | Only groups matching the configured allowlist          |
+| `open`                | Bypass group allowlists (mention-gating still applies) |
+| `disabled`            | Block all group/room messages                          |
 
 <Note>
-OpenClaw uses **strict validation**. Unknown keys, malformed types, or invalid values cause the Gateway to refuse to start. Run `openclaw doctor` to diagnose and fix issues.
+`channels.defaults.groupPolicy` sets the default when a provider's `groupPolicy` is unset.
+Pairing codes expire after 1 hour. Pending DM pairing requests are capped at **3 per channel**.
 </Note>
 
-## Schema + UI hints
-
-The Gateway exposes a JSON Schema representation of the config via `config.schema` for UI editors.
-The Control UI renders a form from this schema, with a **Raw JSON** editor as an escape hatch.
-
-Channel plugins and extensions can register schema + UI hints for their config, so channel settings
-stay schema-driven across apps without hard-coded forms.
-
-Hints (labels, grouping, sensitive fields) ship alongside the schema so clients can render
-better forms without hard-coding config knowledge.
-
-## Auth storage (OAuth + API keys)
-
-OpenClaw stores **per-agent** auth profiles (OAuth + API keys) in:
-
-- `<agentDir>/auth-profiles.json` (default: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`)
-
-See also: [OAuth](/concepts/oauth)
-
-Legacy OAuth imports:
-
-- `~/.openclaw/credentials/oauth.json` (or `$OPENCLAW_STATE_DIR/credentials/oauth.json`)
-
-The embedded Pi agent maintains a runtime cache at:
-
-- `<agentDir>/auth.json` (managed automatically; don't edit manually)
-
-Legacy agent dir (pre multi-agent):
-
-- `~/.openclaw/agent/*` (migrated by `openclaw doctor` into `~/.openclaw/agents/<defaultAgentId>/agent/*`)
-
-Overrides:
-
-- OAuth dir (legacy import only): `OPENCLAW_OAUTH_DIR`
-- Agent dir (default agent root override): `OPENCLAW_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
-
-On first use, OpenClaw imports `oauth.json` entries into `auth-profiles.json`.
-
-### `auth`
-
-Optional metadata for auth profiles. This does **not** store secrets; it maps
-profile IDs to a provider + mode (and optional email) and defines the provider
-rotation order used for failover.
-
-```json5
-{
-  auth: {
-    profiles: {
-      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
-      "anthropic:work": { provider: "anthropic", mode: "api_key" },
-    },
-    order: {
-      anthropic: ["anthropic:me@example.com", "anthropic:work"],
-    },
-  },
-}
-```
-
-## Agent identity
-
-### `agents.list[].identity`
-
-Optional per-agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
-
-If set, OpenClaw derives defaults (only when you haven't set them explicitly):
-
-- `messages.ackReaction` from the **active agent**'s `identity.emoji` (falls back to 👀)
-- `agents.list[].groupChat.mentionPatterns` from the agent's `identity.name`/`identity.emoji` (so "@Samantha" works in groups across Telegram/Slack/Discord/Google Chat/iMessage/WhatsApp)
-- `identity.avatar` accepts a workspace-relative image path or a remote URL/data URL. Local files must live inside the agent workspace.
-
-`identity.avatar` accepts:
-
-- Workspace-relative path (must stay within the agent workspace)
-- `http(s)` URL
-- `data:` URI
-
-```json5
-{
-  agents: {
-    list: [
-      {
-        id: "main",
-        identity: {
-          name: "Samantha",
-          theme: "helpful sloth",
-          emoji: "🦥",
-          avatar: "avatars/samantha.png",
-        },
-      },
-    ],
-  },
-}
-```
-
-### `wizard`
-
-Metadata written by CLI wizards (`onboard`, `configure`, `doctor`).
-
-```json5
-{
-  wizard: {
-    lastRunAt: "2026-01-01T00:00:00.000Z",
-    lastRunVersion: "2026.1.4",
-    lastRunCommit: "abc1234",
-    lastRunCommand: "configure",
-    lastRunMode: "local",
-  },
-}
-```
-
-## Logging
-
-- Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`
-- If you want a stable path, set `logging.file` to `/tmp/openclaw/openclaw.log`.
-- Console output can be tuned separately via:
-  - `logging.consoleLevel` (defaults to `info`, bumps to `debug` when `--verbose`)
-  - `logging.consoleStyle` (`pretty` | `compact` | `json`)
-- Tool summaries can be redacted to avoid leaking secrets:
-  - `logging.redactSensitive` (`off` | `tools`, default: `tools`)
-  - `logging.redactPatterns` (array of regex strings; overrides defaults)
-
-```json5
-{
-  logging: {
-    level: "info",
-    file: "/tmp/openclaw/openclaw.log",
-    consoleLevel: "info",
-    consoleStyle: "pretty",
-    redactSensitive: "tools",
-    redactPatterns: [
-      "\\bTOKEN\\b\\s*[=:]\\s*([\"']?)([^\\s\"']+)\\1",
-      "/\\bsk-[A-Za-z0-9_-]{8,}\\b/gi",
-    ],
-  },
-}
-```
-
-## DM and group access
-
-### `channels.whatsapp.dmPolicy`
-
-Controls how WhatsApp direct chats (DMs) are handled:
-
-- `"pairing"` (default): unknown senders get a pairing code; owner must approve
-- `"allowlist"`: only allow senders in `channels.whatsapp.allowFrom` (or paired allow store)
-- `"open"`: allow all inbound DMs (**requires** `channels.whatsapp.allowFrom` to include `"*"`)
-- `"disabled"`: ignore all inbound DMs
-
-Pairing codes expire after 1 hour; the bot only sends a pairing code when a new request is created. Pending DM pairing requests are capped at **3 per channel** by default.
-
-Pairing approvals:
-
-- `openclaw pairing list whatsapp`
-- `openclaw pairing approve whatsapp <code>`
-
-### `channels.whatsapp.allowFrom`
-
-Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies (**DMs only**).
-If empty and `channels.whatsapp.dmPolicy="pairing"`, unknown senders will receive a pairing code.
-For groups, use `channels.whatsapp.groupPolicy` + `channels.whatsapp.groupAllowFrom`.
-
-```json5
-{
-  channels: {
-    whatsapp: {
-      dmPolicy: "pairing",
-      allowFrom: ["+15555550123", "+447700900123"],
-      textChunkLimit: 4000,
-      chunkMode: "length",
-      mediaMaxMb: 50,
-    },
-  },
-}
-```
-
-### `channels.whatsapp.sendReadReceipts`
-
-Controls whether inbound WhatsApp messages are marked as read (blue ticks). Default: `true`.
-
-Self-chat mode always skips read receipts, even when enabled.
-
-Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`.
-
-```json5
-{
-  channels: {
-    whatsapp: { sendReadReceipts: false },
-  },
-}
-```
-
-### Multi-account (WhatsApp)
-
-Run multiple WhatsApp accounts in one gateway:
-
-```json5
-{
-  channels: {
-    whatsapp: {
-      accounts: {
-        default: {},
-        personal: {},
-        biz: {},
-      },
-    },
-  },
-}
-```
-
-Notes:
-
-- Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
-- The legacy single-account Baileys auth dir is migrated by `openclaw doctor` into `whatsapp/default`.
-
-### Multi-account (Telegram, Discord, Slack, etc.)
-
-Run multiple accounts per channel (each account has its own `accountId` and optional `name`):
-
-```json5
-{
-  channels: {
-    telegram: {
-      accounts: {
-        default: { name: "Primary bot", botToken: "123456:ABC..." },
-        alerts: { name: "Alerts bot", botToken: "987654:XYZ..." },
-      },
-    },
-  },
-}
-```
-
-Notes:
-
-- `default` is used when `accountId` is omitted (CLI + routing).
-- Env tokens only apply to the **default** account.
-- Base channel settings apply to all accounts unless overridden per account.
-- Use `bindings[].match.accountId` to route each account to a different agent.
-
-### Group chat mention gating
-
-Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
-
-**Mention types:**
-
-- **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `channels.whatsapp.allowFrom`).
-- **Text patterns**: Regex patterns defined in `agents.list[].groupChat.mentionPatterns`. Always checked regardless of self-chat mode.
-- Mention gating is enforced only when mention detection is possible (native mentions or at least one `mentionPattern`).
-
-```json5
-{
-  messages: {
-    groupChat: { historyLimit: 50 },
-  },
-  agents: {
-    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
-  },
-}
-```
-
-`messages.groupChat.historyLimit` sets the global default for group history context. Channels can override with `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit` for multi-account). Set `0` to disable history wrapping.
-
-#### DM history limits
-
-DM conversations use session-based history managed by the agent. You can limit the number of user turns retained per DM session:
-
-```json5
-{
-  channels: {
-    telegram: {
-      dmHistoryLimit: 30,
-      dms: {
-        "123456789": { historyLimit: 50 },
-      },
-    },
-  },
-}
-```
-
-Resolution order:
-
-1. Per-DM override: `channels.<provider>.dms[userId].historyLimit`
-2. Provider default: `channels.<provider>.dmHistoryLimit`
-3. No limit (all history retained)
-
-Supported providers: `telegram`, `whatsapp`, `discord`, `slack`, `signal`, `imessage`, `msteams`.
-
-Per-agent override (takes precedence when set, even `[]`):
-
-```json5
-{
-  agents: {
-    list: [
-      { id: "work", groupChat: { mentionPatterns: ["@workbot", "\\+15555550123"] } },
-      { id: "personal", groupChat: { mentionPatterns: ["@homebot", "\\+15555550999"] } },
-    ],
-  },
-}
-```
-
-Mention gating defaults live per channel (`channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`, `channels.discord.guilds`). When `*.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
-
-To respond **only** to specific text triggers (ignoring native @-mentions):
-
-```json5
-{
-  channels: {
-    whatsapp: {
-      allowFrom: ["+15555550123"],
-      groups: { "*": { requireMention: true } },
-    },
-  },
-  agents: {
-    list: [
-      {
-        id: "main",
-        groupChat: { mentionPatterns: ["reisponde", "@openclaw"] },
-      },
-    ],
-  },
-}
-```
-
-### Group policy (per channel)
-
-Use `channels.*.groupPolicy` to control whether group/room messages are accepted at all:
-
-```json5
-{
-  channels: {
-    whatsapp: {
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+15551234567"],
-    },
-    telegram: {
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["tg:123456789", "@alice"],
-    },
-    signal: {
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+15551234567"],
-    },
-    imessage: {
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["chat_id:123"],
-    },
-    msteams: {
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["user@org.com"],
-    },
-    discord: {
-      groupPolicy: "allowlist",
-      guilds: {
-        GUILD_ID: {
-          channels: { help: { allow: true } },
-        },
-      },
-    },
-    slack: {
-      groupPolicy: "allowlist",
-      channels: { "#general": { allow: true } },
-    },
-  },
-}
-```
-
-Notes:
-
-- `"open"`: groups bypass allowlists; mention-gating still applies.
-- `"disabled"`: block all group/room messages.
-- `"allowlist"`: only allow groups/rooms that match the configured allowlist.
-- `channels.defaults.groupPolicy` sets the default when a provider's `groupPolicy` is unset.
-- WhatsApp/Telegram/Signal/iMessage/Microsoft Teams use `groupAllowFrom` (fallback: explicit `allowFrom`).
-- Discord/Slack use channel allowlists (`channels.discord.guilds.*.channels`, `channels.slack.channels`).
-- Group DMs (Discord/Slack) are still controlled by `dm.groupEnabled` + `dm.groupChannels`.
-- Default is `groupPolicy: "allowlist"` (unless overridden by `channels.defaults.groupPolicy`); if no allowlist is configured, group messages are blocked.
-
-## Multi-agent routing
-
-Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside one Gateway.
-Inbound messages are routed to an agent via bindings.
-
-- `agents.list[]`: per-agent overrides.
-  - `id`: stable agent id (required).
-  - `default`: optional; when multiple are set, the first wins and a warning is logged.
-    If none are set, the **first entry** in the list is the default agent.
-  - `name`: display name for the agent.
-  - `workspace`: default `~/.openclaw/workspace-<agentId>` (for `main`, falls back to `agents.defaults.workspace`).
-  - `agentDir`: default `~/.openclaw/agents/<agentId>/agent`.
-  - `model`: per-agent default model, overrides `agents.defaults.model` for that agent.
-    - string form: `"provider/model"`, overrides only `agents.defaults.model.primary`
-    - object form: `{ primary, fallbacks }` (fallbacks override `agents.defaults.model.fallbacks`; `[]` disables global fallbacks for that agent)
-  - `identity`: per-agent name/theme/emoji (used for mention patterns + ack reactions).
-  - `groupChat`: per-agent mention-gating (`mentionPatterns`).
-  - `sandbox`: per-agent sandbox config (overrides `agents.defaults.sandbox`).
-    - `mode`: `"off"` | `"non-main"` | `"all"`
-    - `workspaceAccess`: `"none"` | `"ro"` | `"rw"`
-    - `scope`: `"session"` | `"agent"` | `"shared"`
-    - `workspaceRoot`: custom sandbox workspace root
-    - `docker`: per-agent docker overrides (e.g. `image`, `network`, `env`, `setupCommand`, limits; ignored when `scope: "shared"`)
-    - `browser`: per-agent sandboxed browser overrides (ignored when `scope: "shared"`)
-    - `prune`: per-agent sandbox pruning overrides (ignored when `scope: "shared"`)
-  - `subagents`: per-agent sub-agent defaults.
-    - `allowAgents`: allowlist of agent ids for `sessions_spawn` from this agent (`["*"]` = allow any; default: only same agent)
-  - `tools`: per-agent tool restrictions (applied before sandbox tool policy).
-    - `profile`: base tool profile (applied before allow/deny)
-    - `allow`: array of allowed tool names
-    - `deny`: array of denied tool names (deny wins)
-- `agents.defaults`: shared agent defaults (model, workspace, sandbox, etc.).
-- `bindings[]`: routes inbound messages to an `agentId`.
-  - `match.channel` (required)
-  - `match.accountId` (optional; `*` = any account; omitted = default account)
-  - `match.peer` (optional; `{ kind: direct|group|channel, id }`)
-  - `match.guildId` / `match.teamId` (optional; channel-specific)
-
-Deterministic match order:
-
-1. `match.peer`
-2. `match.guildId`
-3. `match.teamId`
-4. `match.accountId` (exact, no peer/guild/team)
-5. `match.accountId: "*"` (channel-wide, no peer/guild/team)
-6. default agent (`agents.list[].default`, else first list entry, else `"main"`)
-
-Within each match tier, the first matching entry in `bindings` wins.
-
-### Per-agent access profiles (multi-agent)
-
-Each agent can carry its own sandbox + tool policy. Use this to mix access
-levels in one gateway:
-
-- **Full access** (personal agent)
-- **Read-only** tools + workspace
-- **No filesystem access** (messaging/session tools only)
-
-See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence and
-additional examples.
-
-<Accordion title="Full access (no sandbox)">
-```json5
-{
-  agents: {
-    list: [
-      {
-        id: "personal",
-        workspace: "~/.openclaw/workspace-personal",
-        sandbox: { mode: "off" },
-      },
-    ],
-  },
-}
-```
-</Accordion>
-
-<Accordion title="Read-only tools + read-only workspace">
-```json5
-{
-  agents: {
-    list: [
-      {
-        id: "family",
-        workspace: "~/.openclaw/workspace-family",
-        sandbox: {
-          mode: "all",
-          scope: "agent",
-          workspaceAccess: "ro",
-        },
-        tools: {
-          allow: [
-            "read", "sessions_list", "sessions_history",
-            "sessions_send", "sessions_spawn", "session_status",
-          ],
-          deny: ["write", "edit", "apply_patch", "exec", "process", "browser"],
-        },
-      },
-    ],
-  },
-}
-```
-</Accordion>
-
-<Accordion title="No filesystem access (messaging/session tools only)">
-```json5
-{
-  agents: {
-    list: [
-      {
-        id: "public",
-        workspace: "~/.openclaw/workspace-public",
-        sandbox: {
-          mode: "all",
-          scope: "agent",
-          workspaceAccess: "none",
-        },
-        tools: {
-          allow: [
-            "sessions_list", "sessions_history", "sessions_send",
-            "sessions_spawn", "session_status",
-            "whatsapp", "telegram", "slack", "discord", "gateway",
-          ],
-          deny: [
-            "read", "write", "edit", "apply_patch", "exec",
-            "process", "browser", "canvas", "nodes", "cron",
-            "gateway", "image",
-          ],
-        },
-      },
-    ],
-  },
-}
-```
-</Accordion>
-
-<Accordion title="Two WhatsApp accounts → two agents">
-```json5
-{
-  agents: {
-    list: [
-      { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-      { id: "work", workspace: "~/.openclaw/workspace-work" },
-    ],
-  },
-  bindings: [
-    { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
-    { agentId: "work", match: { channel: "whatsapp", accountId: "biz" } },
-  ],
-  channels: {
-    whatsapp: {
-      accounts: { personal: {}, biz: {} },
-    },
-  },
-}
-```
-</Accordion>
-
-### `tools.agentToAgent` (optional)
-
-Agent-to-agent messaging is opt-in:
-
-```json5
-{
-  tools: {
-    agentToAgent: {
-      enabled: false,
-      allow: ["home", "work"],
-    },
-  },
-}
-```
-
-## Message queue and inbound
-
-### `messages.queue`
-
-Controls how inbound messages behave when an agent run is already active.
-
-```json5
-{
-  messages: {
-    queue: {
-      mode: "collect",
-      debounceMs: 1000,
-      cap: 20,
-      drop: "summarize",
-      byChannel: {
-        whatsapp: "collect",
-        telegram: "collect",
-        discord: "collect",
-      },
-    },
-  },
-}
-```
-
-See [Queue](/concepts/queue) for mode details (`steer`, `followup`, `collect`, `steer-backlog`, `interrupt`).
-
-### `messages.inbound`
-
-Debounce rapid inbound messages from the **same sender** so multiple back-to-back
-messages become a single agent turn:
-
-```json5
-{
-  messages: {
-    inbound: {
-      debounceMs: 2000,
-      byChannel: { whatsapp: 5000, slack: 1500 },
-    },
-  },
-}
-```
-
-Notes:
-
-- Debounce batches **text-only** messages; media/attachments flush immediately.
-- Control commands (e.g. `/queue`, `/new`) bypass debouncing.
-
-### `commands` (chat command handling)
-
-```json5
-{
-  commands: {
-    native: "auto",
-    text: true,
-    bash: false,
-    bashForegroundMs: 2000,
-    config: false,
-    debug: false,
-    restart: false,
-    allowFrom: { "*": ["user1"], discord: ["user:123"] },
-    useAccessGroups: true,
-  },
-}
-```
-
-Notes:
-
-- Text commands must be sent as a **standalone** message with leading `/`.
-- `commands.native: "auto"` (default) turns on native commands for Discord/Telegram and leaves Slack off.
-- Set per channel: `channels.discord.commands.native`, `channels.telegram.commands.native`, `channels.slack.commands.native`.
-- `channels.telegram.customCommands` adds extra Telegram bot menu entries.
-- `commands.bash: true` enables `! <cmd>` for host shell commands. Requires `tools.elevated.enabled` and sender allowlisting.
-- `commands.config: true` enables `/config` (reads/writes `openclaw.json`).
-- `channels.<provider>.configWrites` gates config mutations from that channel (default: true).
-- `commands.allowFrom` sets per-provider command allowlists. When configured, it is the **only** authorization source.
-- Full command list: [Slash commands](/tools/slash-commands).
-
-## Channel-specific config
-
-### `web` (WhatsApp web channel runtime)
+### WhatsApp
 
 WhatsApp runs through the gateway's web channel (Baileys Web). It starts automatically when a linked session exists.
 
 ```json5
 {
+  channels: {
+    whatsapp: {
+      dmPolicy: "pairing", // pairing | allowlist | open | disabled
+      allowFrom: ["+15555550123", "+447700900123"],
+      textChunkLimit: 4000,
+      chunkMode: "length", // length | newline
+      mediaMaxMb: 50,
+      sendReadReceipts: true, // blue ticks (false in self-chat mode)
+      groups: {
+        "*": { requireMention: true },
+      },
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15551234567"],
+    },
+  },
   web: {
     enabled: true,
     heartbeatSeconds: 60,
@@ -663,9 +72,31 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 }
 ```
 
-### `channels.telegram` (bot transport)
+<Accordion title="Multi-account WhatsApp">
 
-OpenClaw starts Telegram only when a `channels.telegram` config section exists. The bot token is resolved from `channels.telegram.botToken` (or `channels.telegram.tokenFile`), with `TELEGRAM_BOT_TOKEN` as a fallback for the default account.
+```json5
+{
+  channels: {
+    whatsapp: {
+      accounts: {
+        default: {},
+        personal: {},
+        biz: {
+          // authDir: "~/.openclaw/credentials/whatsapp/biz",
+        },
+      },
+    },
+  },
+}
+```
+
+- Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
+- Legacy single-account Baileys auth dir is migrated by `openclaw doctor` into `whatsapp/default`.
+- Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`.
+
+</Accordion>
+
+### Telegram
 
 ```json5
 {
@@ -694,14 +125,23 @@ OpenClaw starts Telegram only when a `channels.telegram` config section exists. 
         { command: "generate", description: "Create an image" },
       ],
       historyLimit: 50,
-      replyToMode: "first",
+      replyToMode: "first", // off | first | all
       linkPreview: true,
-      streamMode: "partial",
-      draftChunk: { minChars: 200, maxChars: 800, breakPreference: "paragraph" },
+      streamMode: "partial", // off | partial | block
+      draftChunk: {
+        minChars: 200,
+        maxChars: 800,
+        breakPreference: "paragraph", // paragraph | newline | sentence
+      },
       actions: { reactions: true, sendMessage: true },
-      reactionNotifications: "own",
+      reactionNotifications: "own", // off | own | all
       mediaMaxMb: 5,
-      retry: { attempts: 3, minDelayMs: 400, maxDelayMs: 30000, jitter: 0.1 },
+      retry: {
+        attempts: 3,
+        minDelayMs: 400,
+        maxDelayMs: 30000,
+        jitter: 0.1,
+      },
       network: { autoSelectFamily: false },
       proxy: "socks5://localhost:9050",
       webhookUrl: "https://example.com/telegram-webhook",
@@ -712,14 +152,12 @@ OpenClaw starts Telegram only when a `channels.telegram` config section exists. 
 }
 ```
 
-Draft streaming notes:
+- Bot token: `channels.telegram.botToken` or `channels.telegram.tokenFile`, with `TELEGRAM_BOT_TOKEN` as fallback for the default account.
+- `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
+- Draft streaming uses Telegram `sendMessageDraft` (requires private chat topics).
+- Retry policy: see [Retry policy](/concepts/retry).
 
-- Uses Telegram `sendMessageDraft` (draft bubble, not a real message).
-- Requires **private chat topics** (message_thread_id in DMs; bot has topics enabled).
-- `/reasoning stream` streams reasoning into the draft, then sends the final answer.
-- Retry policy defaults: [Retry policy](/concepts/retry).
-
-### `channels.discord` (bot transport)
+### Discord
 
 ```json5
 {
@@ -746,7 +184,7 @@ Draft streaming notes:
         events: true,
         moderation: false,
       },
-      replyToMode: "off",
+      replyToMode: "off", // off | first | all
       dm: {
         enabled: true,
         policy: "pairing",
@@ -774,22 +212,28 @@ Draft streaming notes:
       },
       historyLimit: 20,
       textChunkLimit: 2000,
-      chunkMode: "length",
+      chunkMode: "length", // length | newline
       maxLinesPerMessage: 17,
-      retry: { attempts: 3, minDelayMs: 500, maxDelayMs: 30000, jitter: 0.1 },
+      retry: {
+        attempts: 3,
+        minDelayMs: 500,
+        maxDelayMs: 30000,
+        jitter: 0.1,
+      },
     },
   },
 }
 ```
 
-OpenClaw starts Discord only when a `channels.discord` config section exists. Token is resolved from `channels.discord.token`, with `DISCORD_BOT_TOKEN` as fallback. Use `user:<id>` (DM) or `channel:<id>` (guild) for delivery targets; bare numeric IDs are rejected.
-Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids.
-Reaction notification modes: `off`, `own` (default), `all`, `allowlist`.
-Retry policy: [Retry policy](/concepts/retry).
+- Token: `channels.discord.token`, with `DISCORD_BOT_TOKEN` as fallback for the default account.
+- Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
+- Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
+- Bot-authored messages are ignored by default. `allowBots: true` enables them (own messages still filtered).
+- `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
 
-### `channels.googlechat` (Chat API webhook)
+**Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).
 
-Google Chat runs over HTTP webhooks with app-level auth (service account).
+### Google Chat
 
 ```json5
 {
@@ -797,7 +241,7 @@ Google Chat runs over HTTP webhooks with app-level auth (service account).
     googlechat: {
       enabled: true,
       serviceAccountFile: "/path/to/service-account.json",
-      audienceType: "app-url",
+      audienceType: "app-url", // app-url | project-number
       audience: "https://gateway.example.com/googlechat",
       webhookPath: "/googlechat",
       botUser: "users/1234567890",
@@ -807,7 +251,9 @@ Google Chat runs over HTTP webhooks with app-level auth (service account).
         allowFrom: ["users/1234567890"],
       },
       groupPolicy: "allowlist",
-      groups: { "spaces/AAAA": { allow: true, requireMention: true } },
+      groups: {
+        "spaces/AAAA": { allow: true, requireMention: true },
+      },
       actions: { reactions: true },
       typingIndicator: "message",
       mediaMaxMb: 20,
@@ -816,16 +262,11 @@ Google Chat runs over HTTP webhooks with app-level auth (service account).
 }
 ```
 
-Notes:
-
-- Service account JSON can be inline (`serviceAccount`) or file-based (`serviceAccountFile`).
+- Service account JSON: inline (`serviceAccount`) or file-based (`serviceAccountFile`).
 - Env fallbacks: `GOOGLE_CHAT_SERVICE_ACCOUNT` or `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE`.
-- `audienceType` + `audience` must match the Chat app's webhook auth config.
 - Use `spaces/<spaceId>` or `users/<userId|email>` for delivery targets.
 
-### `channels.slack` (socket mode)
-
-Slack runs in Socket Mode with both a bot token and app token:
+### Slack
 
 ```json5
 {
@@ -837,7 +278,7 @@ Slack runs in Socket Mode with both a bot token and app token:
       dm: {
         enabled: true,
         policy: "pairing",
-        allowFrom: ["U123", "U456"],
+        allowFrom: ["U123", "U456", "*"],
         groupEnabled: false,
         groupChannels: ["G123"],
       },
@@ -856,9 +297,18 @@ Slack runs in Socket Mode with both a bot token and app token:
       allowBots: false,
       reactionNotifications: "own",
       reactionAllowlist: ["U123"],
-      replyToMode: "off",
-      thread: { historyScope: "thread", inheritParent: false },
-      actions: { reactions: true, messages: true, pins: true, memberInfo: true, emojiList: true },
+      replyToMode: "off", // off | first | all
+      thread: {
+        historyScope: "thread", // thread | channel
+        inheritParent: false,
+      },
+      actions: {
+        reactions: true,
+        messages: true,
+        pins: true,
+        memberInfo: true,
+        emojiList: true,
+      },
       slashCommand: {
         enabled: true,
         name: "openclaw",
@@ -873,11 +323,23 @@ Slack runs in Socket Mode with both a bot token and app token:
 }
 ```
 
-OpenClaw starts Slack when both tokens are set (config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`).
-Thread session isolation: `thread.historyScope` (`thread` default, `channel`), `thread.inheritParent` (default false).
-Reaction notification modes: `off`, `own` (default), `all`, `allowlist`.
+- Requires both `botToken` and `appToken` (Socket Mode). Env fallbacks: `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`.
+- `configWrites: false` blocks Slack-initiated config writes.
+- Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
-### `channels.mattermost` (bot token)
+**Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
+
+**Thread session isolation:** `thread.historyScope` is per-thread (default) or shared across channel. `thread.inheritParent` copies parent channel transcript to new threads.
+
+| Action group | Default | Notes                  |
+| ------------ | ------- | ---------------------- |
+| reactions    | enabled | React + list reactions |
+| messages     | enabled | Read/send/edit/delete  |
+| pins         | enabled | Pin/unpin/list         |
+| memberInfo   | enabled | Member info            |
+| emojiList    | enabled | Custom emoji list      |
+
+### Mattermost
 
 Mattermost ships as a plugin: `openclaw plugins install @openclaw/mattermost`.
 
@@ -889,7 +351,7 @@ Mattermost ships as a plugin: `openclaw plugins install @openclaw/mattermost`.
       botToken: "mm-token",
       baseUrl: "https://chat.example.com",
       dmPolicy: "pairing",
-      chatmode: "oncall",
+      chatmode: "oncall", // oncall | onmessage | onchar
       oncharPrefixes: [">", "!"],
       textChunkLimit: 4000,
       chunkMode: "length",
@@ -898,15 +360,15 @@ Mattermost ships as a plugin: `openclaw plugins install @openclaw/mattermost`.
 }
 ```
 
-Chat modes: `oncall` (default, respond on @mention), `onmessage` (respond to every message), `onchar` (trigger prefix).
+Chat modes: `oncall` (respond on @-mention, default), `onmessage` (every message), `onchar` (messages starting with trigger prefix).
 
-### `channels.signal` (signal-cli)
+### Signal
 
 ```json5
 {
   channels: {
     signal: {
-      reactionNotifications: "own",
+      reactionNotifications: "own", // off | own | all | allowlist
       reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
       historyLimit: 50,
     },
@@ -914,9 +376,9 @@ Chat modes: `oncall` (default, respond on @mention), `onmessage` (respond to eve
 }
 ```
 
-Reaction notification modes: `off`, `own` (default), `all`, `allowlist`.
+**Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
 
-### `channels.imessage` (imsg CLI)
+### iMessage
 
 OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 
@@ -940,170 +402,224 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 }
 ```
 
-Notes:
-
 - Requires Full Disk Access to the Messages DB.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
-- `cliPath` can point to an SSH wrapper script; set `remoteHost` to fetch attachments via SCP.
+- `cliPath` can point to an SSH wrapper; set `remoteHost` for SCP attachment fetching.
 
-## Agent defaults
+<Accordion title="iMessage SSH wrapper example">
 
-### Workspace and bootstrap
-
-- `agents.defaults.workspace`: single global workspace directory (default: `~/.openclaw/workspace`).
-- `agents.defaults.repoRoot`: optional repo root shown in system prompt Runtime line.
-- `agents.defaults.skipBootstrap`: disable automatic bootstrap file creation (for pre-seeded workspaces).
-- `agents.defaults.bootstrapMaxChars`: max chars per bootstrap file before truncation (default: 20000).
-- `agents.defaults.userTimezone`: timezone for system prompt context (default: host timezone).
-- `agents.defaults.timeFormat`: time format in system prompt (`auto` | `12` | `24`, default: `auto`).
-
-### Messages
-
-```json5
-{
-  messages: {
-    responsePrefix: "🦞",
-    ackReaction: "👀",
-    ackReactionScope: "group-mentions",
-    removeAckAfterReply: false,
-  },
-}
+```bash
+#!/usr/bin/env bash
+exec ssh -T gateway-host imsg "$@"
 ```
 
-`responsePrefix` is applied to **all outbound replies** across channels unless already present.
+</Accordion>
 
-Overrides (most specific wins):
+### Multi-account (all channels)
 
-1. `channels.<channel>.accounts.<id>.responsePrefix`
-2. `channels.<channel>.responsePrefix`
-3. `messages.responsePrefix`
-
-Semantics:
-
-- `undefined` falls through to the next level
-- `""` explicitly disables the prefix
-- `"auto"` derives `[{identity.name}]` for the routed agent
-
-#### Template variables
-
-| Variable          | Description            | Example                     |
-| ----------------- | ---------------------- | --------------------------- |
-| `{model}`         | Short model name       | `claude-opus-4-6`, `gpt-4o` |
-| `{modelFull}`     | Full model identifier  | `anthropic/claude-opus-4-6` |
-| `{provider}`      | Provider name          | `anthropic`, `openai`       |
-| `{thinkingLevel}` | Current thinking level | `high`, `low`, `off`        |
-| `{identity.name}` | Agent identity name    | (same as `"auto"` mode)     |
-
-Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`. Unresolved variables remain as literal text.
-
-`ackReaction` sends a best-effort emoji reaction on channels that support reactions (Slack/Discord/Telegram/Google Chat). Defaults to `identity.emoji` when set, otherwise `"👀"`. Set `""` to disable.
-
-`ackReactionScope`: `group-mentions` (default), `group-all`, `direct`, `all`.
-
-`removeAckAfterReply`: remove the ack reaction after reply (default: false).
-
-WhatsApp inbound prefix: `channels.whatsapp.messagePrefix` (deprecated: `messages.messagePrefix`).
-
-#### `messages.tts`
-
-Enable text-to-speech for outbound replies:
+Run multiple accounts per channel (each with its own `accountId`):
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      mode: "final",
-      provider: "elevenlabs",
-      summaryModel: "openai/gpt-4.1-mini",
-      modelOverrides: { enabled: true },
-      maxTextLength: 4000,
-      timeoutMs: 30000,
-      prefsPath: "~/.openclaw/settings/tts.json",
-      elevenlabs: {
-        apiKey: "elevenlabs_api_key",
-        baseUrl: "https://api.elevenlabs.io",
-        voiceId: "voice_id",
-        modelId: "eleven_multilingual_v2",
-        voiceSettings: {
-          stability: 0.5,
-          similarityBoost: 0.75,
-          style: 0.0,
-          useSpeakerBoost: true,
-          speed: 1.0,
+  channels: {
+    telegram: {
+      accounts: {
+        default: {
+          name: "Primary bot",
+          botToken: "123456:ABC...",
+        },
+        alerts: {
+          name: "Alerts bot",
+          botToken: "987654:XYZ...",
         },
       },
-      openai: { apiKey: "openai_api_key", model: "gpt-4o-mini-tts", voice: "alloy" },
     },
   },
 }
 ```
 
-Notes:
+- `default` is used when `accountId` is omitted (CLI + routing).
+- Env tokens only apply to the **default** account.
+- Base channel settings apply to all accounts unless overridden per account.
+- Use `bindings[].match.accountId` to route each account to a different agent.
 
-- `auto`: `off` | `always` | `inbound` | `tagged`. `/tts off|always|inbound|tagged` sets per-session.
-- `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
-- `apiKey` values fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+### Group chat mention gating
 
-### Talk mode
+Group messages default to **require mention** (metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
+
+**Mention types:**
+
+- **Metadata mentions**: Native platform @-mentions. Ignored in WhatsApp self-chat mode.
+- **Text patterns**: Regex patterns in `agents.list[].groupChat.mentionPatterns`. Always checked.
+- Mention gating is enforced only when detection is possible (native mentions or at least one pattern).
 
 ```json5
 {
-  talk: {
-    voiceId: "elevenlabs_voice_id",
-    voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" },
-    modelId: "eleven_v3",
-    outputFormat: "mp3_44100_128",
-    apiKey: "elevenlabs_api_key",
-    interruptOnSpeech: true,
+  messages: {
+    groupChat: { historyLimit: 50 },
+  },
+  agents: {
+    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
   },
 }
 ```
 
-### `agents.defaults` (model, thinking, runtime)
+`messages.groupChat.historyLimit` sets the global default. Channels can override with `channels.<channel>.historyLimit` (or per-account). Set `0` to disable.
 
-`agents.defaults.models` defines the configured model catalog and acts as the allowlist for `/model`.
-`agents.defaults.model.primary` sets the default model; `agents.defaults.model.fallbacks` are global failovers.
-`agents.defaults.imageModel` is optional and is **only used if the primary model lacks image input**.
+#### DM history limits
 
-Each `agents.defaults.models` entry can include:
+```json5
+{
+  channels: {
+    telegram: {
+      dmHistoryLimit: 30,
+      dms: {
+        "123456789": { historyLimit: 50 },
+      },
+    },
+  },
+}
+```
 
-- `alias` (optional shortcut, e.g. `/opus`)
-- `params` (optional provider-specific params: `temperature`, `maxTokens`)
+Resolution: per-DM override → provider default → no limit (all retained).
 
-Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinking off` or define `params.thinking` yourself.
+Supported: `telegram`, `whatsapp`, `discord`, `slack`, `signal`, `imessage`, `msteams`.
 
-Built-in alias shorthands (apply only when the model is in `agents.defaults.models`):
+#### Self-chat mode
 
-- `opus` → `anthropic/claude-opus-4-6`
-- `sonnet` → `anthropic/claude-sonnet-4-5`
-- `gpt` → `openai/gpt-5.2`
-- `gpt-mini` → `openai/gpt-5-mini`
-- `gemini` → `google/gemini-3-pro-preview`
-- `gemini-flash` → `google/gemini-3-flash-preview`
+Include your own number in `allowFrom` to enable self-chat mode (ignores native @-mentions, only responds to text patterns):
 
-If you configure the same alias name yourself, your value wins.
+```json5
+{
+  channels: {
+    whatsapp: {
+      allowFrom: ["+15555550123"],
+      groups: { "*": { requireMention: true } },
+    },
+  },
+  agents: {
+    list: [
+      {
+        id: "main",
+        groupChat: { mentionPatterns: ["reisponde", "@openclaw"] },
+      },
+    ],
+  },
+}
+```
 
-<Accordion title="Full agents.defaults example">
+### Commands (chat command handling)
+
+```json5
+{
+  commands: {
+    native: "auto", // register native commands when supported
+    text: true, // parse /commands in chat messages
+    bash: false, // allow ! (alias: /bash)
+    bashForegroundMs: 2000,
+    config: false, // allow /config
+    debug: false, // allow /debug
+    restart: false, // allow /restart + gateway restart tool
+    allowFrom: {
+      "*": ["user1"],
+      discord: ["user:123"],
+    },
+    useAccessGroups: true,
+  },
+}
+```
+
+<Accordion title="Command details">
+
+- Text commands must be **standalone** messages with leading `/`.
+- `native: "auto"` turns on native commands for Discord/Telegram, leaves Slack off.
+- Override per channel: `channels.discord.commands.native` (bool or `"auto"`). `false` clears previously registered commands.
+- `channels.telegram.customCommands` adds extra Telegram bot menu entries.
+- `bash: true` enables `! <cmd>` for host shell. Requires `tools.elevated.enabled` and sender in `tools.elevated.allowFrom.<channel>`.
+- `config: true` enables `/config` (reads/writes `openclaw.json`).
+- `channels.<provider>.configWrites` gates config mutations per channel (default: true).
+- `allowFrom` is per-provider. When set, it is the **only** authorization source (channel allowlists/pairing and `useAccessGroups` are ignored).
+- `useAccessGroups: false` allows commands to bypass access-group policies when `allowFrom` is not set.
+
+</Accordion>
+
+---
+
+## Agent defaults
+
+### `agents.defaults.workspace`
+
+Default: `~/.openclaw/workspace`.
+
+```json5
+{
+  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
+}
+```
+
+### `agents.defaults.repoRoot`
+
+Optional repository root shown in the system prompt's Runtime line. If unset, OpenClaw auto-detects by walking upward from the workspace.
+
+```json5
+{
+  agents: { defaults: { repoRoot: "~/Projects/openclaw" } },
+}
+```
+
+### `agents.defaults.skipBootstrap`
+
+Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`).
+
+```json5
+{
+  agents: { defaults: { skipBootstrap: true } },
+}
+```
+
+### `agents.defaults.bootstrapMaxChars`
+
+Max characters per workspace bootstrap file before truncation. Default: `20000`.
+
+```json5
+{
+  agents: { defaults: { bootstrapMaxChars: 20000 } },
+}
+```
+
+### `agents.defaults.userTimezone`
+
+Timezone for system prompt context (not message timestamps). Falls back to host timezone.
+
+```json5
+{
+  agents: { defaults: { userTimezone: "America/Chicago" } },
+}
+```
+
+### `agents.defaults.timeFormat`
+
+Time format in system prompt. Default: `auto` (OS preference).
+
+```json5
+{
+  agents: { defaults: { timeFormat: "auto" } }, // auto | 12 | 24
+}
+```
+
+### `agents.defaults.model`
+
 ```json5
 {
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
-        "openrouter/deepseek/deepseek-r1:free": {},
-        "zai/glm-4.7": {
-          alias: "GLM",
-          params: { thinking: { type: "enabled", clear_thinking: false } },
-        },
+        "anthropic/claude-opus-4-6": { alias: "opus" },
+        "minimax/MiniMax-M2.1": { alias: "minimax" },
       },
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: [
-          "openrouter/deepseek/deepseek-r1:free",
-          "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-        ],
+        fallbacks: ["minimax/MiniMax-M2.1"],
       },
       imageModel: {
         primary: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
@@ -1114,27 +630,45 @@ If you configure the same alias name yourself, your value wins.
       elevatedDefault: "on",
       timeoutSeconds: 600,
       mediaMaxMb: 5,
-      heartbeat: { every: "30m", target: "last" },
-      maxConcurrent: 3,
-      subagents: { model: "minimax/MiniMax-M2.1", maxConcurrent: 1, archiveAfterMinutes: 60 },
-      exec: { backgroundMs: 10000, timeoutSec: 1800, cleanupMs: 1800000 },
       contextTokens: 200000,
+      maxConcurrent: 3,
     },
   },
 }
 ```
-</Accordion>
 
-#### CLI backends (text-only fallback)
+- `model.primary`: format `provider/model` (e.g. `anthropic/claude-opus-4-6`). If you omit the provider, OpenClaw assumes `anthropic` (deprecated).
+- `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific: `temperature`, `maxTokens`).
+- `imageModel`: only used if the primary model lacks image input.
+- `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.
 
-Optional CLI backends for text-only fallback runs (no tool calls):
+**Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
+
+| Alias          | Model                           |
+| -------------- | ------------------------------- |
+| `opus`         | `anthropic/claude-opus-4-6`     |
+| `sonnet`       | `anthropic/claude-sonnet-4-5`   |
+| `gpt`          | `openai/gpt-5.2`                |
+| `gpt-mini`     | `openai/gpt-5-mini`             |
+| `gemini`       | `google/gemini-3-pro-preview`   |
+| `gemini-flash` | `google/gemini-3-flash-preview` |
+
+Your configured aliases always win over defaults.
+
+Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinking off` or define `agents.defaults.models["zai/<model>"].params.thinking` yourself.
+
+### `agents.defaults.cliBackends`
+
+Optional CLI backends for text-only fallback runs (no tool calls). Useful as a backup when API providers fail.
 
 ```json5
 {
   agents: {
     defaults: {
       cliBackends: {
-        "claude-cli": { command: "/opt/homebrew/bin/claude" },
+        "claude-cli": {
+          command: "/opt/homebrew/bin/claude",
+        },
         "my-cli": {
           command: "my-cli",
           args: ["--json"],
@@ -1153,28 +687,71 @@ Optional CLI backends for text-only fallback runs (no tool calls):
 }
 ```
 
-Notes:
+- CLI backends are text-first; tools are always disabled.
+- Sessions supported when `sessionArg` is set.
+- Image pass-through supported when `imageArg` accepts file paths.
 
-- CLI backends are **text-first**; tools are always disabled.
-- Image pass-through supported when `imageArg` is set.
-- For `claude-cli`, defaults are wired in.
-- See [CLI Backends](/gateway/cli-backends) for details.
+### `agents.defaults.heartbeat`
 
-#### Context pruning
+Periodic heartbeat runs.
 
-`agents.defaults.contextPruning` prunes old tool results from in-memory context before LLM calls.
-Does **not** modify session history on disk.
+```json5
+{
+  agents: {
+    defaults: {
+      heartbeat: {
+        every: "30m", // 0m disables
+        model: "openai/gpt-5.2-mini",
+        includeReasoning: false,
+        session: "main",
+        to: "+15555550123",
+        target: "last", // last | whatsapp | telegram | discord | ... | none
+        prompt: "Read HEARTBEAT.md if it exists...",
+        ackMaxChars: 300,
+      },
+    },
+  },
+}
+```
 
-- `adaptive` (default when enabled): soft-trim oversized results, then hard-clear oldest when ratios exceeded
-- `aggressive`: always replace eligible tool results
-- `off`: disable
+- `every`: duration string (ms/s/m/h). Default: `30m`.
+- Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
+- Heartbeats run full agent turns — shorter intervals burn more tokens.
+
+### `agents.defaults.compaction`
+
+```json5
+{
+  agents: {
+    defaults: {
+      compaction: {
+        mode: "safeguard", // default | safeguard
+        reserveTokensFloor: 24000,
+        memoryFlush: {
+          enabled: true,
+          softThresholdTokens: 6000,
+          systemPrompt: "Session nearing compaction. Store durable memories now.",
+          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
+        },
+      },
+    },
+  },
+}
+```
+
+- `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
+- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
+
+### `agents.defaults.contextPruning`
+
+Prunes **old tool results** from in-memory context before sending to the LLM. Does **not** modify session history on disk.
 
 ```json5
 {
   agents: {
     defaults: {
       contextPruning: {
-        mode: "adaptive",
+        mode: "adaptive", // off | adaptive | aggressive
         keepLastAssistants: 3,
         softTrimRatio: 0.3,
         hardClearRatio: 0.5,
@@ -1188,149 +765,77 @@ Does **not** modify session history on disk.
 }
 ```
 
+<Accordion title="Pruning modes explained">
+
+- **Adaptive**: soft-trims oversized tool results (keep head/tail) at `softTrimRatio`, then hard-clears the oldest at `hardClearRatio` when enough prunable bulk exists.
+- **Aggressive**: always replaces eligible tool results with the placeholder (no ratio checks).
+
+**Soft-trim**: keeps beginning + end, inserts `...` in the middle.
+
+**Hard-clear**: replaces the entire tool result with the placeholder.
+
+Notes:
+
+- Image blocks are never trimmed/cleared.
+- Context ratio is character-based (approximate), not exact tokens.
+- If fewer than `keepLastAssistants` assistant messages exist, pruning is skipped.
+
+</Accordion>
+
 See [Session Pruning](/concepts/session-pruning) for behavior details.
 
-#### Compaction
-
-`agents.defaults.compaction.mode`: `default` or `safeguard` (chunked summarization). See [Compaction](/concepts/compaction).
-
-`agents.defaults.compaction.reserveTokensFloor`: minimum `reserveTokens` (default: 20000).
-
-`agents.defaults.compaction.memoryFlush`: runs a silent turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
+### Block streaming
 
 ```json5
 {
   agents: {
     defaults: {
-      compaction: {
-        mode: "safeguard",
-        reserveTokensFloor: 24000,
-        memoryFlush: {
-          enabled: true,
-          softThresholdTokens: 6000,
-        },
-      },
+      blockStreamingDefault: "off", // on | off
+      blockStreamingBreak: "text_end", // text_end | message_end
+      blockStreamingChunk: { minChars: 800, maxChars: 1200 },
+      blockStreamingCoalesce: { idleMs: 1000 },
+      humanDelay: { mode: "natural" }, // off | natural | custom (use minMs/maxMs)
     },
   },
 }
 ```
 
-#### Block streaming
+- Non-Telegram channels require explicit `*.blockStreaming: true` to enable block replies.
+- Channel overrides: `channels.<channel>.blockStreamingCoalesce` (and per-account variants). Signal/Slack/Discord/Google Chat default `minChars: 1500`.
+- `humanDelay`: randomized pause between block replies. `natural` = 800–2500ms. Per-agent override: `agents.list[].humanDelay`.
 
-- `agents.defaults.blockStreamingDefault`: `"on"` | `"off"` (default off)
-- Channel overrides: `*.blockStreaming` per channel/account
-- `agents.defaults.blockStreamingBreak`: `"text_end"` | `"message_end"` (default: text_end)
-- `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars }` (default: 800–1200)
-- `agents.defaults.blockStreamingCoalesce`: `{ idleMs, minChars, maxChars }` (merge streamed blocks)
-- `agents.defaults.humanDelay`: randomized pause between block replies. Modes: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`)
+See [Streaming](/concepts/streaming) for behavior + chunking details.
 
-See [Streaming + chunking](/concepts/streaming) for details.
-
-#### Typing indicators
-
-- `agents.defaults.typingMode`: `"never"` | `"instant"` | `"thinking"` | `"message"`
-- `agents.defaults.typingIntervalSeconds`: refresh cadence (default: 6s)
-- Per-session overrides: `session.typingMode`, `session.typingIntervalSeconds`
-
-See [Typing indicators](/concepts/typing-indicators).
-
-#### Model selection notes
-
-- Model refs: `provider/model` format (e.g. `anthropic/claude-opus-4-6`)
-- Z.AI: `zai/<model>` (requires `ZAI_API_KEY`)
-- If you omit the provider, OpenClaw assumes `anthropic` as a deprecation fallback
-
-#### Heartbeat
-
-- `every`: duration string (default: `30m`, set `0m` to disable)
-- `model`: optional override model for heartbeat runs
-- `includeReasoning`: deliver reasoning message (default: false)
-- `session`: session key (default: `main`)
-- `to`: optional recipient override
-- `target`: delivery channel (`last`, `whatsapp`, `telegram`, etc.)
-- `prompt`: override heartbeat body
-- `ackMaxChars`: max chars after `HEARTBEAT_OK` (default: 300)
-- Per-agent: `agents.list[].heartbeat` (when set, only those agents run heartbeats)
-
-#### Exec and background
-
-- `tools.exec.backgroundMs`: auto-background delay (default 10000)
-- `tools.exec.timeoutSec`: auto-kill timeout (default 1800)
-- `tools.exec.cleanupMs`: finished session TTL (default 1800000)
-- `tools.exec.notifyOnExit`: system event on background exit (default true)
-- `tools.exec.applyPatch.enabled`: experimental apply_patch (default false)
-- `tools.exec.applyPatch.allowModels`: optional model allowlist
-
-#### Web search and fetch
-
-- `tools.web.search.enabled`, `.apiKey`, `.maxResults` (1–10), `.timeoutSeconds`, `.cacheTtlMinutes`
-- `tools.web.fetch.enabled`, `.maxChars`, `.maxCharsCap`, `.timeoutSeconds`, `.cacheTtlMinutes`, `.userAgent`, `.readability`
-- `tools.web.fetch.firecrawl.enabled`, `.apiKey`, `.baseUrl`, `.onlyMainContent`
-
-#### Media understanding
-
-- `tools.media.models`: shared model list (capability-tagged)
-- `tools.media.concurrency`: max concurrent runs (default 2)
-- Per capability (`image` / `audio` / `video`): `enabled`, `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`, `attachments`, `scope`, `models`
-- Each `models[]` entry: provider or CLI, with `capabilities`, `maxChars`, `maxBytes`, `timeoutSeconds` overrides
-- Provider auth follows standard order (auth profiles, env vars, `models.providers.*.apiKey`)
-
-#### Sub-agents
-
-- `agents.defaults.subagents.model`: default model (string or `{ primary, fallbacks }`)
-- `agents.defaults.subagents.maxConcurrent`: max concurrent (default 1)
-- `agents.defaults.subagents.archiveAfterMinutes`: auto-archive (default 60, `0` disables)
-- Tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`
-
-See [Sub-Agents](/tools/subagents).
-
-#### Tool profiles
-
-`tools.profile` sets a base allowlist: `minimal`, `coding`, `messaging`, `full` (no restriction).
-
-`tools.byProvider` restricts tools per provider or `provider/model`.
-
-`tools.allow` / `tools.deny`: global policy (deny wins, supports `*` wildcards).
-
-Tool groups: `group:runtime`, `group:fs`, `group:sessions`, `group:memory`, `group:web`, `group:ui`, `group:automation`, `group:messaging`, `group:nodes`, `group:openclaw`.
-
-#### Elevated exec
-
-`tools.elevated`: host exec access.
+### Typing indicators
 
 ```json5
 {
-  tools: {
-    elevated: {
-      enabled: true,
-      allowFrom: {
-        whatsapp: ["+15555550123"],
-        discord: ["steipete", "1234567890123"],
-      },
+  agents: {
+    defaults: {
+      typingMode: "instant", // never | instant | thinking | message
+      typingIntervalSeconds: 6,
     },
   },
 }
 ```
 
-- Per-agent override: `agents.list[].tools.elevated` (can only further restrict)
-- `/elevated on|off|ask|full` per session
+- Defaults: `instant` for direct chats/mentions, `message` for unmentioned group chats.
+- Per-session overrides: `session.typingMode`, `session.typingIntervalSeconds`.
 
-#### Concurrency
+See [Typing Indicators](/concepts/typing-indicators).
 
-`agents.defaults.maxConcurrent`: max parallel agent runs across sessions (default: 1). Each session is still serialized.
+### `agents.defaults.sandbox`
 
-## Sandbox
-
-See [Sandboxing](/gateway/sandboxing) for the full guide.
+Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway/sandboxing) for the full guide.
 
 ```json5
 {
   agents: {
     defaults: {
       sandbox: {
-        mode: "non-main",
-        scope: "agent",
-        workspaceAccess: "none",
+        mode: "non-main", // off | non-main | all
+        scope: "agent", // session | agent | shared
+        workspaceAccess: "none", // none | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
@@ -1347,12 +852,15 @@ See [Sandboxing](/gateway/sandboxing) for the full guide.
           memory: "1g",
           memorySwap: "2g",
           cpus: 1,
-          ulimits: { nofile: { soft: 1024, hard: 2048 }, nproc: 256 },
+          ulimits: {
+            nofile: { soft: 1024, hard: 2048 },
+            nproc: 256,
+          },
           seccompProfile: "/path/to/seccomp.json",
           apparmorProfile: "openclaw-sandbox",
           dns: ["1.1.1.1", "8.8.8.8"],
           extraHosts: ["internal.service:10.0.0.5"],
-          binds: ["/var/run/docker.sock:/var/run/docker.sock"],
+          binds: ["/home/user/source:/source:rw"],
         },
         browser: {
           enabled: false,
@@ -1369,7 +877,10 @@ See [Sandboxing](/gateway/sandboxing) for the full guide.
           autoStart: true,
           autoStartTimeoutMs: 12000,
         },
-        prune: { idleHours: 24, maxAgeDays: 7 },
+        prune: {
+          idleHours: 24,
+          maxAgeDays: 7,
+        },
       },
     },
   },
@@ -1396,28 +907,637 @@ See [Sandboxing](/gateway/sandboxing) for the full guide.
 }
 ```
 
-Notes:
+<Accordion title="Sandbox details">
 
-- `scope: "shared"` = shared container, no cross-session isolation. Prefer `"session"` or `"agent"`.
-- `setupCommand` runs once after container creation (inside container via `sh -lc`)
-- `docker.binds` mounts additional host directories; global and per-agent binds merge
-- `network: "none"` is default; set `"bridge"` for outbound access
-- Build images: `scripts/sandbox-setup.sh`, `scripts/sandbox-browser-setup.sh`
-- See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for the decision guide
+**Workspace access:**
+
+- `none`: per-scope sandbox workspace under `~/.openclaw/sandboxes`
+- `ro`: sandbox workspace at `/workspace`, agent workspace mounted read-only at `/agent`
+- `rw`: agent workspace mounted read/write at `/workspace`
+
+**Scope:**
+
+- `session`: per-session container + workspace
+- `agent`: one container + workspace per agent (default)
+- `shared`: shared container and workspace (no cross-session isolation)
+
+**`setupCommand`** runs once after container creation (via `sh -lc`). Needs network egress, writable root, root user.
+
+**Containers default to `network: "none"`** — set to `"bridge"` if the agent needs outbound access.
+
+**Inbound attachments** are staged into `media/inbound/*` in the active workspace.
+
+**`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
+
+**Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in main config.
+
+- `allowHostControl: false` (default) blocks sandboxed sessions from targeting the host browser.
+- `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`: restrict remote browser targets for `target: "custom"`.
+
+</Accordion>
+
+Build images:
+
+```bash
+scripts/sandbox-setup.sh           # main sandbox image
+scripts/sandbox-browser-setup.sh   # optional browser image
+```
+
+### `agents.list` (per-agent overrides)
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        default: true,
+        name: "Main Agent",
+        workspace: "~/.openclaw/workspace",
+        agentDir: "~/.openclaw/agents/main/agent",
+        model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
+        identity: {
+          name: "Samantha",
+          theme: "helpful sloth",
+          emoji: "🦥",
+          avatar: "avatars/samantha.png",
+        },
+        groupChat: { mentionPatterns: ["@openclaw"] },
+        sandbox: { mode: "off" },
+        subagents: { allowAgents: ["*"] },
+        tools: {
+          profile: "coding",
+          allow: ["browser"],
+          deny: ["canvas"],
+          elevated: { enabled: true },
+        },
+      },
+    ],
+  },
+}
+```
+
+- `id`: stable agent id (required).
+- `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
+- `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks).
+- `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
+- `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
+- `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
+
+---
+
+## Multi-agent routing
+
+Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/multi-agent).
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
+      { id: "work", workspace: "~/.openclaw/workspace-work" },
+    ],
+  },
+  bindings: [
+    { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
+    { agentId: "work", match: { channel: "whatsapp", accountId: "biz" } },
+  ],
+}
+```
+
+### Binding match fields
+
+- `match.channel` (required)
+- `match.accountId` (optional; `*` = any account; omitted = default account)
+- `match.peer` (optional; `{ kind: direct|group|channel, id }`)
+- `match.guildId` / `match.teamId` (optional; channel-specific)
+
+**Deterministic match order:**
+
+1. `match.peer`
+2. `match.guildId`
+3. `match.teamId`
+4. `match.accountId` (exact, no peer/guild/team)
+5. `match.accountId: "*"` (channel-wide)
+6. Default agent
+
+Within each tier, the first matching `bindings` entry wins.
+
+### Per-agent access profiles
+
+<Accordion title="Full access (no sandbox)">
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "personal",
+        workspace: "~/.openclaw/workspace-personal",
+        sandbox: { mode: "off" },
+      },
+    ],
+  },
+}
+```
+
+</Accordion>
+
+<Accordion title="Read-only tools + workspace">
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "family",
+        workspace: "~/.openclaw/workspace-family",
+        sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
+        tools: {
+          allow: [
+            "read",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send",
+            "sessions_spawn",
+            "session_status",
+          ],
+          deny: ["write", "edit", "apply_patch", "exec", "process", "browser"],
+        },
+      },
+    ],
+  },
+}
+```
+
+</Accordion>
+
+<Accordion title="No filesystem access (messaging only)">
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "public",
+        workspace: "~/.openclaw/workspace-public",
+        sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
+        tools: {
+          allow: [
+            "sessions_list",
+            "sessions_history",
+            "sessions_send",
+            "sessions_spawn",
+            "session_status",
+            "whatsapp",
+            "telegram",
+            "slack",
+            "discord",
+            "gateway",
+          ],
+          deny: [
+            "read",
+            "write",
+            "edit",
+            "apply_patch",
+            "exec",
+            "process",
+            "browser",
+            "canvas",
+            "nodes",
+            "cron",
+            "gateway",
+            "image",
+          ],
+        },
+      },
+    ],
+  },
+}
+```
+
+</Accordion>
+
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence details.
+
+---
+
+## Session
+
+```json5
+{
+  session: {
+    scope: "per-sender",
+    dmScope: "main", // main | per-peer | per-channel-peer | per-account-channel-peer
+    identityLinks: {
+      alice: ["telegram:123456789", "discord:987654321012345678"],
+    },
+    reset: {
+      mode: "daily", // daily | idle
+      atHour: 4,
+      idleMinutes: 60,
+    },
+    resetByType: {
+      thread: { mode: "daily", atHour: 4 },
+      direct: { mode: "idle", idleMinutes: 240 },
+      group: { mode: "idle", idleMinutes: 120 },
+    },
+    resetTriggers: ["/new", "/reset"],
+    store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+    maintenance: {
+      mode: "warn", // warn | enforce
+      pruneAfter: "30d",
+      maxEntries: 500,
+      rotateBytes: "10mb",
+    },
+    mainKey: "main",
+    agentToAgent: { maxPingPongTurns: 5 },
+    sendPolicy: {
+      rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
+      default: "allow",
+    },
+  },
+}
+```
+
+<Accordion title="Session field details">
+
+- **`dmScope`**: how DMs are grouped.
+  - `main`: all DMs share the main session.
+  - `per-peer`: isolate by sender id across channels.
+  - `per-channel-peer`: isolate per channel + sender (recommended for multi-user inboxes).
+  - `per-account-channel-peer`: isolate per account + channel + sender (recommended for multi-account).
+- **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
+- **`reset`**: primary reset policy. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins.
+- **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Legacy `dm` accepted as alias for `direct`.
+- **`heartbeatIdleMinutes`**: optional idle override for heartbeat checks.
+- **`mainKey`**: direct-chat bucket key (default: `"main"`). `sandbox.mode: "non-main"` uses this to detect the main session.
+- **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|room`), or `keyPrefix`. First deny wins.
+- **`maintenance`**: `warn` warns the active session on eviction; `enforce` applies pruning and rotation.
+
+</Accordion>
+
+---
+
+## Messages
+
+```json5
+{
+  messages: {
+    responsePrefix: "🦞", // or "auto"
+    ackReaction: "👀",
+    ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all
+    removeAckAfterReply: false,
+    queue: {
+      mode: "collect", // steer | followup | collect | steer-backlog | interrupt
+      debounceMs: 1000,
+      cap: 20,
+      drop: "summarize", // old | new | summarize
+      byChannel: {
+        whatsapp: "collect",
+        telegram: "collect",
+      },
+    },
+    inbound: {
+      debounceMs: 2000, // 0 disables
+      byChannel: {
+        whatsapp: 5000,
+        slack: 1500,
+      },
+    },
+  },
+}
+```
+
+### Response prefix
+
+Per-channel/account overrides: `channels.<channel>.responsePrefix`, `channels.<channel>.accounts.<id>.responsePrefix`.
+
+Resolution (most specific wins): account → channel → global. `""` disables and stops cascade. `"auto"` derives `[{identity.name}]`.
+
+**Template variables:**
+
+| Variable          | Description            | Example                     |
+| ----------------- | ---------------------- | --------------------------- |
+| `{model}`         | Short model name       | `claude-opus-4-6`           |
+| `{modelFull}`     | Full model identifier  | `anthropic/claude-opus-4-6` |
+| `{provider}`      | Provider name          | `anthropic`                 |
+| `{thinkingLevel}` | Current thinking level | `high`, `low`, `off`        |
+| `{identity.name}` | Agent identity name    | (same as `"auto"`)          |
+
+Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
+
+### Ack reaction
+
+- Defaults to active agent's `identity.emoji`, otherwise `"👀"`. Set `""` to disable.
+- Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
+- `removeAckAfterReply`: removes ack after reply (Slack/Discord/Telegram/Google Chat only).
+
+### Inbound debounce
+
+Batches rapid text-only messages from the same sender into a single agent turn. Media/attachments flush immediately. Control commands bypass debouncing.
+
+### TTS (text-to-speech)
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always", // off | always | inbound | tagged
+      mode: "final", // final | all
+      provider: "elevenlabs",
+      summaryModel: "openai/gpt-4.1-mini",
+      modelOverrides: { enabled: true },
+      maxTextLength: 4000,
+      timeoutMs: 30000,
+      prefsPath: "~/.openclaw/settings/tts.json",
+      elevenlabs: {
+        apiKey: "elevenlabs_api_key",
+        baseUrl: "https://api.elevenlabs.io",
+        voiceId: "voice_id",
+        modelId: "eleven_multilingual_v2",
+        seed: 42,
+        applyTextNormalization: "auto",
+        languageCode: "en",
+        voiceSettings: {
+          stability: 0.5,
+          similarityBoost: 0.75,
+          style: 0.0,
+          useSpeakerBoost: true,
+          speed: 1.0,
+        },
+      },
+      openai: {
+        apiKey: "openai_api_key",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+      },
+    },
+  },
+}
+```
+
+- `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
+- `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
+- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+
+---
+
+## Talk
+
+Defaults for Talk mode (macOS/iOS/Android).
+
+```json5
+{
+  talk: {
+    voiceId: "elevenlabs_voice_id",
+    voiceAliases: {
+      Clawd: "EXAVITQu4vr4xnSDxMaL",
+      Roger: "CwhRBWXzGAHq8TQ4Fs17",
+    },
+    modelId: "eleven_v3",
+    outputFormat: "mp3_44100_128",
+    apiKey: "elevenlabs_api_key",
+    interruptOnSpeech: true,
+  },
+}
+```
+
+- Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID`.
+- `apiKey` falls back to `ELEVENLABS_API_KEY`.
+- `voiceAliases` lets Talk directives use friendly names.
+
+---
+
+## Tools
+
+### Tool profiles
+
+`tools.profile` sets a base allowlist before `tools.allow`/`tools.deny`:
+
+| Profile     | Includes                                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status` only                                                                     |
+| `coding`    | `group:fs`, `group:runtime`, `group:sessions`, `group:memory`, `image`                    |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status` |
+| `full`      | No restriction (same as unset)                                                            |
+
+### Tool groups
+
+| Group              | Tools                                                                                    |
+| ------------------ | ---------------------------------------------------------------------------------------- |
+| `group:runtime`    | `exec`, `bash`, `process`                                                                |
+| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                   |
+| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status` |
+| `group:memory`     | `memory_search`, `memory_get`                                                            |
+| `group:web`        | `web_search`, `web_fetch`                                                                |
+| `group:ui`         | `browser`, `canvas`                                                                      |
+| `group:automation` | `cron`, `gateway`                                                                        |
+| `group:messaging`  | `message`                                                                                |
+| `group:nodes`      | `nodes`                                                                                  |
+| `group:openclaw`   | All built-in tools (excludes provider plugins)                                           |
+
+### `tools.allow` / `tools.deny`
+
+Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildcards. Applied even when Docker sandbox is off.
+
+```json5
+{
+  tools: { deny: ["browser", "canvas"] },
+}
+```
+
+### `tools.byProvider`
+
+Further restrict tools for specific providers or models. Order: base profile → provider profile → allow/deny.
+
+```json5
+{
+  tools: {
+    profile: "coding",
+    byProvider: {
+      "google-antigravity": { profile: "minimal" },
+      "openai/gpt-5.2": { allow: ["group:fs", "sessions_list"] },
+    },
+  },
+}
+```
+
+### `tools.elevated`
+
+Controls elevated (host) exec access:
+
+```json5
+{
+  tools: {
+    elevated: {
+      enabled: true,
+      allowFrom: {
+        whatsapp: ["+15555550123"],
+        discord: ["steipete", "1234567890123"],
+      },
+    },
+  },
+}
+```
+
+- Per-agent override (`agents.list[].tools.elevated`) can only further restrict.
+- `/elevated on|off|ask|full` stores state per session; inline directives apply to single message.
+- Elevated `exec` runs on the host, bypasses sandboxing.
+
+### `tools.exec`
+
+```json5
+{
+  tools: {
+    exec: {
+      backgroundMs: 10000,
+      timeoutSec: 1800,
+      cleanupMs: 1800000,
+      notifyOnExit: true,
+      applyPatch: {
+        enabled: false,
+        allowModels: ["gpt-5.2"],
+      },
+    },
+  },
+}
+```
+
+### `tools.web`
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        apiKey: "brave_api_key", // or BRAVE_API_KEY env
+        maxResults: 5,
+        timeoutSeconds: 30,
+        cacheTtlMinutes: 15,
+      },
+      fetch: {
+        enabled: true,
+        maxChars: 50000,
+        maxCharsCap: 50000,
+        timeoutSeconds: 30,
+        cacheTtlMinutes: 15,
+        userAgent: "custom-ua",
+        readability: true,
+        firecrawl: {
+          enabled: true,
+          apiKey: "firecrawl_key", // or FIRECRAWL_API_KEY
+          baseUrl: "https://api.firecrawl.dev",
+          onlyMainContent: true,
+        },
+      },
+    },
+  },
+}
+```
+
+### `tools.media`
+
+Configures inbound media understanding (image/audio/video):
+
+```json5
+{
+  tools: {
+    media: {
+      concurrency: 2,
+      audio: {
+        enabled: true,
+        maxBytes: 20971520,
+        scope: {
+          default: "deny",
+          rules: [{ action: "allow", match: { chatType: "direct" } }],
+        },
+        models: [
+          { provider: "openai", model: "gpt-4o-mini-transcribe" },
+          { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] },
+        ],
+      },
+      video: {
+        enabled: true,
+        maxBytes: 52428800,
+        models: [{ provider: "google", model: "gemini-3-flash-preview" }],
+      },
+    },
+  },
+}
+```
+
+<Accordion title="Media model entry fields">
+
+**Provider entry** (`type: "provider"` or omitted):
+
+- `provider`: API provider id (`openai`, `anthropic`, `google`/`gemini`, `groq`, etc.)
+- `model`: model id override
+- `profile` / `preferredProfile`: auth profile selection
+
+**CLI entry** (`type: "cli"`):
+
+- `command`: executable to run
+- `args`: templated args (supports `{{MediaPath}}`, `{{Prompt}}`, `{{MaxChars}}`, etc.)
+
+**Common fields:**
+
+- `capabilities`: optional list (`image`, `audio`, `video`). Defaults: `openai`/`anthropic`/`minimax` → image, `google` → image+audio+video, `groq` → audio.
+- `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`: per-entry overrides.
+- Failures fall back to the next entry.
+
+Provider auth follows standard order: auth profiles → env vars → `models.providers.*.apiKey`.
+
+</Accordion>
+
+### `tools.agentToAgent`
+
+```json5
+{
+  tools: {
+    agentToAgent: {
+      enabled: false,
+      allow: ["home", "work"],
+    },
+  },
+}
+```
+
+### `tools.subagents`
+
+```json5
+{
+  agents: {
+    defaults: {
+      subagents: {
+        model: "minimax/MiniMax-M2.1",
+        maxConcurrent: 1,
+        archiveAfterMinutes: 60,
+      },
+    },
+  },
+}
+```
+
+- `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
+- Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
+
+---
 
 ## Custom providers and base URLs
 
-Add custom providers (LiteLLM, local servers, etc.) via `models.providers`:
+OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `models.providers` in config or `~/.openclaw/agents/<agentId>/agent/models.json`.
 
 ```json5
 {
   models: {
-    mode: "merge",
+    mode: "merge", // merge (default) | replace
     providers: {
       "custom-proxy": {
         baseUrl: "http://localhost:4000/v1",
         apiKey: "LITELLM_KEY",
-        api: "openai-completions",
+        api: "openai-completions", // openai-completions | openai-responses | anthropic-messages | google-generative-ai
         models: [
           {
             id: "llama-3.1-8b",
@@ -1432,32 +1552,15 @@ Add custom providers (LiteLLM, local servers, etc.) via `models.providers`:
       },
     },
   },
-  agents: {
-    defaults: {
-      model: { primary: "custom-proxy/llama-3.1-8b" },
-      models: { "custom-proxy/llama-3.1-8b": {} },
-    },
-  },
 }
 ```
 
-Supported APIs: `openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, `github-copilot`, `bedrock-converse-stream`.
+- Use `authHeader: true` + `headers` for custom auth needs.
+- Override agent config root with `OPENCLAW_AGENT_DIR` (or `PI_CODING_AGENT_DIR`).
 
-Use `authHeader: true` + `headers` for custom auth. Override agent config root with `OPENCLAW_AGENT_DIR`.
-
-For provider-specific setup, see the dedicated pages:
-
-- [OpenCode Zen](/providers/opencode) — `opencode/<model>`
-- [Z.AI (GLM)](/providers/zai) — `zai/<model>`
-- [Moonshot AI (Kimi)](/providers/moonshot) — `moonshot/<model>`, `kimi-coding/<model>`
-- [MiniMax](/providers/minimax) — `minimax/<model>`
-- [Synthetic](/providers/synthetic) — `synthetic/<model>`
-- [Local models (LM Studio)](/gateway/local-models)
-- [LiteLLM](/providers/litellm)
-- Provider overview: [Model Providers](/concepts/model-providers)
+### Provider examples
 
 <Accordion title="Cerebras (GLM 4.6 / 4.7)">
-Use Cerebras via their OpenAI-compatible endpoint:
 
 ```json5
 {
@@ -1491,57 +1594,191 @@ Use Cerebras via their OpenAI-compatible endpoint:
 }
 ```
 
-Notes:
-
-- Use `cerebras/zai-glm-4.7` for Cerebras; use `zai/glm-4.7` for Z.AI direct.
-- Set `CEREBRAS_API_KEY` in the environment or config.
+Use `cerebras/zai-glm-4.7` for Cerebras; `zai/glm-4.7` for Z.AI direct.
 
 </Accordion>
 
-## Session
+<Accordion title="OpenCode Zen">
 
 ```json5
 {
-  session: {
-    scope: "per-sender",
-    dmScope: "main",
-    identityLinks: {
-      alice: ["telegram:123456789", "discord:987654321012345678"],
-    },
-    reset: { mode: "daily", atHour: 4, idleMinutes: 60 },
-    resetByType: {
-      thread: { mode: "daily", atHour: 4 },
-      direct: { mode: "idle", idleMinutes: 240 },
-      group: { mode: "idle", idleMinutes: 120 },
-    },
-    resetTriggers: ["/new", "/reset"],
-    store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
-    maintenance: { mode: "warn", pruneAfter: "30d", maxEntries: 500, rotateBytes: "10mb" },
-    mainKey: "main",
-    agentToAgent: { maxPingPongTurns: 5 },
-    sendPolicy: {
-      rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
-      default: "allow",
+  agents: {
+    defaults: {
+      model: { primary: "opencode/claude-opus-4-6" },
+      models: { "opencode/claude-opus-4-6": { alias: "Opus" } },
     },
   },
 }
 ```
 
-Fields:
+Set `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`). Shortcut: `openclaw onboard --auth-choice opencode-zen`.
 
-- `mainKey`: direct-chat bucket key (default: `"main"`). Sandbox uses this to detect the main session.
-- `dmScope`: `main` | `per-peer` | `per-channel-peer` | `per-account-channel-peer`.
-- `identityLinks`: map canonical ids to provider-prefixed peers for cross-channel DM sharing.
-- `reset`: primary reset policy (default: daily at 4:00 AM). When daily + idle both set, whichever expires first wins.
-- `resetByType`: per-type overrides for `direct`, `group`, `thread`.
-- `heartbeatIdleMinutes`: optional idle override for heartbeat checks.
-- `agentToAgent.maxPingPongTurns`: max reply-back turns (0–5, default 5).
-- `sendPolicy`: block delivery by session type. First deny wins.
-- `maintenance`: session store pruning/rotation.
-  - `mode`: `"warn"` (default) or `"enforce"`
-  - `pruneAfter`, `maxEntries`, `rotateBytes`
+</Accordion>
 
-See [Session Management](/concepts/session) for scoping, lifecycle, and inspecting sessions.
+<Accordion title="Z.AI (GLM-4.7)">
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "zai/glm-4.7" },
+      models: { "zai/glm-4.7": {} },
+    },
+  },
+}
+```
+
+Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `openclaw onboard --auth-choice zai-api-key`.
+
+- General endpoint: `https://api.z.ai/api/paas/v4`
+- Coding endpoint (default): `https://api.z.ai/api/coding/paas/v4`
+- For the general endpoint, define a custom provider with the base URL override.
+
+</Accordion>
+
+<Accordion title="Moonshot AI (Kimi)">
+
+```json5
+{
+  env: { MOONSHOT_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "moonshot/kimi-k2.5" },
+      models: { "moonshot/kimi-k2.5": { alias: "Kimi K2.5" } },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      moonshot: {
+        baseUrl: "https://api.moonshot.ai/v1",
+        apiKey: "${MOONSHOT_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "kimi-k2.5",
+            name: "Kimi K2.5",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 256000,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+For the China endpoint: `baseUrl: "https://api.moonshot.cn/v1"` or `openclaw onboard --auth-choice moonshot-api-key-cn`.
+
+</Accordion>
+
+<Accordion title="Kimi Coding">
+
+```json5
+{
+  env: { KIMI_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "kimi-coding/k2p5" },
+      models: { "kimi-coding/k2p5": { alias: "Kimi K2.5" } },
+    },
+  },
+}
+```
+
+Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choice kimi-code-api-key`.
+
+</Accordion>
+
+<Accordion title="Synthetic (Anthropic-compatible)">
+
+```json5
+{
+  env: { SYNTHETIC_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" },
+      models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.1": { alias: "MiniMax M2.1" } },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      synthetic: {
+        baseUrl: "https://api.synthetic.new/anthropic",
+        apiKey: "${SYNTHETIC_API_KEY}",
+        api: "anthropic-messages",
+        models: [
+          {
+            id: "hf:MiniMaxAI/MiniMax-M2.1",
+            name: "MiniMax M2.1",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 192000,
+            maxTokens: 65536,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw onboard --auth-choice synthetic-api-key`.
+
+</Accordion>
+
+<Accordion title="MiniMax M2.1 (direct)">
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "minimax/MiniMax-M2.1" },
+      models: {
+        "minimax/MiniMax-M2.1": { alias: "Minimax" },
+      },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      minimax: {
+        baseUrl: "https://api.minimax.io/anthropic",
+        apiKey: "${MINIMAX_API_KEY}",
+        api: "anthropic-messages",
+        models: [
+          {
+            id: "MiniMax-M2.1",
+            name: "MiniMax M2.1",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
+            contextWindow: 200000,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Set `MINIMAX_API_KEY`. Shortcut: `openclaw onboard --auth-choice minimax-api`.
+
+</Accordion>
+
+<Accordion title="Local models (LM Studio)">
+
+See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio Responses API on serious hardware; keep hosted models merged for fallback.
+
+</Accordion>
+
+---
 
 ## Skills
 
@@ -1549,10 +1786,18 @@ See [Session Management](/concepts/session) for scoping, lifecycle, and inspecti
 {
   skills: {
     allowBundled: ["gemini", "peekaboo"],
-    load: { extraDirs: ["~/Projects/skills"] },
-    install: { preferBrew: true, nodeManager: "npm" },
+    load: {
+      extraDirs: ["~/Projects/agent-scripts/skills"],
+    },
+    install: {
+      preferBrew: true,
+      nodeManager: "npm", // npm | pnpm | yarn
+    },
     entries: {
-      "nano-banana-pro": { apiKey: "KEY", env: { GEMINI_API_KEY: "KEY" } },
+      "nano-banana-pro": {
+        apiKey: "GEMINI_KEY_HERE",
+        env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
+      },
       peekaboo: { enabled: true },
       sag: { enabled: false },
     },
@@ -1560,22 +1805,40 @@ See [Session Management](/concepts/session) for scoping, lifecycle, and inspecti
 }
 ```
 
-## Plugins (extensions)
+- `allowBundled`: optional allowlist for bundled skills only (managed/workspace skills unaffected).
+- `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
+- `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var.
+
+---
+
+## Plugins
 
 ```json5
 {
   plugins: {
     enabled: true,
     allow: ["voice-call"],
-    load: { paths: ["~/Projects/oss/voice-call-extension"] },
+    deny: [],
+    load: {
+      paths: ["~/Projects/oss/voice-call-extension"],
+    },
     entries: {
-      "voice-call": { enabled: true, config: { provider: "twilio" } },
+      "voice-call": {
+        enabled: true,
+        config: { provider: "twilio" },
+      },
     },
   },
 }
 ```
 
+- Loaded from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus `plugins.load.paths`.
+- **Config changes require a gateway restart.**
+- `allow`: optional allowlist (only listed plugins load). `deny` wins.
+
 See [Plugins](/tools/plugin).
+
+---
 
 ## Browser
 
@@ -1591,101 +1854,110 @@ See [Plugins](/tools/plugin).
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
     color: "#FF4500",
+    // headless: false,
+    // noSandbox: false,
+    // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    // attachOnly: false,
   },
 }
 ```
 
-Notes:
+- `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
+- Remote profiles are attach-only (start/stop/reset disabled).
+- Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
+- Control service: loopback only (port derived from `gateway.port`, default `18791`).
 
-- Control service: loopback only (port derived from `gateway.port`, default 18791)
-- CDP URL default: `http://127.0.0.1:18792`
-- Remote profiles: attach-only (start/stop/reset disabled)
-- Auto-detect: default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium
+---
 
-## UI (Appearance)
+## UI
 
 ```json5
 {
   ui: {
     seamColor: "#FF4500",
-    assistant: { name: "OpenClaw", avatar: "CB" },
+    assistant: {
+      name: "OpenClaw",
+      avatar: "CB", // emoji, short text, image URL, or data URI
+    },
   },
 }
 ```
+
+- `seamColor`: accent color for native app UI chrome (Talk Mode bubble tint, etc.).
+- `assistant`: Control UI identity override. Falls back to active agent identity.
+
+---
 
 ## Gateway
 
 ```json5
 {
   gateway: {
-    mode: "local",
+    mode: "local", // local | remote
     port: 18789,
     bind: "loopback",
-    auth: { mode: "token", token: "your-token" },
-    tailscale: { mode: "off" },
-    controlUi: { enabled: true, basePath: "/openclaw" },
-    reload: { mode: "hybrid", debounceMs: 300 },
-    trustedProxies: [],
-  },
-}
-```
-
-Notes:
-
-- `gateway.port`: single multiplexed port for WS + HTTP
-- Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > default `18789`
-- Gateway auth is required by default. Non-loopback binds require a shared token/password.
-- `gateway.auth.allowTailscale`: allow Tailscale Serve identity headers (default true when `tailscale.mode = "serve"`)
-- `gateway.tailscale.mode`: `"off"` | `"serve"` (tailnet only) | `"funnel"` (public)
-- OpenAI Chat Completions: disabled by default, enable with `gateway.http.endpoints.chatCompletions.enabled: true`
-
-<Accordion title="Control UI options">
-- `gateway.controlUi.basePath`: URL prefix (default: `/`)
-- `gateway.controlUi.root`: filesystem root for assets
-- `gateway.controlUi.allowInsecureAuth`: token-only auth without device identity (default: false)
-- `gateway.controlUi.dangerouslyDisableDeviceAuth`: disable device checks (break-glass only)
-</Accordion>
-
-<Accordion title="Remote client defaults">
-```json5
-{
-  gateway: {
-    mode: "remote",
+    auth: {
+      mode: "token", // token | password
+      token: "your-token",
+      // password: "your-password", // or OPENCLAW_GATEWAY_PASSWORD
+      allowTailscale: true,
+    },
+    tailscale: {
+      mode: "off", // off | serve | funnel
+      resetOnExit: false,
+    },
+    controlUi: {
+      enabled: true,
+      basePath: "/openclaw",
+      // root: "dist/control-ui",
+      // allowInsecureAuth: false,
+      // dangerouslyDisableDeviceAuth: false,
+    },
     remote: {
       url: "ws://gateway.tailnet:18789",
-      transport: "ssh",      // ssh | direct
+      transport: "ssh", // ssh | direct
       token: "your-token",
-      password: "your-password",
+      // password: "your-password",
     },
+    trustedProxies: ["10.0.0.1"],
   },
 }
 ```
 
-- `transport: "direct"` requires `ws://` or `wss://` URL
-- macOS app watches config and switches modes live
+<Accordion title="Gateway field details">
+
+- `mode`: `local` (run gateway) or `remote` (connect to remote gateway). Gateway refuses to start unless `local`.
+- `port`: single multiplexed port for WS + HTTP. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
+- `bind`: `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IP only).
+- **Auth**: required by default. Non-loopback binds require a shared token/password. Onboarding wizard generates a token by default.
+- `auth.allowTailscale`: when `true`, Tailscale Serve identity headers satisfy auth (verified via `tailscale whois`). Defaults to `true` when `tailscale.mode = "serve"`.
+- `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
+- `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
+- `gateway.remote.token` is for remote CLI calls only; does not enable local gateway auth.
+- `trustedProxies`: reverse proxy IPs that terminate TLS. Only list proxies you control.
 
 </Accordion>
 
-<Accordion title="Auth and Tailscale details">
-- `gateway.auth.mode`: `token` or `password`
-- `gateway.auth.token`: shared token for local access
-- `gateway.auth.password`: or via `OPENCLAW_GATEWAY_PASSWORD`
-- `gateway.auth.allowTailscale`: verify Tailscale Serve identity via `tailscale whois`
-- `gateway.remote.token` / `gateway.remote.password`: for remote CLI calls only
-</Accordion>
+### OpenAI-compatible endpoints
+
+- Chat Completions: disabled by default. Enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
+- Responses API: `gateway.http.endpoints.responses.enabled`.
 
 ### Multi-instance isolation
 
-To run multiple gateways on one host, isolate per-instance state + config and use unique ports:
+Run multiple gateways on one host with unique ports and state dirs:
 
-- `OPENCLAW_CONFIG_PATH` (per-instance config)
-- `OPENCLAW_STATE_DIR` (sessions/creds)
-- `agents.defaults.workspace` (memories)
-- `gateway.port` (unique per instance)
+```bash
+OPENCLAW_CONFIG_PATH=~/.openclaw/a.json \
+OPENCLAW_STATE_DIR=~/.openclaw-a \
+openclaw gateway --port 19001
+```
 
-Convenience flags: `openclaw --dev …` (uses `~/.openclaw-dev` + port 19001), `openclaw --profile <name> …` (uses `~/.openclaw-<name>`).
+Convenience flags: `--dev` (uses `~/.openclaw-dev` + port `19001`), `--profile <name>` (uses `~/.openclaw-<name>`).
 
-See [Multiple gateways](/gateway/multiple-gateways) for details.
+See [Multiple Gateways](/gateway/multiple-gateways).
+
+---
 
 ## Hooks
 
@@ -1695,6 +1967,7 @@ See [Multiple gateways](/gateway/multiple-gateways) for details.
     enabled: true,
     token: "shared-secret",
     path: "/hooks",
+    maxBodyBytes: 262144,
     allowedAgentIds: ["hooks", "main"],
     presets: ["gmail"],
     transformsDir: "~/.openclaw/hooks",
@@ -1716,24 +1989,29 @@ See [Multiple gateways](/gateway/multiple-gateways) for details.
 }
 ```
 
-Endpoints:
+Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
+
+**Endpoints:**
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
-Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
+<Accordion title="Mapping details">
 
-Mapping notes:
+- `match.path` matches sub-path after `/hooks` (e.g. `/hooks/gmail` → `gmail`).
+- `match.source` matches a payload field for generic paths.
+- Templates like `{{messages[0].subject}}` read from the payload.
+- `transform` can point to a JS/TS module returning a hook action.
+- `agentId` routes to a specific agent; unknown IDs fall back to default.
+- `allowedAgentIds`: restricts explicit routing (`*` or omitted = allow all, `[]` = deny all).
+- `deliver: true` sends final reply to a channel; `channel` defaults to `last`.
+- `model` overrides LLM for this hook run (must be allowed if model catalog is set).
 
-- `match.path` matches sub-path after `/hooks`
-- `match.source` matches a payload field
-- Templates like `{{messages[0].subject}}` read from the payload
-- `transform` can point to a JS/TS module
-- `deliver: true` sends final reply to a channel; `channel` defaults to `last`
-- `model` overrides the LLM for this hook run
+</Accordion>
 
-<Accordion title="Gmail hooks config">
+### Gmail integration
+
 ```json5
 {
   hooks: {
@@ -1755,13 +2033,10 @@ Mapping notes:
 }
 ```
 
-Notes:
+- Gateway auto-starts `gog gmail watch serve` on boot when configured. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to disable.
+- Don't run a separate `gog gmail watch serve` alongside the Gateway.
 
-- Gateway auto-starts `gog gmail watch serve` on boot when enabled
-- Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to disable
-- Avoid running a separate `gog gmail watch serve` alongside the Gateway
-
-</Accordion>
+---
 
 ## Canvas host
 
@@ -1771,62 +2046,228 @@ Notes:
     root: "~/.openclaw/workspace/canvas",
     port: 18793,
     liveReload: true,
+    // enabled: false, // or OPENCLAW_SKIP_CANVAS_HOST=1
   },
 }
 ```
 
-Notes:
+- Serves HTML/CSS/JS over HTTP for iOS/Android nodes.
+- Injects live-reload client into served HTML.
+- Auto-creates starter `index.html` when empty.
+- Also serves A2UI at `/__openclaw__/a2ui/`.
+- Changes require a gateway restart.
+- Disable live reload for large directories or `EMFILE` errors.
 
-- Serves files over HTTP for iOS/Android nodes
-- Injects live-reload client into served HTML
-- Also serves A2UI at `/__openclaw__/a2ui/`
-- Auto-creates starter `index.html` when directory is empty
-- Disable with `canvasHost: { enabled: false }` or `OPENCLAW_SKIP_CANVAS_HOST=1`
-- Requires gateway restart on config change
+---
+
+## Discovery
+
+### mDNS (Bonjour)
+
+```json5
+{
+  discovery: {
+    mdns: {
+      mode: "minimal", // minimal | full | off
+    },
+  },
+}
+```
+
+- `minimal` (default): omit `cliPath` + `sshPort` from TXT records.
+- `full`: include `cliPath` + `sshPort`.
+- Hostname defaults to `openclaw`. Override with `OPENCLAW_MDNS_HOSTNAME`.
+
+### Wide-area (DNS-SD)
+
+```json5
+{
+  discovery: {
+    wideArea: { enabled: true },
+  },
+}
+```
+
+Writes a unicast DNS-SD zone under `~/.openclaw/dns/`. For cross-network discovery, pair with a DNS server (CoreDNS recommended) + Tailscale split DNS.
+
+Setup: `openclaw dns setup --apply`.
+
+---
+
+## Environment
+
+### `env` (inline env vars)
+
+```json5
+{
+  env: {
+    OPENROUTER_API_KEY: "sk-or-...",
+    vars: {
+      GROQ_API_KEY: "gsk-...",
+    },
+    shellEnv: {
+      enabled: true,
+      timeoutMs: 15000,
+    },
+  },
+}
+```
+
+- Inline env vars are only applied if the process env is missing the key.
+- `.env` files: CWD `.env` + `~/.openclaw/.env` (neither overrides existing vars).
+- `shellEnv`: imports missing expected keys from your login shell profile.
+- See [Environment](/help/environment) for full precedence.
+
+### Env var substitution
+
+Reference env vars in any config string with `${VAR_NAME}`:
+
+```json5
+{
+  gateway: {
+    auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" },
+  },
+}
+```
+
+- Only uppercase names matched: `[A-Z_][A-Z0-9_]*`.
+- Missing/empty vars throw an error at config load.
+- Escape with `$${VAR}` for a literal `${VAR}`.
+- Works with `$include`.
+
+---
+
+## Auth storage
+
+```json5
+{
+  auth: {
+    profiles: {
+      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      "anthropic:work": { provider: "anthropic", mode: "api_key" },
+    },
+    order: {
+      anthropic: ["anthropic:me@example.com", "anthropic:work"],
+    },
+  },
+}
+```
+
+- Per-agent auth profiles stored at `<agentDir>/auth-profiles.json`.
+- Legacy OAuth imports from `~/.openclaw/credentials/oauth.json`.
+- See [OAuth](/concepts/oauth).
+
+---
+
+## Logging
+
+```json5
+{
+  logging: {
+    level: "info",
+    file: "/tmp/openclaw/openclaw.log",
+    consoleLevel: "info",
+    consoleStyle: "pretty", // pretty | compact | json
+    redactSensitive: "tools", // off | tools
+    redactPatterns: ["\\bTOKEN\\b\\s*[=:]\\s*([\"']?)([^\\s\"']+)\\1"],
+  },
+}
+```
+
+- Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`.
+- Set `logging.file` for a stable path.
+- `consoleLevel` bumps to `debug` when `--verbose`.
+
+---
+
+## Wizard
+
+Metadata written by CLI wizards (`onboard`, `configure`, `doctor`):
+
+```json5
+{
+  wizard: {
+    lastRunAt: "2026-01-01T00:00:00.000Z",
+    lastRunVersion: "2026.1.4",
+    lastRunCommit: "abc1234",
+    lastRunCommand: "configure",
+    lastRunMode: "local",
+  },
+}
+```
+
+---
+
+## Identity
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        identity: {
+          name: "Samantha",
+          theme: "helpful sloth",
+          emoji: "🦥",
+          avatar: "avatars/samantha.png",
+        },
+      },
+    ],
+  },
+}
+```
+
+Written by the macOS onboarding assistant. Derives defaults:
+
+- `messages.ackReaction` from `identity.emoji` (falls back to 👀)
+- `mentionPatterns` from `identity.name`/`identity.emoji`
+- `avatar` accepts: workspace-relative path, `http(s)` URL, or `data:` URI
+
+---
 
 ## Bridge (legacy, removed)
 
-<Warning>
-The TCP bridge listener has been removed. `bridge.*` config keys are ignored. Nodes connect over the Gateway WebSocket. This section is kept for historical reference only.
-</Warning>
+Current builds no longer include the TCP bridge. Nodes connect over the Gateway WebSocket. `bridge.*` config keys are ignored.
 
-Legacy config (no longer functional):
+<Accordion title="Legacy bridge config (historical reference)">
 
 ```json5
 {
   bridge: {
     enabled: true,
     port: 18790,
-    bind: "tailnet",
-    tls: { enabled: true },
+    bind: "tailnet", // lan | tailnet | loopback | auto
+    tls: {
+      enabled: true,
+      autoGenerate: true,
+      // certPath, keyPath, caPath
+    },
   },
 }
 ```
 
-Bind modes were: `lan`, `tailnet`, `loopback`, `auto`.
+</Accordion>
 
-## Discovery
+---
 
-### `discovery.mdns` (Bonjour / mDNS)
-
-```json5
-{
-  discovery: { mdns: { mode: "minimal" } },
-}
-```
-
-Modes: `minimal` (default, omit `cliPath` + `sshPort`), `full`, `off`.
-Hostname override: `OPENCLAW_MDNS_HOSTNAME` (default: `openclaw`).
-
-### `discovery.wideArea` (unicast DNS-SD)
+## Cron
 
 ```json5
 {
-  discovery: { wideArea: { enabled: true } },
+  cron: {
+    enabled: true,
+    maxConcurrentRuns: 2,
+    sessionRetention: "24h", // duration string or false
+  },
 }
 ```
 
-One-time setup: `openclaw dns setup --apply`. See [Discovery](/gateway/discovery) for details.
+- `sessionRetention`: how long to keep completed cron sessions before pruning. Default: `24h`.
+
+See [Cron Jobs](/automation/cron-jobs).
+
+---
 
 ## Media model template variables
 
@@ -1845,9 +2286,9 @@ Template placeholders expanded in `tools.media.*.models[].args`:
 | `{{MediaUrl}}`     | Inbound media pseudo-URL                          |
 | `{{MediaPath}}`    | Local media path                                  |
 | `{{MediaType}}`    | Media type (image/audio/document/…)               |
-| `{{Transcript}}`   | Audio transcript (when enabled)                   |
+| `{{Transcript}}`   | Audio transcript                                  |
 | `{{Prompt}}`       | Resolved media prompt for CLI entries             |
-| `{{MaxChars}}`     | Resolved max output chars                         |
+| `{{MaxChars}}`     | Resolved max output chars for CLI entries         |
 | `{{ChatType}}`     | `"direct"` or `"group"`                           |
 | `{{GroupSubject}}` | Group subject (best effort)                       |
 | `{{GroupMembers}}` | Group members preview (best effort)               |
@@ -1855,19 +2296,31 @@ Template placeholders expanded in `tools.media.*.models[].args`:
 | `{{SenderE164}}`   | Sender phone number (best effort)                 |
 | `{{Provider}}`     | Provider hint (whatsapp, telegram, discord, etc.) |
 
-## Cron (Gateway scheduler)
+---
+
+## Config includes (`$include`)
+
+Split config into multiple files:
 
 ```json5
+// ~/.openclaw/openclaw.json
 {
-  cron: {
-    enabled: true,
-    maxConcurrentRuns: 2,
-    sessionRetention: "24h",
+  gateway: { port: 18789 },
+  agents: { $include: "./agents.json5" },
+  broadcast: {
+    $include: ["./clients/mueller.json5", "./clients/schmidt.json5"],
   },
 }
 ```
 
-See [Cron jobs](/automation/cron-jobs) for the full guide.
+**Merge behavior:**
+
+- Single file: replaces the containing object.
+- Array of files: deep-merged in order (later overrides earlier).
+- Sibling keys: merged after includes (override included values).
+- Nested includes: up to 10 levels deep.
+- Paths: relative (to the including file), absolute, or `../` parent references.
+- Errors: clear messages for missing files, parse errors, and circular includes.
 
 ---
 
