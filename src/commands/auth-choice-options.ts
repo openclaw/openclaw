@@ -25,6 +25,7 @@ export type AuthChoiceGroupId =
   | "qwen"
   | "together"
   | "qianfan"
+  | "databricks"
   | "xai"
   | "custom";
 
@@ -100,6 +101,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Qianfan",
     hint: "API key",
     choices: ["qianfan-api-key"],
+  },
+  {
+    value: "databricks",
+    label: "Databricks",
+    hint: "AI Gateway (PAT token or service principal)",
+    choices: ["databricks-api-key"],
   },
   {
     value: "copilot",
@@ -258,6 +265,11 @@ export function buildAuthChoiceOptions(params: {
     value: "minimax-api-lightning",
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
+  });
+  options.push({
+    value: "databricks-api-key",
+    label: "Databricks AI Gateway",
+    hint: "PAT token or service principal (OAuth client_credentials)",
   });
   options.push({ value: "custom-api-key", label: "Custom Provider" });
 
