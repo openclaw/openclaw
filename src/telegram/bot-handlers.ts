@@ -246,7 +246,7 @@ export const registerTelegramHandlers = ({
         const groupMsg = ctx.message;
         if (groupMsg && !albumHasMention && groupIgnoreList.length) {
           const mediaType = resolveTelegramMediaType(groupMsg);
-          if (mediaType && groupIgnoreList.includes(mediaType as any)) {
+          if (mediaType && (groupIgnoreList as readonly string[]).includes(mediaType)) {
             continue;
           }
         }
@@ -924,7 +924,7 @@ export const registerTelegramHandlers = ({
       const isIgnoredMediaType =
         detectedMediaType != null &&
         !mentionedInGroup &&
-        effectiveIgnoreList.includes(detectedMediaType as any);
+        (effectiveIgnoreList as readonly string[]).includes(detectedMediaType);
 
       if (isIgnoredMediaType) {
         const hasTextContent = Boolean((msg.text ?? msg.caption ?? "").trim());
