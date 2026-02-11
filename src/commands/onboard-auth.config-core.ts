@@ -28,10 +28,6 @@ import {
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import {
-  applyDigitalOceanGradientConfig,
-  applyDigitalOceanGradientProviderConfig,
-} from "./digitalocean-gradient-config.js";
-import {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -40,7 +36,6 @@ import {
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
-  DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 import {
   buildZaiModelDefinition,
