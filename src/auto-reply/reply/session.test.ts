@@ -473,3 +473,85 @@ describe("initSessionState channel reset overrides", () => {
     expect(result.sessionEntry.sessionId).toBe(sessionId);
   });
 });
+
+describe("initSessionState label persistence across reset", () => {
+  it("preserves session label when /reset triggers a new session", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-label-reset-"));
+    const storePath = path.join(root, "sessions.json");
+
+    const sessionKey = "agent:main:telegram:default:direct:123";
+    const sessionId = "original-session-id";
+    const label = "my-important-session";
+
+    // Pre-populate with a labeled session
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        systemSent: true,
+        label,
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/reset", "/new"],
+      },
+    } as OpenClawConfig;
+
+    // Trigger reset via /reset command
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    // New session ID should be different
+    expect(result.sessionEntry.sessionId).not.toBe(sessionId);
+    // But the label should be preserved
+    expect(result.sessionEntry.label).toBe(label);
+  });
+
+  it("preserves session label when /new triggers a new session", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-label-new-"));
+    const storePath = path.join(root, "sessions.json");
+
+    const sessionKey = "agent:main:telegram:default:direct:456";
+    const sessionId = "old-session-id";
+    const label = "daily-standup";
+
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        systemSent: true,
+        label,
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/reset", "/new"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.label).toBe(label);
+  });
+});
