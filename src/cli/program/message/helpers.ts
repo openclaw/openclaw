@@ -1,12 +1,5 @@
 import type { Command } from "commander";
-import { messageCommand } from "../../../commands/message.js";
-import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
-import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.js";
-import { defaultRuntime } from "../../../runtime.js";
-import { runCommandWithRuntime } from "../../cli-utils.js";
-import { createDefaultDeps } from "../../deps.js";
-import { ensurePluginRegistryLoaded } from "../../plugin-registry.js";
 
 export type MessageCliHelpers = {
   withMessageBase: (command: Command) => Command;
@@ -24,6 +17,9 @@ function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, 
 }
 
 async function runPluginStopHooks(): Promise<void> {
+  const { danger } = await import("../../../globals.js");
+  const { defaultRuntime } = await import("../../../runtime.js");
+  const { runGlobalGatewayStopSafely } = await import("../../../plugins/hook-runner-global.js");
   await runGlobalGatewayStopSafely({
     event: { reason: "cli message action complete" },
     ctx: {},
@@ -49,6 +45,13 @@ export function createMessageCliHelpers(
     command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);
 
   const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
+    const { setVerbose, danger } = await import("../../../globals.js");
+    const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
+    const { createDefaultDeps } = await import("../../deps.js");
+    const { defaultRuntime } = await import("../../../runtime.js");
+    const { runCommandWithRuntime } = await import("../../cli-utils.js");
+    const { messageCommand } = await import("../../../commands/message.js");
+
     setVerbose(Boolean(opts.verbose));
     ensurePluginRegistryLoaded();
     const deps = createDefaultDeps();
