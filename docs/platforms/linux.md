@@ -130,10 +130,12 @@ systemctl --user restart openclaw-gateway.service
 
 Add to your `.profile` or `.zprofile` (login shell, runs once per session):
 
-```bash
-# WSL2 DBus socket fix - runs once at login
-if [[ -n "$WSL_DISTRO_NAME" ]] && [[ ! -e "/run/user/$(id -u)/bus" ]]; then
-  sudo systemctl restart user@$(id -u).service 2>/dev/null
+```sh
+# WSL2 DBus socket fix (login shell) — runs once per login session.
+# Note: may prompt for your sudo password once.
+uid="$(id -u)"
+if [ -n "${WSL_DISTRO_NAME-}" ] && [ ! -S "/run/user/${uid}/bus" ]; then
+  sudo systemctl restart "user@${uid}.service" 2>/dev/null
 fi
 ```
 
