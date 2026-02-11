@@ -17,9 +17,11 @@
 
 ```
 Hey, please test the new SSH tools.
-Connect to localhost as user 'pi' with password 'power123',
+Connect to 192.168.2.134 as user 'pi' with password 'power123',
 run 'pwd' and 'whoami', then close the connection.
 ```
+
+**⚠️ Important**: Do NOT use "localhost" - the bot runs inside a Docker container, so localhost refers to the container, not the Raspberry Pi host. Always use the actual IP address (192.168.2.134) or hostname.
 
 ### Method 2: Via WhatsApp
 
@@ -67,12 +69,14 @@ node /app/dist/index.js --help
 {
   "tool": "open_ssh_session",
   "parameters": {
-    "host": "localhost",
+    "host": "192.168.2.134",
     "username": "pi",
     "password": "power123"
   }
 }
 ```
+
+**⚠️ Note**: Use actual IP/hostname, not "localhost" (bot runs in Docker container)
 
 ### 2. `execute_ssh_command`
 
@@ -160,7 +164,7 @@ Here's a complete test scenario you can use:
 Please perform the following SSH operations:
 
 1. Open SSH session:
-   - Host: localhost
+   - Host: 192.168.2.134 (NOT localhost - bot runs in Docker!)
    - Username: pi
    - Password: power123
 
@@ -227,7 +231,10 @@ docker compose -f ~/moltbot/docker-compose.yml restart openclaw-gateway
   - **Before**: `export default function register(api)`
   - **After**: `export default { id, name, description, register(api) {...} }`
   - **Deployed**: Yes, container restarted
-- ⏳ Awaiting functional testing via bot (PLEASE TEST NOW!)
+- ✅ **VERIFIED (11:20 CET)**: Tools are now visible to bot! `open_ssh_session` found and called successfully
+  - Initial test with "localhost" failed (expected - Docker networking)
+  - Testing now with actual IP: 192.168.2.134
+- ⏳ Awaiting successful connection test with correct IP
 
 ## 📝 Notes
 
