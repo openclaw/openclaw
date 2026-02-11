@@ -12,6 +12,8 @@ title: "PTY Process Supervision Architecture"
 
 We hit repeated resume failures where long running CLI sessions stalled and cleanup behavior was unsafe or too broad.
 
+Root cause in one sentence: We had no reliable process ownership model, so resume runs could be killed by heuristic cleanup or timeout/PTY races instead of deterministic lifecycle control.
+
 Observed symptoms:
 
 - Resume attempts appeared stuck with no writes for minutes.
