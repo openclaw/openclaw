@@ -800,3 +800,55 @@ export function analyzeCommand(
     factors: risk.factors,
   };
 }
+
+// ============ EXEC INTEGRATION HELPER ============
+
+export type RubberBandCheckContext = {
+  command: string;
+  rbConfig: Partial<RubberBandConfig>;
+  warnings: string[];
+  notifySessionKey?: string;
+  rbNotifyCfg?: unknown;
+  emitExecSystemEvent: (text: string, opts: { sessionKey?: string }) => void;
+  notifyUserChannel: (text: string, opts: { sessionKey?: string; cfg: unknown }) => Promise<void>;
+};
+
+/**
+ * Run a RubberBand check and handle BLOCK/ALERT dispositions.
+ * Throws on BLOCK. Pushes warnings on ALERT. Returns the result.
+ */
+export async function runRubberBandCheck(ctx: RubberBandCheckContext): Promise<RubberBandResult> {
+  const rbOpts = Object.keys(ctx.rbConfig).length > 0 ? { config: ctx.rbConfig } : undefined;
+  const result = analyzeCommand(ctx.command, rbOpts);
+
+  if (result.disposition === "BLOCK") {
+    const rules = result.matches.map((m) => m.rule_id).join(", ");
+    const blockMsg = `🔴 RubberBand BLOCK (score ${result.score}): ${rules}\nCommand: ${ctx.command}`;
+    ctx.emitExecSystemEvent(blockMsg, { sessionKey: ctx.notifySessionKey });
+    if (ctx.rbConfig.notifyChannel && ctx.rbNotifyCfg) {
+      await ctx.notifyUserChannel(blockMsg, {
+        sessionKey: ctx.notifySessionKey,
+        cfg: ctx.rbNotifyCfg,
+      });
+    }
+    throw new Error(
+      `exec blocked by pattern analysis (score ${result.score}/100): ${rules}\n` +
+        "This command was flagged as potentially dangerous and cannot be executed.",
+    );
+  }
+
+  if (result.disposition === "ALERT" && result.matches.length > 0) {
+    const rules = result.matches.map((m) => m.rule_id).join(", ");
+    const alertMsg = `⚠️ RubberBand ALERT (score ${result.score}): ${rules}\nCommand: ${ctx.command}`;
+    ctx.warnings.push(`⚠️ Pattern warning (score ${result.score}): ${rules}`);
+    ctx.emitExecSystemEvent(alertMsg, { sessionKey: ctx.notifySessionKey });
+    if (ctx.rbConfig.notifyChannel && ctx.rbNotifyCfg) {
+      await ctx.notifyUserChannel(alertMsg, {
+        sessionKey: ctx.notifySessionKey,
+        cfg: ctx.rbNotifyCfg,
+      });
+    }
+  }
+
+  return result;
+}
