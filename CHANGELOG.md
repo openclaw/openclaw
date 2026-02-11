@@ -2,6 +2,19 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.2.10
+
+### Changes
+
+- Version alignment: bump manifests and package versions to `2026.2.10`; keep `appcast.xml` unchanged until the next macOS release cut.
+- CLI: add `openclaw logs --local-time` to display log timestamps in local timezone. (#13818) Thanks @xialonglee.
+- Config: avoid redacting `maxTokens`-like fields during config snapshot redaction, preventing round-trip validation failures in `/config`. (#14006) Thanks @constansino.
+
+### Fixes
+
+- Ollama: use configured `models.providers.ollama.baseUrl` for model discovery and normalize `/v1` endpoints to the native Ollama API root. (#14131) Thanks @shtse8.
+- Slack: detect control commands when channel messages start with bot mention prefixes (for example, `@Bot /new`). (#14142) Thanks @beefiker.
+
 ## 2026.2.9
 
 ### Added
@@ -37,10 +50,12 @@ Docs: https://docs.openclaw.ai
 - Telegram: match DM `allowFrom` against sender user id (fallback to chat id) and clarify pairing logs. (#12779) Thanks @liuxiaopai-ai.
 - Pairing/Telegram: include the actual pairing code in approve commands, route Telegram pairing replies through the shared pairing message builder, and add regression checks to prevent `<code>` placeholder drift.
 - Onboarding: QuickStart now auto-installs shell completion (prompt only in Manual).
+- Onboarding/Providers: add LiteLLM provider onboarding and preserve custom LiteLLM proxy base URLs while enforcing API-key auth mode. (#12823) Thanks @ryan-crabbe.
 - Docker: make `docker-setup.sh` compatible with macOS Bash 3.2 and empty extra mounts. (#9441) Thanks @mateusz-michalik.
 - Auth: strip embedded line breaks from pasted API keys and tokens before storing/resolving credentials.
 - Agents: strip reasoning tags and downgraded tool markers from messaging tool and streaming output to prevent leakage. (#11053, #13453) Thanks @liebertar, @meaadore1221-afk, @gumadeiras.
 - Browser: prevent stuck `act:evaluate` from wedging the browser tool, and make cancellation stop waiting promptly. (#13498) Thanks @onutc.
+- Security/Gateway: default-deny missing connect `scopes` (no implicit `operator.admin`).
 - Web UI: make chat refresh smoothly scroll to the latest messages and suppress new-messages badge flash during manual refresh.
 - Web UI: coerce Form Editor values to schema types before `config.set` and `config.apply`, preventing numeric and boolean fields from being serialized as strings. (#13468) Thanks @mcaxtr.
 - Tools/web_search: include provider-specific settings in the web search cache key, and pass `inlineCitations` for Grok. (#12419) Thanks @tmchow.
@@ -59,6 +74,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/CLI: when `gateway.bind=lan`, use a LAN IP for probe URLs and Control UI links. (#11448) Thanks @AnonO6.
 - CLI: make `openclaw plugins list` output scannable by hoisting source roots and shortening bundled/global/workspace plugin paths.
 - Hooks: fix bundled hooks broken since 2026.2.2 (tsdown migration). (#9295) Thanks @patrickshao.
+- Security/Plugins: install plugin and hook dependencies with `--ignore-scripts` to prevent lifecycle script execution.
 - Routing: refresh bindings per message by loading config at route resolution so binding changes apply without restart. (#11372) Thanks @juanpablodlc.
 - Exec approvals: render forwarded commands in monospace for safer approval scanning. (#11937) Thanks @sebslight.
 - Config: clamp `maxTokens` to `contextWindow` to prevent invalid model configs. (#5516) Thanks @lailoo.

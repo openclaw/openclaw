@@ -42,6 +42,7 @@ import { resolveSlackThreadContext } from "../../threading.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
+import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
 
@@ -249,7 +250,9 @@ export async function prepareSlackMessage(params: {
     cfg,
     surface: "slack",
   });
-  const hasControlCommandInMessage = hasControlCommand(message.text ?? "", cfg);
+  // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
+  const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
+  const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
 
   const ownerAuthorized = resolveSlackAllowListMatch({
     allowList: allowFromLower,
