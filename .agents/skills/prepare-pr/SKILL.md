@@ -1,6 +1,6 @@
 ---
 name: prepare-pr
-description: Prepare a GitHub PR for merge by rebasing onto main, fixing review findings, running gates, committing fixes, and pushing to the PR head branch. Use after /reviewpr. Never merge or push to main.
+description: Prepare a GitHub PR for merge by rebasing onto main, fixing review findings, running gates, committing fixes, and pushing to the PR head branch. Use after /review-pr. Never merge or push to main.
 ---
 
 # Prepare PR
@@ -66,9 +66,9 @@ Run all commands inside the worktree directory.
 
 ```sh
 if [ -f .local/review.md ]; then
-  echo "Found review findings from /reviewpr"
+  echo "Found review findings from /review-pr"
 else
-  echo "Missing .local/review.md. Run /reviewpr first and save findings."
+  echo "Missing .local/review.md. Run /review-pr first and save findings."
   exit 1
 fi
 
