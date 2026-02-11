@@ -72,7 +72,7 @@ describe("sanitizeUserFacingText", () => {
 
   it("does not rewrite conversational text mentioning billing or payment terms", () => {
     const text =
-      "The payment processing module handles credit card transactions. When a 402 status code is returned, the system retries with a different payment method.";
+      "The payment processing module handles credit card transactions. When an error status code is returned, the system retries with a different payment method.";
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
