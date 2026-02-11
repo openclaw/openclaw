@@ -9,6 +9,62 @@ import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
+/**
+ * Patterns that indicate shell injection attempts in setupCommand.
+ * Each pattern includes a reason string for error messages.
+ */
+export const SETUP_COMMAND_DENIED_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  // Command chaining operators
+  { pattern: /;/, reason: "semicolon (;) command chaining is not allowed" },
+  { pattern: /&&/, reason: "&& command chaining is not allowed" },
+  { pattern: /\|\|/, reason: "|| command chaining is not allowed" },
+
+  // Command substitution
+  { pattern: /`/, reason: "backtick (`) command substitution is not allowed" },
+  { pattern: /\$\(/, reason: "$( command substitution is not allowed" },
+
+  // Pipes and redirection
+  { pattern: /\|(?!\|)/, reason: "pipe (|) operator is not allowed" },
+  { pattern: />>/, reason: ">> append redirect is not allowed" },
+  { pattern: />(?!>)/, reason: "> output redirect is not allowed" },
+  { pattern: /</, reason: "< input redirect is not allowed" },
+
+  // Newlines (multi-line command injection)
+  { pattern: /\n/, reason: "newline in command is not allowed" },
+  { pattern: /\r/, reason: "carriage return in command is not allowed" },
+
+  // Dangerous commands that enable remote code execution or data exfiltration
+  // Block curl and wget entirely to prevent data exfiltration and remote code download
+  { pattern: /\bcurl\b/i, reason: "curl is not allowed (potential data exfiltration)" },
+  { pattern: /\bwget\b/i, reason: "wget is not allowed (use apt-get for package installation)" },
+  { pattern: /\beval\b/, reason: "eval command is not allowed" },
+  { pattern: /\bnc\b/, reason: "nc (netcat) is not allowed" },
+  { pattern: /\bnetcat\b/, reason: "netcat is not allowed" },
+
+  // Shell invocation with command string
+  { pattern: /\bbash\s+-c\b/, reason: "bash -c is not allowed" },
+  { pattern: /\bsh\s+-c\b/, reason: "sh -c is not allowed" },
+  { pattern: /\bzsh\s+-c\b/, reason: "zsh -c is not allowed" },
+];
+
+/**
+ * Validates a setupCommand for shell injection attempts.
+ * Returns undefined if the command is safe, or an error message if it's not.
+ */
+export function validateSetupCommand(command: string | undefined): string | undefined {
+  if (!command || !command.trim()) {
+    return undefined;
+  }
+
+  for (const { pattern, reason } of SETUP_COMMAND_DENIED_PATTERNS) {
+    if (pattern.test(command)) {
+      return `Invalid setupCommand: ${reason}`;
+    }
+  }
+
+  return undefined;
+}
+
 export function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
   return new Promise<{ stdout: string; stderr: string; code: number }>((resolve, reject) => {
     const child = spawn("docker", args, {
@@ -240,6 +296,10 @@ async function createSandboxContainer(params: {
   await execDocker(["start", name]);
 
   if (cfg.setupCommand?.trim()) {
+    const validationError = validateSetupCommand(cfg.setupCommand);
+    if (validationError) {
+      throw new Error(validationError);
+    }
     await execDocker(["exec", "-i", name, "sh", "-lc", cfg.setupCommand]);
   }
 }
