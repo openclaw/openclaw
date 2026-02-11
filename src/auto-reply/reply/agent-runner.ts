@@ -369,6 +369,12 @@ export async function runReplyAgent(params: {
           queue.lastEnqueuedAt = Date.now();
         } else {
           enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+          // Seed lockRetryCount on the newly created queue so the retry cap
+          // is consistent with the drain-path counter.
+          const newQueue = FOLLOWUP_QUEUES.get(queueKey);
+          if (newQueue) {
+            newQueue.lockRetryCount = retryCount + 1;
+          }
         }
         // Wait before retrying so we don't spam the lock.
         const LOCK_RETRY_DELAY_MS = 5_000;
