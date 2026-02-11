@@ -7,6 +7,7 @@ import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.t
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
@@ -545,7 +546,22 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (formatted === state.lastStreamedReasoning) {
       return;
     }
+    // Compute delta: new text since the last emitted reasoning.
+    // Guard against non-prefix changes (e.g. trim/format altering earlier content).
+    const prior = state.lastStreamedReasoning ?? "";
+    const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
     state.lastStreamedReasoning = formatted;
+
+    // Broadcast thinking event to WebSocket clients in real-time
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "thinking",
+      data: {
+        text: formatted,
+        delta,
+      },
+    });
+
     void params.onReasoningStream({
       text: formatted,
     });
