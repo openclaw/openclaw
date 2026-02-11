@@ -14,36 +14,26 @@ function renderTaskList(tasks: TaskItem[]) {
   if (tasks.length === 0) {
     return html`<div class="muted">No tasks yet.</div>`;
   }
+
   return html`
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Priority</th>
-            <th>Task</th>
-            <th>Project</th>
-            <th>Lane</th>
-            <th>Agent</th>
-            <th>Next Action</th>
-            <th>Due</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tasks.map(
-            (task) => html`
-              <tr>
-                <td><span class="mono">${task.priority}</span></td>
-                <td>${task.title}</td>
-                <td>${task.project || "General"}</td>
-                <td>${laneLabel(task.lane)}</td>
-                <td><span class="mono">${task.assignedAgent || "unassigned"}</span></td>
-                <td>${task.nextAction || "—"}</td>
-                <td>${task.due || "—"}</td>
-              </tr>
-            `,
-          )}
-        </tbody>
-      </table>
+    <div
+      style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 8px;"
+    >
+      ${tasks.map(
+        (task) => html`
+          <article class="card" style="margin: 0; padding: 12px;">
+            <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span class="pill"><span>Priority</span><span class="mono">${task.priority}</span></span>
+              <span class="pill"><span>Lane</span><span class="mono">${laneLabel(task.lane)}</span></span>
+            </div>
+            <div style="font-weight: 600; margin-bottom: 6px;">${task.title}</div>
+            <div class="muted" style="margin-bottom: 8px;">Project: ${task.project || "General"}</div>
+            <div style="font-size: 13px; margin-bottom: 6px;"><strong>Agent:</strong> ${task.assignedAgent || "unassigned"}</div>
+            <div style="font-size: 13px; margin-bottom: 6px;"><strong>Next:</strong> ${task.nextAction || "—"}</div>
+            <div style="font-size: 13px;"><strong>Due:</strong> ${task.due || "—"}</div>
+          </article>
+        `,
+      )}
     </div>
   `;
 }
