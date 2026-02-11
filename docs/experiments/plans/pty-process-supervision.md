@@ -371,6 +371,37 @@ Run this matrix in CI (or gated pre merge runners) for Linux, macOS, and Windows
    - two supervisors compete for same run.
    - assert single owner and no double kill.
 
+## CI And CD Integration Plan
+
+Use the existing CI workflow in this repo:
+
+- `.github/workflows/ci.yml`
+
+Use existing cross platform jobs as the execution lanes:
+
+- Linux lane: `checks`
+- Windows lane: `checks-windows`
+- macOS lane: `macos`
+
+Implementation requirement:
+
+- Add a dedicated process supervisor test command (for example `pnpm test:supervisor:ci`) and run it in all three lanes above.
+- Keep these checks required before merge for the rewrite PR.
+
+Scope trigger requirement:
+
+- Ensure `changed-scope` in `.github/workflows/ci.yml` marks process supervisor changes as Node + macOS relevant, including:
+  - `packages/process-supervisor/**`
+  - `src/process/**`
+  - `src/agents/**` paths that consume the supervisor
+  - supervisor specific test files
+- This ensures macOS coverage is actually executed for supervisor changes and not skipped by path filters.
+
+CD policy:
+
+- No release or rollout if any supervisor lane fails on Linux, Windows, or macOS.
+- Main branch cutover is allowed only after all three lanes pass for the final rewrite commit set.
+
 ## Operational Metrics
 
 Add counters and structured events:
