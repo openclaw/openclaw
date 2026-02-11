@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {
@@ -30,6 +31,10 @@ export type ResolvedBrowserConfig = {
   attachOnly: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
+  auth: {
+    enabled: boolean;
+    token: string | null;
+  };
 };
 
 export type ResolvedBrowserProfile = {
@@ -208,6 +213,11 @@ export function resolveBrowserConfig(
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
       : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
 
+  const authEnabled = cfg?.auth?.enabled !== false; // default: true
+  const authToken = authEnabled
+    ? cfg?.auth?.token?.trim() || randomBytes(32).toString("base64url")
+    : null;
+
   return {
     enabled,
     evaluateEnabled,
@@ -224,6 +234,10 @@ export function resolveBrowserConfig(
     attachOnly,
     defaultProfile,
     profiles,
+    auth: {
+      enabled: authEnabled,
+      token: authToken,
+    },
   };
 }
 

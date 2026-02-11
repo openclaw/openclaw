@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { safeEqual } from "../security/safe-equal.js";
 
 export type NodePairingPendingRequest = {
   requestId: string;
@@ -274,7 +275,7 @@ export async function verifyNodeToken(
   if (!node) {
     return { ok: false };
   }
-  return node.token === token ? { ok: true, node } : { ok: false };
+  return safeEqual(node.token, token) ? { ok: true, node } : { ok: false };
 }
 
 export async function updatePairedNodeMetadata(

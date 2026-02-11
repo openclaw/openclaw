@@ -38,4 +38,11 @@ export type BrowserConfig = {
   profiles?: Record<string, BrowserProfileConfig>;
   /** Default snapshot options (applied by the browser tool/CLI when unset). */
   snapshotDefaults?: BrowserSnapshotDefaults;
+  /** Browser control API auth. Default: enabled with auto-generated token. */
+  auth?: {
+    /** Enable Bearer token auth on the browser control server. Default: true */
+    enabled?: boolean;
+    /** Static auth token. If omitted, a random token is generated at startup. */
+    token?: string;
+  };
 };

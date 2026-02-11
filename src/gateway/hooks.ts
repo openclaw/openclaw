@@ -12,6 +12,7 @@ const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
 export type HooksConfigResolved = {
   basePath: string;
   token: string;
+  allowQueryToken: boolean;
   maxBodyBytes: number;
   mappings: HookMappingResolved[];
 };
@@ -30,6 +31,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   if (trimmed === "/") {
     throw new Error("hooks.path may not be '/'");
   }
+  const allowQueryToken = cfg.hooks?.allowQueryToken !== false; // default: true (backward compat)
   const maxBodyBytes =
     cfg.hooks?.maxBodyBytes && cfg.hooks.maxBodyBytes > 0
       ? cfg.hooks.maxBodyBytes
@@ -38,6 +40,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   return {
     basePath: trimmed,
     token,
+    allowQueryToken,
     maxBodyBytes,
     mappings,
   };

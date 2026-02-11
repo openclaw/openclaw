@@ -98,6 +98,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
         profiles: {
           openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
         },
+        auth: { enabled: false },
       },
     }),
     writeConfigFile: vi.fn(async () => {}),

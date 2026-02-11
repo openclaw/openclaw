@@ -3,6 +3,7 @@ import express from "express";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { safeEqual } from "../security/safe-equal.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
 import { registerBrowserRoutes } from "./routes/index.js";
@@ -25,6 +26,40 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
   const app = express();
   app.use(express.json({ limit: "1mb" }));
+
+  // Host header validation (DNS rebinding protection)
+  app.use((req, res, next) => {
+    const host = (req.headers.host ?? "").replace(/:\d+$/, "").toLowerCase();
+    if (
+      host &&
+      host !== "localhost" &&
+      host !== "127.0.0.1" &&
+      host !== "[::1]" &&
+      host !== "::1"
+    ) {
+      res.status(403).json({ error: "Forbidden: invalid Host header" });
+      return;
+    }
+    next();
+  });
+
+  // Bearer token auth (secure by default)
+  if (resolved.auth.enabled && resolved.auth.token) {
+    const expectedAuth = `Bearer ${resolved.auth.token}`;
+    app.use((req, res, next) => {
+      const auth = String(req.headers.authorization ?? "").trim();
+      if (safeEqual(auth, expectedAuth)) {
+        return next();
+      }
+      res.status(401).json({ error: "Unauthorized" });
+    });
+    logServer.info(`Browser control auth enabled (token: ${resolved.auth.token.slice(0, 8)}…)`);
+  } else {
+    logServer.warn(
+      "Browser control auth is DISABLED. Any local process can control the browser. " +
+        "Set browser.auth.enabled: true in your config for security.",
+    );
+  }
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
@@ -106,4 +141,9 @@ export async function stopBrowserControlServer(): Promise<void> {
   } catch {
     // ignore
   }
+}
+
+/** Get the browser control auth token (for internal consumers). */
+export function getBrowserControlAuthToken(): string | null {
+  return state?.resolved.auth.token ?? null;
 }

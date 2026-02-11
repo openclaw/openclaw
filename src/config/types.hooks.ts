@@ -114,6 +114,8 @@ export type HooksConfig = {
   enabled?: boolean;
   path?: string;
   token?: string;
+  /** Allow hook auth token in query string. Default: true (deprecated, will change to false). */
+  allowQueryToken?: boolean;
   maxBodyBytes?: number;
   presets?: string[];
   transformsDir?: string;

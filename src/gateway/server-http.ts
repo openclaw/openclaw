@@ -12,6 +12,7 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import { loadConfig } from "../config/config.js";
+import { safeEqual } from "../security/safe-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import {
   handleControlUiAvatarRequest,
@@ -83,18 +84,29 @@ export function createHooksRequestHandler(
     }
 
     const { token, fromQuery } = extractHookToken(req, url);
-    if (!token || token !== hooksConfig.token) {
+    if (!token || !safeEqual(token, hooksConfig.token)) {
       res.statusCode = 401;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Unauthorized");
       return true;
     }
     if (fromQuery) {
+      if (!hooksConfig.allowQueryToken) {
+        res.statusCode = 401;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Deprecation", "true");
+        res.end(
+          "Unauthorized: query string tokens are disabled. Use Authorization: Bearer <token> header.",
+        );
+        return true;
+      }
       logHooks.warn(
         "Hook token provided via query parameter is deprecated for security reasons. " +
           "Tokens in URLs appear in logs, browser history, and referrer headers. " +
-          "Use Authorization: Bearer <token> or X-OpenClaw-Token header instead.",
+          "Use Authorization: Bearer <token> or X-OpenClaw-Token header instead. " +
+          "Set hooks.allowQueryToken: false to reject query tokens.",
       );
+      res.setHeader("Deprecation", "true");
     }
 
     if (req.method !== "POST") {

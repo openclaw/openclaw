@@ -96,6 +96,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
         attachOnly: cfgAttachOnly,
         headless: true,
         defaultProfile: "openclaw",
+        auth: { enabled: false },
         profiles: {
           openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
         },

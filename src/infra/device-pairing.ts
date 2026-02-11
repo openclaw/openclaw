@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { safeEqual } from "../security/safe-equal.js";
 
 export type DevicePairingPendingRequest = {
   requestId: string;
@@ -431,7 +432,7 @@ export async function verifyDeviceToken(params: {
     if (entry.revokedAtMs) {
       return { ok: false, reason: "token-revoked" };
     }
-    if (entry.token !== params.token) {
+    if (!safeEqual(entry.token, params.token)) {
       return { ok: false, reason: "token-mismatch" };
     }
     const requestedScopes = normalizeScopes(params.scopes);

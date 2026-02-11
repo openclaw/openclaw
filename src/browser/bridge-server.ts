@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import type { ResolvedBrowserConfig } from "./config.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
+import { safeEqual } from "../security/safe-equal.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import {
   type BrowserServerState,
@@ -34,7 +35,7 @@ export async function startBrowserBridgeServer(params: {
   if (authToken) {
     app.use((req, res, next) => {
       const auth = String(req.headers.authorization ?? "").trim();
-      if (auth === `Bearer ${authToken}`) {
+      if (safeEqual(auth, `Bearer ${authToken}`)) {
         return next();
       }
       res.status(401).send("Unauthorized");
