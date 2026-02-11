@@ -46,8 +46,9 @@ RUN chown -R node:node /app
 USER node
 
 # Health check: verify gateway is responding
+# Uses OPENCLAW_GATEWAY_PORT env var with fallback to default port
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD node -e "fetch('http://localhost:18789').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+  CMD node -e "fetch('http://localhost:'+(process.env.OPENCLAW_GATEWAY_PORT||18789)).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
