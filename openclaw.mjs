@@ -25,8 +25,11 @@ for (let _i = 2; _i < process.argv.length; _i++) {
     break;
   }
   if (_a === "--profile") {
-    _i++;
-  } // skip --profile's value
+    const _next = process.argv[_i + 1];
+    if (_next && !_next.startsWith("-")) {
+      _i++;
+    }
+  }
 }
 if (_versionFlag) {
   let _version = process.env.OPENCLAW_BUNDLED_VERSION;

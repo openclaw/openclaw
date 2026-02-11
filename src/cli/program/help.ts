@@ -78,8 +78,11 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
       break;
     }
     if (arg === "--profile") {
-      i++;
-    } // skip --profile's value
+      const next = process.argv[i + 1];
+      if (next && !next.startsWith("-")) {
+        i++;
+      }
+    }
   }
   if (isVersionRequest) {
     console.log(ctx.programVersion);
