@@ -2,10 +2,11 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { resolvePinnedHostname, SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
+import { canUseAtlas, runAtlasPrompt } from "./atlas.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   extractReadableContent,
@@ -276,6 +277,81 @@ function wrapWebFetchField(value: string | undefined): string | undefined {
   return wrapExternalContent(value, { source: "web_fetch", includeWarning: false });
 }
 
+type AtlasFetchResult = {
+  title?: string;
+  content: string;
+};
+
+function buildAtlasFetchPrompt(params: {
+  url: string;
+  extractMode: ExtractMode;
+  maxChars: number;
+}): string {
+  const modeHint = params.extractMode === "text" ? "plain text" : "markdown";
+  return [
+    "You are a content extraction assistant.",
+    `Open the URL and extract the main content (no summary).`,
+    `URL: ${params.url}`,
+    `Return JSON with shape: {"title":"","content":""}.`,
+    `Content must be ${modeHint}.`,
+    `Limit content to about ${params.maxChars} characters if needed.`,
+    "Return only JSON, no markdown or code fences.",
+  ].join("\n");
+}
+
+function extractAtlasJsonPayload(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const withoutFence = trimmed
+    .replace(/^```(?:json)?/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  const firstBrace = withoutFence.indexOf("{");
+  const lastBrace = withoutFence.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const candidate = withoutFence.slice(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+function normalizeAtlasFetchResult(value: unknown): AtlasFetchResult | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const content =
+    typeof record.content === "string"
+      ? record.content
+      : typeof record.text === "string"
+        ? record.text
+        : "";
+  if (!content.trim()) {
+    return null;
+  }
+  const title = typeof record.title === "string" ? record.title : undefined;
+  return { title, content };
+}
+
+async function assertAtlasFetchUrlAllowed(url: string): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Invalid URL: must be http or https");
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("Invalid URL: must be http or https");
+  }
+  await resolvePinnedHostname(parsed.hostname);
+}
+
 function normalizeContentType(value: string | null | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -360,6 +436,65 @@ export async function fetchFirecrawlContent(params: {
     status: data.metadata?.statusCode,
     warning: payload?.warning,
   };
+}
+
+async function runAtlasFetch(params: {
+  url: string;
+  extractMode: ExtractMode;
+  maxChars: number;
+  timeoutSeconds: number;
+  cacheTtlMs: number;
+  config?: OpenClawConfig;
+  sandboxed?: boolean;
+}): Promise<Record<string, unknown>> {
+  const cacheKey = normalizeCacheKey(
+    `atlas:${params.url}:${params.extractMode}:${params.maxChars}`,
+  );
+  const cached = readCache(FETCH_CACHE, cacheKey);
+  if (cached) {
+    return { ...cached.value, cached: true };
+  }
+
+  await assertAtlasFetchUrlAllowed(params.url);
+
+  const start = Date.now();
+  const prompt = buildAtlasFetchPrompt({
+    url: params.url,
+    extractMode: params.extractMode,
+    maxChars: params.maxChars,
+  });
+  const response = await runAtlasPrompt({
+    config: params.config,
+    sandboxed: params.sandboxed,
+    prompt,
+    timeoutMs: params.timeoutSeconds * 1000,
+  });
+
+  const parsed = extractAtlasJsonPayload(response.text);
+  const normalized = normalizeAtlasFetchResult(parsed);
+  const content = normalized?.content?.trim() || response.text.trim();
+  const title = normalized?.title;
+
+  const wrapped = wrapWebFetchContent(content, params.maxChars);
+  const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
+  const payload = {
+    url: params.url, // Keep raw for tool chaining
+    finalUrl: params.url, // Best-effort
+    status: 200,
+    contentType: params.extractMode === "text" ? "text/plain" : "text/markdown",
+    title: wrappedTitle,
+    extractMode: params.extractMode,
+    extractor: "atlas",
+    truncated: wrapped.truncated,
+    length: wrapped.wrappedLength,
+    rawLength: wrapped.rawLength,
+    wrappedLength: wrapped.wrappedLength,
+    fetchedAt: new Date().toISOString(),
+    tookMs: Date.now() - start,
+    text: wrapped.text,
+  };
+  writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  return payload;
 }
 
 async function runWebFetch(params: {
@@ -653,7 +788,7 @@ export function createWebFetchTool(options?: {
     label: "Web Fetch",
     name: "web_fetch",
     description:
-      "Fetch and extract readable content from a URL (HTML → markdown/text). Use for lightweight page access without browser automation.",
+      "Fetch and extract readable content from a URL (HTML → markdown/text). Uses ChatGPT Atlas when available; otherwise falls back to lightweight HTTP fetch.",
     parameters: WebFetchSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -661,17 +796,41 @@ export function createWebFetchTool(options?: {
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
+      const resolvedMaxChars = resolveMaxChars(
+        maxChars ?? fetch?.maxChars,
+        DEFAULT_FETCH_MAX_CHARS,
+        maxCharsCap,
+      );
+      const timeoutSeconds = resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
+      const cacheTtlMs = resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
+
+      if (canUseAtlas({ config: options?.config, sandboxed: options?.sandboxed })) {
+        try {
+          const result = await runAtlasFetch({
+            url,
+            extractMode,
+            maxChars: resolvedMaxChars,
+            timeoutSeconds,
+            cacheTtlMs,
+            config: options?.config,
+            sandboxed: options?.sandboxed,
+          });
+          return jsonResult(result);
+        } catch (err) {
+          if (err instanceof SsrFBlockedError) {
+            throw err;
+          }
+          // Fall back to standard fetch if Atlas failed for any other reason.
+        }
+      }
+
       const result = await runWebFetch({
         url,
         extractMode,
-        maxChars: resolveMaxChars(
-          maxChars ?? fetch?.maxChars,
-          DEFAULT_FETCH_MAX_CHARS,
-          maxCharsCap,
-        ),
+        maxChars: resolvedMaxChars,
         maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
-        timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-        cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+        timeoutSeconds,
+        cacheTtlMs,
         userAgent,
         readabilityEnabled,
         firecrawlEnabled,

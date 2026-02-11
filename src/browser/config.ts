@@ -6,14 +6,17 @@ import {
   DEFAULT_BROWSER_CONTROL_PORT,
 } from "../config/port-defaults.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { resolveAtlasExecutableForPlatform } from "./chrome.executables.js";
 import {
+  DEFAULT_ATLAS_BROWSER_COLOR,
+  DEFAULT_ATLAS_BROWSER_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
+import { allocateCdpPort, CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
@@ -41,6 +44,7 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   color: string;
   driver: "openclaw" | "extension";
+  executablePath?: string;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -135,6 +139,31 @@ function ensureDefaultChromeExtensionProfile(
   };
   return result;
 }
+
+function ensureAtlasProfile(
+  profiles: Record<string, BrowserProfileConfig>,
+  range: { start: number; end: number },
+): Record<string, BrowserProfileConfig> {
+  const result = { ...profiles };
+  if (result[DEFAULT_ATLAS_BROWSER_PROFILE_NAME]) {
+    return result;
+  }
+  const atlasExe = resolveAtlasExecutableForPlatform(process.platform);
+  if (!atlasExe) {
+    return result;
+  }
+  const usedPorts = getUsedPorts(result);
+  const cdpPort = allocateCdpPort(usedPorts, range);
+  if (!cdpPort) {
+    return result;
+  }
+  result[DEFAULT_ATLAS_BROWSER_PROFILE_NAME] = {
+    cdpPort,
+    color: DEFAULT_ATLAS_BROWSER_COLOR,
+    executablePath: atlasExe.path,
+  };
+  return result;
+}
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
@@ -185,9 +214,12 @@ export function resolveBrowserConfig(
   const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
   // Use legacy cdpUrl port for backward compatibility when no profiles configured
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
-  const profiles = ensureDefaultChromeExtensionProfile(
-    ensureDefaultProfile(cfg?.profiles, defaultColor, legacyCdpPort, derivedCdpRange.start),
-    controlPort,
+  const profiles = ensureAtlasProfile(
+    ensureDefaultChromeExtensionProfile(
+      ensureDefaultProfile(cfg?.profiles, defaultColor, legacyCdpPort, derivedCdpRange.start),
+      controlPort,
+    ),
+    derivedCdpRange,
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
   const defaultProfile =
@@ -253,6 +285,7 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
+    executablePath: profile.executablePath?.trim() || undefined,
   };
 }
 

@@ -1,7 +1,7 @@
 import AppKit
+import Foundation
 import OpenClawIPC
 import OpenClawKit
-import Foundation
 import WebKit
 
 @MainActor
@@ -183,7 +183,9 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
 
     @MainActor deinit {
         for name in CanvasA2UIActionMessageHandler.allMessageNames {

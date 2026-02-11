@@ -21,6 +21,7 @@ const CHROMIUM_BUNDLE_IDS = new Set([
   "com.microsoft.EdgeBeta",
   "com.microsoft.EdgeDev",
   "com.microsoft.EdgeCanary",
+  "com.openai.atlas",
   "org.chromium.Chromium",
   "com.vivaldi.Vivaldi",
   "com.operasoftware.Opera",
@@ -63,6 +64,7 @@ const CHROMIUM_EXE_NAMES = new Set([
   "google chrome",
   "google chrome canary",
   "brave browser",
+  "chatgpt atlas",
   "microsoft edge",
   "chromium",
   "chrome",
@@ -126,6 +128,9 @@ function inferKindFromIdentifier(identifier: string): BrowserExecutable["kind"] 
   if (id.includes("canary")) {
     return "canary";
   }
+  if (id.includes("atlas")) {
+    return "chromium";
+  }
   if (
     id.includes("opera") ||
     id.includes("vivaldi") ||
@@ -150,6 +155,9 @@ function inferKindFromExecutableName(name: string): BrowserExecutable["kind"] {
   }
   if (lower.includes("canary") || lower.includes("sxs")) {
     return "canary";
+  }
+  if (lower.includes("atlas")) {
+    return "chromium";
   }
   if (lower.includes("opera") || lower.includes("vivaldi") || lower.includes("yandex")) {
     return "chromium";
@@ -501,6 +509,14 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
         "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
       ),
     },
+    {
+      kind: "chromium",
+      path: "/Applications/ChatGPT Atlas.app/Contents/MacOS/ChatGPT Atlas",
+    },
+    {
+      kind: "chromium",
+      path: path.join(os.homedir(), "Applications/ChatGPT Atlas.app/Contents/MacOS/ChatGPT Atlas"),
+    },
   ];
 
   return findFirstExecutable(candidates);
@@ -594,6 +610,29 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
   });
 
   return findFirstExecutable(candidates);
+}
+
+export function findAtlasExecutableMac(): BrowserExecutable | null {
+  const candidates: Array<BrowserExecutable> = [
+    {
+      kind: "chromium",
+      path: "/Applications/ChatGPT Atlas.app/Contents/MacOS/ChatGPT Atlas",
+    },
+    {
+      kind: "chromium",
+      path: path.join(os.homedir(), "Applications/ChatGPT Atlas.app/Contents/MacOS/ChatGPT Atlas"),
+    },
+  ];
+  return findFirstExecutable(candidates);
+}
+
+export function resolveAtlasExecutableForPlatform(
+  platform: NodeJS.Platform,
+): BrowserExecutable | null {
+  if (platform === "darwin") {
+    return findAtlasExecutableMac();
+  }
+  return null;
 }
 
 export function resolveBrowserExecutableForPlatform(

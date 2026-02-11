@@ -31,6 +31,7 @@ const BROWSER_TOOL_ACTIONS = [
   "pdf",
   "upload",
   "dialog",
+  "atlas",
   "act",
 ] as const;
 

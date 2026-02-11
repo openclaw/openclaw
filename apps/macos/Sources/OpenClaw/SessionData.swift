@@ -84,8 +84,13 @@ struct SessionRow: Identifiable {
     let tokens: SessionTokenStats
     let model: String?
 
-    var ageText: String { relativeAge(from: self.updatedAt) }
-    var label: String { self.displayName ?? self.key }
+    var ageText: String {
+        relativeAge(from: self.updatedAt)
+    }
+
+    var label: String {
+        self.displayName ?? self.key
+    }
 
     var flagLabels: [String] {
         var flags: [String] = []

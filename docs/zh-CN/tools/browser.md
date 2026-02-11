@@ -16,8 +16,8 @@ x-i18n:
 
 # 浏览器（openclaw 托管）
 
-OpenClaw 可以运行一个由智能体控制的**专用 Chrome/Brave/Edge/Chromium 配置文件**。
-它与你的个人浏览器隔离，通过 Gateway 网关内部的小型本地控制服务进行管理（仅限 loopback）。
+OpenClaw 可以运行一个由智能体控制的**专用 Chromium 配置文件**（Chrome/Brave/Edge/Chromium；ChatGPT Atlas 仅 macOS）。
+它与你的个人浏览器隔离，通过 Gateway 网关内部的一个小型本地控制服务进行管理（仅限 loopback）。
 
 新手视角：
 
@@ -87,14 +87,14 @@ openclaw browser --browser-profile openclaw snapshot
 - `remoteCdpTimeoutMs` 适用于远程（非 loopback）CDP 可达性检查。
 - `remoteCdpHandshakeTimeoutMs` 适用于远程 CDP WebSocket 可达性检查。
 - `attachOnly: true` 表示"永不启动本地浏览器；仅在浏览器已运行时附加"。
-- `color` + 每个配置文件的 `color` 为浏览器 UI 着色，以便你能看到哪个配置文件处于活动状态。
-- 默认配置文件是 `chrome`（扩展中继）。使用 `defaultProfile: "openclaw"` 来使用托管浏览器。
-- 自动检测顺序：如果系统默认浏览器是基于 Chromium 的则使用它；否则 Chrome → Brave → Edge → Chromium → Chrome Canary。
-- 本地 `openclaw` 配置文件会自动分配 `cdpPort`/`cdpUrl` — 仅为远程 CDP 设置这些。
+- `color` + 每个配置文件的 `color` 为浏览器 UI 着色，以便你识别当前活动的配置文件。
+- 默认配置文件为 `chrome`（扩展中继）。使用 `defaultProfile: "openclaw"` 切换到托管浏览器。
+- 自动检测顺序：如果系统默认浏览器是基于 Chromium 的则使用它；否则按 Chrome → Brave → Edge → Chromium → Chrome Canary → ChatGPT Atlas（macOS）顺序查找。
+- 本地 `openclaw` 配置文件会自动分配 `cdpPort`/`cdpUrl`；仅在远程 CDP 时才需要手动设置。
 
-## 使用 Brave（或其他基于 Chromium 的浏览器）
+## 使用 Brave（或其他基于 Chromium 的浏览器，包括 macOS 的 ChatGPT Atlas）
 
-如果你的**系统默认**浏览器是基于 Chromium 的（Chrome/Brave/Edge 等），OpenClaw 会自动使用它。设置 `browser.executablePath` 可覆盖自动检测：
+如果你的**系统默认**浏览器是基于 Chromium 的（Chrome/Brave/Edge 等，macOS 上的 ChatGPT Atlas 也算），OpenClaw 会自动使用它。设置 `browser.executablePath` 来覆盖自动检测：
 
 CLI 示例：
 
@@ -278,12 +278,13 @@ openclaw browser create-profile \
 3. Edge
 4. Chromium
 5. Chrome Canary
+6. ChatGPT Atlas（macOS）
 
 你可以使用 `browser.executablePath` 覆盖。
 
 平台：
 
-- macOS：检查 `/Applications` 和 `~/Applications`。
+- macOS：检查 `/Applications` 和 `~/Applications`（包含 ChatGPT Atlas）。
 - Linux：查找 `google-chrome`、`brave`、`microsoft-edge`、`chromium` 等。
 - Windows：检查常见安装位置。
 
@@ -328,7 +329,7 @@ docker compose run --rm openclaw-cli \
 高层流程：
 
 - 一个小型**控制服务器**接受 HTTP 请求。
-- 它通过 **CDP** 连接到基于 Chromium 的浏览器（Chrome/Brave/Edge/Chromium）。
+- 它通过 **CDP** 连接到基于 Chromium 的浏览器（Chrome/Brave/Edge/Chromium；ChatGPT Atlas 仅 macOS）。
 - 对于高级操作（点击/输入/快照/PDF），它在 CDP 之上使用 **Playwright**。
 - 当缺少 Playwright 时，仅非 Playwright 操作可用。
 

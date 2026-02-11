@@ -3,6 +3,8 @@ export type BrowserProfileConfig = {
   cdpPort?: number;
   /** CDP URL for this profile (use for remote Chrome). */
   cdpUrl?: string;
+  /** Override the browser executable path for this profile. */
+  executablePath?: string;
   /** Profile driver (default: openclaw). */
   driver?: "openclaw" | "extension";
   /** Profile color (hex). Auto-assigned at creation. */

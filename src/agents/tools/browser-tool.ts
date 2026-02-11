@@ -20,11 +20,22 @@ import {
   browserTabs,
 } from "../../browser/client.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
-import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
+import {
+  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  DEFAULT_ATLAS_BROWSER_PROFILE_NAME,
+} from "../../browser/constants.js";
 import { loadConfig } from "../../config/config.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { wrapExternalContent } from "../../security/external-content.js";
+import { canUseAtlas, runAtlasPrompt } from "./atlas.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
-import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  imageResultFromFile,
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
 
@@ -236,6 +247,7 @@ export function createBrowserTool(opts?: {
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
+      'For browser-only research/extraction tasks, you can use action="atlas" with promptText (and optional targetUrl) to offload to ChatGPT Atlas when available.',
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
       hostHint,
     ].join(" "),
@@ -672,6 +684,85 @@ export function createBrowserTool(opts?: {
               profile,
             }),
           );
+        }
+        case "atlas": {
+          if (target === "sandbox") {
+            return jsonResult({
+              error: "atlas_unsupported_target",
+              message: "Atlas is only available on the host browser (target=host).",
+            });
+          }
+          if (nodeTarget) {
+            return jsonResult({
+              error: "atlas_unsupported_target",
+              message: "Atlas is only available on the host browser, not via node proxy.",
+            });
+          }
+          if (opts?.allowHostControl === false) {
+            return jsonResult({
+              error: "atlas_host_blocked",
+              message: "Host browser control is blocked by policy.",
+            });
+          }
+          if (profile && profile !== DEFAULT_ATLAS_BROWSER_PROFILE_NAME) {
+            return jsonResult({
+              error: "atlas_profile_mismatch",
+              message: `Atlas action only supports profile="${DEFAULT_ATLAS_BROWSER_PROFILE_NAME}".`,
+            });
+          }
+
+          const promptText = readStringParam(params, "promptText", { required: true });
+          const targetUrl = readStringParam(params, "targetUrl");
+          const timeoutMs =
+            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+              ? Math.max(1000, Math.floor(params.timeoutMs))
+              : 60_000;
+          const maxCharsRaw = readNumberParam(params, "maxChars", { integer: true });
+          const maxChars =
+            typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw)
+              ? Math.max(0, Math.floor(maxCharsRaw))
+              : undefined;
+
+          const cfg = loadConfig();
+          if (!canUseAtlas({ config: cfg, sandboxed: false })) {
+            return jsonResult({
+              error: "atlas_unavailable",
+              message:
+                "ChatGPT Atlas is not available. Install/launch Atlas on macOS or use standard browser actions instead.",
+            });
+          }
+
+          const promptParts = [
+            "You are ChatGPT running inside ChatGPT Atlas.",
+            targetUrl ? `Open this URL: ${targetUrl}` : "",
+            `Task: ${promptText}`,
+            "Return only the final answer. No markdown fences.",
+          ].filter(Boolean);
+
+          const result = await runAtlasPrompt({
+            config: cfg,
+            prompt: promptParts.join("\n"),
+            timeoutMs,
+          });
+
+          const raw = result.text.trim();
+          const trimmed = maxChars === undefined ? raw : raw.slice(0, maxChars);
+          const truncated = maxChars !== undefined ? raw.length > maxChars : false;
+          const wrapped = wrapExternalContent(trimmed, {
+            source: "browser",
+            includeWarning: true,
+          });
+
+          return jsonResult({
+            ok: true,
+            provider: "atlas",
+            targetUrl,
+            tookMs: result.tookMs,
+            rawLength: raw.length,
+            truncated,
+            length: wrapped.length,
+            text: wrapped,
+          });
         }
         case "act": {
           const request = params.request as Record<string, unknown> | undefined;

@@ -41,7 +41,12 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     let detectError: string | null = null;
 
     try {
-      const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
+      const resolvedForProfile = {
+        ...current.resolved,
+        executablePath:
+          profileCtx.profile.executablePath ?? current.resolved.executablePath ?? undefined,
+      };
+      const detected = resolveBrowserExecutableForPlatform(resolvedForProfile, process.platform);
       if (detected) {
         detectedBrowser = detected.kind;
         detectedExecutablePath = detected.path;
@@ -67,7 +72,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       color: profileCtx.profile.color,
       headless: current.resolved.headless,
       noSandbox: current.resolved.noSandbox,
-      executablePath: current.resolved.executablePath ?? null,
+      executablePath: profileCtx.profile.executablePath ?? current.resolved.executablePath ?? null,
       attachOnly: current.resolved.attachOnly,
     });
   });

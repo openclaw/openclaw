@@ -159,7 +159,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 extension MenuSessionsInjector {
     // MARK: - Injection
 
-    private var mainSessionKey: String { WorkActivityStore.shared.mainSessionKey }
+    private var mainSessionKey: String {
+        WorkActivityStore.shared.mainSessionKey
+    }
 
     private func inject(into menu: NSMenu) {
         self.cancelPreviewTasks()
@@ -1175,10 +1177,8 @@ extension MenuSessionsInjector {
 
     private func makeHostedView(rootView: AnyView, width: CGFloat, highlighted: Bool) -> NSView {
         if highlighted {
-            let container = HighlightedMenuItemHostView(rootView: rootView, width: width)
-            return container
+            return HighlightedMenuItemHostView(rootView: rootView, width: width)
         }
-
         let hosting = NSHostingView(rootView: rootView)
         hosting.frame.size.width = max(1, width)
         let size = hosting.fittingSize

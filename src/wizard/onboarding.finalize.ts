@@ -446,9 +446,10 @@ export async function finalizeOnboardingWizard(
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n")
       : [
-          "If you want your agent to be able to search the web, you’ll need an API key.",
+          "If you want your agent to be able to search the web, you’ll need an API key (unless ChatGPT Atlas is available).",
           "",
-          "OpenClaw uses Brave Search for the `web_search` tool. Without a Brave Search API key, web search won’t work.",
+          "OpenClaw uses ChatGPT Atlas when available; otherwise it falls back to Brave Search for the `web_search` tool.",
+          "Without Atlas or a Brave Search API key, web search won’t work.",
           "",
           "Set it up interactively:",
           `- Run: ${formatCliCommand("openclaw configure --section web")}`,

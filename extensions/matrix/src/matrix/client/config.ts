@@ -1,11 +1,30 @@
-import { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
-import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 
 function clean(value?: string): string {
   return value?.trim() ?? "";
+}
+
+async function fetchMatrixUserId(params: {
+  homeserver: string;
+  accessToken: string;
+}): Promise<string> {
+  const response = await fetch(`${params.homeserver}/_matrix/client/v3/account/whoami`, {
+    headers: {
+      Authorization: `Bearer ${params.accessToken}`,
+    },
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Matrix whoami failed: ${errorText}`);
+  }
+  const payload = (await response.json()) as { user_id?: string };
+  const userId = payload.user_id?.trim();
+  if (!userId) {
+    throw new Error("Matrix whoami did not return user_id");
+  }
+  return userId;
 }
 
 export function resolveMatrixConfig(
@@ -66,11 +85,11 @@ export async function resolveMatrixAuth(params?: {
   if (resolved.accessToken) {
     let userId = resolved.userId;
     if (!userId) {
-      // Fetch userId from access token via whoami
-      ensureMatrixSdkLoggingConfigured();
-      const tempClient = new MatrixClient(resolved.homeserver, resolved.accessToken);
-      const whoami = await tempClient.getUserId();
-      userId = whoami;
+      // Fetch userId from access token via whoami to avoid SDK dependency at config-resolve time.
+      userId = await fetchMatrixUserId({
+        homeserver: resolved.homeserver,
+        accessToken: resolved.accessToken,
+      });
       // Save the credentials with the fetched userId
       saveMatrixCredentials({
         homeserver: resolved.homeserver,

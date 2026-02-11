@@ -2913,7 +2913,7 @@ Example:
 
 ### `browser` (openclaw-managed browser)
 
-OpenClaw can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance for openclaw and expose a small loopback control service.
+OpenClaw can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance (or ChatGPT Atlas on macOS) for openclaw and expose a small loopback control service.
 Profiles can point at a **remote** Chromium-based browser via `profiles.<name>.cdpUrl`. Remote
 profiles are attach-only (start/stop/reset are disabled).
 
@@ -2928,7 +2928,7 @@ Defaults:
 - CDP URL: `http://127.0.0.1:18792` (control service + 1, legacy single-profile)
 - profile color: `#FF4500` (lobster-orange)
 - Note: the control server is started by the running gateway (OpenClaw.app menubar, or `openclaw gateway`).
-- Auto-detect order: default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
+- Auto-detect order: default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary → ChatGPT Atlas (macOS).
 
 ```json5
 {

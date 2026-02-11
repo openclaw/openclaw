@@ -9,7 +9,7 @@ title: "Browser (OpenClaw-managed)"
 
 # Browser (openclaw-managed)
 
-OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls.
+OpenClaw can run a **dedicated Chromium-based profile** (Chrome/Brave/Edge/Chromium; ChatGPT Atlas on macOS) that the agent controls.
 It is isolated from your personal browser and is managed through a small local
 control service inside the Gateway (loopback only).
 
@@ -89,12 +89,12 @@ Notes:
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
 - Default profile is `chrome` (extension relay). Use `defaultProfile: "openclaw"` for the managed browser.
-- Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
+- Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary → ChatGPT Atlas (macOS).
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
 
-## Use Brave (or another Chromium-based browser)
+## Use Brave (or another Chromium-based browser, including ChatGPT Atlas on macOS)
 
-If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
+If your **system default** browser is Chromium-based (Chrome/Brave/Edge/ChatGPT Atlas on macOS),
 OpenClaw uses it automatically. Set `browser.executablePath` to override
 auto-detection:
 
@@ -287,12 +287,13 @@ When launching locally, OpenClaw picks the first available:
 3. Edge
 4. Chromium
 5. Chrome Canary
+6. ChatGPT Atlas (macOS)
 
 You can override with `browser.executablePath`.
 
 Platforms:
 
-- macOS: checks `/Applications` and `~/Applications`.
+- macOS: checks `/Applications` and `~/Applications` (including ChatGPT Atlas).
 - Linux: looks for `google-chrome`, `brave`, `microsoft-edge`, `chromium`, etc.
 - Windows: checks common install locations.
 
@@ -345,7 +346,7 @@ To persist browser downloads, set `PLAYWRIGHT_BROWSERS_PATH` (for example,
 High-level flow:
 
 - A small **control server** accepts HTTP requests.
-- It connects to Chromium-based browsers (Chrome/Brave/Edge/Chromium) via **CDP**.
+- It connects to Chromium-based browsers (Chrome/Brave/Edge/Chromium; ChatGPT Atlas on macOS) via **CDP**.
 - For advanced actions (click/type/snapshot/PDF), it uses **Playwright** on top
   of CDP.
 - When Playwright is missing, only non-Playwright operations are available.
