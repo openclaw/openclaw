@@ -122,6 +122,12 @@ export async function createThreadDiscord(
     const starterContent = payload.content?.trim() ? payload.content : payload.name;
     body.message = { content: starterContent };
   }
+  // When creating a standalone thread (no messageId) in a non-forum channel,
+  // default to public thread (type 11). Discord defaults to private (type 12)
+  // which is unexpected for most users. (#14147)
+  if (!payload.messageId && !isForumLike && body.type === undefined) {
+    body.type = ChannelType.PublicThread;
+  }
   const route = payload.messageId
     ? Routes.threads(channelId, payload.messageId)
     : Routes.threads(channelId);
