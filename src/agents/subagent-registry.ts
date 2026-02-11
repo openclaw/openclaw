@@ -425,6 +425,25 @@ export function listSubagentRunsForRequester(requesterSessionKey: string): Subag
   return [...subagentRuns.values()].filter((entry) => entry.requesterSessionKey === key);
 }
 
+/**
+ * Look up a sub-agent run by its child session key.
+ * Returns the record if found, or undefined.
+ */
+export function findSubagentRunByChildKey(
+  childSessionKey: string,
+): SubagentRunRecord | undefined {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return undefined;
+  }
+  for (const entry of subagentRuns.values()) {
+    if (entry.childSessionKey === key) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }
