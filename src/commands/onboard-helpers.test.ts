@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  moveToTrash,
   normalizeGatewayTokenInput,
   openUrl,
   resolveBrowserOpenCommand,
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     killed: false,
   })),
   pickPrimaryTailnetIPv4: vi.fn(() => undefined),
+  fsAccess: vi.fn(async () => {}),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -24,6 +26,11 @@ vi.mock("../process/exec.js", () => ({
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
 }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, default: { ...actual, access: mocks.fsAccess } };
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -120,5 +127,90 @@ describe("normalizeGatewayTokenInput", () => {
 
   it("returns empty string for non-string input", () => {
     expect(normalizeGatewayTokenInput(123)).toBe("");
+  });
+});
+
+describe("moveToTrash", () => {
+  const mockRuntime = { log: vi.fn() } as never;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    mocks.runCommandWithTimeout.mockClear();
+    mocks.fsAccess.mockClear();
+    (mockRuntime as { log: ReturnType<typeof vi.fn> }).log.mockClear();
+  });
+
+  it("succeeds with first trash command", async () => {
+    mocks.fsAccess.mockResolvedValueOnce(undefined);
+    mocks.runCommandWithTimeout.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+    await moveToTrash("/tmp/test-file", mockRuntime);
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(["trash", "/tmp/test-file"], {
+      timeoutMs: 5000,
+    });
+    expect((mockRuntime as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+      expect.stringContaining("Moved to Trash"),
+    );
+  });
+
+  it("falls back to gio trash when trash command fails", async () => {
+    mocks.fsAccess.mockResolvedValueOnce(undefined);
+    mocks.runCommandWithTimeout
+      .mockRejectedValueOnce(new Error("trash not found"))
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+      });
+    await moveToTrash("/tmp/test-file", mockRuntime);
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(["gio", "trash", "/tmp/test-file"], {
+      timeoutMs: 5000,
+    });
+    expect((mockRuntime as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+      expect.stringContaining("Moved to Trash"),
+    );
+  });
+
+  it("falls back to trash-put when both trash and gio fail", async () => {
+    mocks.fsAccess.mockResolvedValueOnce(undefined);
+    mocks.runCommandWithTimeout
+      .mockRejectedValueOnce(new Error("trash not found"))
+      .mockRejectedValueOnce(new Error("gio not found"))
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+      });
+    await moveToTrash("/tmp/test-file", mockRuntime);
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(["trash-put", "/tmp/test-file"], {
+      timeoutMs: 5000,
+    });
+  });
+
+  it("logs failure when all trash commands fail", async () => {
+    mocks.fsAccess.mockResolvedValueOnce(undefined);
+    mocks.runCommandWithTimeout
+      .mockRejectedValueOnce(new Error("trash not found"))
+      .mockRejectedValueOnce(new Error("gio not found"))
+      .mockRejectedValueOnce(new Error("trash-put not found"));
+    await moveToTrash("/tmp/test-file", mockRuntime);
+    expect((mockRuntime as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to move to Trash"),
+    );
+  });
+
+  it("skips non-existent paths", async () => {
+    mocks.fsAccess.mockRejectedValueOnce(new Error("ENOENT"));
+    await moveToTrash("/tmp/nonexistent", mockRuntime);
+    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 });
