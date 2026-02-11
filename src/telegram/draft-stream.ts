@@ -3,6 +3,7 @@ import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helper
 
 const TELEGRAM_DRAFT_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 300;
+const DEFAULT_DRAFT_TIMEOUT_MS = 1500;
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
@@ -17,11 +18,13 @@ export function createTelegramDraftStream(params: {
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
   throttleMs?: number;
+  draftTimeoutMs?: number;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
   const maxChars = Math.min(params.maxChars ?? TELEGRAM_DRAFT_MAX_CHARS, TELEGRAM_DRAFT_MAX_CHARS);
   const throttleMs = Math.max(50, params.throttleMs ?? DEFAULT_THROTTLE_MS);
+  const draftTimeoutMs = Math.max(50, params.draftTimeoutMs ?? DEFAULT_DRAFT_TIMEOUT_MS);
   const rawDraftId = Number.isFinite(params.draftId) ? Math.trunc(params.draftId) : 1;
   const draftId = rawDraftId === 0 ? 1 : Math.abs(rawDraftId);
   const chatId = params.chatId;
@@ -54,13 +57,26 @@ export function createTelegramDraftStream(params: {
     }
     lastSentText = trimmed;
     lastSentAt = Date.now();
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
-      await params.api.sendMessageDraft(chatId, draftId, trimmed, threadParams);
+      await new Promise<void>((resolve, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`telegram draft stream timeout (${draftTimeoutMs}ms)`));
+        }, draftTimeoutMs);
+        void params.api.sendMessageDraft(chatId, draftId, trimmed, threadParams).then(
+          () => resolve(),
+          (err) => reject(err),
+        );
+      });
     } catch (err) {
       stopped = true;
       params.warn?.(
         `telegram draft stream failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
     }
   };
 
