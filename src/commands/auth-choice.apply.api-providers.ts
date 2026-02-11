@@ -204,14 +204,8 @@ export async function applyAuthChoiceApiProviders(
   }
 
   if (authChoice === "litellm-api-key") {
-    const store = ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: false,
-    });
-    const profileOrder = resolveAuthProfileOrder({
-      cfg: nextConfig,
-      store,
-      provider: "litellm",
-    });
+    const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+    const profileOrder = resolveAuthProfileOrder({ cfg: nextConfig, store, provider: "litellm" });
     const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
     const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
     let profileId = "litellm:default";
@@ -221,24 +215,15 @@ export async function applyAuthChoiceApiProviders(
       profileId = existingProfileId;
       hasCredential = true;
     }
-
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "litellm") {
       await setLitellmApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
       hasCredential = true;
     }
-
     if (!hasCredential) {
       await params.prompter.note(
-        [
-          "LiteLLM provides a unified API to 100+ LLM providers.",
-          "Get your API key from your LiteLLM proxy or https://litellm.ai",
-          "Default proxy runs on http://localhost:4000",
-        ].join("\n"),
+        "LiteLLM provides a unified API to 100+ LLM providers.\nGet your API key from your LiteLLM proxy or https://litellm.ai\nDefault proxy runs on http://localhost:4000",
         "LiteLLM",
       );
-    }
-
-    if (!hasCredential) {
       const envKey = resolveEnvApiKey("litellm");
       if (envKey) {
         const useExisting = await params.prompter.confirm({
@@ -250,17 +235,15 @@ export async function applyAuthChoiceApiProviders(
           hasCredential = true;
         }
       }
+      if (!hasCredential) {
+        const key = await params.prompter.text({
+          message: "Enter LiteLLM API key",
+          validate: validateApiKeyInput,
+        });
+        await setLitellmApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+        hasCredential = true;
+      }
     }
-
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter LiteLLM API key",
-        validate: validateApiKeyInput,
-      });
-      await setLitellmApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
-      hasCredential = true;
-    }
-
     if (hasCredential) {
       nextConfig = applyAuthProfileConfig(nextConfig, {
         profileId,
@@ -268,20 +251,18 @@ export async function applyAuthChoiceApiProviders(
         mode: "api_key",
       });
     }
-    {
-      const applied = await applyDefaultModelChoice({
-        config: nextConfig,
-        setDefaultModel: params.setDefaultModel,
-        defaultModel: LITELLM_DEFAULT_MODEL_REF,
-        applyDefaultConfig: applyLitellmConfig,
-        applyProviderConfig: applyLitellmProviderConfig,
-        noteDefault: LITELLM_DEFAULT_MODEL_REF,
-        noteAgentModel,
-        prompter: params.prompter,
-      });
-      nextConfig = applied.config;
-      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
-    }
+    const applied = await applyDefaultModelChoice({
+      config: nextConfig,
+      setDefaultModel: params.setDefaultModel,
+      defaultModel: LITELLM_DEFAULT_MODEL_REF,
+      applyDefaultConfig: applyLitellmConfig,
+      applyProviderConfig: applyLitellmProviderConfig,
+      noteDefault: LITELLM_DEFAULT_MODEL_REF,
+      noteAgentModel,
+      prompter: params.prompter,
+    });
+    nextConfig = applied.config;
+    agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
     return { config: nextConfig, agentModelOverride };
   }
 
