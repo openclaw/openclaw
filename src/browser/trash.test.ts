@@ -95,17 +95,20 @@ describe("movePathToTrash", () => {
 
       const result = await movePathToTrash(targetFile);
 
+      // Return value should be the original path (consistent with CLI commands).
+      expect(result).toBe(targetFile);
+
       // File should no longer exist at original location.
       expect(fs.existsSync(targetFile)).toBe(false);
 
       // File should be in XDG trash.
       const trashFilesDir = path.join(xdgDataHome, "Trash", "files");
-      expect(result.startsWith(trashFilesDir)).toBe(true);
-      expect(fs.existsSync(result)).toBe(true);
+      const trashedEntries = fs.readdirSync(trashFilesDir);
+      expect(trashedEntries.length).toBe(1);
+      expect(fs.existsSync(path.join(trashFilesDir, trashedEntries[0]!))).toBe(true);
 
       // A .trashinfo file should exist in the info directory.
-      const destName = path.basename(result);
-      const infoFile = path.join(xdgDataHome, "Trash", "info", `${destName}.trashinfo`);
+      const infoFile = path.join(xdgDataHome, "Trash", "info", `${trashedEntries[0]}.trashinfo`);
       expect(fs.existsSync(infoFile)).toBe(true);
       const infoContent = fs.readFileSync(infoFile, "utf8");
       expect(infoContent).toContain("[Trash Info]");
@@ -130,9 +133,9 @@ describe("movePathToTrash", () => {
 
       const result = await movePathToTrash(targetFile);
 
+      // Return value should be the original path (consistent with CLI commands).
+      expect(result).toBe(targetFile);
       expect(fs.existsSync(targetFile)).toBe(false);
-      expect(result).toContain(".Trash");
-      expect(fs.existsSync(result)).toBe(true);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
     }
