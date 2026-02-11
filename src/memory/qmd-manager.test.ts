@@ -733,7 +733,6 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-
   it("treats plain-text no-results stdout as an empty result set", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
@@ -838,7 +837,6 @@ describe("QmdMemoryManager", () => {
     ).rejects.toThrow(/qmd query returned invalid JSON/);
     await manager.close();
   });
-
   describe("model cache symlink", () => {
     let defaultModelsDir: string;
     let customModelsDir: string;
@@ -920,7 +918,6 @@ describe("QmdMemoryManager", () => {
 
       await manager!.close();
     });
-  });
   });
 });
 
