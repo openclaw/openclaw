@@ -481,6 +481,8 @@ export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
+  needsApproval?: boolean;
+  approvalReason?: string;
 };
 
 // after_tool_call hook
