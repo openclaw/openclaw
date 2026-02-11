@@ -516,6 +516,7 @@ export function createExecTool(
           emitExecSystemEvent,
           notifyUserChannel,
         });
+        const rbRequiresApproval = false; // ALERT warns only; BLOCK throws above
         // === END RUBBERBAND ===
 
         const boundNode = defaults?.node?.trim();
@@ -803,6 +804,7 @@ export function createExecTool(
           emitExecSystemEvent,
           notifyUserChannel,
         });
+        const rbRequiresApproval = false; // ALERT warns only; BLOCK throws above
         // === END RUBBERBAND ===
 
         const allowlistEval = evaluateShellAllowlist({
