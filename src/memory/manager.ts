@@ -1057,12 +1057,12 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (params?.force) {
       return true;
     }
+    if (needsFullReindex) {
+      return true;
+    }
     const reason = params?.reason;
     if (reason === "session-start" || reason === "watch") {
       return false;
-    }
-    if (needsFullReindex) {
-      return true;
     }
     return this.sessionsDirty && this.sessionsDirtyFiles.size > 0;
   }
