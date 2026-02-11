@@ -189,6 +189,10 @@ export function createFollowupRunner(params: {
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
       } catch (err) {
+        // Re-throw lock errors so the drain loop can apply backoff/retry logic.
+        if (err instanceof Error && err.message.includes("session file locked")) {
+          throw err;
+        }
         const message = err instanceof Error ? err.message : String(err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         return;

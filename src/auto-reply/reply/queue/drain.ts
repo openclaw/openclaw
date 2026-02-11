@@ -20,6 +20,43 @@ export function scheduleFollowupDrain(
   queue.draining = true;
   void (async () => {
     try {
+      const LOCK_RETRY_DELAY_MS = 5_000;
+      const MAX_LOCK_RETRIES = 3;
+
+      /** Run a followup, handling session-lock errors with backoff + re-enqueue. */
+      const runWithLockRetry = async (
+        item: FollowupRun,
+        restoreOnLock?: () => void,
+      ): Promise<void> => {
+        try {
+          await runFollowup(item);
+          // Reset lock retry counter on success.
+          queue.lockRetryCount = 0;
+        } catch (err) {
+          if (err instanceof Error && err.message.includes("session file locked")) {
+            const retryCount = queue.lockRetryCount ?? 0;
+            if (retryCount >= MAX_LOCK_RETRIES) {
+              defaultRuntime.error?.(
+                `Session locked after ${MAX_LOCK_RETRIES} retries in drain, dropping: ${key}`,
+              );
+              queue.lockRetryCount = 0;
+              return;
+            }
+            defaultRuntime.log?.(
+              `Session locked in drain (retry ${retryCount + 1}/${MAX_LOCK_RETRIES}), re-enqueueing: ${key}`,
+            );
+            queue.lockRetryCount = retryCount + 1;
+            // Re-insert at front to preserve FIFO order.
+            queue.items.unshift(item);
+            queue.lastEnqueuedAt = Date.now();
+            restoreOnLock?.();
+            await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
+            return;
+          }
+          throw err;
+        }
+      };
+
       let forceIndividualCollect = false;
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
@@ -33,7 +70,7 @@ export function scheduleFollowupDrain(
             if (!next) {
               break;
             }
-            await runFollowup(next);
+            await runWithLockRetry(next);
             continue;
           }
 
@@ -62,7 +99,7 @@ export function scheduleFollowupDrain(
             if (!next) {
               break;
             }
-            await runFollowup(next);
+            await runWithLockRetry(next);
             continue;
           }
 
@@ -89,15 +126,21 @@ export function scheduleFollowupDrain(
             summary,
             renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
-          await runFollowup({
-            prompt,
-            run,
-            enqueuedAt: Date.now(),
-            originatingChannel,
-            originatingTo,
-            originatingAccountId,
-            originatingThreadId,
-          });
+          await runWithLockRetry(
+            {
+              prompt,
+              run,
+              enqueuedAt: Date.now(),
+              originatingChannel,
+              originatingTo,
+              originatingAccountId,
+              originatingThreadId,
+            },
+            // On lock, restore the original items so they can be re-collected.
+            () => {
+              queue.items.unshift(...items);
+            },
+          );
           continue;
         }
 
@@ -107,7 +150,7 @@ export function scheduleFollowupDrain(
           if (!run) {
             break;
           }
-          await runFollowup({
+          await runWithLockRetry({
             prompt: summaryPrompt,
             run,
             enqueuedAt: Date.now(),
@@ -119,7 +162,7 @@ export function scheduleFollowupDrain(
         if (!next) {
           break;
         }
-        await runFollowup(next);
+        await runWithLockRetry(next);
       }
     } catch (err) {
       defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
