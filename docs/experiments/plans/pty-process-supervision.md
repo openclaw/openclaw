@@ -161,30 +161,35 @@ On startup or supervisor crash recovery:
 - Easier reasoning in incidents because ownership is explicit.
 - Better portability because platform details are isolated.
 
-## Migration Plan
+## One Go Implementation Plan
 
-### Phase 1
+Ship the rewrite as one cohesive change set behind a short lived feature flag, then flip it as default in the same PR once tests pass.
 
-- Introduce explicit run ownership (`RunRegistry`) and lifecycle telemetry.
-- Add normalized termination reasons for all exits.
-- Keep existing behavior operational while recording enough data to validate migration.
+1. Build the full supervisor path first:
+   - `ProcessSupervisor`, `RunRegistry`, `ExecutionAdapter`, `TerminationController`, `ProcessReaper`.
+   - PTY and non PTY run paths both use this shared contract.
+2. Implement ownership based termination only:
+   - kill by tracked pid or process group or job boundary.
+   - no command line text matching in the new path.
+3. Implement recovery and orphan reconciliation:
+   - on startup, reconcile every active `RunRecord`.
+   - clean stale owned runs deterministically.
+4. Replace old execution wiring completely:
+   - route all spawn, timeout, no output watchdog, manual cancel, and exit finalization through supervisor.
+   - remove legacy cleanup paths from runtime flow.
+5. Add full regression coverage before cutover:
+   - unit, integration, and failure tests listed below must pass.
+6. Cutover in one go:
+   - enable supervisor path by default.
+   - delete dead code and old fallback interfaces in same change set.
 
-### Phase 2
+Acceptance criteria for merge:
 
-- Route all new cancel and timeout paths through `TerminationController` (`AbortController`).
-- Move PTY and non PTY execution behind one supervisor contract.
-- Use targeted pid or process group termination for owned runs.
-
-### Phase 3
-
-- Enable orphan reconciliation from the registry at startup.
-- Remove default heuristic process matching cleanup.
-- Retain heuristic fallback only behind an emergency feature flag.
-
-### Phase 4
-
-- Harden cross platform adapters (POSIX process groups, Windows job boundary abstraction).
-- Finalize policy modules and remove legacy lifecycle paths.
+- No runtime dependency on heuristic `ps` command matching.
+- PTY and non PTY share one lifecycle implementation.
+- Timeout reasons are normalized and observable.
+- Startup reconciliation is deterministic.
+- All targeted tests pass on supported OS environments.
 
 ## Testing Strategy
 
@@ -210,7 +215,7 @@ Add counters and structured events:
 - `run_spawn_total`
 - `run_exit_total{reason=...}`
 - `run_timeout_total{type=no_output|overall}`
-- `run_cleanup_kill_total{mode=pid|pgid|fallback}`
+- `run_cleanup_kill_total{mode=pid|pgid|job}`
 - `run_reconcile_orphans_total`
 
 These make regression detection and incident triage straightforward.
