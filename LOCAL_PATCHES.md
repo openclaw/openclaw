@@ -78,6 +78,25 @@ Quick status:
   - Apply timeout to the browser client fetch (clamped to `[1000ms, 120000ms]`).
   - For `act`, also inject `timeoutMs` into the request body when not already present so the server-side Playwright actions respect it.
 
+### 7) Memory/QMD: enforce per-agent QMD isolation for both memory manager and `exec qmd ...`
+
+- Commit: `f986f05e1` — `fix(memory): isolate qmd config/cache per agent in memory and exec`
+- Why:
+  - We need strict memory boundaries:
+    - terminal shell qmd index = obsidian-only
+    - main agent qmd = memory/life/tacit only
+    - boxed agent qmd = no collections
+  - Before this patch, `qmd status` invoked via agent `exec` could still resolve to host-level defaults (`~/.cache/qmd`, `~/.config/qmd`), which looked like leakage even when memory manager isolation was configured.
+- What:
+  - `src/memory/qmd-manager.ts`
+    - set `QMD_CONFIG_DIR=<agent-state>/qmd/xdg-config/qmd` when spawning qmd so collection config is always agent-local.
+  - `src/agents/bash-tools.exec.ts`
+    - detect `qmd ...` commands and inject agent-scoped env defaults (unless explicitly overridden via `params.env`):
+      - `QMD_CONFIG_DIR`
+      - `XDG_CONFIG_HOME`
+      - `XDG_CACHE_HOME`
+    - ensures agent-run `qmd status` reports the agent’s own index/config, not terminal host defaults.
+
 ## Operating rules
 
 - Treat this file as the **source of truth** for why a local commit exists.
