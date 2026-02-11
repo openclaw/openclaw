@@ -135,4 +135,19 @@ describe("normalizeUsage", () => {
       }),
     ).toBe(5_000); // input only, since cacheWrite is 0
   });
+
+  it("returns undefined when cumulative data has no input or cacheWrite", () => {
+    // Edge case: cache-hit-only turns where input=0 and cacheWrite=0.
+    // deflated = 0, which should yield undefined — NOT clamp to contextTokens.
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 0,
+          cacheRead: 2_000_000,
+          cacheWrite: 0,
+        },
+        contextTokens: 200_000,
+      }),
+    ).toBeUndefined();
+  });
 });

@@ -149,8 +149,7 @@ export function deriveSessionTotalTokens(params: {
     promptTokens !== undefined &&
     promptTokens > contextTokens
   ) {
-    const deflated = input + cacheWrite;
-    total = deflated > 0 ? deflated : input || total;
+    total = input + cacheWrite;
   }
   if (!(total > 0)) {
     return undefined;
