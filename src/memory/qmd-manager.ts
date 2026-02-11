@@ -129,6 +129,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       ...process.env,
       XDG_CONFIG_HOME: this.xdgConfigHome,
       XDG_CACHE_HOME: this.xdgCacheHome,
+      // qmd collections live in ~/.config/qmd/index.yml (hardcoded in qmd repo).
+      // Point qmd at an agent-local config dir so each agent can have an isolated
+      // collection set (main vs boxed) without polluting the user's terminal config.
+      QMD_CONFIG_DIR: path.join(this.xdgConfigHome, "qmd"),
       NO_COLOR: "1",
     };
     this.sessionExporter = this.qmd.sessions.enabled
