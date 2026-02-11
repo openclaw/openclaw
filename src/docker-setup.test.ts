@@ -7,6 +7,13 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 
+// docker-setup.sh is a Bash script targeting Linux/macOS shells.
+// On Windows, even when "bash" exists (Git Bash), PATH and tooling behave differently;
+// skip these tests to avoid false negatives.
+const hasBash = process.platform !== "win32";
+
+const describeBash = hasBash ? describe : describe.skip;
+
 type DockerSetupSandbox = {
   rootDir: string;
   scriptPath: string;
@@ -84,7 +91,7 @@ function resolveBashForCompatCheck(): string | null {
   return null;
 }
 
-describe("docker-setup.sh", () => {
+describeBash("docker-setup.sh", () => {
   it("handles unset optional env vars under strict mode", async () => {
     const sandbox = await createDockerSetupSandbox();
     const env = createEnv(sandbox, {

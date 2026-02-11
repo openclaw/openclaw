@@ -19,7 +19,7 @@ test("exec falls back when PTY spawn fails", async () => {
   const { createExecTool } = await import("./bash-tools.exec");
   const tool = createExecTool({ allowBackground: false });
   const result = await tool.execute("toolcall", {
-    command: "printf ok",
+    command: "node -e \"process.stdout.write('ok')\"",
     pty: true,
   });
 

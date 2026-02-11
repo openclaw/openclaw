@@ -164,7 +164,14 @@ export async function runEmbeddedAttempt(
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
   let restoreSkillEnv: (() => void) | undefined;
-  process.chdir(effectiveWorkspace);
+  let didChdir = false;
+  try {
+    process.chdir(effectiveWorkspace);
+    didChdir = true;
+  } catch {
+    // Some environments (e.g. Vitest worker threads) do not support process.chdir.
+    // All path-sensitive operations below should use explicit workspace paths.
+  }
   try {
     const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
     const skillEntries = shouldLoadSkillEntries
@@ -923,6 +930,12 @@ export async function runEmbeddedAttempt(
     }
   } finally {
     restoreSkillEnv?.();
-    process.chdir(prevCwd);
+    if (didChdir) {
+      try {
+        process.chdir(prevCwd);
+      } catch {
+        // ignore
+      }
+    }
   }
 }

@@ -91,6 +91,13 @@ const MemorySchema = z
   .strict()
   .optional();
 
+const CoreMemoriesSchema = z
+  .object({
+    compression: z.union([z.literal("auto"), z.literal("rule"), z.literal("ollama")]).optional(),
+  })
+  .strict()
+  .optional();
+
 export const OpenClawSchema = z
   .object({
     meta: z
@@ -514,6 +521,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     memory: MemorySchema,
+    coreMemories: CoreMemoriesSchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),

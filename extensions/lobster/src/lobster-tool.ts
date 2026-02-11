@@ -117,11 +117,19 @@ async function runLobsterSubprocessOnce(
   }
 
   return await new Promise<{ stdout: string }>((resolve, reject) => {
+    const windowsShell =
+      process.platform === "win32" && useShell
+        ? (env.ComSpec ??
+          (env.SystemRoot ? path.join(env.SystemRoot, "System32", "cmd.exe") : undefined) ??
+          // Fallback (Node will try to resolve cmd.exe; may fail in restricted envs)
+          "cmd.exe")
+        : undefined;
+
     const child = spawn(execPath, argv, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env,
-      shell: useShell,
+      shell: windowsShell ?? useShell,
       windowsHide: useShell ? true : undefined,
     });
 
