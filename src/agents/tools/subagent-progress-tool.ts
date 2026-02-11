@@ -7,6 +7,9 @@
  * whether to relay the update to the user.
  *
  * Only functional in sub-agent sessions (returns error otherwise).
+ * 
+ * Rate limiting: By default, progress updates are throttled to max 1 per 30 seconds
+ * per session. If called too soon, returns success without sending to parent.
  */
 
 import { Type } from "@sinclair/typebox";
@@ -18,6 +21,10 @@ import { resolveMainSessionKey } from "../../config/sessions.js";
 import { findSubagentRunByChildKey } from "../subagent-registry.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
+
+// Rate limiting: Track last-sent timestamps per session key
+const lastProgressTimestamps = new Map<string, number>();
+const FALLBACK_THROTTLE_MS = 30000; // 30 seconds fallback when no config is set
 
 const SubagentProgressToolSchema = Type.Object({
   message: Type.String({
@@ -36,6 +43,8 @@ const SubagentProgressToolSchema = Type.Object({
 export function createSubagentProgressTool(opts?: {
   /** The current session key (used to verify this is a sub-agent session). */
   agentSessionKey?: string;
+  /** Rate limiting throttle in milliseconds (default: 30000ms = 30s). */
+  throttleMs?: number;
 }): AnyAgentTool {
   return {
     label: "Sub-agent",
@@ -58,6 +67,22 @@ export function createSubagentProgressTool(opts?: {
         return jsonResult({
           status: "error",
           error: "subagent_progress is only available in sub-agent sessions.",
+        });
+      }
+
+      // Rate limiting: Check if enough time has passed since last update
+      const cfg = loadConfig();
+      const throttleMs = opts?.throttleMs ?? cfg.tools?.subagentProgress?.throttleMs ?? FALLBACK_THROTTLE_MS;
+      const now = Date.now();
+      const lastSent = lastProgressTimestamps.get(sessionKey);
+      
+      if (lastSent && (now - lastSent) < throttleMs) {
+        // Called too soon - return success without sending to parent
+        const progressText = percent !== undefined ? `[${percent}%] ${message}` : message;
+        return jsonResult({
+          status: "throttled",
+          message: progressText,
+          note: "Progress update throttled to prevent flooding parent session.",
         });
       }
 
@@ -104,6 +129,9 @@ export function createSubagentProgressTool(opts?: {
           },
           timeoutMs: 10_000,
         });
+
+        // Update the timestamp after successful send
+        lastProgressTimestamps.set(sessionKey, now);
 
         return jsonResult({
           status: "sent",
