@@ -34,7 +34,13 @@ export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
   assemblyai: "best",
 };
 
-export const AUTO_AUDIO_KEY_PROVIDERS = ["openai", "groq", "deepgram", "google", "assemblyai"] as const;
+export const AUTO_AUDIO_KEY_PROVIDERS = [
+  "openai",
+  "groq",
+  "deepgram",
+  "google",
+  "assemblyai",
+] as const;
 export const AUTO_IMAGE_KEY_PROVIDERS = [
   "openai",
   "anthropic",

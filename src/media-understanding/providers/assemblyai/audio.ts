@@ -54,7 +54,9 @@ async function uploadAudio(params: {
   try {
     if (!res.ok) {
       const detail = await readErrorResponse(res);
-      throw new Error(`AssemblyAI upload failed (HTTP ${res.status})${detail ? `: ${detail}` : ""}`);
+      throw new Error(
+        `AssemblyAI upload failed (HTTP ${res.status})${detail ? `: ${detail}` : ""}`,
+      );
     }
     const payload = (await res.json()) as UploadResponse;
     if (!payload.upload_url) {
@@ -116,7 +118,9 @@ async function submitTranscript(params: {
   try {
     if (!res.ok) {
       const detail = await readErrorResponse(res);
-      throw new Error(`AssemblyAI transcript submit failed (HTTP ${res.status})${detail ? `: ${detail}` : ""}`);
+      throw new Error(
+        `AssemblyAI transcript submit failed (HTTP ${res.status})${detail ? `: ${detail}` : ""}`,
+      );
     }
     const payload = (await res.json()) as TranscriptSubmitResponse;
     if (!payload.id) {
@@ -170,7 +174,9 @@ async function pollTranscript(params: {
     try {
       if (!res.ok) {
         const detail = await readErrorResponse(res);
-        throw new Error(`AssemblyAI poll failed (HTTP ${res.status})${detail ? `: ${detail}` : ""}`);
+        throw new Error(
+          `AssemblyAI poll failed (HTTP ${res.status})${detail ? `: ${detail}` : ""}`,
+        );
       }
       payload = (await res.json()) as TranscriptSubmitResponse;
     } finally {

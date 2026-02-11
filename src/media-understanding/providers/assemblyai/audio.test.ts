@@ -54,16 +54,21 @@ describe("transcribeAssemblyAiAudio", () => {
       if (url.endsWith("/transcript") && init?.method === "POST") {
         const body = JSON.parse(init.body as string);
         expect(body.audio_url).toBe("https://cdn.assemblyai.com/upload/abc123");
-        return new Response(
-          JSON.stringify({ id: "tx_001", status: "queued" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ id: "tx_001", status: "queued" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
 
       // Call 3+: poll — return completed immediately
       if (url.includes("/transcript/tx_001")) {
         return new Response(
-          JSON.stringify({ id: "tx_001", status: "completed", text: "hello world", speech_model: "best" }),
+          JSON.stringify({
+            id: "tx_001",
+            status: "completed",
+            text: "hello world",
+            speech_model: "best",
+          }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
@@ -97,20 +102,20 @@ describe("transcribeAssemblyAiAudio", () => {
       }
 
       if (url.endsWith("/transcript") && init?.method === "POST") {
-        return new Response(
-          JSON.stringify({ id: "tx_002", status: "queued" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ id: "tx_002", status: "queued" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
 
       if (url.includes("/transcript/tx_002")) {
         pollCount++;
         // First two polls: still processing
         if (pollCount <= 2) {
-          return new Response(
-            JSON.stringify({ id: "tx_002", status: "processing" }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
+          return new Response(JSON.stringify({ id: "tx_002", status: "processing" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
         }
         // Third poll: done
         return new Response(
@@ -146,10 +151,10 @@ describe("transcribeAssemblyAiAudio", () => {
       }
 
       if (url.endsWith("/transcript") && init?.method === "POST") {
-        return new Response(
-          JSON.stringify({ id: "tx_err", status: "queued" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ id: "tx_err", status: "queued" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
 
       if (url.includes("/transcript/tx_err")) {
@@ -174,8 +179,7 @@ describe("transcribeAssemblyAiAudio", () => {
   });
 
   it("throws on upload HTTP error", async () => {
-    const fetchFn = async () =>
-      new Response("Unauthorized", { status: 401 });
+    const fetchFn = async () => new Response("Unauthorized", { status: 401 });
 
     await expect(
       transcribeAssemblyAiAudio({
@@ -202,15 +206,20 @@ describe("transcribeAssemblyAiAudio", () => {
 
       if (url.endsWith("/transcript") && init?.method === "POST") {
         submitBody = JSON.parse(init.body as string);
-        return new Response(
-          JSON.stringify({ id: "tx_lang", status: "queued" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ id: "tx_lang", status: "queued" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
 
       if (url.includes("/transcript/tx_lang")) {
         return new Response(
-          JSON.stringify({ id: "tx_lang", status: "completed", text: "bonjour", speech_model: "nano" }),
+          JSON.stringify({
+            id: "tx_lang",
+            status: "completed",
+            text: "bonjour",
+            speech_model: "nano",
+          }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
