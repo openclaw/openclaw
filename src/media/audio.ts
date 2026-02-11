@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { getFileExtension, normalizeMimeType } from "./mime.js";
 
 export const TELEGRAM_VOICE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus", ".mp3", ".m4a"]);
@@ -45,4 +47,38 @@ export function isVoiceCompatibleAudio(opts: {
   fileName?: string | null;
 }): boolean {
   return isTelegramVoiceCompatibleAudio(opts);
+}
+
+/** Returns true if ffmpeg is available in the system PATH. */
+export function hasFFmpeg(): boolean {
+  try {
+    execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Transcodes an audio file to a standard OGG/Opus voice format.
+ * Returns the path to the new file if successful, or the original path if failed.
+ */
+export function transcodeToOggOpus(inputPath: string): string {
+  if (!inputPath || !existsSync(inputPath)) {
+    return inputPath;
+  }
+  const outputPath = inputPath.replace(/\.[^.]+$/, ".ogg");
+  try {
+    execFileSync(
+      "ffmpeg",
+      ["-i", inputPath, "-acodec", "libopus", "-ac", "1", "-ar", "24000", outputPath, "-y"],
+      { stdio: "ignore" },
+    );
+    if (existsSync(outputPath)) {
+      return outputPath;
+    }
+  } catch {
+    // Ignore errors and return original path as fallback
+  }
+  return inputPath;
 }

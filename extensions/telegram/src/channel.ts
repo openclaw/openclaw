@@ -6,6 +6,7 @@ import {
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
   getChatChannelMeta,
+  hasFFmpeg,
   listTelegramAccountIds,
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
@@ -378,6 +379,8 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         probe,
         audit,
         allowUnmentionedGroups,
+        nativeVoiceNotes: account.config.nativeVoiceNotes === true,
+        ffmpegInstalled: hasFFmpeg(),
         lastInboundAt: runtime?.lastInboundAt ?? null,
         lastOutboundAt: runtime?.lastOutboundAt ?? null,
       };

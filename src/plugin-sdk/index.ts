@@ -274,6 +274,7 @@ export type {
   DiagnosticWebhookReceivedEvent,
 } from "../infra/diagnostic-events.js";
 export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
+export { hasFFmpeg } from "../media/audio.js";
 export { extractOriginalFilename } from "../media/store.js";
 
 // Channel: Discord
