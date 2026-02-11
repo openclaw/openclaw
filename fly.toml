@@ -12,7 +12,7 @@ NODE_ENV = "production"
 # Fly uses x86, but keep this for consistency
 OPENCLAW_PREFER_PNPM = "1"
 OPENCLAW_STATE_DIR = "/data"
-NODE_OPTIONS = "--max-old-space-size=1536"
+NODE_OPTIONS = "--max-old-space-size=2880 --optimize-for-size"
 
 [processes]
 app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
@@ -27,7 +27,7 @@ processes = ["app"]
 
 [[vm]]
 size = "shared-cpu-2x"
-memory = "2048mb"
+memory = "4096mb"
 
 [mounts]
 source = "clawdbot_data"

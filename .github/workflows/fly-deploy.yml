@@ -1,0 +1,143 @@
+name: Deploy to Fly.io
+
+on:
+  workflow_dispatch:
+    inputs:
+      reset_config:
+        description: "Reset config to default (deletes existing /data/openclaw.json)"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy OpenClaw to Fly
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          missing=()
+
+          [ -n "${FLY_API_TOKEN}" ]          || missing+=("FLY_API_TOKEN")
+          [ -n "${FLY_APP_NAME}" ]           || missing+=("FLY_APP_NAME")
+          [ -n "${OPENCLAW_GATEWAY_TOKEN}" ] || missing+=("OPENCLAW_GATEWAY_TOKEN")
+
+          if [ -z "${ANTHROPIC_API_KEY}" ] && [ -z "${OPENAI_API_KEY}" ] && [ -z "${GOOGLE_API_KEY}" ]; then
+            missing+=("at least one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY")
+          fi
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf "Missing required secrets:\n"
+            printf "  - %s\n" "${missing[@]}"
+            exit 1
+          fi
+
+          echo "All required secrets present."
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          OPENCLAW_GATEWAY_TOKEN: ${{ secrets.OPENCLAW_GATEWAY_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+
+      - name: Ensure Fly app and volume exist
+        run: |
+          set -euo pipefail
+
+          if flyctl apps show "${FLY_APP_NAME}" >/dev/null 2>&1; then
+            echo "Fly app exists: ${FLY_APP_NAME}"
+          else
+            echo "Creating Fly app: ${FLY_APP_NAME}"
+            flyctl apps create "${FLY_APP_NAME}"
+          fi
+
+          EXISTING=$(flyctl volumes list --app "${FLY_APP_NAME}" --json | jq -r '.[].name' 2>/dev/null || echo "")
+          if echo "$EXISTING" | grep -Fxq "clawdbot_data"; then
+            echo "Volume exists: clawdbot_data"
+          else
+            echo "Creating volume clawdbot_data in region ${FLY_REGION:-lhr}"
+            flyctl volumes create clawdbot_data \
+              --app "${FLY_APP_NAME}" \
+              --region "${FLY_REGION:-lhr}" \
+              --size "${FLY_VOLUME_SIZE_GB:-1}" \
+              --yes
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          FLY_REGION: ${{ secrets.FLY_REGION }}
+          FLY_VOLUME_SIZE_GB: ${{ secrets.FLY_VOLUME_SIZE_GB }}
+
+      - name: Stage Fly secrets
+        run: |
+          set -euo pipefail
+
+          SECRETS=(
+            "OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}"
+          )
+          [ -n "${ANTHROPIC_API_KEY}" ]  && SECRETS+=("ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}")
+          [ -n "${OPENAI_API_KEY}" ]     && SECRETS+=("OPENAI_API_KEY=${OPENAI_API_KEY}")
+          [ -n "${GOOGLE_API_KEY}" ]     && SECRETS+=("GOOGLE_API_KEY=${GOOGLE_API_KEY}")
+          [ -n "${TAILSCALE_AUTHKEY}" ]  && SECRETS+=("TAILSCALE_AUTHKEY=${TAILSCALE_AUTHKEY}")
+          [ -n "${TELEGRAM_BOT_TOKEN}" ] && SECRETS+=("TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}")
+          [ -n "${DISCORD_BOT_TOKEN}" ]  && SECRETS+=("DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}")
+          [ -n "${DISCORD_GUILD_ID}" ]   && SECRETS+=("DISCORD_GUILD_ID=${DISCORD_GUILD_ID}")
+
+          # Sync-runtime-config env overrides
+          [ -n "${OPENCLAW_THINKING_DEFAULT}" ]       && SECRETS+=("OPENCLAW_THINKING_DEFAULT=${OPENCLAW_THINKING_DEFAULT}")
+          [ -n "${OPENCLAW_MAX_CONCURRENT}" ]          && SECRETS+=("OPENCLAW_MAX_CONCURRENT=${OPENCLAW_MAX_CONCURRENT}")
+          [ -n "${OPENCLAW_CONTEXT_PRUNING_MODE}" ]    && SECRETS+=("OPENCLAW_CONTEXT_PRUNING_MODE=${OPENCLAW_CONTEXT_PRUNING_MODE}")
+          [ -n "${OPENCLAW_CONTEXT_PRUNING_TTL}" ]     && SECRETS+=("OPENCLAW_CONTEXT_PRUNING_TTL=${OPENCLAW_CONTEXT_PRUNING_TTL}")
+          [ -n "${OPENCLAW_COMPACTION_MODE}" ]          && SECRETS+=("OPENCLAW_COMPACTION_MODE=${OPENCLAW_COMPACTION_MODE}")
+          [ -n "${OPENCLAW_HEARTBEAT_EVERY}" ]          && SECRETS+=("OPENCLAW_HEARTBEAT_EVERY=${OPENCLAW_HEARTBEAT_EVERY}")
+
+          if [ "${RESET_CONFIG}" = "true" ]; then
+            SECRETS+=("RESET_CONFIG=true")
+          fi
+
+          flyctl secrets set "${SECRETS[@]}" --app "${FLY_APP_NAME}" --stage
+
+          echo "Secrets staged for deploy."
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          OPENCLAW_GATEWAY_TOKEN: ${{ secrets.OPENCLAW_GATEWAY_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          OPENCLAW_THINKING_DEFAULT: ${{ secrets.OPENCLAW_THINKING_DEFAULT }}
+          OPENCLAW_MAX_CONCURRENT: ${{ secrets.OPENCLAW_MAX_CONCURRENT }}
+          OPENCLAW_CONTEXT_PRUNING_MODE: ${{ secrets.OPENCLAW_CONTEXT_PRUNING_MODE }}
+          OPENCLAW_CONTEXT_PRUNING_TTL: ${{ secrets.OPENCLAW_CONTEXT_PRUNING_TTL }}
+          OPENCLAW_COMPACTION_MODE: ${{ secrets.OPENCLAW_COMPACTION_MODE }}
+          OPENCLAW_HEARTBEAT_EVERY: ${{ secrets.OPENCLAW_HEARTBEAT_EVERY }}
+          RESET_CONFIG: ${{ inputs.reset_config && 'true' || '' }}
+
+      - name: Deploy
+        run: flyctl deploy --remote-only --config fly.toml --app "${FLY_APP_NAME}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+
+      - name: Clear one-shot reset flag
+        if: ${{ always() && inputs.reset_config == true }}
+        run: flyctl secrets unset RESET_CONFIG --app "${FLY_APP_NAME}" || true
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}

@@ -62,7 +62,53 @@ WRAPPER
     echo "[fly-entrypoint] Created openclaw wrapper"
 fi
 
+# Handle one-shot config reset
+if [ "${RESET_CONFIG}" = "true" ] || [ "${RESET_CONFIG}" = "1" ]; then
+    CONFIG_FILE="${OPENCLAW_STATE_DIR:-/data}/openclaw.json"
+    if [ -f "$CONFIG_FILE" ]; then
+        echo "[fly-entrypoint] RESET_CONFIG is set; removing existing config..."
+        rm -f "$CONFIG_FILE"
+    fi
+fi
+
 echo "[fly-entrypoint] Persistent storage initialized"
+
+# Start Tailscale if auth key is provided
+if [ -n "$TAILSCALE_AUTHKEY" ]; then
+    echo "[fly-entrypoint] Starting Tailscale..."
+
+    # Create persistent state directory for Tailscale
+    mkdir -p /data/tailscale
+
+    # Start tailscaled in background with persistent state
+    tailscaled --state=/data/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+
+    # Wait for tailscaled to be ready
+    sleep 2
+
+    # Connect to Tailscale network
+    tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="clawdbot-fly" --accept-routes
+
+    # Get Tailscale IP
+    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
+    if [ -n "$TAILSCALE_IP" ]; then
+        echo "[fly-entrypoint] Tailscale connected: $TAILSCALE_IP"
+    else
+        echo "[fly-entrypoint] Tailscale connection pending..."
+    fi
+fi
+
+# Sync runtime config from env vars (idempotent, non-fatal)
+if [ -f /app/scripts/sync-runtime-config.mjs ]; then
+    echo "[fly-entrypoint] Syncing runtime config..."
+    OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-/data}" node /app/scripts/sync-runtime-config.mjs || true
+fi
+
+# Start PostgreSQL if data directory exists
+if [ -d /data/postgres ] && command -v pg_isready >/dev/null 2>&1; then
+    echo "[fly-entrypoint] Starting PostgreSQL..."
+    pg_ctlcluster 16 main start 2>/dev/null || true
+fi
 
 # Execute the main command
 exec "$@"
