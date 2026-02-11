@@ -168,7 +168,12 @@ export function buildEmbeddedRunPayloads(params: {
         : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
 
-  for (const text of answerTexts) {
+  // Collapse multiple text blocks into one when configured (reduces multi-message spam)
+  const collapseReplies = params.config?.agents?.defaults?.collapseReplyPayloads === true;
+  const finalAnswerTexts =
+    collapseReplies && answerTexts.length > 1 ? [answerTexts.join("\n\n")] : answerTexts;
+
+  for (const text of finalAnswerTexts) {
     const {
       text: cleanedText,
       mediaUrls,

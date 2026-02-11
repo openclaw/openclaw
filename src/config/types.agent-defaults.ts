@@ -155,6 +155,14 @@ export type AgentDefaultsConfig = {
    * idleMs: wait time before flushing when idle.
    */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /**
+   * Collapse all assistant text blocks into a single reply payload.
+   * When true, multiple intermediate text blocks (e.g., narration between tool calls)
+   * are joined with "\n\n" and delivered as one message instead of N separate messages.
+   * Only affects final reply payloads (not block streaming).
+   * Default: false.
+   */
+  collapseReplyPayloads?: boolean;
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
   timeoutSeconds?: number;
