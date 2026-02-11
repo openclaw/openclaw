@@ -112,13 +112,11 @@ export function createClaudeCodeTool(defaults?: {
       });
 
       if (isPlan) {
+        const sessionInfo = result.sessionId
+          ? `\n\n---\nsessionId: ${result.sessionId}\n(Use this sessionId with the "resume" parameter to execute this plan)`
+          : "\n\n---\n(Warning: No sessionId returned by SDK. Resume may not be available in plan mode.)";
         return {
-          content: [
-            {
-              type: "text",
-              text: `${result.text}\n\n---\nsessionId: ${result.sessionId}\n(Use this sessionId with the "resume" parameter to execute this plan)`,
-            },
-          ],
+          content: [{ type: "text", text: `${result.text}${sessionInfo}` }],
           details: {
             status: "planned" as const,
             sessionId: result.sessionId,

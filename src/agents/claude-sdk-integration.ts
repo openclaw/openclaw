@@ -193,6 +193,9 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
 
       if (msg.type === "result") {
         if (msg.subtype === "success") {
+          log.info(
+            `sdk result: session_id=${msg.session_id} resultLen=${msg.result.length} assistantTextLen=${lastAssistantText.length}`,
+          );
           params.onProgress?.({
             phase: "complete",
             durationMs: msg.duration_ms,
