@@ -66,7 +66,7 @@ const WebSearchSchema = Type.Object({
   freshness: Type.Optional(
     Type.String({
       description:
-        "Filter results by discovery time (Brave only). Values: 'pd' (past 24h), 'pw' (past week), 'pm' (past month), 'py' (past year), or date range 'YYYY-MM-DDtoYYYY-MM-DD'.",
+        "Filter results by discovery time (Brave and ZAI Search). Values: 'pd' (past 24h), 'pw' (past week), 'pm' (past month), 'py' (past year), or date range 'YYYY-MM-DDtoYYYY-MM-DD'.",
     }),
   ),
 });
@@ -444,9 +444,9 @@ async function initZsearchSession(
     id: 0,
     method: "initialize",
     params: {
-      protocolVersion: "2024-11-05",
+      protocolVersion: "2025-03-26",
       capabilities: {},
-      clientInfo: { name: "openclaw", version: "1.0.0" },
+      clientInfo: { name: "ExampleClient", version: "1.0.0" },
     },
   };
 
@@ -473,6 +473,19 @@ async function initZsearchSession(
 
   // Consume the response body to avoid leaking resources.
   await res.text();
+
+  // Send initialized notification as required by MCP spec.
+  await fetch(baseUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      Authorization: `Bearer ${apiKey}`,
+      "Mcp-Session-Id": sessionId,
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+    signal: withTimeout(undefined, timeoutMs),
+  });
 
   return sessionId;
 }
