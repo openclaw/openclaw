@@ -45,11 +45,7 @@ const CHROMIUM_DESKTOP_IDS = new Set([
   "opera.desktop",
   "opera-gx.desktop",
   "yandex-browser.desktop",
-  // Flatpak reverse-DNS desktop file IDs
-  "com.google.Chrome.desktop",
-  "com.brave.Browser.desktop",
   "org.chromium.Chromium.desktop",
-  "com.microsoft.Edge.desktop",
 ]);
 
 const CHROMIUM_EXE_NAMES = new Set([
