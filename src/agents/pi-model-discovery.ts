@@ -89,7 +89,12 @@ function syncPiSdkAuthFile(agentDir: string): void {
 
 // Compatibility helpers for pi-coding-agent 0.50+ (discover* helpers removed).
 export function discoverAuthStorage(agentDir: string): AuthStorage {
-  syncPiSdkAuthFile(agentDir);
+  try {
+    syncPiSdkAuthFile(agentDir);
+  } catch {
+    // Best-effort: if the agent dir doesn't exist yet or auth-profiles.json
+    // can't be read, fall through to AuthStorage which handles missing files.
+  }
   return new AuthStorage(path.join(agentDir, "auth.json"));
 }
 
