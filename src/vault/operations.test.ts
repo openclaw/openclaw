@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+const isWindows = process.platform === "win32";
 import {
   VAULT_PROVIDER_DEFAULTS,
   buildDefaultProxyMap,
@@ -140,7 +142,13 @@ describe("encryptVault + decryptVault round-trip", () => {
     const stat = await fs.promises.stat(vaultPath);
     expect(stat.isFile()).toBe(true);
     // eslint-disable-next-line no-bitwise
-    expect(stat.mode & 0o777).toBe(0o600);
+    const mode = stat.mode & 0o777;
+    // Windows does not support Unix file permissions; mode is typically 0o666.
+    if (isWindows) {
+      expect([0o600, 0o666]).toContain(mode);
+    } else {
+      expect(mode).toBe(0o600);
+    }
 
     // Ciphertext should not contain plaintext
     const ciphertext = await fs.promises.readFile(vaultPath, "utf-8");
@@ -208,7 +216,7 @@ describe("resolveVaultFilePath", () => {
       {},
       { ...process.env, OPENCLAW_VAULT_PATH: "/custom/vault.age" },
     );
-    expect(result).toBe("/custom/vault.age");
+    expect(result).toBe(path.resolve("/custom/vault.age"));
   });
 
   it("uses config vault.file when set", () => {
@@ -216,7 +224,7 @@ describe("resolveVaultFilePath", () => {
       { vault: { file: "/config/path/secrets.age" } },
       { ...process.env, OPENCLAW_VAULT_PATH: undefined },
     );
-    expect(result).toBe("/config/path/secrets.age");
+    expect(result).toBe(path.resolve("/config/path/secrets.age"));
   });
 
   it("env var takes precedence over config vault.file", () => {
@@ -224,7 +232,7 @@ describe("resolveVaultFilePath", () => {
       { vault: { file: "/config/path/secrets.age" } },
       { ...process.env, OPENCLAW_VAULT_PATH: "/env/vault.age" },
     );
-    expect(result).toBe("/env/vault.age");
+    expect(result).toBe(path.resolve("/env/vault.age"));
   });
 
   it("defaults to vault.age alongside config path", () => {
@@ -236,7 +244,7 @@ describe("resolveVaultFilePath", () => {
         OPENCLAW_CONFIG_PATH: "/test/dir/openclaw.json",
       },
     );
-    expect(result).toBe("/test/dir/vault.age");
+    expect(result).toBe(path.join(path.resolve("/test/dir"), "vault.age"));
   });
 });
 

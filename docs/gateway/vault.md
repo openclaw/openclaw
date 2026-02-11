@@ -239,6 +239,11 @@ The vault sidecar exposes health endpoints on port 5335:
 | Deepgram      | 8083 | `DEEPGRAM_API_KEY`      | `Authorization: Token <key>`  |
 | OpenAI-compat | 8084 | `OPENAI_COMPAT_API_KEY` | `Authorization: Bearer <key>` |
 | Google Gemini | 8085 | `GEMINI_API_KEY`        | `x-goog-api-key: <key>`       |
+| Groq          | 8086 | `GROQ_API_KEY`          | `Authorization: Bearer <key>` |
+| xAI           | 8087 | `XAI_API_KEY`           | `Authorization: Bearer <key>` |
+| Mistral       | 8088 | `MISTRAL_API_KEY`       | `Authorization: Bearer <key>` |
+| Brave Search  | 8089 | `BRAVE_API_KEY`         | `X-Subscription-Token: <key>` |
+| Perplexity    | 8090 | `PERPLEXITY_API_KEY`    | `Authorization: Bearer <key>` |
 
 ### Adding a new provider
 

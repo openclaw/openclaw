@@ -1,0 +1,265 @@
+# Vault sidecar nginx config template.
+#
+# ${VAR} placeholders are replaced by entrypoint.sh via envsubst.
+# Secrets are injected into proxy_set_header directives at startup.
+#
+# Each server block listens on a dedicated port and proxies to one API,
+# injecting the correct auth header format.
+#
+# Adding a new provider requires updating three files in sync:
+#   1. This file: add a new server block with the provider's port and auth header
+#   2. vault/entrypoint.sh: add the secret name to the validation list and envsubst call
+#   3. src/vault/operations.ts: add the entry to VAULT_PROVIDER_DEFAULTS
+
+user nginx;
+worker_processes 1;
+error_log /dev/stderr warn;
+pid /run/secrets/nginx.pid;
+
+events {
+    worker_connections 128;
+}
+
+http {
+    server_tokens off;
+    client_max_body_size 25m;
+
+    # Custom log format: excludes query strings and Referer to prevent token leakage.
+    log_format vault '$remote_addr - $remote_user [$time_local] '
+                     '"$request_method $uri" $status $body_bytes_sent';
+    access_log /dev/stdout vault;
+
+    # Shared proxy defaults
+    proxy_http_version 1.1;
+    proxy_ssl_server_name on;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 60s;
+
+    # Health check endpoint
+    server {
+        listen 5335;
+        location /live {
+            return 200 'ok';
+        }
+        location /ready {
+            return 200 'ok';
+        }
+    }
+
+    # OpenAI API (port 8081)
+    # Target: https://api.openai.com
+    # Auth: Authorization: Bearer <key>
+    server {
+        listen 8081;
+
+        # Restrict to known OpenAI API paths (defense-in-depth).
+        # Prevents agent-injected requests from reaching arbitrary endpoints.
+        location /v1/ {
+            proxy_pass https://api.openai.com;
+            proxy_set_header Host api.openai.com;
+            proxy_set_header Authorization "Bearer ${OPENAI_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location / {
+            return 403 'path not allowed';
+        }
+    }
+
+    # Anthropic API (port 8082)
+    # Target: https://api.anthropic.com
+    # Auth: x-api-key: <key>
+    server {
+        listen 8082;
+
+        location /v1/ {
+            proxy_pass https://api.anthropic.com;
+            proxy_set_header Host api.anthropic.com;
+            proxy_set_header Authorization "";
+            proxy_set_header x-api-key "${ANTHROPIC_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location / {
+            return 403 'path not allowed';
+        }
+    }
+
+    # Deepgram API (port 8083)
+    # Target: https://api.deepgram.com
+    # Auth: Authorization: Token <key>
+    # Supports WebSocket upgrade for real-time streaming
+    server {
+        listen 8083;
+
+        location /v1/ {
+            proxy_pass https://api.deepgram.com;
+            proxy_set_header Host api.deepgram.com;
+            proxy_set_header Authorization "Token ${DEEPGRAM_API_KEY}";
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+        }
+        location / {
+            return 403 'path not allowed';
+        }
+    }
+
+    # Google Gemini API (port 8085)
+    # Target: https://generativelanguage.googleapis.com
+    # Auth: x-goog-api-key: <key>
+    server {
+        listen 8085;
+
+        location /v1beta/ {
+            proxy_pass https://generativelanguage.googleapis.com;
+            proxy_set_header Host generativelanguage.googleapis.com;
+            proxy_set_header Authorization "";
+            proxy_set_header x-goog-api-key "${GEMINI_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location /v1/ {
+            proxy_pass https://generativelanguage.googleapis.com;
+            proxy_set_header Host generativelanguage.googleapis.com;
+            proxy_set_header Authorization "";
+            proxy_set_header x-goog-api-key "${GEMINI_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        # The Google SDK sets apiVersion="" when baseUrl is overridden,
+        # so requests arrive as /models/{model}:method without a version
+        # prefix. Rewrite to /v1beta/models/ for the upstream API.
+        location /models/ {
+            proxy_pass https://generativelanguage.googleapis.com/v1beta/models/;
+            proxy_set_header Host generativelanguage.googleapis.com;
+            proxy_set_header Authorization "";
+            proxy_set_header x-goog-api-key "${GEMINI_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location / {
+            return 403 'path not allowed';
+        }
+    }
+
+    # Groq API (port 8086)
+    # Target: https://api.groq.com
+    # Auth: Authorization: Bearer <key>
+    server {
+        listen 8086;
+
+        location /openai/v1/ {
+            proxy_pass https://api.groq.com;
+            proxy_set_header Host api.groq.com;
+            proxy_set_header Authorization "Bearer ${GROQ_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location /v1/ {
+            proxy_pass https://api.groq.com;
+            proxy_set_header Host api.groq.com;
+            proxy_set_header Authorization "Bearer ${GROQ_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location / {
+            return 403 'path not allowed';
+        }
+    }
+
+    # xAI API (port 8087)
+    # Target: https://api.x.ai
+    # Auth: Authorization: Bearer <key>
+    server {
+        listen 8087;
+
+        location /v1/ {
+            proxy_pass https://api.x.ai;
+            proxy_set_header Host api.x.ai;
+            proxy_set_header Authorization "Bearer ${XAI_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location / {
+            return 403 'path not allowed';
+        }
+    }
+
+    # Mistral API (port 8088)
+    # Target: https://api.mistral.ai
+    # Auth: Authorization: Bearer <key>
+    server {
+        listen 8088;
+
+        location /v1/ {
+            proxy_pass https://api.mistral.ai;
+            proxy_set_header Host api.mistral.ai;
+            proxy_set_header Authorization "Bearer ${MISTRAL_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location / {
+            return 403 'path not allowed';
+        }
+    }
+
+    # Brave Search API (port 8089)
+    # Target: https://api.search.brave.com
+    # Auth: X-Subscription-Token: <key>
+    server {
+        listen 8089;
+
+        location /res/ {
+            proxy_pass https://api.search.brave.com;
+            proxy_set_header Host api.search.brave.com;
+            proxy_set_header Authorization "";
+            proxy_set_header X-Subscription-Token "${BRAVE_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location / {
+            return 403 'path not allowed';
+        }
+    }
+
+    # Perplexity API (port 8090)
+    # Target: https://api.perplexity.ai
+    # Auth: Authorization: Bearer <key>
+    server {
+        listen 8090;
+
+        location /chat/ {
+            proxy_pass https://api.perplexity.ai;
+            proxy_set_header Host api.perplexity.ai;
+            proxy_set_header Authorization "Bearer ${PERPLEXITY_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location /v1/ {
+            proxy_pass https://api.perplexity.ai;
+            proxy_set_header Host api.perplexity.ai;
+            proxy_set_header Authorization "Bearer ${PERPLEXITY_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location / {
+            return 403 'path not allowed';
+        }
+    }
+
+    # Generic OpenAI-compatible API (port 8084)
+    # Target: configurable (Groq, OpenRouter, etc.) — defaults to OpenRouter
+    # Auth: Authorization: Bearer <key>
+    #
+    # To change the target, update proxy_pass and Host header.
+    # Each additional provider needs its own server block + port.
+    server {
+        listen 8084;
+
+        location /v1/ {
+            proxy_pass https://openrouter.ai;
+            proxy_set_header Host openrouter.ai;
+            proxy_set_header Authorization "Bearer ${OPENAI_COMPAT_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location /api/ {
+            proxy_pass https://openrouter.ai;
+            proxy_set_header Host openrouter.ai;
+            proxy_set_header Authorization "Bearer ${OPENAI_COMPAT_API_KEY}";
+            proxy_set_header Connection "";
+        }
+        location / {
+            return 403 'path not allowed';
+        }
+    }
+}
