@@ -9,7 +9,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { formatToolSummary, resolveToolDisplay } from "../src/agents/tool-display.js";
+import { writeFileSync } from "node:fs";
+import { formatToolFeedbackDiscord, resolveToolDisplay } from "../src/agents/tool-display.js";
 
 const PROMPT = "list files in /tmp/openclaw using ls, then read the first file you find";
 
@@ -59,10 +60,9 @@ child.stdout.on("data", (chunk: Buffer) => {
             const input = block.input as Record<string, unknown> | undefined;
             toolEvents.push({ name: toolName, input });
 
-            // Format through the same pipeline used by dispatch-from-config.ts
+            // Format through the same pipeline used by Discord feedback
             const display = resolveToolDisplay({ name: toolName, args: input });
-            const summary = formatToolSummary(display);
-            const feedback = `*${summary}*`;
+            const feedback = formatToolFeedbackDiscord(display);
             feedbackMessages.push(feedback);
 
             console.log(`[tool_start] name=${toolName} input=${JSON.stringify(input)}`);
@@ -99,14 +99,47 @@ child.on("close", (code) => {
     console.log("WARNING: No tool events captured!");
   }
 
+  // Save results to home directory
+  const outputPath = `${process.env.HOME}/tool-feedback-test-results.txt`;
+  const output = [
+    "--- Tool Feedback E2E Test Results ---",
+    `Date: ${new Date().toISOString()}`,
+    `Prompt: "${PROMPT}"`,
+    `Exit code: ${code}`,
+    `Tool events captured: ${toolEvents.length}`,
+    "",
+    "Feedback messages (as they would appear in Discord):",
+    ...feedbackMessages.map((m) => `  ${m}`),
+    "",
+  ].join("\n");
+  writeFileSync(outputPath, output);
+  console.log(`Results saved to ${outputPath}`);
+
   // Validate
-  const passed = toolEvents.length > 0 && feedbackMessages.every((m) => !m.includes("Claude Code"));
-  console.log(`\nTest ${passed ? "PASSED ✅" : "FAILED ❌"}`);
-  if (!passed && toolEvents.length === 0) {
+  const noEmojis = feedbackMessages.every((m) => !/[\u{1F000}-\u{1FFFF}]/u.test(m));
+  const allItalic = feedbackMessages.every((m) => m.startsWith("*") && m.endsWith("*"));
+  const noColons = feedbackMessages.every((m) => !m.includes(":"));
+  const passed =
+    toolEvents.length > 0 &&
+    noEmojis &&
+    allItalic &&
+    noColons &&
+    feedbackMessages.every((m) => !m.includes("Claude Code"));
+  console.log(`\nTest ${passed ? "PASSED" : "FAILED"}`);
+  if (toolEvents.length === 0) {
     console.log("  No tools were used. The prompt may not have triggered tool use.");
   }
+  if (!noEmojis) {
+    console.log("  Emojis found in feedback messages.");
+  }
+  if (!allItalic) {
+    console.log("  Not all messages wrapped in italic markers.");
+  }
+  if (!noColons) {
+    console.log("  Colons found in feedback messages.");
+  }
   if (feedbackMessages.some((m) => m.includes("Claude Code"))) {
-    console.log('  "Claude Code" label appeared in feedback — detailOnly is not working.');
+    console.log('  "Claude Code" label appeared in feedback.');
   }
   process.exit(passed ? 0 : 1);
 });
