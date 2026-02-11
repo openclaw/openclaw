@@ -1,6 +1,6 @@
 ---
 name: merge-pr
-description: Merge a GitHub PR via squash after /preparepr. Use when asked to merge a ready PR. Do not push to main or modify code. Ensure the PR ends in MERGED state and clean up worktrees after success.
+description: Merge a GitHub PR via squash after /prepare-pr. Use when asked to merge a ready PR. Do not push to main or modify code. Ensure the PR ends in MERGED state and clean up worktrees after success.
 ---
 
 # Merge PR
@@ -63,7 +63,7 @@ Run all commands inside the worktree directory.
 Expect these files from earlier steps:
 
 - `.local/review.md` from `/reviewpr`
-- `.local/prep.md` from `/preparepr`
+- `.local/prep.md` from `/prepare-pr`
 
 ```sh
 ls -la .local || true
@@ -72,7 +72,7 @@ if [ -f .local/review.md ]; then
   echo "Found .local/review.md"
   sed -n '1,120p' .local/review.md
 else
-  echo "Missing .local/review.md. Stop and run /reviewpr, then /preparepr."
+  echo "Missing .local/review.md. Stop and run /reviewpr, then /prepare-pr."
   exit 1
 fi
 
@@ -80,7 +80,7 @@ if [ -f .local/prep.md ]; then
   echo "Found .local/prep.md"
   sed -n '1,120p' .local/prep.md
 else
-  echo "Missing .local/prep.md. Stop and run /preparepr first."
+  echo "Missing .local/prep.md. Stop and run /prepare-pr first."
   exit 1
 fi
 ```
@@ -113,10 +113,10 @@ gh pr checks <PR>
 # Check behind main
 git fetch origin main
 git fetch origin pull/<PR>/head:pr-<PR>
-git merge-base --is-ancestor origin/main pr-<PR> || echo "PR branch is behind main, run /preparepr"
+git merge-base --is-ancestor origin/main pr-<PR> || echo "PR branch is behind main, run /prepare-pr"
 ```
 
-If anything is failing or behind, stop and say to run `/preparepr`.
+If anything is failing or behind, stop and say to run `/prepare-pr`.
 
 3. Merge PR and delete branch
 
@@ -135,7 +135,7 @@ fi
 ```
 
 If merge fails, report the error and stop. Do not retry in a loop.
-If the PR needs changes beyond what `/preparepr` already did, stop and say to run `/preparepr` again.
+If the PR needs changes beyond what `/prepare-pr` already did, stop and say to run `/prepare-pr` again.
 
 4. Get merge SHA
 
@@ -144,7 +144,7 @@ merge_sha=$(gh pr view <PR> --json mergeCommit --jq '.mergeCommit.oid')
 echo "merge_sha=$merge_sha"
 ```
 
-5. Optional comment
+5. PR comment
 
 Use a literal multiline string or heredoc for newlines.
 
