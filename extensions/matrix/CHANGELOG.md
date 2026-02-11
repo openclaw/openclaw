@@ -29,6 +29,16 @@
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
+## 2026.2.9
+
+### Features
+
+- Added `sessionScope` config for inbound Matrix routing:
+  - `room` (default): preserve per-room session history.
+  - `agent`: share one Matrix session across rooms for the same agent (`agent:{agentId}:matrix:main`).
+- Added thread-isolated session keys for room thread traffic (`:thread:{threadRootId}`) with `ParentSessionKey` linking back to the base room/agent session.
+- Wired resolved session keys through inbound context creation, session persistence, and system event enqueueing so thread and non-thread conversations remain isolated.
+- Added unit coverage for `sessionScope` schema validation and session-key resolution behavior (room default, agent scope, room-thread isolation, DM non-thread behavior).
 
 ## 2026.2.6-3
 

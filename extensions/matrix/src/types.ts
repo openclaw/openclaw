@@ -73,6 +73,8 @@ export type MatrixConfig = {
   replyToMode?: ReplyToMode;
   /** How to handle thread replies (off|inbound|always). */
   threadReplies?: "off" | "inbound" | "always";
+  /** Session scope for Matrix inbound routing (room=per-room, agent=shared across rooms for the same agent). */
+  sessionScope?: "room" | "agent";
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
