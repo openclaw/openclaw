@@ -1,4 +1,5 @@
 import type { FollowupRun } from "./types.js";
+import { flushPendingAckRemovals } from "../../../channels/ack-reactions.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildCollectPrompt,
@@ -34,6 +35,7 @@ export function scheduleFollowupDrain(
               break;
             }
             await runFollowup(next);
+            flushPendingAckRemovals([next.messageId]);
             continue;
           }
 
@@ -63,6 +65,7 @@ export function scheduleFollowupDrain(
               break;
             }
             await runFollowup(next);
+            flushPendingAckRemovals([next.messageId]);
             continue;
           }
 
@@ -98,6 +101,7 @@ export function scheduleFollowupDrain(
             originatingAccountId,
             originatingThreadId,
           });
+          flushPendingAckRemovals(items.map((i) => i.messageId));
           continue;
         }
 
@@ -120,6 +124,7 @@ export function scheduleFollowupDrain(
           break;
         }
         await runFollowup(next);
+        flushPendingAckRemovals([next.messageId]);
       }
     } catch (err) {
       defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);

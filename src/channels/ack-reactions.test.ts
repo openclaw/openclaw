@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { sleep } from "../utils.ts";
 import {
+  _clearPendingAckRemovals,
+  _getPendingAckRemovalsSize,
+  flushPendingAckRemovals,
+  registerPendingAckRemoval,
   removeAckReactionAfterReply,
   shouldAckReaction,
   shouldAckReactionForWhatsApp,
@@ -224,6 +228,63 @@ describe("shouldAckReactionForWhatsApp", () => {
         groupActivated: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("pending ack removal registry", () => {
+  afterEach(() => {
+    _clearPendingAckRemovals();
+  });
+
+  it("registers and flushes a pending removal", () => {
+    const remove = vi.fn();
+    registerPendingAckRemoval("ts-1", remove);
+    expect(_getPendingAckRemovalsSize()).toBe(1);
+
+    flushPendingAckRemovals(["ts-1"]);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(_getPendingAckRemovalsSize()).toBe(0);
+  });
+
+  it("flushes multiple pending removals at once", () => {
+    const remove1 = vi.fn();
+    const remove2 = vi.fn();
+    registerPendingAckRemoval("ts-1", remove1);
+    registerPendingAckRemoval("ts-2", remove2);
+
+    flushPendingAckRemovals(["ts-1", "ts-2"]);
+    expect(remove1).toHaveBeenCalledTimes(1);
+    expect(remove2).toHaveBeenCalledTimes(1);
+    expect(_getPendingAckRemovalsSize()).toBe(0);
+  });
+
+  it("ignores undefined and unknown messageIds without error", () => {
+    const remove = vi.fn();
+    registerPendingAckRemoval("ts-1", remove);
+
+    flushPendingAckRemovals([undefined, "unknown-id"]);
+    expect(remove).not.toHaveBeenCalled();
+    expect(_getPendingAckRemovalsSize()).toBe(1);
+  });
+
+  it("does not invoke a removal twice on repeated flush", () => {
+    const remove = vi.fn();
+    registerPendingAckRemoval("ts-1", remove);
+
+    flushPendingAckRemovals(["ts-1"]);
+    flushPendingAckRemovals(["ts-1"]);
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("latest registration wins for duplicate messageId", () => {
+    const remove1 = vi.fn();
+    const remove2 = vi.fn();
+    registerPendingAckRemoval("ts-1", remove1);
+    registerPendingAckRemoval("ts-1", remove2);
+
+    flushPendingAckRemovals(["ts-1"]);
+    expect(remove1).not.toHaveBeenCalled();
+    expect(remove2).toHaveBeenCalledTimes(1);
   });
 });
 

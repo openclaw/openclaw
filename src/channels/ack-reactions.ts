@@ -78,6 +78,44 @@ export function shouldAckReactionForWhatsApp(params: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Pending ack-removal registry
+// ---------------------------------------------------------------------------
+// When a message is enqueued (not immediately replied to), the ack-reaction
+// removal callback is stored here keyed by messageTs.  After the followup
+// runner finishes processing the batch, `flushPendingAckRemovals` executes
+// and cleans them up.
+// ---------------------------------------------------------------------------
+
+const PENDING_ACK_REMOVALS = new Map<string, () => void>();
+
+export function registerPendingAckRemoval(messageId: string, remove: () => void): void {
+  PENDING_ACK_REMOVALS.set(messageId, remove);
+}
+
+export function flushPendingAckRemovals(messageIds: Array<string | undefined>): void {
+  for (const id of messageIds) {
+    if (!id) {
+      continue;
+    }
+    const remove = PENDING_ACK_REMOVALS.get(id);
+    if (remove) {
+      remove();
+      PENDING_ACK_REMOVALS.delete(id);
+    }
+  }
+}
+
+/** @internal — exposed for testing only */
+export function _getPendingAckRemovalsSize(): number {
+  return PENDING_ACK_REMOVALS.size;
+}
+
+/** @internal — exposed for testing only */
+export function _clearPendingAckRemovals(): void {
+  PENDING_ACK_REMOVALS.clear();
+}
+
 export function removeAckReactionAfterReply(params: {
   removeAfterReply: boolean;
   ackReactionPromise: Promise<boolean> | null;

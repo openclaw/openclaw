@@ -3,7 +3,10 @@ import { resolveHumanDelayConfig } from "../../../agents/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
-import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
+import {
+  registerPendingAckRemoval,
+  removeAckReactionAfterReply,
+} from "../../../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../../../channels/typing.js";
@@ -146,6 +149,33 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
 
   if (!anyReplyDelivered) {
+    // Message was enqueued (not immediately replied to).
+    // Register pending ack-reaction removal so the followup drain can flush it.
+    if (ctx.removeAckAfterReply && prepared.ackReactionPromise && prepared.ackReactionValue) {
+      const messageTs = prepared.ackReactionMessageTs;
+      if (messageTs) {
+        registerPendingAckRemoval(messageTs, () => {
+          removeAckReactionAfterReply({
+            removeAfterReply: true,
+            ackReactionPromise: prepared.ackReactionPromise,
+            ackReactionValue: prepared.ackReactionValue,
+            remove: () =>
+              removeSlackReaction(message.channel, messageTs, prepared.ackReactionValue, {
+                token: ctx.botToken,
+                client: ctx.app.client,
+              }),
+            onError: (err) => {
+              logAckFailure({
+                log: logVerbose,
+                channel: "slack",
+                target: `${message.channel}/${message.ts}`,
+                error: err,
+              });
+            },
+          });
+        });
+      }
+    }
     if (prepared.isRoomish) {
       clearHistoryEntriesIfEnabled({
         historyMap: ctx.channelHistories,
