@@ -1,6 +1,7 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "name": "OpenClaw",
+  "description": "Self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI coding agents. Run a single Gateway process on your own machine and message your AI assistant from anywhere.",
   "theme": "mint",
   "icons": {
     "library": "lucide"
@@ -801,7 +802,12 @@
               },
               {
                 "group": "First steps",
-                "pages": ["start/getting-started", "start/wizard", "start/onboarding"]
+                "pages": [
+                  "start/getting-started",
+                  "start/onboarding-overview",
+                  "start/wizard",
+                  "start/onboarding"
+                ]
               },
               {
                 "group": "Guides",
@@ -857,6 +863,7 @@
                   "channels/telegram",
                   "channels/grammy",
                   "channels/discord",
+                  "channels/irc",
                   "channels/slack",
                   "channels/feishu",
                   "channels/googlechat",
@@ -1231,6 +1238,16 @@
               {
                 "group": "Release notes",
                 "pages": ["reference/RELEASING", "reference/test"]
+              },
+              {
+                "group": "Experiments",
+                "pages": [
+                  "experiments/onboarding-config-protocol",
+                  "experiments/plans/cron-add-hardening",
+                  "experiments/plans/group-policy-hardening",
+                  "experiments/research/memory",
+                  "experiments/proposals/model-config"
+                ]
               }
             ]
           },
@@ -1263,7 +1280,7 @@
               },
               {
                 "group": "Contributing",
-                "pages": ["help/submitting-a-pr", "help/submitting-an-issue"]
+                "pages": ["help/submitting-a-pr", "help/submitting-an-issue", "ci"]
               },
               {
                 "group": "Docs meta",
@@ -1750,6 +1767,16 @@
               {
                 "group": "发布说明",
                 "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
+              },
+              {
+                "group": "实验性功能",
+                "pages": [
+                  "zh-CN/experiments/onboarding-config-protocol",
+                  "zh-CN/experiments/plans/cron-add-hardening",
+                  "zh-CN/experiments/plans/group-policy-hardening",
+                  "zh-CN/experiments/research/memory",
+                  "zh-CN/experiments/proposals/model-config"
+                ]
               }
             ]
           },

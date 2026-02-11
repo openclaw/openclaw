@@ -60,7 +60,7 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
-import { isAbortError } from "../abort.js";
+import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
@@ -833,7 +833,7 @@ export async function runEmbeddedAttempt(
         try {
           await waitForCompactionRetry();
         } catch (err) {
-          if (isAbortError(err)) {
+          if (isRunnerAbortError(err)) {
             if (!promptError) {
               promptError = err;
             }
