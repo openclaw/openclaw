@@ -8,17 +8,26 @@
 import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
+  PluginHookAfterLlmCallEvent,
+  PluginHookAfterLlmCallResult,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeCompactionEvent,
+  PluginHookBeforeLlmCallEvent,
+  PluginHookBeforeLlmCallResult,
+  PluginHookBeforeResponseEmitEvent,
+  PluginHookBeforeResponseEmitResult,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookContextAssembledEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookLoopIterationEndEvent,
+  PluginHookLoopIterationStartEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -61,6 +70,16 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  // Extended security / agent loop observability hooks
+  PluginHookBeforeLlmCallEvent,
+  PluginHookBeforeLlmCallResult,
+  PluginHookAfterLlmCallEvent,
+  PluginHookAfterLlmCallResult,
+  PluginHookContextAssembledEvent,
+  PluginHookLoopIterationStartEvent,
+  PluginHookLoopIterationEndEvent,
+  PluginHookBeforeResponseEmitEvent,
+  PluginHookBeforeResponseEmitResult,
 };
 
 export type HookRunnerLogger = {
@@ -424,6 +443,114 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Extended Security / Agent Loop Observability Hooks
+  // =========================================================================
+
+  /**
+   * Run before_llm_call hook.
+   * Fires before every LLM API call within the agent loop.
+   * Allows plugins to inspect/modify context, filter tools, or block the call.
+   * Runs sequentially, merging results across handlers.
+   */
+  async function runBeforeLlmCall(
+    event: PluginHookBeforeLlmCallEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeLlmCallResult | undefined> {
+    return runModifyingHook<"before_llm_call", PluginHookBeforeLlmCallResult>(
+      "before_llm_call",
+      event,
+      ctx,
+      (acc, next) => ({
+        messages: next.messages ?? acc?.messages,
+        systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+        tools: next.tools ?? acc?.tools,
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+      }),
+    );
+  }
+
+  /**
+   * Run after_llm_call hook.
+   * Fires after receiving the LLM response but before executing tool calls.
+   * Allows plugins to filter/modify tool calls or block execution.
+   * Runs sequentially, merging results across handlers.
+   */
+  async function runAfterLlmCall(
+    event: PluginHookAfterLlmCallEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookAfterLlmCallResult | undefined> {
+    return runModifyingHook<"after_llm_call", PluginHookAfterLlmCallResult>(
+      "after_llm_call",
+      event,
+      ctx,
+      (acc, next) => ({
+        toolCalls: next.toolCalls ?? acc?.toolCalls,
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+      }),
+    );
+  }
+
+  /**
+   * Run context_assembled hook.
+   * Fires when the full context is assembled, before the first LLM call.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runContextAssembled(
+    event: PluginHookContextAssembledEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("context_assembled", event, ctx);
+  }
+
+  /**
+   * Run loop_iteration_start hook.
+   * Fires at the start of each agent loop iteration.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runLoopIterationStart(
+    event: PluginHookLoopIterationStartEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("loop_iteration_start", event, ctx);
+  }
+
+  /**
+   * Run loop_iteration_end hook.
+   * Fires at the end of each agent loop iteration.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runLoopIterationEnd(
+    event: PluginHookLoopIterationEndEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("loop_iteration_end", event, ctx);
+  }
+
+  /**
+   * Run before_response_emit hook.
+   * Fires when the agent's final response is ready, before delivery.
+   * Allows plugins to modify content or block emission.
+   * Runs sequentially, merging results across handlers.
+   */
+  async function runBeforeResponseEmit(
+    event: PluginHookBeforeResponseEmitEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeResponseEmitResult | undefined> {
+    return runModifyingHook<"before_response_emit", PluginHookBeforeResponseEmitResult>(
+      "before_response_emit",
+      event,
+      ctx,
+      (acc, next) => ({
+        content: next.content ?? acc?.content,
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+      }),
+    );
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -461,6 +588,13 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Extended security / agent loop observability hooks
+    runBeforeLlmCall,
+    runAfterLlmCall,
+    runContextAssembled,
+    runLoopIterationStart,
+    runLoopIterationEnd,
+    runBeforeResponseEmit,
     // Utility
     hasHooks,
     getHookCount,

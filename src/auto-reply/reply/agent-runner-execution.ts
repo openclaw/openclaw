@@ -271,6 +271,8 @@ export async function runAgentTurnWithFallback(params: {
             senderName: params.sessionCtx.SenderName?.trim() || undefined,
             senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
             senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
+            senderIsOwner: params.followupRun.run.senderIsOwner,
+            spawnedBy: params.followupRun.run.spawnedBy,
             // Provider threading context for tool auto-injection
             ...buildThreadingToolContext({
               sessionCtx: params.sessionCtx,

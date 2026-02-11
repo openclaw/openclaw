@@ -539,6 +539,38 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // Wrap streamFn for extended security hooks (before_llm_call / context_assembled).
+      // This must be the outermost wrapper so hooks see the full context first.
+      const hookIterationRef = { current: 0 };
+      const hookRunner = getGlobalHookRunner();
+      const hookAgentId =
+        typeof params.agentId === "string" && params.agentId.trim()
+          ? normalizeAgentId(params.agentId)
+          : resolveSessionAgentIds({
+              sessionKey: params.sessionKey,
+              config: params.config,
+            }).sessionAgentId;
+      const hookAgentCtx: import("../../../plugins/hooks.js").PluginHookAgentContext = {
+        agentId: hookAgentId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider ?? undefined,
+        senderId: params.senderId ?? undefined,
+        senderName: params.senderName ?? undefined,
+        senderIsOwner: params.senderIsOwner ?? undefined,
+        groupId: params.groupId ?? undefined,
+        spawnedBy: params.spawnedBy ?? undefined,
+      };
+      if (hookRunner?.hasHooks("before_llm_call") || hookRunner?.hasHooks("context_assembled")) {
+        const { wrapStreamFnWithHooks } = await import("./hook-stream-wrapper.js");
+        activeSession.agent.streamFn = wrapStreamFnWithHooks(activeSession.agent.streamFn, {
+          hookRunner,
+          agentCtx: hookAgentCtx,
+          iterationRef: hookIterationRef,
+          modelId: params.modelId,
+        });
+      }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -654,6 +686,82 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
       } = subscription;
 
+      // Subscribe for extended hook events (loop iteration tracking, after_llm_call)
+      let hookTurnIteration = 0;
+      const hookEventUnsub =
+        hookRunner?.hasHooks("loop_iteration_start") ||
+        hookRunner?.hasHooks("loop_iteration_end") ||
+        hookRunner?.hasHooks("after_llm_call")
+          ? activeSession.subscribe((event) => {
+              if (event.type === "turn_start") {
+                hookTurnIteration++;
+                hookIterationRef.current = hookTurnIteration;
+                hookRunner!
+                  .runLoopIterationStart(
+                    {
+                      iteration: hookTurnIteration,
+                      pendingToolResults: 0,
+                      messageCount: activeSession.messages.length,
+                    },
+                    hookAgentCtx,
+                  )
+                  .catch((err) => log.warn(`loop_iteration_start hook: ${String(err)}`));
+              }
+              if (event.type === "turn_end") {
+                const toolResults = event.toolResults ?? [];
+                hookRunner!
+                  .runLoopIterationEnd(
+                    {
+                      iteration: hookTurnIteration,
+                      toolCallsMade: toolResults.length,
+                      newMessagesAdded: 0,
+                      willContinue: toolResults.length > 0,
+                    },
+                    hookAgentCtx,
+                  )
+                  .catch((err) => log.warn(`loop_iteration_end hook: ${String(err)}`));
+              }
+              if (event.type === "message_end" && hookRunner!.hasHooks("after_llm_call")) {
+                const msg = event.message;
+                // Extract tool calls from assistant message content
+                const toolCalls: Array<{
+                  id: string;
+                  name: string;
+                  arguments: Record<string, unknown>;
+                }> = [];
+                if (
+                  msg &&
+                  typeof msg === "object" &&
+                  "content" in msg &&
+                  Array.isArray((msg as unknown as Record<string, unknown>).content)
+                ) {
+                  for (const part of (msg as unknown as { content: Array<Record<string, unknown>> })
+                    .content) {
+                    if (part && part.type === "toolCall") {
+                      toolCalls.push({
+                        id: (part.id as string) ?? "",
+                        name: (part.name as string) ?? "",
+                        arguments: (part.arguments as Record<string, unknown>) ?? {},
+                      });
+                    }
+                  }
+                }
+                hookRunner!
+                  .runAfterLlmCall(
+                    {
+                      response: msg as AgentMessage,
+                      toolCalls,
+                      iteration: hookTurnIteration,
+                      model: params.modelId,
+                      latencyMs: 0, // Not tracked from event subscription
+                    },
+                    hookAgentCtx,
+                  )
+                  .catch((err) => log.warn(`after_llm_call hook: ${String(err)}`));
+              }
+            })
+          : undefined;
+
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
           await activeSession.steer(text);
@@ -707,16 +815,6 @@ export async function runEmbeddedAttempt(
         }
       }
 
-      // Get hook runner once for both before_agent_start and agent_end hooks
-      const hookRunner = getGlobalHookRunner();
-      const hookAgentId =
-        typeof params.agentId === "string" && params.agentId.trim()
-          ? normalizeAgentId(params.agentId)
-          : resolveSessionAgentIds({
-              sessionKey: params.sessionKey,
-              config: params.config,
-            }).sessionAgentId;
-
       let promptError: unknown = null;
       try {
         const promptStartedAt = Date.now();
@@ -730,12 +828,7 @@ export async function runEmbeddedAttempt(
                 prompt: params.prompt,
                 messages: activeSession.messages,
               },
-              {
-                agentId: hookAgentId,
-                sessionKey: params.sessionKey,
-                workspaceDir: params.workspaceDir,
-                messageProvider: params.messageProvider ?? undefined,
-              },
+              hookAgentCtx,
             );
             if (hookResult?.prependContext) {
               effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
@@ -843,6 +936,51 @@ export async function runEmbeddedAttempt(
 
         messagesSnapshot = activeSession.messages.slice();
         sessionIdUsed = activeSession.sessionId;
+
+        // Emit before_response_emit hook
+        if (hookRunner?.hasHooks("before_response_emit")) {
+          const lastAssistantMsg = messagesSnapshot
+            .slice()
+            .reverse()
+            .find((m) => m.role === "assistant");
+          if (
+            lastAssistantMsg &&
+            typeof lastAssistantMsg === "object" &&
+            "content" in lastAssistantMsg
+          ) {
+            const content =
+              typeof lastAssistantMsg.content === "string"
+                ? lastAssistantMsg.content
+                : Array.isArray(lastAssistantMsg.content)
+                  ? (lastAssistantMsg.content as Array<{ type?: string; text?: string }>)
+                      .filter((c) => c?.type === "text")
+                      .map((c) => c.text ?? "")
+                      .join("")
+                  : "";
+            if (content) {
+              try {
+                const emitResult = await hookRunner.runBeforeResponseEmit(
+                  {
+                    content,
+                    channel: params.messageChannel ?? params.messageProvider,
+                    messageCount: messagesSnapshot.length,
+                  },
+                  hookAgentCtx,
+                );
+                if (emitResult?.block) {
+                  log.warn(
+                    `before_response_emit: response blocked: ${emitResult.blockReason ?? "no reason"}`,
+                  );
+                  // Hook is primarily for logging/auditing at this integration point.
+                  // Future: integrate with the response delivery pipeline for true blocking.
+                }
+              } catch (err) {
+                log.warn(`before_response_emit hook failed: ${String(err)}`);
+              }
+            }
+          }
+        }
+
         cacheTrace?.recordStage("session:after", {
           messages: messagesSnapshot,
           note: promptError ? "prompt error" : undefined,
@@ -860,12 +998,7 @@ export async function runEmbeddedAttempt(
                 error: promptError ? describeUnknownError(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
               },
-              {
-                agentId: hookAgentId,
-                sessionKey: params.sessionKey,
-                workspaceDir: params.workspaceDir,
-                messageProvider: params.messageProvider ?? undefined,
-              },
+              hookAgentCtx,
             )
             .catch((err) => {
               log.warn(`agent_end hook failed: ${err}`);
@@ -876,6 +1009,7 @@ export async function runEmbeddedAttempt(
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);
         }
+        hookEventUnsub?.();
         unsubscribe();
         clearActiveEmbeddedRun(params.sessionId, queueHandle);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
