@@ -1,5 +1,9 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
-import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
+import {
+  DisconnectReason,
+  getAggregateVotesInPollMessage,
+  isJidGroup,
+} from "@whiskeysockets/baileys";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 import { createInboundDebouncer } from "../../auto-reply/inbound-debounce.js";
 import { formatLocationText } from "../../channels/location.js";
@@ -20,6 +24,7 @@ import {
   extractText,
 } from "./extract.js";
 import { downloadInboundMedia } from "./media.js";
+import { createPollStore } from "./poll-store.js";
 import { createWebSendApi } from "./send-api.js";
 
 export async function monitorWebInbox(options: {
@@ -112,6 +117,7 @@ export async function monitorWebInbox(options: {
       inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
     },
   });
+  const pollStore = createPollStore();
   const groupMetaCache = new Map<
     string,
     { subject?: string; participants?: string[]; expires: number }
@@ -343,7 +349,97 @@ export async function monitorWebInbox(options: {
       }
     }
   };
+
+  const handleMessagesUpdate = async (
+    updates: Array<{ key: proto.IMessageKey; update: unknown }>,
+  ) => {
+    for (const { key, update } of updates) {
+      const pollUpdates = (update as { pollUpdates?: unknown[] })?.pollUpdates;
+      if (!pollUpdates?.length) {
+        continue;
+      }
+
+      const pollMessageId = key.id;
+      if (!pollMessageId) {
+        continue;
+      }
+
+      const stored = pollStore.get(pollMessageId);
+      if (!stored) {
+        continue;
+      }
+
+      const remoteJid = key.remoteJid;
+      if (!remoteJid) {
+        continue;
+      }
+
+      const message = {
+        pollCreationMessage: { options: stored.options.map((o) => ({ optionName: o })) },
+      };
+
+      let votes: Array<{ name: string; voters: string[] }>;
+      try {
+        votes = getAggregateVotesInPollMessage(
+          { message, pollUpdates: pollUpdates as proto.IPollUpdate[] },
+          selfJid ?? undefined,
+        );
+      } catch {
+        continue;
+      }
+
+      const group = isJidGroup(remoteJid) === true;
+      const allVoters = new Map<string, string[]>();
+      for (const { name, voters } of votes) {
+        for (const voterJid of voters) {
+          if (voterJid === selfJid) {
+            continue;
+          }
+          const existing = allVoters.get(voterJid) ?? [];
+          existing.push(name);
+          allVoters.set(voterJid, existing);
+        }
+      }
+
+      for (const [voterJid, selectedOptions] of allVoters) {
+        const voterE164 = await resolveInboundJid(voterJid);
+        const voter = voterE164 ?? voterJid;
+        const optionsText = selectedOptions.map((o) => `'${o}'`).join(", ");
+        const body = `[Poll Vote] ${voter} voted ${optionsText} in "${stored.question}"`;
+
+        const inboundMessage: WebInboundMessage = {
+          id: `poll-vote-${pollMessageId}-${Date.now()}`,
+          from: group ? remoteJid : voter,
+          conversationId: group ? remoteJid : voter,
+          to: selfE164 ?? "me",
+          accountId: options.accountId,
+          body,
+          chatType: group ? "group" : "direct",
+          chatId: remoteJid,
+          senderJid: voterJid,
+          senderE164: voterE164 ?? undefined,
+          selfJid,
+          selfE164,
+          sendComposing: async () => {
+            try {
+              await sock.sendPresenceUpdate("composing", remoteJid);
+            } catch {}
+          },
+          reply: async (text: string) => {
+            await sock.sendMessage(remoteJid, { text });
+          },
+          sendMedia: async (payload: AnyMessageContent) => {
+            await sock.sendMessage(remoteJid, payload);
+          },
+        };
+
+        void debouncer.enqueue(inboundMessage);
+      }
+    }
+  };
+
   sock.ev.on("messages.upsert", handleMessagesUpsert);
+  sock.ev.on("messages.update", handleMessagesUpdate);
 
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
@@ -370,6 +466,7 @@ export async function monitorWebInbox(options: {
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
     },
     defaultAccountId: options.accountId,
+    onPollSent: (poll) => pollStore.store({ ...poll, createdAt: Date.now() }),
   });
 
   return {
@@ -382,14 +479,19 @@ export async function monitorWebInbox(options: {
         const messagesUpsertHandler = handleMessagesUpsert as unknown as (
           ...args: unknown[]
         ) => void;
+        const messagesUpdateHandler = handleMessagesUpdate as unknown as (
+          ...args: unknown[]
+        ) => void;
         const connectionUpdateHandler = handleConnectionUpdate as unknown as (
           ...args: unknown[]
         ) => void;
         if (typeof ev.off === "function") {
           ev.off("messages.upsert", messagesUpsertHandler);
+          ev.off("messages.update", messagesUpdateHandler);
           ev.off("connection.update", connectionUpdateHandler);
         } else if (typeof ev.removeListener === "function") {
           ev.removeListener("messages.upsert", messagesUpsertHandler);
+          ev.removeListener("messages.update", messagesUpdateHandler);
           ev.removeListener("connection.update", connectionUpdateHandler);
         }
         sock.ws?.close();

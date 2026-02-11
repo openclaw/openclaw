@@ -9,6 +9,12 @@ export function createWebSendApi(params: {
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
   defaultAccountId: string;
+  onPollSent?: (poll: {
+    messageId: string;
+    chatJid: string;
+    question: string;
+    options: string[];
+  }) => void;
 }) {
   return {
     sendMessage: async (
@@ -82,6 +88,14 @@ export function createWebSendApi(params: {
         typeof result === "object" && result && "key" in result
           ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
           : "unknown";
+      if (messageId !== "unknown") {
+        params.onPollSent?.({
+          messageId,
+          chatJid: jid,
+          question: poll.question,
+          options: poll.options,
+        });
+      }
       return { messageId };
     },
     sendReaction: async (
