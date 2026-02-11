@@ -9,7 +9,7 @@ function createRun(params: {
   originatingChannel?: FollowupRun["originatingChannel"];
   originatingTo?: string;
   originatingAccountId?: string;
-  originatingThreadId?: number;
+  originatingThreadId?: string | number;
 }): FollowupRun {
   return {
     prompt: params.prompt,
@@ -282,5 +282,128 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
+  });
+
+  it("does not collect when same channel but different Slack string threadId", async () => {
+    const key = `test-collect-diff-slack-thread-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "thread-a msg",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "1770796627.094000",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "thread-b msg",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "1770796999.001000",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await expect.poll(() => calls.length).toBe(2);
+    expect(calls[0]?.prompt).toBe("thread-a msg");
+    expect(calls[1]?.prompt).toBe("thread-b msg");
+  });
+
+  it("collects and preserves Slack string threadId when same thread", async () => {
+    const key = `test-collect-same-slack-thread-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const threadTs = "1770796627.094000";
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "msg one",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: threadTs,
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "msg two",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: threadTs,
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.originatingChannel).toBe("slack");
+    expect(calls[0]?.originatingTo).toBe("channel:A");
+    expect(calls[0]?.originatingThreadId).toBe(threadTs);
+  });
+
+  it("preserves numeric Telegram threadId (regression)", async () => {
+    const key = `test-collect-telegram-thread-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "tg one",
+        originatingChannel: "telegram",
+        originatingTo: "-100123456",
+        originatingThreadId: 42,
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "tg two",
+        originatingChannel: "telegram",
+        originatingTo: "-100123456",
+        originatingThreadId: 42,
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.originatingThreadId).toBe(42);
   });
 });

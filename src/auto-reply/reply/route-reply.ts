@@ -27,7 +27,7 @@ export type RouteReplyParams = {
   sessionKey?: string;
   /** Provider account id (multi-account). */
   accountId?: string;
-  /** Thread id for replies (Telegram topic id or Matrix thread event id). */
+  /** Thread id for replies (Telegram topic id, Slack thread_ts, or Matrix thread event id). */
   threadId?: string | number;
   /** Config for provider-specific settings. */
   cfg: OpenClawConfig;
