@@ -119,7 +119,7 @@ interface OllamaTagsResponse {
  * The native Ollama API lives at the root (e.g. `/api/tags`), so we
  * strip the `/v1` suffix when present.
  */
-function resolveOllamaApiBase(configuredBaseUrl?: string): string {
+export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   if (!configuredBaseUrl) {
     return OLLAMA_API_BASE_URL;
   }
