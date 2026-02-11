@@ -341,13 +341,24 @@ export async function runReplyAgent(params: {
       // When the session file is locked by another process (e.g. cron, sub-agent),
       // queue the message for retry instead of dropping it.
       if (lockErr instanceof Error && lockErr.message.includes("session file locked")) {
+        // Track retry count to prevent infinite cycling under persistent contention.
+        // The drain loop shift()s the item before calling us, so re-enqueue is not
+        // a dedup conflict — the queue is empty when we push it back.
+        const MAX_LOCK_RETRIES = 3;
+        const retryCount =
+          ((followupRun as Record<string, unknown>)._lockRetryCount as number) ?? 0;
+        if (retryCount >= MAX_LOCK_RETRIES) {
+          defaultRuntime.error?.(
+            `Session locked after ${MAX_LOCK_RETRIES} retries, dropping message: ${sessionKey ?? followupRun.run.sessionId}`,
+          );
+          typing.cleanup();
+          return undefined;
+        }
         defaultRuntime.log?.(
-          `Session locked, queuing message for retry: ${sessionKey ?? followupRun.run.sessionId}`,
+          `Session locked (retry ${retryCount + 1}/${MAX_LOCK_RETRIES}), queuing message for retry: ${sessionKey ?? followupRun.run.sessionId}`,
         );
+        (followupRun as Record<string, unknown>)._lockRetryCount = retryCount + 1;
         enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
-        // Wait before returning so the drain loop doesn't immediately retry.
-        // If we just re-enqueue and return, the drain loop retries after only
-        // debounceMs (~1s) instead of the intended backoff.
         // Wait before retrying so we don't spam the lock.
         const LOCK_RETRY_DELAY_MS = 5_000;
         await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
