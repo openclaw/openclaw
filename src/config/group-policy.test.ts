@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import { resolveChannelDMToolsPolicy } from "./group-policy.js";
+import {
+  resolveChannelDMToolsPolicy,
+  resolveContactContext,
+  resolveContactEntry,
+  resolveContactGroups,
+} from "./group-policy.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("resolveChannelDMToolsPolicy", () => {
@@ -378,5 +383,248 @@ describe("contact groups", () => {
         senderE164: "+15551234567",
       }),
     ).toEqual({ deny: ["*"] });
+  });
+});
+
+describe("resolveContactEntry", () => {
+  it("finds a contact entry by phone number", () => {
+    const contacts = {
+      entries: {
+        alice: { phone: "+15551234567", name: "Alice Smith", email: "alice@example.com" },
+        bob: { phone: "+15559876543", name: "Bob" },
+      },
+    };
+
+    const result = resolveContactEntry(contacts, "+15551234567");
+    expect(result).toEqual({
+      key: "alice",
+      phone: "+15551234567",
+      name: "Alice Smith",
+      email: "alice@example.com",
+    });
+  });
+
+  it("returns undefined for unknown phone numbers", () => {
+    const contacts = {
+      entries: {
+        alice: { phone: "+15551234567", name: "Alice" },
+      },
+    };
+
+    expect(resolveContactEntry(contacts, "+19990000000")).toBeUndefined();
+  });
+
+  it("returns undefined when contacts is undefined", () => {
+    expect(resolveContactEntry(undefined, "+15551234567")).toBeUndefined();
+  });
+
+  it("returns undefined when phone is undefined", () => {
+    const contacts = {
+      entries: {
+        alice: { phone: "+15551234567", name: "Alice" },
+      },
+    };
+    expect(resolveContactEntry(contacts, undefined)).toBeUndefined();
+  });
+});
+
+describe("resolveContactGroups", () => {
+  it("finds all groups a contact belongs to", () => {
+    const contacts = {
+      entries: {
+        alice: { phone: "+15551234567", name: "Alice" },
+      },
+      groups: {
+        family: {
+          members: ["alice"],
+          instructions: "Be casual and friendly.",
+        },
+        vips: {
+          members: ["alice", "+15559999999"],
+          instructions: "Give priority support.",
+        },
+        strangers: {
+          members: ["+19990000000"],
+        },
+      },
+    };
+
+    const result = resolveContactGroups(contacts, "+15551234567");
+    expect(result).toEqual([
+      { key: "family", instructions: "Be casual and friendly." },
+      { key: "vips", instructions: "Give priority support." },
+    ]);
+  });
+
+  it("handles inline phone numbers in group members", () => {
+    const contacts = {
+      groups: {
+        vips: {
+          members: ["+15551234567"],
+          instructions: "VIP treatment",
+        },
+      },
+    };
+
+    const result = resolveContactGroups(contacts, "+15551234567");
+    expect(result).toEqual([{ key: "vips", instructions: "VIP treatment" }]);
+  });
+
+  it("returns empty array for unknown phone numbers", () => {
+    const contacts = {
+      groups: {
+        friends: {
+          members: ["+15551234567"],
+        },
+      },
+    };
+
+    expect(resolveContactGroups(contacts, "+19990000000")).toEqual([]);
+  });
+});
+
+describe("resolveContactContext", () => {
+  const baseCfg: OpenClawConfig = {
+    contacts: {
+      entries: {
+        alice: { phone: "+15551234567", name: "Alice Smith" },
+        bob: { phone: "+15559876543", name: "Bob" },
+      },
+      groups: {
+        close_friends: {
+          members: ["alice", "bob"],
+          instructions: "Be casual, no formal greetings needed.",
+        },
+        family: {
+          members: ["alice"],
+          instructions: "Share personal updates freely.",
+        },
+      },
+    },
+    channels: {
+      whatsapp: { verified: true },
+      sms: { verified: false },
+    },
+  };
+
+  it("returns full context for verified channel + known contact", () => {
+    const result = resolveContactContext({
+      cfg: baseCfg,
+      channel: "whatsapp",
+      senderE164: "+15551234567",
+      ownerNumbers: ["+14155550100"],
+    });
+
+    expect(result.verified).toBe(true);
+    expect(result.isOwner).toBe(false);
+    expect(result.entry).toEqual({
+      key: "alice",
+      phone: "+15551234567",
+      name: "Alice Smith",
+    });
+    expect(result.groups).toEqual([
+      { key: "close_friends", instructions: "Be casual, no formal greetings needed." },
+      { key: "family", instructions: "Share personal updates freely." },
+    ]);
+    expect(result.instructions).toBe(
+      "Be casual, no formal greetings needed.\n\nShare personal updates freely.",
+    );
+  });
+
+  it("identifies owner from ownerNumbers", () => {
+    const result = resolveContactContext({
+      cfg: baseCfg,
+      channel: "whatsapp",
+      senderE164: "+14155550100",
+      ownerNumbers: ["+14155550100", "+14155550101"],
+    });
+
+    expect(result.isOwner).toBe(true);
+    expect(result.verified).toBe(true);
+  });
+
+  it("returns minimal context for unverified channel", () => {
+    const result = resolveContactContext({
+      cfg: baseCfg,
+      channel: "sms",
+      senderE164: "+15551234567", // Alice's number, but SMS is unverified
+      ownerNumbers: [],
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.entry).toBeUndefined();
+    expect(result.groups).toEqual([]);
+    expect(result.instructions).toBeUndefined();
+  });
+
+  it("returns minimal context for unknown contact on verified channel", () => {
+    const result = resolveContactContext({
+      cfg: baseCfg,
+      channel: "whatsapp",
+      senderE164: "+19990000000", // Unknown number
+      ownerNumbers: [],
+    });
+
+    expect(result.verified).toBe(true);
+    expect(result.entry).toBeUndefined();
+    expect(result.groups).toEqual([]);
+    expect(result.instructions).toBeUndefined();
+    expect(result.isOwner).toBe(false);
+  });
+
+  it("uses default verified=true for whatsapp when not explicitly set", () => {
+    const cfg: OpenClawConfig = {
+      contacts: baseCfg.contacts,
+      // No channels config — uses defaults
+    };
+
+    const result = resolveContactContext({
+      cfg,
+      channel: "whatsapp",
+      senderE164: "+15551234567",
+      ownerNumbers: [],
+    });
+
+    expect(result.verified).toBe(true);
+    expect(result.entry?.name).toBe("Alice Smith");
+  });
+
+  it("uses default verified=false for sms when not explicitly set", () => {
+    const cfg: OpenClawConfig = {
+      contacts: baseCfg.contacts,
+    };
+
+    const result = resolveContactContext({
+      cfg,
+      channel: "sms",
+      senderE164: "+15551234567",
+      ownerNumbers: [],
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.entry).toBeUndefined();
+  });
+
+  it("handles contact in group without instructions", () => {
+    const cfg: OpenClawConfig = {
+      contacts: {
+        groups: {
+          basic: {
+            members: ["+15551234567"],
+            // No instructions
+          },
+        },
+      },
+    };
+
+    const result = resolveContactContext({
+      cfg,
+      channel: "whatsapp",
+      senderE164: "+15551234567",
+      ownerNumbers: [],
+    });
+
+    expect(result.groups).toEqual([{ key: "basic", instructions: undefined }]);
+    expect(result.instructions).toBeUndefined();
   });
 });

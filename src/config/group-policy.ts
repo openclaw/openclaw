@@ -481,3 +481,160 @@ export function resolveChannelDMToolsPolicy(
 
   return resolvePolicy(account?.toolsBySender) ?? resolvePolicy(channelConfig?.toolsBySender);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Contact Context Resolution
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ContactEntryResolved = {
+  /** The key used to define this contact in contacts.entries. */
+  key: string;
+  /** Phone number in E.164 format. */
+  phone: string;
+  /** Display name from the contact entry. */
+  name?: string;
+  /** Email address from the contact entry. */
+  email?: string;
+};
+
+export type ContactGroupResolved = {
+  /** The key used to define this group in contacts.groups. */
+  key: string;
+  /** Instructions defined for this group, injected into prompt context. */
+  instructions?: string;
+};
+
+export type ContactContext = {
+  /** The matched contact entry, if sender is in the registry. */
+  entry?: ContactEntryResolved;
+  /** All groups the sender belongs to, in config order. */
+  groups: ContactGroupResolved[];
+  /** Whether the sender's identity is cryptographically verified by the channel. */
+  verified: boolean;
+  /** Consolidated instructions from all matching groups (joined with newlines). */
+  instructions?: string;
+  /** Whether the sender is a registered owner. */
+  isOwner: boolean;
+};
+
+/**
+ * Find a contact entry by phone number.
+ */
+export function resolveContactEntry(
+  contacts: ContactsConfig | undefined,
+  phone: string | undefined | null,
+): ContactEntryResolved | undefined {
+  if (!contacts?.entries || !phone) {
+    return undefined;
+  }
+  const normalizedPhone = normalizePhoneKey(phone);
+  if (!normalizedPhone) {
+    return undefined;
+  }
+  for (const [key, entry] of Object.entries(contacts.entries)) {
+    if (normalizePhoneKey(entry.phone) === normalizedPhone) {
+      return {
+        key,
+        phone: entry.phone,
+        name: entry.name,
+        email: entry.email,
+      };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Find all groups a phone number belongs to, in config order.
+ */
+export function resolveContactGroups(
+  contacts: ContactsConfig | undefined,
+  phone: string | undefined | null,
+): ContactGroupResolved[] {
+  if (!contacts?.groups || !phone) {
+    return [];
+  }
+  const normalizedPhone = normalizePhoneKey(phone);
+  if (!normalizedPhone) {
+    return [];
+  }
+
+  const result: ContactGroupResolved[] = [];
+
+  for (const [groupKey, group] of Object.entries(contacts.groups)) {
+    for (const member of group.members) {
+      const memberPhone = resolveMemberToPhone(member, contacts);
+      if (memberPhone && normalizePhoneKey(memberPhone) === normalizedPhone) {
+        result.push({
+          key: groupKey,
+          instructions: group.instructions,
+        });
+        break; // Found in this group, move to next group
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Resolve full contact context for a sender.
+ *
+ * This is the main entry point for contact-aware features. It returns:
+ * - The matched contact entry (if in registry)
+ * - All groups the contact belongs to
+ * - Whether the channel verifies sender identity
+ * - Consolidated instructions from all matching groups
+ * - Whether the sender is a registered owner
+ */
+export function resolveContactContext(params: {
+  cfg: OpenClawConfig;
+  channel?: string | null;
+  accountId?: string | null;
+  senderE164?: string | null;
+  ownerNumbers?: string[];
+}): ContactContext {
+  const { cfg, channel, accountId, senderE164, ownerNumbers } = params;
+  const contacts = cfg.contacts;
+
+  // Resolve channel verification flag
+  const verified = channel
+    ? resolveChannelVerifiedFlag(cfg, channel as GroupPolicyChannel, accountId)
+    : false;
+
+  // Check if sender is an owner
+  const normalizedSenderPhone = senderE164 ? normalizePhoneKey(senderE164) : undefined;
+  const isOwner = Boolean(
+    normalizedSenderPhone &&
+    ownerNumbers?.some((num) => normalizePhoneKey(num) === normalizedSenderPhone),
+  );
+
+  // If not verified, return minimal context (no registry lookups)
+  if (!verified) {
+    return {
+      entry: undefined,
+      groups: [],
+      verified: false,
+      instructions: undefined,
+      isOwner,
+    };
+  }
+
+  // Resolve contact entry and groups
+  const entry = resolveContactEntry(contacts, senderE164);
+  const groups = resolveContactGroups(contacts, senderE164);
+
+  // Consolidate instructions from all groups
+  const instructionsList = groups
+    .map((g) => g.instructions)
+    .filter((i): i is string => Boolean(i?.trim()));
+  const instructions = instructionsList.length > 0 ? instructionsList.join("\n\n") : undefined;
+
+  return {
+    entry,
+    groups,
+    verified,
+    instructions,
+    isOwner,
+  };
+}

@@ -14,6 +14,7 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
+import { resolveContactContext } from "../../config/group-policy.js";
 import {
   resolveGroupSessionKey,
   resolveSessionFilePath,
@@ -183,8 +184,17 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
+  // Resolve contact context for trusted metadata injection
+  const contactContext = resolveContactContext({
+    cfg,
+    channel: sessionCtx.OriginatingChannel ?? sessionCtx.Provider,
+    accountId: sessionCtx.AccountId,
+    senderE164: sessionCtx.SenderE164,
+    ownerNumbers: command.ownerList,
+  });
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
+    { contactContext },
   );
   const extraSystemPrompt = [inboundMetaPrompt, groupIntro, groupSystemPrompt]
     .filter(Boolean)
