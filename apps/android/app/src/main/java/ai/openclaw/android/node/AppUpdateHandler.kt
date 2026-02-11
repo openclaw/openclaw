@@ -8,6 +8,8 @@ import ai.openclaw.android.MainActivity
 import ai.openclaw.android.gateway.GatewaySession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -184,7 +186,10 @@ class AppUpdateHandler(
       }
 
       // Return immediately — download happens in background
-      return GatewaySession.InvokeResult.ok("""{"status":"downloading","url":"$url"}""")
+      return GatewaySession.InvokeResult.ok(buildJsonObject {
+          put("status", "downloading")
+          put("url", url)
+        }.toString())
     } catch (err: Throwable) {
       android.util.Log.e("openclaw", "app.update: error", err)
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "update failed")
