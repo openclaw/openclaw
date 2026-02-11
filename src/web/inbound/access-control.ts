@@ -73,10 +73,11 @@ export async function checkInboundAccessControl(params: {
       ? allowFrom.filter((entry) => entry !== "*").map(normalizeE164)
       : [];
   const groupHasWildcard = groupAllowFrom?.includes("*") ?? false;
+  const groupAllowFromEntries = groupAllowFrom?.filter((e) => e !== "*") ?? [];
+  const groupJidEntries = groupAllowFromEntries.filter((e) => e.endsWith("@g.us"));
+  const groupSenderEntries = groupAllowFromEntries.filter((e) => !e.endsWith("@g.us"));
   const normalizedGroupAllowFrom =
-    groupAllowFrom && groupAllowFrom.length > 0
-      ? groupAllowFrom.filter((entry) => entry !== "*").map(normalizeE164)
-      : [];
+    groupSenderEntries.length > 0 ? groupSenderEntries.map(normalizeE164) : [];
 
   // Group policy filtering:
   // - "open": groups bypass allowFrom, only mention-gating applies
@@ -103,8 +104,10 @@ export async function checkInboundAccessControl(params: {
         resolvedAccountId: account.accountId,
       };
     }
+    const groupJidAllowed = groupJidEntries.includes(params.from);
     const senderAllowed =
       groupHasWildcard ||
+      groupJidAllowed ||
       (params.senderE164 != null && normalizedGroupAllowFrom.includes(params.senderE164));
     if (!senderAllowed) {
       logVerbose(
