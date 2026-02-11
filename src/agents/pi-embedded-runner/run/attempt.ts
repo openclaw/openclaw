@@ -941,7 +941,7 @@ export async function runEmbeddedAttempt(
         if (hookRunner?.hasHooks("before_response_emit")) {
           const lastAssistantMsg = messagesSnapshot
             .slice()
-            .reverse()
+            .toReversed()
             .find((m) => m.role === "assistant");
           if (
             lastAssistantMsg &&
@@ -971,8 +971,37 @@ export async function runEmbeddedAttempt(
                   log.warn(
                     `before_response_emit: response blocked: ${emitResult.blockReason ?? "no reason"}`,
                   );
-                  // Hook is primarily for logging/auditing at this integration point.
-                  // Future: integrate with the response delivery pipeline for true blocking.
+                }
+                // Apply modified content from plugin hooks (e.g. developerMode taint headers)
+                if (emitResult?.content && emitResult.content !== content) {
+                  log.info(
+                    `before_response_emit: APPLYING modified content (len=${emitResult.content.length}, aTexts=${assistantTexts.length})`,
+                  );
+                  // Update assistantTexts — this is what the delivery pipeline actually uses
+                  if (assistantTexts.length > 0) {
+                    assistantTexts[assistantTexts.length - 1] = emitResult.content;
+                  } else {
+                    assistantTexts.push(emitResult.content);
+                  }
+                  // Also update session messages for consistency
+                  const sessionMsg = activeSession.messages[activeSession.messages.length - 1];
+                  if (sessionMsg && sessionMsg.role === "assistant") {
+                    if (typeof sessionMsg.content === "string") {
+                      (sessionMsg as unknown as Record<string, unknown>).content =
+                        emitResult.content;
+                    } else if (Array.isArray(sessionMsg.content)) {
+                      const sParts = (
+                        sessionMsg.content as Array<{ type?: string; text?: string }>
+                      ).filter((c) => c?.type === "text");
+                      if (sParts.length > 0) {
+                        sParts[0].text = emitResult.content;
+                      }
+                    }
+                  }
+                } else {
+                  log.info(
+                    `before_response_emit: no modification (hasResult=${!!emitResult}, hasContent=${!!emitResult?.content})`,
+                  );
                 }
               } catch (err) {
                 log.warn(`before_response_emit hook failed: ${String(err)}`);
