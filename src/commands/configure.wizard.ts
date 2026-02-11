@@ -48,13 +48,12 @@ import { setupSkills } from "./onboard-skills.js";
  * the wizard didn't modify (#9632).
  *
  * Uses reference equality between baseConfig and nextConfig to detect
- * which top-level sections the wizard touched. Unmodified sections
- * keep their raw file values (preserving ${VAR} references, unknown
- * sub-keys, and original formatting).
- *
- * Sections that exist only in baseConfig (injected by Zod defaults,
- * not in the user's raw file) are intentionally omitted — all top-level
- * schema keys are optional and Zod re-injects defaults on next read.
+ * which top-level sections the wizard touched:
+ * - Modified sections (different reference) → use wizard's value
+ * - Unmodified sections present in rawParsed → keep raw file value
+ *   (preserving ${VAR} references, unknown sub-keys, original values)
+ * - Unmodified sections only in baseConfig (Zod defaults) → keep
+ *   baseConfig value to avoid dropping config sections
  */
 export function mergeWizardOutput(
   rawParsed: Record<string, unknown>,
@@ -71,8 +70,14 @@ export function mergeWizardOutput(
 
   for (const key of Object.keys(nextRec)) {
     if (nextRec[key] !== baseRec[key]) {
+      // Wizard modified this section — use wizard's value.
       result[key] = nextRec[key];
+    } else if (!(key in rawParsed)) {
+      // Section exists only in baseConfig (e.g., Zod defaults) and the
+      // wizard didn't touch it — carry forward to avoid dropping it.
+      result[key] = baseRec[key];
     }
+    // else: section is in rawParsed and unmodified → already in result
   }
 
   return result;
