@@ -28,6 +28,10 @@ import {
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import {
+  applyDigitalOceanGradientConfig,
+  applyDigitalOceanGradientProviderConfig,
+} from "./digitalocean-gradient-config.js";
+import {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -42,7 +46,6 @@ import {
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
-  buildDigitalOceanGradientModels,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
@@ -54,7 +57,6 @@ import {
   resolveZaiBaseUrl,
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
-  DIGITALOCEAN_GRADIENT_BASE_URL,
 } from "./onboard-auth.models.js";
 
 export function applyZaiProviderConfig(
@@ -917,77 +919,6 @@ export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
               }
             : undefined),
           primary: XAI_DEFAULT_MODEL_REF,
-        },
-      },
-    },
-  };
-}
-
-export function applyDigitalOceanGradientProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  const modelRef = DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_REF;
-  models[modelRef] = {
-    ...models[modelRef],
-    alias: models[modelRef]?.alias ?? "DigitalOcean Gradient",
-  };
-
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.digitalocean;
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const defaultModels = buildDigitalOceanGradientModels();
-
-  // Merge existing models with default models, avoiding duplicates
-  const existingModelIds = new Set(existingModels.map((m) => m.id));
-  const newModels = defaultModels.filter((m) => !existingModelIds.has(m.id));
-  const mergedModels =
-    existingModels.length > 0 ? [...existingModels, ...newModels] : defaultModels;
-
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.digitalocean = {
-    ...existingProviderRest,
-    baseUrl: DIGITALOCEAN_GRADIENT_BASE_URL,
-    api: "openai-completions" as ModelApi,
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels,
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
-}
-
-export function applyDigitalOceanGradientConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyDigitalOceanGradientProviderConfig(cfg);
-  const existingModel = next.agents?.defaults?.model;
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-              }
-            : undefined),
-          primary: DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_REF,
         },
       },
     },

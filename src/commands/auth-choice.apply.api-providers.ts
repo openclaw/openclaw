@@ -8,6 +8,11 @@ import {
 } from "./auth-choice.api-key.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
+  applyDigitalOceanGradientAuthChoice,
+  applyDigitalOceanGradientConfig,
+  applyDigitalOceanGradientProviderConfig,
+} from "./digitalocean-gradient-config.js";
+import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
@@ -41,8 +46,6 @@ import {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   applyZaiProviderConfig,
-  applyDigitalOceanGradientConfig,
-  applyDigitalOceanGradientProviderConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
@@ -68,9 +71,7 @@ import {
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
-  setDigitalOceanGradientApiKey,
   ZAI_DEFAULT_MODEL_REF,
-  DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
@@ -1054,82 +1055,7 @@ export async function applyAuthChoiceApiProviders(
   }
 
   if (authChoice === "digitalocean-gradient-api-key") {
-    const store = ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: false,
-    });
-    const profileOrder = resolveAuthProfileOrder({
-      cfg: nextConfig,
-      store,
-      provider: "digitalocean",
-    });
-    const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
-    const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
-    let profileId = "digitalocean:default";
-    let mode: "api_key" | "oauth" | "token" = "api_key";
-    let hasCredential = false;
-
-    if (existingProfileId && existingCred?.type) {
-      profileId = existingProfileId;
-      mode =
-        existingCred.type === "oauth"
-          ? "oauth"
-          : existingCred.type === "token"
-            ? "token"
-            : "api_key";
-      hasCredential = true;
-    }
-
-    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "digitalocean") {
-      setDigitalOceanGradientApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
-      hasCredential = true;
-    }
-
-    if (!hasCredential) {
-      const envKey = resolveEnvApiKey("digitalocean");
-      if (envKey) {
-        const useExisting = await params.prompter.confirm({
-          message: `Use existing DIGITALOCEAN_API_KEY from environment? ${formatApiKeyPreview(envKey.apiKey)}`,
-          initialValue: true,
-        });
-        if (useExisting) {
-          setDigitalOceanGradientApiKey(envKey.apiKey, params.agentDir);
-          hasCredential = true;
-        }
-      }
-    }
-
-    if (!hasCredential) {
-      const apiKey = await params.prompter.text({
-        message: "Enter DigitalOcean Gradient API key",
-        validate: validateApiKeyInput,
-      });
-      if (!apiKey || !apiKey.trim()) {
-        return { config: nextConfig };
-      }
-      setDigitalOceanGradientApiKey(normalizeApiKeyInput(apiKey), params.agentDir);
-    }
-
-    nextConfig = applyDigitalOceanGradientProviderConfig(nextConfig);
-    nextConfig = applyAuthProfileConfig(nextConfig, { profileId, provider: "digitalocean", mode });
-
-    if (params.setDefaultModel) {
-      nextConfig = applyDigitalOceanGradientConfig(nextConfig);
-      agentModelOverride = DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_REF;
-      await noteAgentModel(DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_REF);
-    } else {
-      nextConfig = await applyDefaultModelChoice({
-        config: nextConfig,
-        setDefaultModel: false,
-        defaultModel: DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_REF,
-        applyDefaultConfig: applyDigitalOceanGradientConfig,
-        applyProviderConfig: applyDigitalOceanGradientProviderConfig,
-        noteDefault: DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_REF,
-        noteAgentModel,
-        prompter: params.prompter,
-      }).then(applied => applied.config);
-    }
-
-    return { config: nextConfig, agentModelOverride };
+    return applyDigitalOceanGradientAuthChoice(params);
   }
 
   return null;
