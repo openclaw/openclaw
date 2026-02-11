@@ -577,7 +577,8 @@ export class Neo4jMemoryClient {
         const session = this.driver!.session();
         try {
           // Single query: entity fulltext lookup → direct mentions + N-hop spreading activation
-          const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+          const agentFilterM = agentId ? "AND m.agentId = $agentId" : "";
+          const agentFilterM2 = agentId ? "AND m2.agentId = $agentId" : "";
           // Variable-length relationship pattern: 1..maxHops hops through entity relationships
           const hopRange = `1..${Math.max(1, Math.min(3, maxHops))}`;
           const result = await session.run(
@@ -591,7 +592,7 @@ export class Neo4jMemoryClient {
 
              // Collect direct mentions
              OPTIONAL MATCH (entity)<-[rm:MENTIONS]-(m:Memory)
-             WHERE m IS NOT NULL ${agentFilter}
+             WHERE m IS NOT NULL ${agentFilterM}
              WITH entity, collect({
                id: m.id, text: m.text, category: m.category,
                importance: m.importance, createdAt: m.createdAt,
@@ -602,7 +603,7 @@ export class Neo4jMemoryClient {
              OPTIONAL MATCH (entity)-[rels:${RELATIONSHIP_TYPE_PATTERN}*${hopRange}]-(e2:Entity)
              WHERE ALL(r IN rels WHERE coalesce(r.confidence, 0.7) >= $firingThreshold)
              OPTIONAL MATCH (e2)<-[rm2:MENTIONS]-(m2:Memory)
-             WHERE m2 IS NOT NULL ${agentFilter}
+             WHERE m2 IS NOT NULL ${agentFilterM2}
              WITH directResults, collect({
                id: m2.id, text: m2.text, category: m2.category,
                importance: m2.importance, createdAt: m2.createdAt,
