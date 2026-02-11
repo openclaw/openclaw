@@ -410,7 +410,8 @@ export async function runOnboardingWizard(
       allowKeep: true,
       ignoreAllowlist: true,
       includeVllm: true,
-      preferredProvider: customPreferredProvider ?? resolvePreferredProviderForAuthChoice(authChoice),
+      preferredProvider:
+        customPreferredProvider ?? resolvePreferredProviderForAuthChoice(authChoice),
     });
     if (modelSelection.config) {
       nextConfig = modelSelection.config;
