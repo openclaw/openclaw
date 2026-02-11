@@ -11,12 +11,20 @@ title: "Configuration"
 
 OpenClaw reads an optional <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> config from `~/.openclaw/openclaw.json`.
 
-If the file is missing, OpenClaw uses safe defaults. You usually only need a config to:
+If the file is missing, OpenClaw uses safe defaults. The config controls everything from basic setup to advanced automation:
 
-- Restrict who can trigger the bot (allowlists, pairing)
-- Set the agent's workspace and model
-- Tune session behavior (reset, scoping, memory)
-- Configure channels (WhatsApp, Telegram, Discord, Slack, etc.)
+- **Channels** — connect WhatsApp, Telegram, Discord, Slack, Signal, iMessage, and more
+- **Access control** — allowlists, pairing, group policies, per-channel DM rules
+- **Models** — primary model, fallbacks, custom providers, image models
+- **Agent runtime** — workspace, bootstrap files, thinking level, timeouts, sub-agents
+- **Sessions** — reset policy, DM scoping, identity links, send policy
+- **Automation** — cron jobs, webhooks (hooks), heartbeats, Gmail integration
+- **Tools** — tool profiles, exec/elevated access, browser control, web search
+- **Sandboxing** — Docker isolation per session/agent with tool policy
+- **Skills and plugins** — skill allowlists, plugin loading, per-skill config
+- **Media** — audio transcription, image/video understanding, TTS
+- **Networking** — gateway bind/auth, Tailscale, Bonjour discovery, remote access
+- **UI** — accent colors, Talk mode voice, response prefixes, typing indicators
 
 <Tip>
 **New to configuration?** Start with `openclaw onboard` for interactive setup, or check out the [Configuration Examples](/gateway/configuration-examples) guide for complete copy-paste configs.
