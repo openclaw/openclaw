@@ -26,7 +26,7 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/feishu
 ```
 
-Make sure plugin is enabled:
+Make sure feishu plugin is enabled:
 
 ```
 openclaw plugins list
