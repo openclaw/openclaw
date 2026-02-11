@@ -16,7 +16,7 @@ Set:
 
 - `AGENTSHIELD_URL` — base URL for the AgentShield trust server
 - `AGENTSHIELD_MODE` — `all` (default) or `selective`
-- `AGENTSHIELD_TOOL_FILTER` — optional comma-separated tool names (used when mode is `selective`)
+- `AGENTSHIELD_TOOLS` — comma-separated tool-name allowlist (used when mode is `selective`)
 
 ## Behavior
 

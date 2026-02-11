@@ -23,6 +23,11 @@ export function argsFingerprint(paramsJSON: string): string {
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch {
+    // chmod may fail on non-POSIX platforms (e.g. Windows); safe to ignore
+  }
 }
 
 function encrypt(key: Buffer, plaintext: Buffer): Buffer {
