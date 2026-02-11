@@ -12,11 +12,11 @@ import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { ElevenLabsScribeSTTProvider } from "./providers/stt-elevenlabs-scribe.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
-import type { NormalizedEvent, WebhookContext } from "./types.js";
-import { ElevenLabsScribeSTTProvider } from "./providers/stt-elevenlabs-scribe.js";
 import { SilenceFiller } from "./silence-filler.js";
+import type { NormalizedEvent, WebhookContext } from "./types.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
