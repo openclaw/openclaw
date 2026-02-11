@@ -278,4 +278,28 @@ describe("diagnostics-otel service", () => {
     expect(options?.url).toBe("https://collector.example.com/v1/traces");
     await service.stop?.();
   });
+
+  test("keeps signal-qualified endpoint unchanged when it has query params", async () => {
+    const service = createDiagnosticsOtelService();
+    await service.start({
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "https://collector.example.com/v1/traces?timeout=30s",
+            protocol: "http/protobuf",
+            traces: true,
+            metrics: false,
+            logs: false,
+          },
+        },
+      },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    });
+
+    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(options?.url).toBe("https://collector.example.com/v1/traces?timeout=30s");
+    await service.stop?.();
+  });
 });
