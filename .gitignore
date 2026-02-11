@@ -82,3 +82,4 @@ USER.md
 !.agent/workflows/
 local/
 package-lock.json
+skills/walking-thoughts/config/kimi_config.json

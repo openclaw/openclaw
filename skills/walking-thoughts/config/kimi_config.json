@@ -1,8 +1,8 @@
 {
-  "api_key": "sk-LXiP0UoJN31M1nxBpIHd1kPZSBJekNwc9lxsA9ooKtl7bfCo",
+  "api_key": "MONTHSHOT_API_KEY",
   "base_url": "https://api.moonshot.cn/v1",
   "model": "moonshot-v1-8k",
-  "search_api_key": "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",
+  "search_api_key": "OPENROUTER_API_KEY",
   "search_base_url": "https://openrouter.ai/api/v1",
   "search_model": "openai/gpt-3.5-turbo",
   "temperature": 0.3,
