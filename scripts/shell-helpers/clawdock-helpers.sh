@@ -221,7 +221,7 @@ clawdock-health() {
     return 1
   fi
   _clawdock_compose exec -e "OPENCLAW_GATEWAY_TOKEN=$token" openclaw-gateway \
-    node dist/index.js health
+    node openclaw.mjs health
 }
 
 # Show gateway token
@@ -305,7 +305,7 @@ clawdock-devices() {
 
   echo "🔍 Checking device pairings..."
   local output status
-  output=$(_clawdock_compose exec openclaw-gateway node dist/index.js devices list 2>&1)
+  output=$(_clawdock_compose exec openclaw-gateway node openclaw.mjs devices list 2>&1)
   status=$?
   printf "%s\n" "$output" | _clawdock_filter_warnings
   if [ $status -ne 0 ]; then
@@ -342,7 +342,7 @@ clawdock-approve() {
 
   echo "✅ Approving device: $1"
   _clawdock_compose exec openclaw-gateway \
-    node dist/index.js devices approve "$1" 2>&1 | _clawdock_filter_warnings
+    node openclaw.mjs devices approve "$1" 2>&1 | _clawdock_filter_warnings
 
   echo ""
   echo "✅ Device approved! Refresh your browser."

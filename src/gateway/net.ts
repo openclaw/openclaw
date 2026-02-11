@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
@@ -23,6 +24,77 @@ export function pickPrimaryLanIPv4(): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Cached result of Docker environment detection.
+ * Docker Desktop (macOS/Windows) routes host connections through a bridge
+ * gateway (e.g. 192.168.65.x) instead of 127.0.0.1.  Detecting the
+ * `/.dockerenv` sentinel file lets us treat these as local requests when
+ * the client IP matches the container's default gateway.
+ */
+let _isDocker: boolean | undefined;
+export function isDockerEnvironment(): boolean {
+  if (_isDocker === undefined) {
+    try {
+      _isDocker = fs.existsSync("/.dockerenv");
+    } catch {
+      _isDocker = false;
+    }
+  }
+  return _isDocker;
+}
+
+/**
+ * Read the container's default gateway IP from `/proc/net/route`.
+ *
+ * The routing table contains lines like:
+ *   Iface  Destination  Gateway  Flags  RefCnt  Use  Metric  Mask  ...
+ *   eth0   00000000     0102A8C0 0003   0       0    0       00000000 ...
+ *
+ * The default route has Destination `00000000`.  The Gateway column is a
+ * little-endian hexadecimal IPv4 address (e.g. `0102A8C0` -> 192.168.2.1).
+ *
+ * Returns `undefined` on non-Linux systems or when the file is missing.
+ * Result is cached since the gateway IP doesn't change during container lifetime.
+ */
+let _dockerGatewayIp: string | undefined | null;
+export function readDockerGatewayIp(): string | undefined {
+  if (_dockerGatewayIp !== undefined) {
+    return _dockerGatewayIp ?? undefined;
+  }
+  try {
+    const content = fs.readFileSync("/proc/net/route", "utf-8");
+    const lines = content.split("\n");
+    for (const line of lines.slice(1)) {
+      const cols = line.trim().split(/\s+/);
+      if (cols[1] === "00000000" && cols[2]) {
+        const hex = cols[2];
+        if (hex.length === 8) {
+          const ip = [
+            parseInt(hex.slice(6, 8), 16),
+            parseInt(hex.slice(4, 6), 16),
+            parseInt(hex.slice(2, 4), 16),
+            parseInt(hex.slice(0, 2), 16),
+          ].join(".");
+          _dockerGatewayIp = ip;
+          return ip;
+        }
+      }
+    }
+  } catch {
+    // Non-Linux or missing file — not in Docker or no route info
+  }
+  _dockerGatewayIp = null;
+  return undefined;
+}
+
+/**
+ * Reset cached Docker detection state. For testing only.
+ */
+export function _resetDockerCache(): void {
+  _isDocker = undefined;
+  _dockerGatewayIp = undefined;
 }
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
@@ -51,7 +123,7 @@ function normalizeIPv4MappedAddress(ip: string): string {
   return ip;
 }
 
-function normalizeIp(ip: string | undefined): string | undefined {
+export function normalizeIp(ip: string | undefined): string | undefined {
   const trimmed = ip?.trim();
   if (!trimmed) {
     return undefined;

@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { authorizeGatewayConnect } from "./auth.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { authorizeGatewayConnect, isLocalDirectRequest } from "./auth.js";
+import * as netModule from "./net.js";
 
 describe("gateway auth", () => {
   it("does not throw when req is missing socket", async () => {
@@ -97,5 +98,97 @@ describe("gateway auth", () => {
     expect(res.ok).toBe(true);
     expect(res.method).toBe("tailscale");
     expect(res.user).toBe("peter");
+  });
+});
+
+describe("isLocalDirectRequest – Docker gateway verification", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns true when Docker env + client IP matches gateway + Host=localhost", () => {
+    vi.spyOn(netModule, "isDockerEnvironment").mockReturnValue(true);
+    vi.spyOn(netModule, "readDockerGatewayIp").mockReturnValue("192.168.65.1");
+
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "192.168.65.1" },
+      headers: { host: "localhost:18789" },
+    } as never);
+
+    expect(result).toBe(true);
+  });
+
+  it("returns false when Docker env + client IP does NOT match gateway (spoofing blocked)", () => {
+    vi.spyOn(netModule, "isDockerEnvironment").mockReturnValue(true);
+    vi.spyOn(netModule, "readDockerGatewayIp").mockReturnValue("192.168.65.1");
+
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "172.17.0.3" },
+      headers: { host: "localhost:18789" },
+    } as never);
+
+    expect(result).toBe(false);
+  });
+
+  it("returns false when Docker env + matching gateway IP + Host=remote.host", () => {
+    vi.spyOn(netModule, "isDockerEnvironment").mockReturnValue(true);
+    vi.spyOn(netModule, "readDockerGatewayIp").mockReturnValue("192.168.65.1");
+
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "192.168.65.1" },
+      headers: { host: "remote.example.com" },
+    } as never);
+
+    expect(result).toBe(false);
+  });
+
+  it("returns false when Docker env + forwarded headers present", () => {
+    vi.spyOn(netModule, "isDockerEnvironment").mockReturnValue(true);
+    vi.spyOn(netModule, "readDockerGatewayIp").mockReturnValue("192.168.65.1");
+
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "192.168.65.1" },
+      headers: {
+        host: "localhost:18789",
+        "x-forwarded-for": "10.0.0.1",
+      },
+    } as never);
+
+    expect(result).toBe(false);
+  });
+
+  it("returns false when Docker env + no gateway IP available", () => {
+    vi.spyOn(netModule, "isDockerEnvironment").mockReturnValue(true);
+    vi.spyOn(netModule, "readDockerGatewayIp").mockReturnValue(undefined);
+
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "192.168.65.1" },
+      headers: { host: "localhost:18789" },
+    } as never);
+
+    expect(result).toBe(false);
+  });
+
+  it("returns true for non-Docker loopback requests (original behavior)", () => {
+    vi.spyOn(netModule, "isDockerEnvironment").mockReturnValue(false);
+
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: { host: "localhost:18789" },
+    } as never);
+
+    expect(result).toBe(true);
+  });
+
+  it("handles IPv4-mapped IPv6 gateway addresses", () => {
+    vi.spyOn(netModule, "isDockerEnvironment").mockReturnValue(true);
+    vi.spyOn(netModule, "readDockerGatewayIp").mockReturnValue("192.168.65.1");
+
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "::ffff:192.168.65.1" },
+      headers: { host: "localhost:18789" },
+    } as never);
+
+    expect(result).toBe(true);
   });
 });
