@@ -4,8 +4,10 @@ import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
 import {
+  clearEnqueuedMessage,
   registerPendingAckRemoval,
   removeAckReactionAfterReply,
+  wasMessageEnqueued,
 } from "../../../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
@@ -149,11 +151,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
 
   if (!anyReplyDelivered) {
-    // Message was enqueued (not immediately replied to).
-    // Register pending ack-reaction removal so the followup drain can flush it.
+    // No reply was delivered – either the message was enqueued (agent busy) or
+    // the agent returned NO_REPLY.  We distinguish the two cases so that
+    // NO_REPLY ack reactions are removed immediately rather than waiting for a
+    // followup drain that will never come.
     if (ctx.removeAckAfterReply && prepared.ackReactionPromise && prepared.ackReactionValue) {
       const messageTs = prepared.ackReactionMessageTs;
-      if (messageTs) {
+      const isQueued = messageTs ? wasMessageEnqueued(messageTs) : false;
+
+      if (isQueued && messageTs) {
+        // Enqueued message: register for deferred removal (drain will flush).
         registerPendingAckRemoval(messageTs, () => {
           removeAckReactionAfterReply({
             removeAfterReply: true,
@@ -173,6 +180,27 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
               });
             },
           });
+        });
+        clearEnqueuedMessage(messageTs);
+      } else {
+        // NO_REPLY (or unknown): remove ack reaction immediately.
+        removeAckReactionAfterReply({
+          removeAfterReply: ctx.removeAckAfterReply,
+          ackReactionPromise: prepared.ackReactionPromise,
+          ackReactionValue: prepared.ackReactionValue,
+          remove: () =>
+            removeSlackReaction(message.channel, messageTs ?? "", prepared.ackReactionValue, {
+              token: ctx.botToken,
+              client: ctx.app.client,
+            }),
+          onError: (err) => {
+            logAckFailure({
+              log: logVerbose,
+              channel: "slack",
+              target: `${message.channel}/${message.ts}`,
+              error: err,
+            });
+          },
         });
       }
     }

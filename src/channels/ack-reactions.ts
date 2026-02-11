@@ -79,6 +79,24 @@ export function shouldAckReactionForWhatsApp(params: {
 }
 
 // ---------------------------------------------------------------------------
+// Enqueued message tracking (for NO_REPLY vs queued distinction)
+// ---------------------------------------------------------------------------
+
+const ENQUEUED_MESSAGE_IDS = new Set<string>();
+
+export function markMessageEnqueued(messageId: string): void {
+  ENQUEUED_MESSAGE_IDS.add(messageId);
+}
+
+export function wasMessageEnqueued(messageId: string): boolean {
+  return ENQUEUED_MESSAGE_IDS.has(messageId);
+}
+
+export function clearEnqueuedMessage(messageId: string): void {
+  ENQUEUED_MESSAGE_IDS.delete(messageId);
+}
+
+// ---------------------------------------------------------------------------
 // Pending ack-removal registry
 // ---------------------------------------------------------------------------
 // When a message is enqueued (not immediately replied to), the ack-reaction

@@ -47,12 +47,13 @@ describe("msteams messenger", () => {
       expect(messages).toEqual([]);
     });
 
-    it("filters silent reply prefixes", () => {
+    it("delivers non-exact silent token text (prefix no longer silent)", () => {
       const messages = renderReplyPayloadsToMessages(
         [{ text: `${SILENT_REPLY_TOKEN} -- ignored` }],
         { textChunkLimit: 4000, tableMode: "code" },
       );
-      expect(messages).toEqual([]);
+      expect(messages.length).toBe(1);
+      expect(messages[0].text).toBe(`${SILENT_REPLY_TOKEN} -- ignored`);
     });
 
     it("splits media into separate messages by default", () => {

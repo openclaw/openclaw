@@ -10,6 +10,7 @@ import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
+import { markMessageEnqueued } from "../../channels/ack-reactions.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
@@ -181,6 +182,7 @@ export async function runReplyAgent(params: {
 
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    markMessageEnqueued(followupRun.messageId ?? "");
     if (activeSessionEntry && activeSessionStore && sessionKey) {
       const updatedAt = Date.now();
       activeSessionEntry.updatedAt = updatedAt;
