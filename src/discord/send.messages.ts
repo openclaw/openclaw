@@ -105,6 +105,9 @@ export async function createThreadDiscord(
   if (payload.autoArchiveMinutes) {
     body.auto_archive_duration = payload.autoArchiveMinutes;
   }
+  if (!payload.messageId && payload.type !== undefined) {
+    body.type = payload.type;
+  }
   let channelType: ChannelType | undefined;
   if (!payload.messageId) {
     // Only detect channel kind for route-less thread creation.
