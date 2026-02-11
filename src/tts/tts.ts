@@ -81,6 +81,35 @@ const TELEPHONY_OUTPUT = {
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
 
+/**
+ * Sanitizes TTS error messages to prevent API key leakage in logs.
+ * Redacts common API key patterns and authorization headers.
+ *
+ * CWE-532: Insertion of Sensitive Information into Log File
+ */
+function sanitizeTtsError(err: unknown): string {
+  if (!(err instanceof Error)) {
+    return String(err);
+  }
+
+  let message = err.message;
+
+  // Redact OpenAI-style API keys (sk-...)
+  message = message.replace(/sk-[a-zA-Z0-9]{20,}/g, "sk-***REDACTED***");
+
+  // Redact ElevenLabs-style API keys (sk_...)
+  message = message.replace(/sk_[a-zA-Z0-9]{10,}/g, "sk_***REDACTED***");
+
+  // Redact Bearer tokens
+  message = message.replace(/Bearer\s+[^\s"']+/gi, "Bearer ***REDACTED***");
+
+  // Redact xi-api-key header values (in JSON or plain text)
+  message = message.replace(/"xi-api-key"\s*:\s*"[^"]+"/gi, '"xi-api-key": "***REDACTED***"');
+  message = message.replace(/xi-api-key[:\s]+[^\s"',}]+/gi, "xi-api-key: ***REDACTED***");
+
+  return message;
+}
+
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
   mode: TtsMode;
@@ -1069,6 +1098,9 @@ async function elevenLabsTTS(params: {
     }
 
     return Buffer.from(await response.arrayBuffer());
+  } catch (err) {
+    // Sanitize error to prevent API key leakage in logs (CWE-532)
+    throw new Error(sanitizeTtsError(err), { cause: err });
   } finally {
     clearTimeout(timeout);
   }
@@ -1115,6 +1147,9 @@ async function openaiTTS(params: {
     }
 
     return Buffer.from(await response.arrayBuffer());
+  } catch (err) {
+    // Sanitize error to prevent API key leakage in logs (CWE-532)
+    throw new Error(sanitizeTtsError(err), { cause: err });
   } finally {
     clearTimeout(timeout);
   }
@@ -1575,5 +1610,6 @@ export const _test = {
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
+  sanitizeTtsError,
   resolveEdgeOutputFormat,
 };
