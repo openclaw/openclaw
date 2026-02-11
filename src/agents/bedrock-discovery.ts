@@ -1,8 +1,4 @@
-import {
-  BedrockClient,
-  ListFoundationModelsCommand,
-  type ListFoundationModelsCommandOutput,
-} from "@aws-sdk/client-bedrock";
+import type { BedrockClient, ListFoundationModelsCommandOutput } from "@aws-sdk/client-bedrock";
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
@@ -174,6 +170,7 @@ export async function discoverBedrockModels(params: {
     }
   }
 
+  const { BedrockClient, ListFoundationModelsCommand } = await import("@aws-sdk/client-bedrock");
   const clientFactory = params.clientFactory ?? ((region: string) => new BedrockClient({ region }));
   const client = clientFactory(params.region);
 
