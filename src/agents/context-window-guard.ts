@@ -65,10 +65,15 @@ export function evaluateContextWindowGuard(params: {
   );
   const hardMin = Math.max(1, Math.floor(params.hardMinTokens ?? CONTEXT_WINDOW_HARD_MIN_TOKENS));
   const tokens = Math.max(0, Math.floor(params.info.tokens));
+  // Don't warn when the user explicitly configured the context window
+  // (via models.providers[].models[].contextWindow or agents.defaults.contextTokens).
+  // The warning should only fire for auto-detected or default values.
+  const isExplicit =
+    params.info.source === "modelsConfig" || params.info.source === "agentContextTokens";
   return {
     ...params.info,
     tokens,
-    shouldWarn: tokens > 0 && tokens < warnBelow,
+    shouldWarn: tokens > 0 && tokens < warnBelow && !isExplicit,
     shouldBlock: tokens > 0 && tokens < hardMin,
   };
 }

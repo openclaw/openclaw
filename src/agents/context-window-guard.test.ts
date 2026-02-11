@@ -83,6 +83,8 @@ describe("context-window-guard", () => {
     const guard = evaluateContextWindowGuard({ info });
     expect(info.source).toBe("modelsConfig");
     expect(guard.shouldBlock).toBe(true);
+    // Explicit config should not warn (user knows what they're doing)
+    expect(guard.shouldWarn).toBe(false);
   });
 
   it("caps with agents.defaults.contextTokens", () => {
@@ -98,6 +100,21 @@ describe("context-window-guard", () => {
     });
     const guard = evaluateContextWindowGuard({ info });
     expect(info.source).toBe("agentContextTokens");
+    // Explicit config should not warn
+    expect(guard.shouldWarn).toBe(false);
+    expect(guard.shouldBlock).toBe(false);
+  });
+
+  it("does not warn when modelsConfig sets low context window explicitly", () => {
+    const info = { tokens: 2048, source: "modelsConfig" as const };
+    const guard = evaluateContextWindowGuard({ info });
+    expect(guard.shouldWarn).toBe(false);
+    expect(guard.shouldBlock).toBe(true);
+  });
+
+  it("still warns when model metadata reports low context window", () => {
+    const info = { tokens: 24_000, source: "model" as const };
+    const guard = evaluateContextWindowGuard({ info });
     expect(guard.shouldWarn).toBe(true);
     expect(guard.shouldBlock).toBe(false);
   });
