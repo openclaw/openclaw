@@ -1312,9 +1312,9 @@ export function createExecTool(
           const commandText = params.command;
           const effectiveTimeout =
             typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
-          const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
+          const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
 
-          void (async () => {
+          return (async (): Promise<AgentToolResult<ExecToolDetails>> => {
             let decision: string | null = null;
             try {
               const decisionResult = await callGatewayTool<{ decision: string }>(
@@ -1343,7 +1343,21 @@ export function createExecTool(
                 `Exec denied (gateway id=${approvalId}, approval-request-failed): ${commandText}`,
                 { sessionKey: notifySessionKey, contextKey },
               );
-              return;
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}Exec denied (approval-request-failed).`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  exitCode: null,
+                  durationMs: 0,
+                  aggregated: "",
+                  cwd: workdir,
+                },
+              };
             }
 
             let approvedByAsk = false;
@@ -1390,7 +1404,21 @@ export function createExecTool(
                 `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${commandText}`,
                 { sessionKey: notifySessionKey, contextKey },
               );
-              return;
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}Exec denied (${deniedReason}).`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  exitCode: null,
+                  durationMs: 0,
+                  aggregated: "",
+                  cwd: workdir,
+                },
+              };
             }
 
             if (allowlistMatches.length > 0) {
@@ -1410,7 +1438,7 @@ export function createExecTool(
               }
             }
 
-            let run: ExecProcessHandle | null = null;
+            let run: ExecProcessHandle;
             try {
               run = await runExecProcess({
                 command: commandText,
@@ -1432,16 +1460,39 @@ export function createExecTool(
                 `Exec denied (gateway id=${approvalId}, spawn-failed): ${commandText}`,
                 { sessionKey: notifySessionKey, contextKey },
               );
-              return;
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}Exec denied (spawn-failed).`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  exitCode: null,
+                  durationMs: 0,
+                  aggregated: "",
+                  cwd: workdir,
+                },
+              };
             }
 
-            markBackgrounded(run.session);
+            const onAbortSignal = () => {
+              if (!run.session.backgrounded) {
+                run.kill();
+              }
+            };
+            if (signal?.aborted) {
+              onAbortSignal();
+            } else if (signal) {
+              signal.addEventListener("abort", onAbortSignal, { once: true });
+            }
 
             let runningTimer: NodeJS.Timeout | null = null;
             if (approvalRunningNoticeMs > 0) {
               runningTimer = setTimeout(() => {
                 emitExecSystemEvent(
-                  `Exec running (gateway id=${approvalId}, session=${run?.session.id}, >${noticeSeconds}s): ${commandText}`,
+                  `Exec running (gateway id=${approvalId}, session=${run.session.id}, >${noticeSeconds}s): ${commandText}`,
                   { sessionKey: notifySessionKey, contextKey },
                 );
               }, approvalRunningNoticeMs);
@@ -1459,27 +1510,40 @@ export function createExecTool(
               ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
               : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
             emitExecSystemEvent(summary, { sessionKey: notifySessionKey, contextKey });
-          })();
 
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `${warningText}Approval required (id ${approvalSlug}). ` +
-                  "Approve to run; updates will arrive after completion.",
+            if (outcome.status === "failed") {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}${outcome.aggregated || outcome.reason || "Command failed."}`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  exitCode: outcome.exitCode ?? null,
+                  durationMs: outcome.durationMs,
+                  aggregated: outcome.aggregated ?? "",
+                  cwd: run.session.cwd,
+                },
+              };
+            }
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
+                },
+              ],
+              details: {
+                status: "completed",
+                exitCode: outcome.exitCode ?? 0,
+                durationMs: outcome.durationMs,
+                aggregated: outcome.aggregated ?? "",
+                cwd: run.session.cwd,
               },
-            ],
-            details: {
-              status: "approval-pending",
-              approvalId,
-              approvalSlug,
-              expiresAtMs,
-              host: "gateway",
-              command: params.command,
-              cwd: workdir,
-            },
-          };
+            };
+          })();
         }
 
         if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied)) {
