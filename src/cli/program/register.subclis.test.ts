@@ -21,6 +21,24 @@ const { nodesAction, registerNodesCli } = vi.hoisted(() => {
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 
+const { registerPluginCliCommands } = vi.hoisted(() => {
+  const fn = vi.fn();
+  return { registerPluginCliCommands: fn };
+});
+
+vi.mock("../../plugins/cli.js", () => ({ registerPluginCliCommands }));
+vi.mock("../../config/config.js", () => ({ loadConfig: vi.fn(() => ({})) }));
+vi.mock("../pairing-cli.js", () => ({
+  registerPairingCli: vi.fn((program: Command) => {
+    program.command("pairing").description("Pairing helpers");
+  }),
+}));
+vi.mock("../plugins-cli.js", () => ({
+  registerPluginsCli: vi.fn((program: Command) => {
+    program.command("plugins").description("Plugin management");
+  }),
+}));
+
 const { registerSubCliByName, registerSubCliCommands } = await import("./register.subclis.js");
 
 describe("registerSubCliCommands", () => {
@@ -30,10 +48,12 @@ describe("registerSubCliCommands", () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     delete process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
+    delete process.env.OPENCLAW_COMPLETION_MODE;
     registerAcpCli.mockClear();
     acpAction.mockClear();
     registerNodesCli.mockClear();
     nodesAction.mockClear();
+    registerPluginCliCommands.mockClear();
   });
 
   afterEach(() => {
@@ -93,5 +113,28 @@ describe("registerSubCliCommands", () => {
     await program.parseAsync(["node", "openclaw", "acp"], { from: "user" });
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips plugin loading for pairing/plugins in completion mode", async () => {
+    process.env.OPENCLAW_COMPLETION_MODE = "1";
+    const program = new Command();
+    program.name("openclaw");
+
+    await registerSubCliByName(program, "pairing");
+    await registerSubCliByName(program, "plugins");
+
+    expect(registerPluginCliCommands).not.toHaveBeenCalled();
+    expect(program.commands.map((cmd) => cmd.name())).toContain("pairing");
+    expect(program.commands.map((cmd) => cmd.name())).toContain("plugins");
+  });
+
+  it("loads plugins for pairing/plugins outside completion mode", async () => {
+    const program = new Command();
+    program.name("openclaw");
+
+    await registerSubCliByName(program, "pairing");
+    await registerSubCliByName(program, "plugins");
+
+    expect(registerPluginCliCommands).toHaveBeenCalledTimes(2);
   });
 });
