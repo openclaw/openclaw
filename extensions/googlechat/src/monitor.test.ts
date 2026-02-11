@@ -100,4 +100,15 @@ describe("extractMentionInfo", () => {
     const result = extractMentionInfo(annotations);
     expect(result).toEqual({ hasAnyMention: true, wasMentioned: true });
   });
+
+  it("detects same bot mentioned twice (duplicate annotations, one distinct bot)", () => {
+    // Same bot mentioned twice in one message — should still trigger since
+    // there is only one distinct BOT user, not two different bots.
+    const annotations = [
+      mentionAnnotation("users/112986094383820258709", "BOT"),
+      mentionAnnotation("users/112986094383820258709", "BOT"),
+    ];
+    const result = extractMentionInfo(annotations);
+    expect(result).toEqual({ hasAnyMention: true, wasMentioned: true });
+  });
 });

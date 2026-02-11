@@ -405,13 +405,16 @@ export function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?
     // user.type field. Google Chat sends numeric user IDs (e.g. "users/123...")
     // instead of "users/app" for webhook-based bots, so the type field is the
     // only reliable signal. For multi-bot safety, only use this fallback when
-    // exactly one BOT-type mention exists — with multiple bots we can't tell
-    // which one is ours without an explicit botUser configuration.
+    // exactly one distinct BOT-type user exists — with multiple bots we can't
+    // tell which one is ours without an explicit botUser configuration.
     if (!trimmedBotUser && entry.userMention?.user?.type?.toUpperCase() === "BOT") {
-      const botTypeMentionCount = mentionAnnotations.filter(
-        (m) => m.userMention?.user?.type?.toUpperCase() === "BOT",
-      ).length;
-      return botTypeMentionCount === 1;
+      const distinctBotUsers = new Set(
+        mentionAnnotations
+          .filter((m) => m.userMention?.user?.type?.toUpperCase() === "BOT")
+          .map((m) => m.userMention?.user?.name)
+          .filter(Boolean),
+      );
+      return distinctBotUsers.size === 1;
     }
     return false;
   });
