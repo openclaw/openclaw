@@ -743,7 +743,14 @@ function iterateQuoteAware(
 
 function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
   let emptySegment = false;
+  let heredocPending = false;
   const result = iterateQuoteAware(command, (ch, next) => {
+    if (heredocPending) {
+      heredocPending = false;
+      if (ch === "<") {
+        return "include";
+      }
+    }
     if (ch === "|" && next === "|") {
       return { reject: "unsupported shell token: ||" };
     }
@@ -756,6 +763,10 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     }
     if (ch === "&" || ch === ";") {
       return { reject: `unsupported shell token: ${ch}` };
+    }
+    if (ch === "<" && next === "<") {
+      heredocPending = true;
+      return "include";
     }
     if (DISALLOWED_PIPELINE_TOKENS.has(ch)) {
       return { reject: `unsupported shell token: ${ch}` };
