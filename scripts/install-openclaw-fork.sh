@@ -4,7 +4,7 @@ set -euo pipefail
 # Installs OpenClaw from a fork/tag (recommended) or branch and runs onboarding.
 #
 # Recommended release usage (immutable):
-#   OPENCLAW_REF=v2026.2.9-dreamclaw.2
+#   OPENCLAW_REF=v2026.2.9-dreamclaw.4
 #
 # Overrides:
 #   OPENCLAW_REPO=https://github.com/<org>/<repo>.git
@@ -14,10 +14,10 @@ set -euo pipefail
 #   OPENCLAW_BIN=openclaw|moltbot
 #   OPENCLAW_RUN_ONBOARD=1|0
 #   OPENCLAW_ONBOARD_ARGS="--install-daemon --auth-choice x402"
-#   OPENCLAW_NPM_SCRIPT_SHELL=/path/to/bash  # optional npm lifecycle shell override
+#   OPENCLAW_NPM_SCRIPT_SHELL=/path/to/sh  # optional npm lifecycle shell override
 
 OPENCLAW_REPO="${OPENCLAW_REPO:-https://github.com/RedBeardEth/clawdbot.git}"
-OPENCLAW_REF="${OPENCLAW_REF:-v2026.2.9-dreamclaw.2}"
+OPENCLAW_REF="${OPENCLAW_REF:-v2026.2.9-dreamclaw.4}"
 OPENCLAW_BRANCH="${OPENCLAW_BRANCH:-}"
 OPENCLAW_INSTALLER="${OPENCLAW_INSTALLER:-auto}"
 OPENCLAW_BIN="${OPENCLAW_BIN:-}"
@@ -45,6 +45,48 @@ SPEC="git+${OPENCLAW_REPO}#${TARGET_REF}"
 
 echo "==> Installing from ${SPEC} (${REF_KIND})"
 
+resolve_npm_script_shell() {
+  if [[ -n "$OPENCLAW_NPM_SCRIPT_SHELL" ]]; then
+    if [[ -x "$OPENCLAW_NPM_SCRIPT_SHELL" ]]; then
+      printf '%s\n' "$OPENCLAW_NPM_SCRIPT_SHELL"
+      return 0
+    fi
+    echo "ERROR: OPENCLAW_NPM_SCRIPT_SHELL is not executable: $OPENCLAW_NPM_SCRIPT_SHELL" >&2
+    return 1
+  fi
+
+  # Prefer stable absolute paths to avoid bad shell hashes/aliases.
+  if [[ -x "/bin/sh" ]]; then
+    printf '%s\n' "/bin/sh"
+    return 0
+  fi
+  if [[ -x "/usr/bin/sh" ]]; then
+    printf '%s\n' "/usr/bin/sh"
+    return 0
+  fi
+  if [[ -x "/bin/bash" ]]; then
+    printf '%s\n' "/bin/bash"
+    return 0
+  fi
+  if [[ -x "/usr/bin/bash" ]]; then
+    printf '%s\n' "/usr/bin/bash"
+    return 0
+  fi
+
+  local found
+  found="$(command -v sh || true)"
+  if [[ -n "$found" && -x "$found" ]]; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+  found="$(command -v bash || true)"
+  if [[ -n "$found" && -x "$found" ]]; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+  return 1
+}
+
 if [[ "$OPENCLAW_INSTALLER" == "pnpm" ]] || [[ "$OPENCLAW_INSTALLER" == "auto" && -x "$(command -v pnpm || true)" ]]; then
   echo "==> Using pnpm global install"
   pnpm add -g "$SPEC"
@@ -56,13 +98,12 @@ else
   echo "==> Using npm global install"
   # npm lifecycle scripts assume a POSIX shell and standard system PATH entries.
   export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
-  if [[ -n "$OPENCLAW_NPM_SCRIPT_SHELL" ]]; then
-    npm_config_script_shell="$OPENCLAW_NPM_SCRIPT_SHELL" npm install -g "$SPEC"
-  elif command -v bash >/dev/null 2>&1; then
-    npm_config_script_shell="$(command -v bash)" npm install -g "$SPEC"
-  elif command -v sh >/dev/null 2>&1; then
-    npm_config_script_shell="$(command -v sh)" npm install -g "$SPEC"
+  npm_shell="$(resolve_npm_script_shell || true)"
+  if [[ -n "${npm_shell:-}" ]]; then
+    echo "==> npm script shell: ${npm_shell}"
+    npm_config_script_shell="$npm_shell" npm install -g "$SPEC"
   else
+    echo "==> npm script shell: default"
     npm install -g "$SPEC"
   fi
 fi
