@@ -296,4 +296,50 @@ describe("applySkillEnvOverrides", () => {
       }
     }
   });
+
+  it("applies env overrides using skillKey for config lookup", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "trello-skill");
+    // Skill name is "trello-skill" but config key is "trello" (via skillKey metadata)
+    await writeSkill({
+      dir: skillDir,
+      name: "trello-skill",
+      description: "Trello integration",
+      metadata: '{"openclaw":{"skillKey":"trello","requires":{"env":["TRELLO_API_KEY"]}}}',
+    });
+
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      // Config uses "trello" as key, not "trello-skill"
+      config: { skills: { entries: { trello: { env: { TRELLO_API_KEY: "my-api-key" } } } } },
+    });
+
+    // Find our skill in the snapshot
+    const trelloSkill = snapshot.skills.find((s) => s.name === "trello-skill");
+    expect(trelloSkill).toBeDefined();
+    // Verify snapshot stores the skillKey
+    expect(trelloSkill?.name).toBe("trello-skill");
+    expect(trelloSkill?.skillKey).toBe("trello");
+
+    const originalEnv = process.env.TRELLO_API_KEY;
+    delete process.env.TRELLO_API_KEY;
+
+    const restore = applySkillEnvOverridesFromSnapshot({
+      snapshot,
+      // Config uses "trello" as key
+      config: { skills: { entries: { trello: { env: { TRELLO_API_KEY: "my-api-key" } } } } },
+    });
+
+    try {
+      expect(process.env.TRELLO_API_KEY).toBe("my-api-key");
+    } finally {
+      restore();
+      if (originalEnv === undefined) {
+        expect(process.env.TRELLO_API_KEY).toBeUndefined();
+      } else {
+        expect(process.env.TRELLO_API_KEY).toBe(originalEnv);
+      }
+    }
+  });
 });

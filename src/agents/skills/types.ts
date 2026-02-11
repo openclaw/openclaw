@@ -81,7 +81,7 @@ export type SkillEligibilityContext = {
 
 export type SkillSnapshot = {
   prompt: string;
-  skills: Array<{ name: string; primaryEnv?: string }>;
+  skills: Array<{ name: string; skillKey?: string; primaryEnv?: string }>;
   resolvedSkills?: Skill[];
   version?: number;
 };

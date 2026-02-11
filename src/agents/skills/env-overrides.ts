@@ -53,7 +53,9 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   const updates: Array<{ key: string; prev: string | undefined }> = [];
 
   for (const skill of snapshot.skills) {
-    const skillConfig = resolveSkillConfig(config, skill.name);
+    // Use skillKey for config lookup when available, fallback to name.
+    const configKey = skill.skillKey ?? skill.name;
+    const skillConfig = resolveSkillConfig(config, configKey);
     if (!skillConfig) {
       continue;
     }
