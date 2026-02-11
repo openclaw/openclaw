@@ -219,20 +219,6 @@ export async function runAgentTurnWithFallback(params: {
                 });
                 lifecycleTerminalEmitted = true;
 
-                // Mirror CLI turn to OpenClaw session transcript so chat.history can surface it.
-                try {
-                  const { mirrorCliTurnToTranscript } =
-                    await import("../../config/sessions/transcript.js");
-                  await mirrorCliTurnToTranscript({
-                    sessionFile: params.followupRun.run.sessionFile,
-                    sessionId: params.followupRun.run.sessionId,
-                    userText: params.commandBody,
-                    assistantText: cliText,
-                  });
-                } catch {
-                  // Non-fatal: transcript mirror failure should not break agent response
-                }
-
                 return result;
               } catch (err) {
                 emitAgentEvent({
