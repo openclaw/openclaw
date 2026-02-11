@@ -87,3 +87,5 @@ data/brew/
 local/
 /data
 /.env-store*
+
+.tags
