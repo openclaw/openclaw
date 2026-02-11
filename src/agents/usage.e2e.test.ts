@@ -47,7 +47,11 @@ describe("normalizeUsage", () => {
     expect(hasNonzeroUsage({ total: 1 })).toBe(true);
   });
 
-  it("does not clamp derived session total tokens to the context window", () => {
+  it("excludes cumulative cacheRead when sum exceeds context window (#13782)", () => {
+    // When cacheRead is accumulated across many turns (e.g. 12 turns × 200k cached
+    // system prompt = 2.4M), input + cacheRead + cacheWrite far exceeds the context
+    // window. A single API call can never exceed contextWindow, so this indicates
+    // cumulative data. The function should use input + cacheWrite instead.
     expect(
       deriveSessionTotalTokens({
         usage: {
@@ -58,7 +62,21 @@ describe("normalizeUsage", () => {
         },
         contextTokens: 200_000,
       }),
-    ).toBe(2_400_027);
+    ).toBe(27); // input + cacheWrite = 27, NOT clamped to 200k
+  });
+
+  it("still uses full prompt tokens when within context window", () => {
+    // When prompt tokens are within the context window, use the full sum.
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 150_000,
+          cacheRead: 48_000,
+          cacheWrite: 0,
+        },
+        contextTokens: 200_000,
+      }),
+    ).toBe(198_000); // input + cacheRead within context window → use as-is
   });
 
   it("uses prompt tokens when within context window", () => {
@@ -88,5 +106,33 @@ describe("normalizeUsage", () => {
         contextTokens: 200_000,
       }),
     ).toBe(65_000);
+  });
+
+  it("handles cumulative usage with nonzero cacheWrite", () => {
+    // Cumulative: 5 turns, each reading 100k from cache, first turn wrote 100k
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 15_000,
+          cacheRead: 500_000,
+          cacheWrite: 100_000,
+        },
+        contextTokens: 200_000,
+      }),
+    ).toBe(115_000); // input + cacheWrite = 15k + 100k = 115k
+  });
+
+  it("uses input as floor when cacheWrite is also zero", () => {
+    // Edge case: cumulative usage with zero cacheWrite (all turns cache-hit only)
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 5_000,
+          cacheRead: 1_000_000,
+          cacheWrite: 0,
+        },
+        contextTokens: 200_000,
+      }),
+    ).toBe(5_000); // input only, since cacheWrite is 0
   });
 });

@@ -122,6 +122,7 @@ export function deriveSessionTotalTokens(params: {
     return undefined;
   }
   const input = usage?.input ?? 0;
+  const cacheWrite = usage?.cacheWrite ?? 0;
   const promptTokens = hasPromptOverride
     ? promptOverride
     : derivePromptTokens({
@@ -129,7 +130,28 @@ export function deriveSessionTotalTokens(params: {
         cacheRead: usage?.cacheRead,
         cacheWrite: usage?.cacheWrite,
       });
+
+  const contextTokens = params.contextTokens;
+  const hasContextCap =
+    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0;
+
   let total = promptTokens ?? usage?.total ?? input;
+
+  // When cache metrics are accumulated across multiple turns (common in
+  // multi-turn agent runs), cacheRead grows with every turn while the actual
+  // context stays roughly the same size.  A single API call can never exceed
+  // the context window, so if the derived sum overshoots it the data must be
+  // cumulative.  Fall back to input + cacheWrite which approximates actual
+  // context consumption without cumulative cache-read inflation.  (#13782)
+  if (
+    !hasPromptOverride &&
+    hasContextCap &&
+    promptTokens !== undefined &&
+    promptTokens > contextTokens
+  ) {
+    const deflated = input + cacheWrite;
+    total = deflated > 0 ? deflated : input || total;
+  }
   if (!(total > 0)) {
     return undefined;
   }
