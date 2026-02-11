@@ -63,7 +63,7 @@ function isEmptyStreamError(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  const message = err instanceof Error ? err.message : String(err);
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
   return EMPTY_STREAM_ERROR_RE.test(message);
 }
 
