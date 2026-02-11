@@ -2,6 +2,7 @@ package ai.openclaw.android
 
 import android.app.Application
 import android.os.StrictMode
+import android.util.Log
 import java.security.Security
 
 class NodeApp : Application() {
@@ -15,7 +16,9 @@ class NodeApp : Application() {
         .getDeclaredConstructor().newInstance() as java.security.Provider
       Security.removeProvider("BC")
       Security.insertProviderAt(bcProvider, 1)
-    } catch (_: Throwable) { }
+    } catch (it: Throwable) {
+      Log.e("NodeApp", "Failed to register Bouncy Castle provider", it)
+    }
     if (BuildConfig.DEBUG) {
       StrictMode.setThreadPolicy(
         StrictMode.ThreadPolicy.Builder()
