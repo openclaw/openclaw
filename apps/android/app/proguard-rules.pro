@@ -1,36 +1,38 @@
-# Bouncy Castle - keep ALL classes (needed for Ed25519 crypto)
--keep class org.bouncycastle.** { *; }
+# ── Bouncy Castle (Ed25519 only) ──────────────────────────────────
+# Keep only the JCA provider entry point and the Ed25519 / EdDSA classes.
+# R8 will strip the rest (PQC, CMS, PKCS, etc.) saving ~1 MB.
 -keep class org.bouncycastle.jce.provider.BouncyCastleProvider { *; }
+-keep class org.bouncycastle.jcajce.** { *; }
+-keep class org.bouncycastle.crypto.signers.Ed25519Signer { *; }
+-keep class org.bouncycastle.crypto.params.Ed25519** { *; }
+-keep class org.bouncycastle.math.ec.rfc8032.** { *; }
+-keep class org.bouncycastle.asn1.edec.** { *; }
+-keep class org.bouncycastle.asn1.x509.** { *; }
+-keep class org.bouncycastle.asn1.pkcs.** { *; }
+-keep class org.bouncycastle.asn1.** { *; }
 -dontwarn org.bouncycastle.**
 
-# OkHttp
--keep class okhttp3.** { *; }
+# ── OkHttp ────────────────────────────────────────────────────────
 -dontwarn okhttp3.**
--keep class okio.** { *; }
 -dontwarn okio.**
+# OkHttp uses reflection for platform adapters
+-keep class okhttp3.internal.platform.** { *; }
 
-# Keep ALL app classes (gateway, protocol, etc.)
--keep class ai.openclaw.android.** { *; }
+# ── App classes ───────────────────────────────────────────────────
+# Don't blanket-keep; let R8 remove unused code.
+# Keep classes used via reflection / serialization:
+-keep class ai.openclaw.android.gateway.** { *; }
+-keep class ai.openclaw.android.protocol.** { *; }
 
-# Keep Java security/crypto classes used by Ed25519
--keep class java.security.** { *; }
--keep class javax.crypto.** { *; }
+# kotlinx.serialization
+-keepattributes *Annotation*, InnerClasses
+-keepclassmembers class ** {
+    @kotlinx.serialization.Serializable *;
+}
 
-# Generated missing rules
--dontwarn com.sun.jna.Library
--dontwarn com.sun.jna.Memory
--dontwarn com.sun.jna.Native
--dontwarn com.sun.jna.Pointer
--dontwarn com.sun.jna.Structure$ByReference
--dontwarn com.sun.jna.Structure$FieldOrder
--dontwarn com.sun.jna.Structure
--dontwarn com.sun.jna.WString
--dontwarn com.sun.jna.platform.win32.Win32Exception
--dontwarn com.sun.jna.ptr.IntByReference
--dontwarn com.sun.jna.win32.W32APIOptions
--dontwarn javax.naming.NamingException
--dontwarn javax.naming.directory.DirContext
--dontwarn javax.naming.directory.InitialDirContext
+# ── Misc suppressions ────────────────────────────────────────────
+-dontwarn com.sun.jna.**
+-dontwarn javax.naming.**
 -dontwarn lombok.Generated
 -dontwarn org.slf4j.impl.StaticLoggerBinder
 -dontwarn sun.net.spi.nameservice.NameServiceDescriptor
