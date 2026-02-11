@@ -29,7 +29,12 @@ export async function createS3Storage(config: BackupStorageConfig): Promise<Stor
   if (!bucket) {
     throw new Error("S3 storage requires backup.storage.path (bucket name)");
   }
-  const prefix = config.prefix ?? "";
+  // Normalize prefix: ensure it ends with '/' or is empty
+  const prefix = config.prefix
+    ? config.prefix.endsWith("/")
+      ? config.prefix
+      : `${config.prefix}/`
+    : "";
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic import type
   const clientOptions: Record<string, any> = {};
@@ -50,7 +55,7 @@ export async function createS3Storage(config: BackupStorageConfig): Promise<Stor
   const client: S3Client = new sdk.S3Client(clientOptions);
 
   function fullKey(key: string): string {
-    return prefix ? `${prefix}${key}` : key;
+    return `${prefix}${key}`;
   }
 
   return {

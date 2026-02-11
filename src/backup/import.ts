@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import type { BackupManifest, ImportOptions, StorageBackend } from "./types.js";
 import { resolveConfigPathCandidate, resolveStateDir } from "../config/paths.js";
-import { DEFAULT_CRON_STORE_PATH } from "../cron/store.js";
+import { DEFAULT_CRON_STORE_PATH, loadCronStore, saveCronStore } from "../cron/store.js";
 import { extractArchive } from "../infra/archive.js";
 import { decrypt } from "./crypto.js";
 import { validateManifest, verifyIntegrity } from "./manifest.js";
@@ -67,6 +67,9 @@ export async function importBackup(
       destDir: extractDir,
       timeoutMs: EXTRACT_TIMEOUT_MS,
     });
+
+    // Security: validate no extracted files escape the extract directory (tar-slip prevention)
+    await validateExtractedPaths(extractDir);
 
     // Remove the temp archive file after extraction
     await fs.unlink(tempArchivePath).catch(() => undefined);
@@ -216,37 +219,48 @@ export async function importBackup(
  * Deduplicates by job ID, preferring the backup version for conflicts.
  */
 async function mergeCronJobs(sourcePath: string, destPath: string): Promise<void> {
-  const sourceRaw = await fs.readFile(sourcePath, "utf-8");
-  const sourceStore = JSON.parse(sourceRaw) as { version: number; jobs: Array<{ id?: string }> };
-
-  let existingStore: { version: number; jobs: Array<{ id?: string }> } = { version: 1, jobs: [] };
-  try {
-    const existingRaw = await fs.readFile(destPath, "utf-8");
-    existingStore = JSON.parse(existingRaw);
-  } catch {
-    // no existing store
-  }
+  // Use canonical cron store loader (handles JSON5 + error recovery)
+  const sourceStore = await loadCronStore(sourcePath);
+  const existingStore = await loadCronStore(destPath);
 
   // Merge: backup jobs override existing ones with the same ID
   const byId = new Map<string, unknown>();
   for (const job of existingStore.jobs) {
-    if (job.id) {
-      byId.set(job.id, job);
+    const jobRecord = job as Record<string, unknown>;
+    if (jobRecord.id && typeof jobRecord.id === "string") {
+      byId.set(jobRecord.id, job);
     }
   }
   for (const job of sourceStore.jobs) {
-    if (job.id) {
-      byId.set(job.id, job);
+    const jobRecord = job as Record<string, unknown>;
+    if (jobRecord.id && typeof jobRecord.id === "string") {
+      byId.set(jobRecord.id, job);
     }
   }
 
   const merged = {
-    version: 1,
-    jobs: [...byId.values()],
+    version: 1 as const,
+    jobs: [...byId.values()] as typeof existingStore.jobs,
   };
 
-  await fs.mkdir(path.dirname(destPath), { recursive: true });
-  await fs.writeFile(destPath, JSON.stringify(merged, null, 2), "utf-8");
+  // Use canonical cron store saver (atomic write with temp + rename + backup)
+  await saveCronStore(destPath, merged);
+}
+
+/**
+ * Security: verify all extracted files/directories are within the expected directory.
+ * Prevents tar-slip (path traversal) attacks via entries like `../../etc/passwd`.
+ */
+async function validateExtractedPaths(extractDir: string): Promise<void> {
+  const resolvedBase = path.resolve(extractDir);
+  const entries = await fs.readdir(extractDir, { recursive: true });
+  for (const entry of entries) {
+    const entryStr = typeof entry === "string" ? entry : String(entry);
+    const resolved = path.resolve(extractDir, entryStr);
+    if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) {
+      throw new Error(`Unsafe archive: entry "${entryStr}" escapes extraction directory`);
+    }
+  }
 }
 
 /**
