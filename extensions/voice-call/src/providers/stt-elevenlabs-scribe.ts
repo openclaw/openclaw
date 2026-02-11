@@ -45,7 +45,7 @@ export class ElevenLabsScribeSTTProvider {
     this.apiKey = config.apiKey;
     this.model = config.model || "scribe_v2_realtime";
     this.languageCode = config.languageCode;
-    this.vadSilenceThresholdSecs = config.vadSilenceThresholdSecs ?? 1.0;
+    this.vadSilenceThresholdSecs = config.vadSilenceThresholdSecs ?? 0.5;
     this.vadThreshold = config.vadThreshold ?? 0.4;
   }
 
@@ -144,6 +144,10 @@ class ElevenLabsScribeSTTSession implements RealtimeSTTSession {
     return new Promise((resolve, reject) => {
       const params = new URLSearchParams({
         model_id: this.model,
+        commit_strategy: "vad",
+        vad_silence_threshold_secs: String(this.vadSilenceThresholdSecs),
+        vad_threshold: String(this.vadThreshold),
+        audio_format: "pcm_16000",
       });
       if (this.languageCode) {
         params.set("language_code", this.languageCode);
