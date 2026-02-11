@@ -5,7 +5,8 @@ import type { ResolvedBotAccount } from "../types/index.js";
 /**
  * **WecomRuntimeEnv (运行时环境)**
  *
- * 包含基础的日志和错误报告接口，用于解耦对 PluginRuntime 的直接依赖。
+ * Runtime environment with logging and error reporting interfaces,
+ * decoupled from direct PluginRuntime dependency.
  */
 export type WecomRuntimeEnv = {
   log?: (message: string) => void;
