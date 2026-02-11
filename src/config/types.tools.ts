@@ -336,8 +336,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", or "grok"). */
-      provider?: "brave" | "perplexity" | "grok";
+      /** Search provider ("brave", "perplexity", "grok", or "zsearch"). */
+      provider?: "brave" | "perplexity" | "grok" | "zsearch";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -363,6 +363,17 @@ export type ToolsConfig = {
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
+      };
+      /** ZAI Search-specific configuration (used when provider="zsearch"). */
+      zsearch?: {
+        /** API key for ZAI Search (defaults to ZAI_API_KEY env var). */
+        apiKey?: string;
+        /** Base URL for ZAI Search MCP endpoint (defaults to ZAI_SEARCH_BASE_URL env var or "https://api.z.ai/api/mcp/web_search_prime/mcp"). */
+        baseUrl?: string;
+        /** Content size: "medium" (400-600 words) or "high" (2500 words). */
+        contentSize?: "medium" | "high";
+        /** Location filter: "cn" or "us". */
+        location?: "cn" | "us";
       };
     };
     fetch?: {

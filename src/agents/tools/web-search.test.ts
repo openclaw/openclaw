@@ -11,6 +11,7 @@ const {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  mapBraveFreshnessToZai,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -161,5 +162,31 @@ describe("web_search grok response parsing", () => {
     expect(extractGrokContent({ output_text: "hello from output_text" })).toBe(
       "hello from output_text",
     );
+  });
+});
+
+describe("web_search ZAI Search freshness mapping", () => {
+  it("maps pd to oneDay", () => {
+    expect(mapBraveFreshnessToZai("pd")).toBe("oneDay");
+  });
+
+  it("maps pw to oneWeek", () => {
+    expect(mapBraveFreshnessToZai("pw")).toBe("oneWeek");
+  });
+
+  it("maps pm to oneMonth", () => {
+    expect(mapBraveFreshnessToZai("pm")).toBe("oneMonth");
+  });
+
+  it("maps py to oneYear", () => {
+    expect(mapBraveFreshnessToZai("py")).toBe("oneYear");
+  });
+
+  it("returns noLimit for undefined", () => {
+    expect(mapBraveFreshnessToZai(undefined)).toBe("noLimit");
+  });
+
+  it("returns noLimit for unknown values", () => {
+    expect(mapBraveFreshnessToZai("2024-01-01to2024-01-31")).toBe("noLimit");
   });
 });

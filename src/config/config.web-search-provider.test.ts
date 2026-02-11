@@ -21,4 +21,55 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts zsearch provider and config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "zsearch",
+            zsearch: {
+              apiKey: "test-zai-key",
+              contentSize: "medium",
+              location: "us",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts zsearch provider without config block", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "zsearch",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid zsearch contentSize", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "zsearch",
+            zsearch: {
+              contentSize: "invalid",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });

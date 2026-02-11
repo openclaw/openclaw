@@ -18,7 +18,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "zsearch"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -31,6 +31,8 @@ const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
+
+const ZAI_SEARCH_ENDPOINT = "https://api.z.ai/api/mcp/web_search_prime/mcp";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -131,6 +133,40 @@ type PerplexitySearchResponse = {
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
 
+type ZsearchConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  contentSize?: "medium" | "high";
+  location?: "cn" | "us";
+};
+
+type ZsearchJsonRpcResponse = {
+  jsonrpc: string;
+  id: number;
+  result?: {
+    content?: Array<{ type: string; text: string }>;
+    isError?: boolean;
+  };
+  error?: {
+    code: number;
+    message: string;
+  };
+};
+
+const BRAVE_TO_ZAI_FRESHNESS: Record<string, string> = {
+  pd: "oneDay",
+  pw: "oneWeek",
+  pm: "oneMonth",
+  py: "oneYear",
+};
+
+function mapBraveFreshnessToZai(freshness: string | undefined): string {
+  if (!freshness) {
+    return "noLimit";
+  }
+  return BRAVE_TO_ZAI_FRESHNESS[freshness] ?? "noLimit";
+}
+
 function extractGrokContent(data: GrokSearchResponse): string | undefined {
   // xAI Responses API format: output[0].content[0].text
   const fromResponses = data.output?.[0]?.content?.[0]?.text;
@@ -184,6 +220,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "zsearch") {
+    return {
+      error: "missing_zsearch_api_key",
+      message:
+        "web_search (zsearch) needs a ZAI API key. Set ZAI_API_KEY in the Gateway environment, or configure tools.web.search.zsearch.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -201,6 +245,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "grok") {
     return "grok";
+  }
+  if (raw === "zsearch") {
+    return "zsearch";
   }
   if (raw === "brave") {
     return "brave";
@@ -344,6 +391,160 @@ function resolveGrokModel(grok?: GrokConfig): string {
 
 function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
   return grok?.inlineCitations === true;
+}
+
+function resolveZsearchConfig(search?: WebSearchConfig): ZsearchConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const zsearch = "zsearch" in search ? search.zsearch : undefined;
+  if (!zsearch || typeof zsearch !== "object") {
+    return {};
+  }
+  return zsearch as ZsearchConfig;
+}
+
+function resolveZsearchBaseUrl(zsearch?: ZsearchConfig): string {
+  const fromConfig = zsearch?.baseUrl?.trim();
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = process.env.ZAI_SEARCH_BASE_URL?.trim();
+  return fromEnv || ZAI_SEARCH_ENDPOINT;
+}
+
+function resolveZsearchApiKey(zsearch?: ZsearchConfig): string | undefined {
+  const fromConfig = normalizeApiKey(zsearch?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv =
+    normalizeApiKey(process.env.ZAI_API_KEY) || normalizeApiKey(process.env.Z_AI_API_KEY);
+  return fromEnv || undefined;
+}
+
+function parseSseResponse(text: string): ZsearchJsonRpcResponse {
+  const lines = text.split("\n");
+  for (const line of lines) {
+    if (line.startsWith("data:")) {
+      const jsonStr = line.slice("data:".length).trim();
+      return JSON.parse(jsonStr) as ZsearchJsonRpcResponse;
+    }
+  }
+  throw new Error("No SSE data line found in ZAI Search response");
+}
+
+async function initZsearchSession(
+  apiKey: string,
+  baseUrl: string,
+  timeoutMs: number,
+): Promise<string> {
+  const body = {
+    jsonrpc: "2.0",
+    id: 0,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "openclaw", version: "1.0.0" },
+    },
+  };
+
+  const res = await fetch(baseUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: withTimeout(undefined, timeoutMs),
+  });
+
+  if (!res.ok) {
+    const detail = await readResponseText(res);
+    throw new Error(`ZAI Search init error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const sessionId = res.headers.get("mcp-session-id");
+  if (!sessionId) {
+    throw new Error("ZAI Search did not return Mcp-Session-Id header");
+  }
+
+  // Consume the response body to avoid leaking resources.
+  await res.text();
+
+  return sessionId;
+}
+
+async function runZsearchSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  timeoutSeconds: number;
+  contentSize?: "medium" | "high";
+  location?: "cn" | "us";
+  freshness?: string;
+}): Promise<{ content: string }> {
+  const timeoutMs = params.timeoutSeconds * 1000;
+
+  const sessionId = await initZsearchSession(params.apiKey, params.baseUrl, timeoutMs);
+
+  const toolArgs: Record<string, string> = {
+    search_query: params.query.slice(0, 70),
+  };
+  if (params.contentSize) {
+    toolArgs.content_size = params.contentSize;
+  }
+  if (params.location) {
+    toolArgs.location = params.location;
+  }
+  const recencyFilter = mapBraveFreshnessToZai(params.freshness);
+  if (recencyFilter !== "noLimit") {
+    toolArgs.search_recency_filter = recencyFilter;
+  }
+
+  const body = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: {
+      name: "webSearchPrime",
+      arguments: toolArgs,
+    },
+  };
+
+  const res = await fetch(params.baseUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      Authorization: `Bearer ${params.apiKey}`,
+      "Mcp-Session-Id": sessionId,
+    },
+    body: JSON.stringify(body),
+    signal: withTimeout(undefined, timeoutMs),
+  });
+
+  if (!res.ok) {
+    const detail = await readResponseText(res);
+    throw new Error(`ZAI Search API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const responseText = await res.text();
+  const parsed = parseSseResponse(responseText);
+
+  if (parsed.error) {
+    throw new Error(`ZAI Search JSON-RPC error: ${parsed.error.message}`);
+  }
+
+  if (parsed.result?.isError) {
+    const errorText = parsed.result.content?.[0]?.text ?? "Unknown error";
+    throw new Error(`ZAI Search tool error: ${errorText}`);
+  }
+
+  const content = parsed.result?.content?.[0]?.text ?? "No results";
+  return { content };
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -516,13 +717,18 @@ async function runWebSearch(params: {
   perplexityModel?: string;
   grokModel?: string;
   grokInlineCitations?: boolean;
+  zsearchContentSize?: "medium" | "high";
+  zsearchLocation?: "cn" | "us";
+  zsearchBaseUrl?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        : params.provider === "zsearch"
+          ? `${params.provider}:${params.query}:${params.zsearchContentSize || "default"}:${params.zsearchLocation || "default"}:${params.freshness || "default"}`
+          : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -547,6 +753,27 @@ async function runWebSearch(params: {
       tookMs: Date.now() - start,
       content: wrapWebContent(content),
       citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "zsearch") {
+    const { content } = await runZsearchSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      baseUrl: params.zsearchBaseUrl || ZAI_SEARCH_ENDPOINT,
+      timeoutSeconds: params.timeoutSeconds,
+      contentSize: params.zsearchContentSize,
+      location: params.zsearchLocation,
+      freshness: params.freshness,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      tookMs: Date.now() - start,
+      content: wrapWebContent(content),
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -647,13 +874,16 @@ export function createWebSearchTool(options?: {
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
+  const zsearchConfig = resolveZsearchConfig(search);
 
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : provider === "zsearch"
+          ? "Search the web using ZAI Search. Returns AI-synthesized search results. Supports freshness filters and region-specific search."
+          : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -668,7 +898,9 @@ export function createWebSearchTool(options?: {
           ? perplexityAuth?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
-            : resolveSearchApiKey(search);
+            : provider === "zsearch"
+              ? resolveZsearchApiKey(zsearchConfig)
+              : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -681,10 +913,10 @@ export function createWebSearchTool(options?: {
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave") {
+      if (rawFreshness && provider !== "brave" && provider !== "zsearch") {
         return jsonResult({
           error: "unsupported_freshness",
-          message: "freshness is only supported by the Brave web_search provider.",
+          message: "freshness is only supported by the Brave and ZAI Search web_search providers.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -716,6 +948,9 @@ export function createWebSearchTool(options?: {
         perplexityModel: resolvePerplexityModel(perplexityConfig),
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
+        zsearchContentSize: zsearchConfig.contentSize,
+        zsearchLocation: zsearchConfig.location ?? (country?.toLowerCase() === "cn" ? "cn" : "us"),
+        zsearchBaseUrl: resolveZsearchBaseUrl(zsearchConfig),
       });
       return jsonResult(result);
     },
@@ -732,4 +967,5 @@ export const __testing = {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  mapBraveFreshnessToZai,
 } as const;

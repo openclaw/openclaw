@@ -76,6 +76,9 @@ USER.md
 # local tooling
 .serena/
 
+# IDE
+.idea/
+
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
 .agent/*.json
