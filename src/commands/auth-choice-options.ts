@@ -9,29 +9,6 @@ export type AuthChoiceOption = {
   hint?: string;
 };
 
-export type AuthChoiceGroupId =
-  | "openai"
-  | "anthropic"
-  | "google"
-  | "copilot"
-  | "openrouter"
-  | "litellm"
-  | "ai-gateway"
-  | "cloudflare-ai-gateway"
-  | "moonshot"
-  | "zai"
-  | "xiaomi"
-  | "opencode-zen"
-  | "minimax"
-  | "synthetic"
-  | "venice"
-  | "qwen"
-  | "together"
-  | "huggingface"
-  | "qianfan"
-  | "xai"
-  | "custom";
-
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;

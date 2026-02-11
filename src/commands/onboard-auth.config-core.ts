@@ -1,10 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
 import {
-  buildCloudflareAiGatewayModelDefinition,
-  resolveCloudflareAiGatewayBaseUrl,
-} from "../agents/cloudflare-ai-gateway.js";
-import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
@@ -33,16 +29,25 @@ import {
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import {
-  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   HUGGINGFACE_DEFAULT_MODEL_REF,
-  LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
-  VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
+export {
+  applyCloudflareAiGatewayConfig,
+  applyCloudflareAiGatewayProviderConfig,
+  applyVercelAiGatewayConfig,
+  applyVercelAiGatewayProviderConfig,
+} from "./onboard-auth.config-gateways.js";
+export {
+  applyLitellmConfig,
+  applyLitellmProviderConfig,
+  LITELLM_BASE_URL,
+  LITELLM_DEFAULT_MODEL_ID,
+} from "./onboard-auth.config-litellm.js";
 import {
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
@@ -104,139 +109,6 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
   };
 }
 
-export function applyVercelAiGatewayProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF] = {
-    ...models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF],
-    alias: models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF]?.alias ?? "Vercel AI Gateway",
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
-}
-
-export function applyCloudflareAiGatewayProviderConfig(
-  cfg: OpenClawConfig,
-  params?: { accountId?: string; gatewayId?: string },
-): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF] = {
-    ...models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF],
-    alias: models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF]?.alias ?? "Cloudflare AI Gateway",
-  };
-
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers["cloudflare-ai-gateway"];
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const defaultModel = buildCloudflareAiGatewayModelDefinition();
-  const hasDefaultModel = existingModels.some((model) => model.id === defaultModel.id);
-  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
-  const baseUrl =
-    params?.accountId && params?.gatewayId
-      ? resolveCloudflareAiGatewayBaseUrl({
-          accountId: params.accountId,
-          gatewayId: params.gatewayId,
-        })
-      : existingProvider?.baseUrl;
-
-  if (!baseUrl) {
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models,
-        },
-      },
-    };
-  }
-
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers["cloudflare-ai-gateway"] = {
-    ...existingProviderRest,
-    baseUrl,
-    api: "anthropic-messages",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
-}
-
-export function applyVercelAiGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyVercelAiGatewayProviderConfig(cfg);
-  const existingModel = next.agents?.defaults?.model;
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-              }
-            : undefined),
-          primary: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
-        },
-      },
-    },
-  };
-}
-
-export function applyCloudflareAiGatewayConfig(
-  cfg: OpenClawConfig,
-  params?: { accountId?: string; gatewayId?: string },
-): OpenClawConfig {
-  const next = applyCloudflareAiGatewayProviderConfig(cfg, params);
-  const existingModel = next.agents?.defaults?.model;
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-              }
-            : undefined),
-          primary: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
-        },
-      },
-    },
-  };
-}
-
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenrouterProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
@@ -253,105 +125,6 @@ export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
               }
             : undefined),
           primary: OPENROUTER_DEFAULT_MODEL_REF,
-        },
-      },
-    },
-  };
-}
-
-export const LITELLM_BASE_URL = "http://localhost:4000";
-export const LITELLM_DEFAULT_MODEL_ID = "claude-opus-4-6";
-const LITELLM_DEFAULT_CONTEXT_WINDOW = 128_000;
-const LITELLM_DEFAULT_MAX_TOKENS = 8_192;
-const LITELLM_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
-
-function buildLitellmModelDefinition(): {
-  id: string;
-  name: string;
-  reasoning: boolean;
-  input: Array<"text" | "image">;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  contextWindow: number;
-  maxTokens: number;
-} {
-  return {
-    id: LITELLM_DEFAULT_MODEL_ID,
-    name: "Claude Opus 4.6",
-    reasoning: true,
-    input: ["text", "image"],
-    // LiteLLM routes to many upstreams; keep neutral placeholders.
-    cost: LITELLM_DEFAULT_COST,
-    contextWindow: LITELLM_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: LITELLM_DEFAULT_MAX_TOKENS,
-  };
-}
-
-export function applyLitellmProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[LITELLM_DEFAULT_MODEL_REF] = {
-    ...models[LITELLM_DEFAULT_MODEL_REF],
-    alias: models[LITELLM_DEFAULT_MODEL_REF]?.alias ?? "LiteLLM",
-  };
-
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.litellm;
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const defaultModel = buildLitellmModelDefinition();
-  const hasDefaultModel = existingModels.some((model) => model.id === LITELLM_DEFAULT_MODEL_ID);
-  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedBaseUrl =
-    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.litellm = {
-    ...existingProviderRest,
-    baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
-    api: "openai-completions",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
-}
-
-export function applyLitellmConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyLitellmProviderConfig(cfg);
-  const existingModel = next.agents?.defaults?.model;
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-              }
-            : undefined),
-          primary: LITELLM_DEFAULT_MODEL_REF,
         },
       },
     },
