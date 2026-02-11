@@ -80,7 +80,10 @@ export async function getReplyFromConfig(
   let model = defaultModel;
   let hasResolvedHeartbeatModelOverride = false;
   if (opts?.isHeartbeat) {
-    const heartbeatRaw = agentCfg?.heartbeat?.model?.trim() ?? "";
+    // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
+    // fall back to the global defaults heartbeat model for backward compatibility.
+    const heartbeatRaw =
+      opts.heartbeatModelOverride?.trim() ?? agentCfg?.heartbeat?.model?.trim() ?? "";
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({
           raw: heartbeatRaw,
