@@ -59,7 +59,7 @@ export async function applyAuthChoiceHuggingface(
   const envKey = resolveEnvApiKey("huggingface");
   if (envKey) {
     const useExisting = await params.prompter.confirm({
-      message: `Use existing HF_TOKEN (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+      message: `Use existing Hugging Face token (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
       initialValue: true,
     });
     if (useExisting) {
