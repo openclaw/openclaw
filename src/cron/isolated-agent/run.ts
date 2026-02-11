@@ -121,8 +121,30 @@ function isLikelyInterimCronMessage(value: string): boolean {
     "retrying now",
     "should be about",
     "should have your summary",
+    "subagent spawned",
+    "spawned a subagent",
+    "it'll auto-announce when done",
+    "it will auto-announce when done",
+    "auto-announce when done",
+    "both subagents are running",
+    "wait for them to report back",
   ];
   return words <= 45 && interimHints.some((hint) => normalized.includes(hint));
+}
+
+function expectsSubagentFollowup(value: string): boolean {
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized) {
+    return false;
+  }
+  const hints = [
+    "subagent spawned",
+    "spawned a subagent",
+    "auto-announce when done",
+    "both subagents are running",
+    "wait for them to report back",
+  ];
+  return hints.some((hint) => normalized.includes(hint));
 }
 
 async function waitForDescendantSubagentSummary(params: {
@@ -690,13 +712,14 @@ export async function runCronIsolatedAgentTurn(params: {
           : `cron:${params.job.id}`;
       const initialSynthesizedText = synthesizedText.trim();
       let activeSubagentRuns = countActiveDescendantRuns(agentSessionKey);
+      const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
       const hadActiveDescendants = activeSubagentRuns > 0;
-      if (activeSubagentRuns > 0) {
+      if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
         const finalReply = await waitForDescendantSubagentSummary({
           sessionKey: agentSessionKey,
           initialReply: initialSynthesizedText,
           timeoutMs,
-          observedActiveDescendants: true,
+          observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
         });
         activeSubagentRuns = countActiveDescendantRuns(agentSessionKey);
         if (finalReply && activeSubagentRuns === 0) {
@@ -712,7 +735,7 @@ export async function runCronIsolatedAgentTurn(params: {
         return withRunSession({ status: "ok", summary, outputText });
       }
       if (
-        hadActiveDescendants &&
+        (hadActiveDescendants || expectedSubagentFollowup) &&
         synthesizedText.trim() === initialSynthesizedText &&
         isLikelyInterimCronMessage(initialSynthesizedText) &&
         initialSynthesizedText.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase()
