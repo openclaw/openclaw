@@ -4,11 +4,7 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import {
-  formatInboundEnvelope,
-  formatThreadStarterEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../auto-reply/envelope.js";
+import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -20,7 +16,7 @@ import {
   shouldAckReaction as shouldAckReactionGate,
 } from "../../channels/ack-reactions.js";
 import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
-import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
+import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
@@ -31,7 +27,7 @@ import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
-import { normalizeDiscordSlug } from "./allow-list.js";
+import { normalizeDiscordSlug, resolveDiscordOwnerAllowFrom } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import {
   buildDiscordMediaPayload,
@@ -157,6 +153,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   );
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
+    channelConfig,
+    guildInfo,
+    sender: { id: sender.id, name: sender.name, tag: sender.tag },
+  });
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
   });
@@ -195,12 +196,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }),
     });
   }
-  const replyContext = resolveReplyContext(message, resolveDiscordMessageText, {
-    envelope: envelopeOptions,
-  });
-  if (replyContext) {
-    combinedBody = `[Replied message - for context]\n${replyContext}\n\n${combinedBody}`;
-  }
+  const replyContext = resolveReplyContext(message, resolveDiscordMessageText);
   if (forumContextLine) {
     combinedBody = `${combinedBody}\n${forumContextLine}`;
   }
@@ -209,22 +205,19 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let threadLabel: string | undefined;
   let parentSessionKey: string | undefined;
   if (threadChannel) {
-    const starter = await resolveDiscordThreadStarter({
-      channel: threadChannel,
-      client,
-      parentId: threadParentId,
-      parentType: threadParentType,
-      resolveTimestampMs,
-    });
-    if (starter?.text) {
-      const starterEnvelope = formatThreadStarterEnvelope({
-        channel: "Discord",
-        author: starter.author,
-        timestamp: starter.timestamp,
-        body: starter.text,
-        envelope: envelopeOptions,
+    const includeThreadStarter = channelConfig?.includeThreadStarter !== false;
+    if (includeThreadStarter) {
+      const starter = await resolveDiscordThreadStarter({
+        channel: threadChannel,
+        client,
+        parentId: threadParentId,
+        parentType: threadParentType,
+        resolveTimestampMs,
       });
-      threadStarterBody = starterEnvelope;
+      if (starter?.text) {
+        // Keep thread starter as raw text; metadata is provided out-of-band in the system prompt.
+        threadStarterBody = starter.text;
+      }
     }
     const parentName = threadParentName ?? "parent";
     threadLabel = threadName
@@ -271,8 +264,19 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     return;
   }
 
+  const inboundHistory =
+    shouldIncludeChannelHistory && historyLimit > 0
+      ? (guildHistories.get(message.channelId) ?? []).map((entry) => ({
+          sender: entry.sender,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }))
+      : undefined;
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
+    BodyForAgent: baseText ?? text,
+    InboundHistory: inboundHistory,
     RawBody: baseText,
     CommandBody: baseText,
     From: effectiveFrom,
@@ -290,10 +294,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
     GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+    OwnerAllowFrom: ownerAllowFrom,
     Provider: "discord" as const,
     Surface: "discord" as const,
     WasMentioned: effectiveWasMentioned,
     MessageSid: message.id,
+    ReplyToId: replyContext?.id,
+    ReplyToBody: replyContext?.body,
+    ReplyToSender: replyContext?.sender,
     ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,
@@ -334,7 +342,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ? deliverTarget.slice("channel:".length)
     : message.channelId;
 
-  const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    cfg,
+    agentId: route.agentId,
+    channel: "discord",
+    accountId: route.accountId,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "discord",
@@ -342,8 +355,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
 
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    responsePrefix: prefixContext.responsePrefix,
-    responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+    ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload: ReplyPayload) => {
       const replyToId = replyReference.use();
@@ -389,9 +401,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         typeof discordConfig?.blockStreaming === "boolean"
           ? !discordConfig.blockStreaming
           : undefined,
-      onModelSelected: (ctx) => {
-        prefixContext.onModelSelected(ctx);
-      },
+      onModelSelected,
     },
   });
   markDispatchIdle();

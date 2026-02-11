@@ -1,5 +1,29 @@
 import net from "node:net";
+import os from "node:os";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+
+/**
+ * Pick the primary non-internal IPv4 address (LAN IP).
+ * Prefers common interface names (en0, eth0) then falls back to any external IPv4.
+ */
+export function pickPrimaryLanIPv4(): string | undefined {
+  const nets = os.networkInterfaces();
+  const preferredNames = ["en0", "eth0"];
+  for (const name of preferredNames) {
+    const list = nets[name];
+    const entry = list?.find((n) => n.family === "IPv4" && !n.internal);
+    if (entry?.address) {
+      return entry.address;
+    }
+  }
+  for (const list of Object.values(nets)) {
+    const entry = list?.find((n) => n.family === "IPv4" && !n.internal);
+    if (entry?.address) {
+      return entry.address;
+    }
+  }
+  return undefined;
+}
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
   if (!ip) {
@@ -220,7 +244,7 @@ export async function resolveGatewayListenHosts(
  * @param host - The string to validate
  * @returns True if valid IPv4 format
  */
-function isValidIPv4(host: string): boolean {
+export function isValidIPv4(host: string): boolean {
   const parts = host.split(".");
   if (parts.length !== 4) {
     return false;
@@ -231,6 +255,20 @@ function isValidIPv4(host: string): boolean {
   });
 }
 
+/**
+ * Check if a hostname or IP refers to the local machine.
+ * Handles: localhost, 127.x.x.x, ::1, [::1], ::ffff:127.x.x.x
+ * Note: 0.0.0.0 and :: are NOT loopback - they bind to all interfaces.
+ */
 export function isLoopbackHost(host: string): boolean {
-  return isLoopbackAddress(host);
+  if (!host) {
+    return false;
+  }
+  const h = host.trim().toLowerCase();
+  if (h === "localhost") {
+    return true;
+  }
+  // Handle bracketed IPv6 addresses like [::1]
+  const unbracket = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+  return isLoopbackAddress(unbracket);
 }

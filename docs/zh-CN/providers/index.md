@@ -48,7 +48,7 @@ Venice 是我们推荐的 Venice AI 设置，用于隐私优先的推理，并�
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Moonshot AI（Kimi + Kimi Coding）](/providers/moonshot)
 - [OpenCode Zen](/providers/opencode)
-- [Amazon Bedrock](/bedrock)
+- [Amazon Bedrock](/providers/bedrock)
 - [Z.AI](/providers/zai)
 - [Xiaomi](/providers/xiaomi)
 - [GLM 模型](/providers/glm)

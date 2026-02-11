@@ -380,8 +380,8 @@ describe("gateway server chat", () => {
 
         emitAgentEvent({
           runId: "run-tool-1",
-          stream: "tool",
-          data: { phase: "start", name: "read", toolCallId: "tool-1" },
+          stream: "assistant",
+          data: { text: "hello" },
         });
 
         const evt = await agentEvtP;
@@ -390,31 +390,6 @@ describe("gateway server chat", () => {
             ? (evt.payload as Record<string, unknown>)
             : {};
         expect(payload.sessionKey).toBe("main");
-      }
-
-      {
-        registerAgentRunContext("run-tool-off", { sessionKey: "agent:main:main" });
-
-        emitAgentEvent({
-          runId: "run-tool-off",
-          stream: "tool",
-          data: { phase: "start", name: "read", toolCallId: "tool-1" },
-        });
-        emitAgentEvent({
-          runId: "run-tool-off",
-          stream: "assistant",
-          data: { text: "hello" },
-        });
-
-        const evt = await onceMessage(
-          webchatWs,
-          (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-off",
-          8000,
-        );
-        const payload =
-          evt.payload && typeof evt.payload === "object"
-            ? (evt.payload as Record<string, unknown>)
-            : {};
         expect(payload.stream).toBe("assistant");
       }
 

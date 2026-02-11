@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
+  createReplyPrefixOptions,
   logAckFailure,
   logInboundDrop,
   logTypingFailure,
@@ -360,14 +361,16 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 
+type BlueBubblesDebouncer = {
+  enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
+  flushKey: (key: string) => Promise<void>;
+};
+
 /**
  * Maps webhook targets to their inbound debouncers.
  * Each target gets its own debouncer keyed by a unique identifier.
  */
-const targetDebouncers = new Map<
-  WebhookTarget,
-  ReturnType<BlueBubblesCoreRuntime["channel"]["debounce"]["createInboundDebouncer"]>
->();
+const targetDebouncers = new Map<WebhookTarget, BlueBubblesDebouncer>();
 
 function resolveBlueBubblesDebounceMs(
   config: OpenClawConfig,
@@ -507,14 +510,29 @@ export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => v
   };
 }
 
-async function readJsonBody(req: IncomingMessage, maxBytes: number) {
+async function readJsonBody(req: IncomingMessage, maxBytes: number, timeoutMs = 30_000) {
   const chunks: Buffer[] = [];
   let total = 0;
   return await new Promise<{ ok: boolean; value?: unknown; error?: string }>((resolve) => {
+    let done = false;
+    const finish = (result: { ok: boolean; value?: unknown; error?: string }) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      finish({ ok: false, error: "request body timeout" });
+      req.destroy();
+    }, timeoutMs);
+
     req.on("data", (chunk: Buffer) => {
       total += chunk.length;
       if (total > maxBytes) {
-        resolve({ ok: false, error: "payload too large" });
+        finish({ ok: false, error: "payload too large" });
         req.destroy();
         return;
       }
@@ -524,27 +542,30 @@ async function readJsonBody(req: IncomingMessage, maxBytes: number) {
       try {
         const raw = Buffer.concat(chunks).toString("utf8");
         if (!raw.trim()) {
-          resolve({ ok: false, error: "empty payload" });
+          finish({ ok: false, error: "empty payload" });
           return;
         }
         try {
-          resolve({ ok: true, value: JSON.parse(raw) as unknown });
+          finish({ ok: true, value: JSON.parse(raw) as unknown });
           return;
         } catch {
           const params = new URLSearchParams(raw);
           const payload = params.get("payload") ?? params.get("data") ?? params.get("message");
           if (payload) {
-            resolve({ ok: true, value: JSON.parse(payload) as unknown });
+            finish({ ok: true, value: JSON.parse(payload) as unknown });
             return;
           }
           throw new Error("invalid json");
         }
       } catch (err) {
-        resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        finish({ ok: false, error: err instanceof Error ? err.message : String(err) });
       }
     });
     req.on("error", (err) => {
-      resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      finish({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    });
+    req.on("close", () => {
+      finish({ ok: false, error: "connection closed" });
     });
   });
 }
@@ -1785,7 +1806,7 @@ async function processMessage(
     channel: "bluebubbles",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "dm",
+      kind: isGroup ? "group" : "direct",
       id: peerId,
     },
   });
@@ -1898,7 +1919,7 @@ async function processMessage(
             maxBytes,
           });
           const saved = await core.channel.media.saveMediaBuffer(
-            downloaded.buffer,
+            Buffer.from(downloaded.buffer),
             downloaded.contentType,
             "inbound",
             maxBytes,
@@ -2173,10 +2194,17 @@ async function processMessage(
     }, typingRestartDelayMs);
   };
   try {
+    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      cfg: config,
+      agentId: route.agentId,
+      channel: "bluebubbles",
+      accountId: account.accountId,
+    });
     await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: config,
       dispatcherOptions: {
+        ...prefixOptions,
         deliver: async (payload, info) => {
           const rawReplyToId =
             typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
@@ -2288,6 +2316,7 @@ async function processMessage(
         },
       },
       replyOptions: {
+        onModelSelected,
         disableBlockStreaming:
           typeof account.config.blockStreaming === "boolean"
             ? !account.config.blockStreaming
@@ -2322,7 +2351,7 @@ async function processMessage(
         },
       });
     }
-    if (shouldStopTyping) {
+    if (shouldStopTyping && chatGuidForActions) {
       // Stop typing after streaming completes to avoid a stuck indicator.
       sendBlueBubblesTyping(chatGuidForActions, false, {
         cfg: config,
@@ -2415,7 +2444,7 @@ async function processReaction(
     channel: "bluebubbles",
     accountId: account.accountId,
     peer: {
-      kind: reaction.isGroup ? "group" : "dm",
+      kind: reaction.isGroup ? "group" : "direct",
       id: peerId,
     },
   });

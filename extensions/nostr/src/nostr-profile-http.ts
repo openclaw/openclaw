@@ -229,31 +229,58 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-async function readJsonBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<unknown> {
+async function readJsonBody(
+  req: IncomingMessage,
+  maxBytes = 64 * 1024,
+  timeoutMs = 30_000,
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (fn: () => void) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      clearTimeout(timer);
+      fn();
+    };
+
+    const timer = setTimeout(() => {
+      finish(() => {
+        const err = new Error("Request body timeout");
+        req.destroy(err);
+        reject(err);
+      });
+    }, timeoutMs);
+
     const chunks: Buffer[] = [];
     let totalBytes = 0;
 
     req.on("data", (chunk: Buffer) => {
       totalBytes += chunk.length;
       if (totalBytes > maxBytes) {
-        reject(new Error("Request body too large"));
-        req.destroy();
+        finish(() => {
+          reject(new Error("Request body too large"));
+          req.destroy();
+        });
         return;
       }
       chunks.push(chunk);
     });
 
     req.on("end", () => {
-      try {
-        const body = Buffer.concat(chunks).toString("utf-8");
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        reject(new Error("Invalid JSON"));
-      }
+      finish(() => {
+        try {
+          const body = Buffer.concat(chunks).toString("utf-8");
+          resolve(body ? JSON.parse(body) : {});
+        } catch {
+          reject(new Error("Invalid JSON"));
+        }
+      });
     });
 
-    req.on("error", reject);
+    req.on("error", (err) => finish(() => reject(err)));
+    req.on("close", () => finish(() => reject(new Error("Connection closed"))));
   });
 }
 

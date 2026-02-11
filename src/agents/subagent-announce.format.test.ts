@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const agentSpy = vi.fn(async () => ({ runId: "run-main", status: "ok" }));
+const sessionsDeleteSpy = vi.fn();
+const readLatestAssistantReplyMock = vi.fn(async () => "raw subagent reply");
 const embeddedRunMock = {
   isEmbeddedPiRunActive: vi.fn(() => false),
   isEmbeddedPiRunStreaming: vi.fn(() => false),
@@ -28,6 +30,7 @@ vi.mock("../gateway/call.js", () => ({
       return {};
     }
     if (typed.method === "sessions.delete") {
+      sessionsDeleteSpy(typed);
       return {};
     }
     return {};
@@ -35,7 +38,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("./tools/agent-step.js", () => ({
-  readLatestAssistantReply: vi.fn(async () => "raw subagent reply"),
+  readLatestAssistantReply: readLatestAssistantReplyMock,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -60,10 +63,12 @@ vi.mock("../config/config.js", async (importOriginal) => {
 describe("subagent announce formatting", () => {
   beforeEach(() => {
     agentSpy.mockClear();
+    sessionsDeleteSpy.mockClear();
     embeddedRunMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
     embeddedRunMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockReset().mockResolvedValue(true);
+    readLatestAssistantReplyMock.mockReset().mockResolvedValue("raw subagent reply");
     sessionStore = {};
     configOverride = {
       session: {
@@ -94,7 +99,7 @@ describe("subagent announce formatting", () => {
     };
     const msg = call?.params?.message as string;
     expect(call?.params?.sessionKey).toBe("agent:main:main");
-    expect(msg).toContain("background task");
+    expect(msg).toContain("subagent task");
     expect(msg).toContain("failed");
     expect(msg).toContain("boom");
     expect(msg).toContain("Findings:");
@@ -155,7 +160,7 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(embeddedRunMock.queueEmbeddedPiMessage).toHaveBeenCalledWith(
       "session-123",
-      expect.stringContaining("background task"),
+      expect.stringContaining("subagent task"),
     );
     expect(agentSpy).not.toHaveBeenCalled();
   });
@@ -196,6 +201,85 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("whatsapp");
     expect(call?.params?.to).toBe("+1555");
     expect(call?.params?.accountId).toBe("kev");
+  });
+
+  it("includes threadId when origin has an active topic/thread", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-thread",
+        lastChannel: "telegram",
+        lastTo: "telegram:123",
+        lastThreadId: 42,
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-thread",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("telegram:123");
+    expect(call?.params?.threadId).toBe("42");
+  });
+
+  it("prefers requesterOrigin.threadId over session entry threadId", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-thread-override",
+        lastChannel: "telegram",
+        lastTo: "telegram:123",
+        lastThreadId: 42,
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-thread-override",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "telegram:123",
+        threadId: 99,
+      },
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.threadId).toBe("99");
   });
 
   it("splits collect-mode queues when accountId differs", async () => {
@@ -275,6 +359,95 @@ describe("subagent announce formatting", () => {
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.channel).toBe("whatsapp");
     expect(call?.params?.accountId).toBe("acct-123");
+  });
+
+  it("retries reading subagent output when early lifecycle completion had no text", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValueOnce(true).mockReturnValue(false);
+    embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+    readLatestAssistantReplyMock
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce("Read #12 complete.");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-1",
+      },
+    };
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "context-stress-test",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(embeddedRunMock.waitForEmbeddedPiRunEnd).toHaveBeenCalledWith("child-session-1", 1000);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    expect(call?.params?.message).toContain("Read #12 complete.");
+    expect(call?.params?.message).not.toContain("(no output)");
+  });
+
+  it("defers announce when child run is still active after wait timeout", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-active",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-child-active",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "context-stress-test",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not delete child session when announce is deferred for an active run", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-active",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-child-active-delete",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "context-stress-test",
+      timeoutMs: 1000,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
   it("normalizes requesterOrigin for direct announce delivery", async () => {
