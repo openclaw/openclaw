@@ -5,7 +5,8 @@
   "description": "OpenClaw Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
-    "@urbit/aura": "^3.0.0"
+    "@urbit/aura": "^3.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "openclaw": "workspace:*"
