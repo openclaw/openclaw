@@ -51,9 +51,18 @@ export function extractToolCards(message: unknown): ToolCard[] {
 
   const hasResultText = cards.some((card) => card.kind === "result" && Boolean(card.text?.trim()));
   if (!hasResultText) {
-    return cards.filter(
-      (card) => card.kind !== "call" || !shouldSuppressToolCardWhenNoOutput(card.name),
-    );
+    return cards.filter((card) => {
+      if (!shouldSuppressToolCardWhenNoOutput(card.name)) {
+        return true;
+      }
+      if (card.kind === "call") {
+        return false;
+      }
+      if (card.kind === "result" && !card.text?.trim()) {
+        return false;
+      }
+      return true;
+    });
   }
 
   return cards;
