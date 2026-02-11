@@ -107,6 +107,11 @@ export type OnboardOptions = {
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;
+  customBaseUrl?: string;
+  customApiKey?: string;
+  customModelId?: string;
+  customProviderId?: string;
+  customCompatibility?: "openai" | "anthropic";
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;
