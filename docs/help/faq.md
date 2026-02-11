@@ -10,7 +10,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 ## Table of contents
 
 - [Quick start and first-run setup]
-  - [Im stuck whats the fastest way to get unstuck?](#im-stuck-whats-the-fastest-way-to-get-unstuck)
+  - [I'm stuck: what's the fastest way to get unstuck?](#im-stuck-whats-the-fastest-way-to-get-unstuck)
   - [What's the recommended way to install and set up OpenClaw?](#whats-the-recommended-way-to-install-and-set-up-openclaw)
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
@@ -91,7 +91,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [What's the recommended backup strategy?](#whats-the-recommended-backup-strategy)
   - [How do I completely uninstall OpenClaw?](#how-do-i-completely-uninstall-openclaw)
   - [Can agents work outside the workspace?](#can-agents-work-outside-the-workspace)
-  - [I'm in remote mode - where is the session store?](#im-in-remote-mode-where-is-the-session-store)
+  - [I'm in remote mode: where is the session store?](#im-in-remote-mode-where-is-the-session-store)
 - [Config basics](#config-basics)
   - [What format is the config? Where is it?](#what-format-is-the-config-where-is-it)
   - [I set `gateway.bind: "lan"` (or `"tailnet"`) and now nothing listens / the UI says unauthorized](#i-set-gatewaybind-lan-or-tailnet-and-now-nothing-listens-the-ui-says-unauthorized)
@@ -125,7 +125,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Is there a way to make a team of OpenClaw instances one CEO and many agents](#is-there-a-way-to-make-a-team-of-openclaw-instances-one-ceo-and-many-agents)
   - [Why did context get truncated mid-task? How do I prevent it?](#why-did-context-get-truncated-midtask-how-do-i-prevent-it)
   - [How do I completely reset OpenClaw but keep it installed?](#how-do-i-completely-reset-openclaw-but-keep-it-installed)
-  - [I'm getting "context too large" errors - how do I reset or compact?](#im-getting-context-too-large-errors-how-do-i-reset-or-compact)
+  - [I'm getting "context too large" errors: how do I reset or compact?](#im-getting-context-too-large-errors-how-do-i-reset-or-compact)
   - [Why am I seeing "LLM request rejected: messages.N.content.X.tool_use.input: Field required"?](#why-am-i-seeing-llm-request-rejected-messagesncontentxtooluseinput-field-required)
   - [Why am I getting heartbeat messages every 30 minutes?](#why-am-i-getting-heartbeat-messages-every-30-minutes)
   - [Do I need to add a "bot account" to a WhatsApp group?](#do-i-need-to-add-a-bot-account-to-a-whatsapp-group)
@@ -262,7 +262,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Quick start and first-run setup
 
-### Im stuck whats the fastest way to get unstuck
+### I'm stuck: what's the fastest way to get unstuck
 
 Use a local AI agent that can **see your machine**. That is far more effective than asking
 in Discord, because most "I'm stuck" cases are **local config or environment issues** that
@@ -440,7 +440,7 @@ Newest entries are at the top. If the top section is marked **Unreleased**, the 
 section is the latest shipped version. Entries are grouped by **Highlights**, **Changes**, and
 **Fixes** (plus docs/other sections when needed).
 
-### I cant access docs.openclaw.ai SSL error What now
+### I can't access docs.openclaw.ai (SSL error). What now?
 
 Some Comcast/Xfinity connections incorrectly block `docs.openclaw.ai` via Xfinity
 Advanced Security. Disable it or allowlist `docs.openclaw.ai`, then retry. More
@@ -464,7 +464,7 @@ that same version to `latest`**. That's why beta and stable can point at the
 See what changed:
 [https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
 
-### How do I install the beta version and whats the difference between beta and dev
+### How do I install the beta version, and what's the difference between beta and dev?
 
 **Beta** is the npm dist-tag `beta` (may match `latest`).
 **Dev** is the moving head of `main` (git); when published, it uses the npm dist-tag `dev`.
@@ -492,7 +492,7 @@ Rough guide:
 - **Onboarding:** 5-15 minutes depending on how many channels/models you configure
 
 If it hangs, use [Installer stuck](/help/faq#installer-stuck-how-do-i-get-more-feedback)
-and the fast debug loop in [Im stuck](/help/faq#im-stuck--whats-the-fastest-way-to-get-unstuck).
+and the fast debug loop in [I'm stuck](/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck).
 
 ### How do I try the latest bits
 
@@ -1335,7 +1335,7 @@ Example (repo as default cwd):
 }
 ```
 
-### Im in remote mode where is the session store
+### I'm in remote mode: where is the session store?
 
 Session state is owned by the **gateway host**. If you're in remote mode, the session store you care about is on the remote machine, not your local laptop. See [Session management](/concepts/session).
 
@@ -1351,7 +1351,7 @@ $OPENCLAW_CONFIG_PATH
 
 If the file is missing, it uses safe-ish defaults (including a default workspace of `~/.openclaw/workspace`).
 
-### I set gatewaybind lan or tailnet and now nothing listens the UI says unauthorized
+### I set `gateway.bind: "lan"` (or `"tailnet"`) and now nothing listens / the UI says unauthorized
 
 Non-loopback binds **require auth**. Configure `gateway.auth.mode` + `gateway.auth.token` (or use `OPENCLAW_GATEWAY_TOKEN`).
 
@@ -1802,7 +1802,7 @@ Notes:
 - If you used profiles (`--profile` / `OPENCLAW_PROFILE`), reset each state dir (defaults are `~/.openclaw-<profile>`).
 - Dev reset: `openclaw gateway --dev --reset` (dev-only; wipes dev config + credentials + sessions + workspace).
 
-### Im getting context too large errors how do I reset or compact
+### I'm getting "context too large" errors: how do I reset or compact?
 
 Use one of these:
 
@@ -1895,7 +1895,7 @@ openclaw directory groups list --channel whatsapp
 
 Docs: [WhatsApp](/channels/whatsapp), [Directory](/cli/directory), [Logs](/cli/logs).
 
-### Why doesnt OpenClaw reply in a group
+### Why doesn't OpenClaw reply in a group?
 
 Two common causes:
 
@@ -2324,7 +2324,7 @@ To target a specific agent:
 openclaw models auth order set --provider anthropic --agent main anthropic:default
 ```
 
-### OAuth vs API key whats the difference
+### OAuth vs API key: what's the difference?
 
 OpenClaw supports both:
 
@@ -2412,7 +2412,7 @@ Fix:
 - In the Control UI settings, paste the same token.
 - Still stuck? Run `openclaw status --all` and follow [Troubleshooting](/gateway/troubleshooting). See [Dashboard](/web/dashboard) for auth details.
 
-### I set gatewaybind tailnet but it cant bind nothing listens
+### I set `gateway.bind: "tailnet"` but it can't bind / nothing listens
 
 `tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine isn't on Tailscale (or the interface is down), there's nothing to bind to.
 
