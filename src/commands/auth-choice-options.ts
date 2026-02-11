@@ -13,6 +13,7 @@ export type AuthChoiceGroupId =
   | "google"
   | "copilot"
   | "openrouter"
+  | "litellm"
   | "ai-gateway"
   | "cloudflare-ai-gateway"
   | "moonshot"
@@ -23,8 +24,10 @@ export type AuthChoiceGroupId =
   | "synthetic"
   | "venice"
   | "qwen"
+  | "together"
   | "qianfan"
-  | "xai";
+  | "xai"
+  | "custom";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -130,16 +133,34 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["synthetic-api-key"],
   },
   {
+    value: "together",
+    label: "Together AI",
+    hint: "API key",
+    choices: ["together-api-key"],
+  },
+  {
     value: "venice",
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",
     choices: ["venice-api-key"],
   },
   {
+    value: "litellm",
+    label: "LiteLLM",
+    hint: "Unified LLM gateway (100+ providers)",
+    choices: ["litellm-api-key"],
+  },
+  {
     value: "cloudflare-ai-gateway",
     label: "Cloudflare AI Gateway",
     hint: "Account ID + Gateway ID + API key",
     choices: ["cloudflare-ai-gateway-api-key"],
+  },
+  {
+    value: "custom",
+    label: "Custom Provider",
+    hint: "Any OpenAI or Anthropic compatible endpoint",
+    choices: ["custom-api-key"],
   },
 ];
 
@@ -169,6 +190,11 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
   options.push({
+    value: "litellm-api-key",
+    label: "LiteLLM API key",
+    hint: "Unified gateway for 100+ LLM providers",
+  });
+  options.push({
     value: "ai-gateway-api-key",
     label: "Vercel AI Gateway API key",
   });
@@ -185,12 +211,20 @@ export function buildAuthChoiceOptions(params: {
     value: "moonshot-api-key-cn",
     label: "Kimi API key (.cn)",
   });
-  options.push({ value: "kimi-code-api-key", label: "Kimi Code API key (subscription)" });
+  options.push({
+    value: "kimi-code-api-key",
+    label: "Kimi Code API key (subscription)",
+  });
   options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
   options.push({
     value: "venice-api-key",
     label: "Venice AI API key",
     hint: "Privacy-focused inference (uncensored models)",
+  });
+  options.push({
+    value: "together-api-key",
+    label: "Together AI API key",
+    hint: "Access to Llama, DeepSeek, Qwen, and more open models",
   });
   options.push({
     value: "github-copilot",
@@ -237,6 +271,8 @@ export function buildAuthChoiceOptions(params: {
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
   });
+  options.push({ value: "custom-api-key", label: "Custom Provider" });
+
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
   }
