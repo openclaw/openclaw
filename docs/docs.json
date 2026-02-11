@@ -869,7 +869,6 @@
                 "pages": [
                   "channels/whatsapp",
                   "channels/telegram",
-                  "channels/grammy",
                   "channels/discord",
                   "channels/irc",
                   "channels/slack",
@@ -1229,7 +1228,7 @@
               },
               {
                 "group": "Technical reference",
-                "pages": ["reference/wizard", "reference/token-use"]
+                "pages": ["reference/wizard", "reference/token-use", "channels/grammy"]
               },
               {
                 "group": "Concept internals",
@@ -1387,7 +1386,6 @@
                 "pages": [
                   "zh-CN/channels/whatsapp",
                   "zh-CN/channels/telegram",
-                  "zh-CN/channels/grammy",
                   "zh-CN/channels/discord",
                   "zh-CN/channels/slack",
                   "zh-CN/channels/feishu",
