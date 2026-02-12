@@ -3,6 +3,15 @@ import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } fr
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 
+const VALID_FAILURE_REASONS: ReadonlySet<string> = new Set<AuthProfileFailureReason>([
+  "auth",
+  "format",
+  "rate_limit",
+  "billing",
+  "timeout",
+  "unknown",
+]);
+
 function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
   const values = [stats.cooldownUntil, stats.disabledUntil]
     .filter((value): value is number => typeof value === "number")
@@ -32,6 +41,9 @@ export function resolveDominantCooldownReason(
     }
     if (stats.failureCounts) {
       for (const [reason, count] of Object.entries(stats.failureCounts)) {
+        if (!VALID_FAILURE_REASONS.has(reason)) {
+          continue;
+        }
         const key = reason as AuthProfileFailureReason;
         totals[key] = (totals[key] ?? 0) + (count ?? 0);
       }
