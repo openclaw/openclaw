@@ -218,6 +218,30 @@ describe("cli program (smoke)", () => {
     }
   });
 
+  it("warns and drops deprecated --key/--api-key (does not forward to onboard)", async () => {
+    const program = buildProgram();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await program.parseAsync(
+      ["onboard", "--non-interactive", "--auth-choice", "opencode-zen", "--key", "sk-test"],
+      { from: "user" },
+    );
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/--key and --api-key are not supported global options/),
+    );
+
+    expect(onboardCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ nonInteractive: true }),
+      runtime,
+    );
+    const args = onboardCommand.mock.calls[0][0];
+    expect(args.key).toBeUndefined();
+    expect(args.apiKey).toBeUndefined();
+
+    warnSpy.mockRestore();
+  });
+
   it("runs channels login", async () => {
     const program = buildProgram();
     await program.parseAsync(["channels", "login", "--account", "work"], {
