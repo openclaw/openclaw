@@ -97,6 +97,30 @@ export function buildMoonshotModelDefinition(): ModelDefinitionConfig {
   };
 }
 
+export const MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
+export const MISTRAL_DEFAULT_MODEL_ID = "mistral-large-latest";
+export const MISTRAL_DEFAULT_MODEL_REF = `mistral/${MISTRAL_DEFAULT_MODEL_ID}`;
+export const MISTRAL_DEFAULT_CONTEXT_WINDOW = 128000;
+export const MISTRAL_DEFAULT_MAX_TOKENS = 8192;
+export const MISTRAL_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export function buildMistralModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: MISTRAL_DEFAULT_MODEL_ID,
+    name: "Mistral Large",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: MISTRAL_DEFAULT_COST,
+    contextWindow: MISTRAL_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: MISTRAL_DEFAULT_MAX_TOKENS,
+  };
+}
+
 export const XAI_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_MODEL_ID = "grok-4";
 export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;

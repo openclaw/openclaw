@@ -38,6 +38,7 @@ export type AuthChoice =
   | "copilot-proxy"
   | "qwen-portal"
   | "xai-api-key"
+  | "mistral-api-key"
   | "qianfan-api-key"
   | "custom-api-key"
   | "skip";
@@ -55,6 +56,7 @@ export type AuthChoiceGroupId =
   | "opencode-zen"
   | "minimax"
   | "synthetic"
+  | "mistral"
   | "venice"
   | "qwen"
   | "qianfan"
@@ -89,6 +91,7 @@ export type OnboardOptions = {
   tokenExpiresIn?: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
+  mistralApiKey?: string;
   openrouterApiKey?: string;
   litellmApiKey?: string;
   aiGatewayApiKey?: string;
