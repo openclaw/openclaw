@@ -43,10 +43,9 @@ describe("buildTelegramThreadParams", () => {
     });
   });
 
-  it("keeps thread id=1 for dm threads", () => {
-    expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toEqual({
-      message_thread_id: 1,
-    });
+  it("omits thread id for dm chats (private chats don't support threads)", () => {
+    expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toBeUndefined();
+    expect(buildTelegramThreadParams({ id: 99, scope: "dm" })).toBeUndefined();
   });
 
   it("normalizes thread ids to integers", () => {

@@ -58,12 +58,17 @@ export function resolveTelegramThreadSpec(params: {
  * Build thread params for Telegram API calls (messages, media).
  * General forum topic (id=1) must be treated like a regular supergroup send:
  * Telegram rejects sendMessage/sendMedia with message_thread_id=1 ("thread not found").
+ * Private/DM chats do not support message_thread_id and will error if it's included.
  */
 export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
   if (!thread?.id) {
     return undefined;
   }
   const normalized = Math.trunc(thread.id);
+  // Private chats don't support threads - omit message_thread_id
+  if (thread.scope === "dm") {
+    return undefined;
+  }
   if (normalized === TELEGRAM_GENERAL_TOPIC_ID && thread.scope === "forum") {
     return undefined;
   }

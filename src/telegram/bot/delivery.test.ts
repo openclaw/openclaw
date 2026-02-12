@@ -138,7 +138,7 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("keeps message_thread_id=1 when allowed", async () => {
+  it("omits message_thread_id for dm threads (private chats don't support threads)", async () => {
     const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 4,
@@ -157,13 +157,17 @@ describe("deliverReplies", () => {
       thread: { id: 1, scope: "dm" },
     });
 
+    // Private chats don't support threads, so message_thread_id should be omitted
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
       expect.any(String),
       expect.objectContaining({
-        message_thread_id: 1,
+        parse_mode: "HTML",
       }),
     );
+    // Verify message_thread_id is NOT in the params
+    const callArgs = sendMessage.mock.calls[0];
+    expect(callArgs[2]).not.toHaveProperty("message_thread_id");
   });
 
   it("does not include link_preview_options when linkPreview is true", async () => {
