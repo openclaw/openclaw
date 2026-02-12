@@ -246,6 +246,32 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("sends media with empty text without content field", async () => {
+    const { rest, postMock } = makeRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+    const res = await sendMessageDiscord("channel:789", "", {
+      rest,
+      token: "t",
+      mediaUrl: "file:///tmp/photo.jpg",
+    });
+    expect(res.messageId).toBe("msg");
+    const body = postMock.mock.calls[0]?.[1]?.body;
+    expect(body).not.toHaveProperty("content");
+    expect(body).toHaveProperty("files");
+  });
+
+  it("preserves whitespace in media captions", async () => {
+    const { rest, postMock } = makeRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+    await sendMessageDiscord("channel:789", "  spaced  ", {
+      rest,
+      token: "t",
+      mediaUrl: "file:///tmp/photo.jpg",
+    });
+    const body = postMock.mock.calls[0]?.[1]?.body;
+    expect(body).toHaveProperty("content", "  spaced  ");
+  });
+
   it("includes message_reference when replying", async () => {
     const { rest, postMock } = makeRest();
     postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
