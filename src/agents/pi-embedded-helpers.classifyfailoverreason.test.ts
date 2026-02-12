@@ -43,4 +43,14 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
+  it("classifies connection errors as timeout for failover", () => {
+    expect(classifyFailoverReason("Connection error.")).toBe("timeout");
+    expect(classifyFailoverReason("connection error")).toBe("timeout");
+    expect(classifyFailoverReason("connect ECONNREFUSED 127.0.0.1:443")).toBe("timeout");
+    expect(classifyFailoverReason("fetch failed")).toBe("timeout");
+    expect(classifyFailoverReason("socket hang up")).toBe("timeout");
+    expect(classifyFailoverReason("getaddrinfo ENOTFOUND api.example.com")).toBe("timeout");
+    expect(classifyFailoverReason("network error")).toBe("timeout");
+    expect(classifyFailoverReason("unable to connect to the server")).toBe("timeout");
+  });
 });

@@ -165,9 +165,25 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
+  if (
+    [
+      "ETIMEDOUT",
+      "ESOCKETTIMEDOUT",
+      "ECONNRESET",
+      "ECONNABORTED",
+      "ECONNREFUSED",
+      "ENOTFOUND",
+      "EAI_AGAIN",
+      "EHOSTUNREACH",
+    ].includes(code)
+  ) {
     return "timeout";
   }
+  const name = getErrorName(err);
+  if (name === "APIConnectionError" || name === "APIConnectionTimeoutError") {
+    return "timeout";
+  }
+
   if (isTimeoutError(err)) {
     return "timeout";
   }

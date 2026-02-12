@@ -452,6 +452,14 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
+  if (isConnectionErrorMessage(raw)) {
+    return (
+      "Unable to connect to the AI provider. " +
+      "Check your internet connection, verify the provider's base URL is correct, " +
+      "and ensure the service is reachable."
+    );
+  }
+
   if (isOverloadedErrorMessage(raw)) {
     return "The AI service is temporarily overloaded. Please try again in a moment.";
   }
@@ -503,6 +511,14 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       return BILLING_ERROR_USER_MESSAGE;
     }
 
+    if (isConnectionErrorMessage(trimmed)) {
+      return (
+        "Unable to connect to the AI provider. " +
+        "Check your internet connection, verify the provider's base URL is correct, " +
+        "and ensure the service is reachable."
+      );
+    }
+
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
       return formatRawAssistantErrorForUi(trimmed);
     }
@@ -541,6 +557,19 @@ const ERROR_PATTERNS = {
   ],
   overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
   timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
+  connection: [
+    /^connection error\.?$/,
+    /econn(?:refused|reset|aborted)/,
+    "fetch failed",
+    "socket hang up",
+    /network (?:error|failure|unavailable)/,
+    "apiconnectionerror",
+    /connect (?:econnrefused|etimedout)/,
+    "eai_again",
+    "ehostunreach",
+    "enotfound",
+    "unable to connect",
+  ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
@@ -601,6 +630,10 @@ export function isRateLimitErrorMessage(raw: string): boolean {
 
 export function isTimeoutErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
+}
+
+export function isConnectionErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.connection);
 }
 
 export function isBillingErrorMessage(raw: string): boolean {
@@ -719,6 +752,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isBillingErrorMessage(raw)) {
     return "billing";
+  }
+  if (isConnectionErrorMessage(raw)) {
+    return "timeout";
   }
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";

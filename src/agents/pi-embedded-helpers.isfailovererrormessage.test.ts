@@ -22,4 +22,16 @@ describe("isFailoverErrorMessage", () => {
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
   });
+  it("matches connection errors", () => {
+    const samples = [
+      "Connection error.",
+      "connect ECONNREFUSED 127.0.0.1:443",
+      "fetch failed",
+      "socket hang up",
+      "network error",
+    ];
+    for (const sample of samples) {
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
 });

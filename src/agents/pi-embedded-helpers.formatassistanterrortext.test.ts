@@ -104,4 +104,20 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("API provider");
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
+  it("returns a friendly message for connection errors", () => {
+    const msg = makeAssistantError("Connection error.");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Unable to connect to the AI provider");
+    expect(result).toContain("base URL");
+  });
+  it("returns a friendly message for ECONNREFUSED", () => {
+    const msg = makeAssistantError("connect ECONNREFUSED 127.0.0.1:443");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Unable to connect to the AI provider");
+  });
+  it("returns a friendly message for fetch failed", () => {
+    const msg = makeAssistantError("fetch failed");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Unable to connect to the AI provider");
+  });
 });

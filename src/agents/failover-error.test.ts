@@ -53,4 +53,37 @@ describe("failover-error", () => {
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
   });
+  it("infers timeout from ECONNREFUSED error code", () => {
+    expect(resolveFailoverReasonFromError({ code: "ECONNREFUSED" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENOTFOUND" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EAI_AGAIN" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EHOSTUNREACH" })).toBe("timeout");
+  });
+
+  it("infers timeout from APIConnectionError name", () => {
+    const err = new Error("Connection error.");
+    err.name = "APIConnectionError";
+    expect(resolveFailoverReasonFromError(err)).toBe("timeout");
+  });
+
+  it("infers timeout from APIConnectionTimeoutError name", () => {
+    const err = new Error("Request timed out.");
+    err.name = "APIConnectionTimeoutError";
+    expect(resolveFailoverReasonFromError(err)).toBe("timeout");
+  });
+
+  it("infers timeout from 'Connection error.' message string", () => {
+    expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
+  });
+
+  it("coerces connection errors into FailoverError", () => {
+    const err = coerceToFailoverError("Connection error.", {
+      provider: "zai",
+      model: "glm-4.7",
+    });
+    expect(err?.name).toBe("FailoverError");
+    expect(err?.reason).toBe("timeout");
+    expect(err?.status).toBe(408);
+    expect(err?.provider).toBe("zai");
+  });
 });
