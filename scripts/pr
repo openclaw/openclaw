@@ -344,7 +344,7 @@ EOF_MD
     "result": "pass"
   },
   "docs": "not_applicable",
-  "changelog": "not_required"
+  "changelog": "required"
 }
 EOF_JSON
   fi
@@ -411,22 +411,13 @@ review_validate_artifacts() {
   local changelog_status
   changelog_status=$(jq -r '.changelog // ""' .local/review.json)
   case "$changelog_status" in
-    "required"|"not_required")
+    "required")
       ;;
     *)
-      echo "Invalid changelog status in .local/review.json: $changelog_status"
+      echo "Invalid changelog status in .local/review.json: $changelog_status (must be \"required\")"
       exit 1
       ;;
   esac
-
-  if [ "$changelog_status" = "required" ]; then
-    local changelog_finding_count
-    changelog_finding_count=$(jq '[.findings[]? | select(((.area // "" | ascii_downcase | contains("changelog")) or (.title // "" | ascii_downcase | contains("changelog")) or (.fix // "" | ascii_downcase | contains("changelog"))))] | length' .local/review.json)
-    if [ "$changelog_finding_count" -eq 0 ]; then
-      echo "changelog is required but no changelog-related finding exists in .local/review.json"
-      exit 1
-    fi
-  fi
 
   echo "review artifacts validated"
 }
@@ -628,6 +619,12 @@ prepare_gates() {
   local docs_only=false
   if [ -n "$changed_files" ] && [ -z "$non_docs" ]; then
     docs_only=true
+  fi
+
+  # Enforce workflow policy: every prepared PR must include a changelog update.
+  if ! printf '%s\n' "$changed_files" | rg -q '^CHANGELOG\.md$'; then
+    echo "Missing CHANGELOG.md update in PR diff. This workflow requires a changelog entry."
+    exit 1
   fi
 
   run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build

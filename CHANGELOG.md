@@ -67,6 +67,7 @@ Docs: https://docs.openclaw.ai
 - Agents: prevent file descriptor leaks in child process cleanup. (#13565) Thanks @KyleChen26.
 - Agents: prevent double compaction caused by cache TTL bypassing guard. (#13514) Thanks @taw0002.
 - Agents: use last API call's cache tokens for context display instead of accumulated sum. (#13805) Thanks @akari-musubi.
+- Agents: keep followup-runner session `totalTokens` aligned with post-compaction context by using last-call usage and shared token-accounting logic. (#14979) Thanks @shtse8.
 - Discord: allow channel-edit to archive/lock threads and set auto-archive duration. (#5542) Thanks @stumct.
 - Discord tests: use a partial @buape/carbon mock in slash command coverage. (#13262) Thanks @arosstale.
 - Tests: update thread ID handling in Slack message collection tests. (#14108) Thanks @swizzmagik.
