@@ -222,3 +222,497 @@ body {
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
+
+/* ========================================
+   Tiptap Markdown Editor
+   ======================================== */
+
+/* Editor container layout */
+.markdown-editor-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Tiptap contenteditable area -- inherits workspace-prose via parent */
+.editor-content-area {
+  flex: 1;
+  padding: 1rem 1.5rem 2rem;
+  min-height: 300px;
+}
+
+.editor-content-area .tiptap {
+  outline: none;
+  min-height: 200px;
+}
+
+.editor-content-area .tiptap:focus {
+  outline: none;
+}
+
+/* Placeholder */
+.editor-content-area .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--color-text-muted);
+  opacity: 0.5;
+  pointer-events: none;
+  height: 0;
+}
+
+/* Tiptap task list (editable checkboxes) */
+.editor-content-area .tiptap ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.editor-content-area .tiptap ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+  margin-bottom: 0.25em;
+}
+
+.editor-content-area .tiptap ul[data-type="taskList"] li label {
+  flex-shrink: 0;
+  margin-top: 0.25em;
+}
+
+.editor-content-area .tiptap ul[data-type="taskList"] li label input[type="checkbox"] {
+  appearance: none;
+  width: 1em;
+  height: 1em;
+  border: 1.5px solid var(--color-border);
+  border-radius: 0.2em;
+  cursor: pointer;
+  position: relative;
+}
+
+.editor-content-area .tiptap ul[data-type="taskList"] li label input[type="checkbox"]:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.editor-content-area .tiptap ul[data-type="taskList"] li label input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.editor-content-area .tiptap ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+
+/* Images in editor */
+.editor-content-area .tiptap .editor-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  margin: 1em 0;
+  cursor: default;
+}
+
+.editor-content-area .tiptap .editor-image.ProseMirror-selectednode {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+
+/* Table editing */
+.editor-content-area .tiptap table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+
+.editor-content-area .tiptap th,
+.editor-content-area .tiptap td {
+  border: 1px solid var(--color-border);
+  padding: 0.5em 0.75em;
+  position: relative;
+}
+
+.editor-content-area .tiptap th {
+  background: var(--color-surface);
+  font-weight: 600;
+}
+
+.editor-content-area .tiptap .selectedCell {
+  background: rgba(232, 93, 58, 0.08);
+}
+
+/* --- Toolbar --- */
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0.375rem 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.editor-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.editor-toolbar-divider {
+  width: 1px;
+  height: 1.25rem;
+  background: var(--color-border);
+  margin: 0 0.375rem;
+}
+
+.editor-toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.25rem;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.1s;
+}
+
+.editor-toolbar-btn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.editor-toolbar-btn-active {
+  background: rgba(232, 93, 58, 0.12);
+  color: var(--color-accent);
+}
+
+.editor-toolbar-btn-active:hover {
+  background: rgba(232, 93, 58, 0.18);
+}
+
+/* --- Bubble menu --- */
+
+.bubble-menu {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0.25rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.bubble-menu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.25rem;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.1s;
+}
+
+.bubble-menu-btn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.bubble-menu-btn-active {
+  color: var(--color-accent);
+  background: rgba(232, 93, 58, 0.12);
+}
+
+/* --- Sticky top bar (save + read toggle) --- */
+
+.editor-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.editor-top-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.editor-top-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.editor-save-indicator {
+  font-size: 0.75rem;
+}
+
+.editor-save-unsaved {
+  color: #f59e0b;
+}
+
+.editor-save-saved {
+  color: #22c55e;
+}
+
+.editor-save-error {
+  color: #f87171;
+}
+
+.editor-save-hint {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  opacity: 0.6;
+  padding: 0.15rem 0.4rem;
+  background: var(--color-surface);
+  border-radius: 0.25rem;
+  border: 1px solid var(--color-border);
+}
+
+.editor-save-button {
+  padding: 0.35rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border-radius: 0.375rem;
+  border: none;
+  background: var(--color-accent);
+  color: white;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.editor-save-button:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+
+.editor-save-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* --- Edit / Read mode toggle --- */
+
+.editor-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.editor-mode-toggle:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+
+/* ========================================
+   Slash Command Popup
+   ======================================== */
+
+.slash-cmd-popup {
+  max-height: 320px;
+  overflow-y: auto;
+  min-width: 240px;
+  max-width: 320px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 0.25rem;
+}
+
+.slash-cmd-empty {
+  padding: 0.75rem 1rem;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.slash-cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: none;
+  background: transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.slash-cmd-item:hover,
+.slash-cmd-item-active {
+  background: var(--color-surface-hover);
+}
+
+.slash-cmd-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.25rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.slash-cmd-icon-text {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+.slash-cmd-item-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.slash-cmd-item-title {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--color-text);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.slash-cmd-item-desc {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ========================================
+   Report Block (in-editor)
+   ======================================== */
+
+.report-block-wrapper {
+  position: relative;
+  margin: 1em 0;
+  border-radius: 0.75rem;
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.report-block-wrapper[data-selected] {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.report-block-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.5rem;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.report-block-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  border-radius: 0.25rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.report-block-btn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.report-block-btn-danger:hover {
+  background: rgba(248, 113, 113, 0.1);
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+.report-block-source {
+  position: relative;
+}
+
+.report-block-source-label {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.5rem;
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.report-block-textarea {
+  width: 100%;
+  padding: 1rem;
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: none;
+  outline: none;
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 100px;
+}
+
+.report-block-error {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: rgba(248, 113, 113, 0.05);
+  color: #f87171;
+  font-size: 0.8rem;
+}

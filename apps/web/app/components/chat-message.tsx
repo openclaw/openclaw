@@ -141,17 +141,72 @@ export function ChatMessage({ message }: { message: UIMessage }) {
 						: "bg-[var(--color-surface)] text-[var(--color-text)]"
 				}`}
 			>
-			{segments.map((segment, index) => {
-				if (segment.type === "text") {
+		{segments.map((segment, index) => {
+			if (segment.type === "text") {
+				// Detect agent error messages (prefixed with [error])
+				const errorMatch = segment.text.match(
+					/^\[error\]\s*([\s\S]*)$/,
+				);
+				if (errorMatch) {
 					return (
 						<div
 							key={index}
-							className="whitespace-pre-wrap text-[15px] leading-relaxed"
+							className="flex items-start gap-2 rounded-lg px-3 py-2 text-[13px] leading-relaxed"
+							style={{
+								background:
+									"color-mix(in srgb, var(--color-error, #ef4444) 12%, transparent)",
+								color: "var(--color-error, #ef4444)",
+								border: "1px solid color-mix(in srgb, var(--color-error, #ef4444) 25%, transparent)",
+							}}
 						>
-							{segment.text}
+							<span
+								className="flex-shrink-0 mt-0.5"
+								aria-hidden="true"
+							>
+								<svg
+									width="16"
+									height="16"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+								>
+									<circle
+										cx="12"
+										cy="12"
+										r="10"
+									/>
+									<line
+										x1="12"
+										y1="8"
+										x2="12"
+										y2="12"
+									/>
+									<line
+										x1="12"
+										y1="16"
+										x2="12.01"
+										y2="16"
+									/>
+								</svg>
+							</span>
+							<span className="whitespace-pre-wrap">
+								{errorMatch[1].trim()}
+							</span>
 						</div>
 					);
 				}
+				return (
+					<div
+						key={index}
+						className="whitespace-pre-wrap text-[15px] leading-relaxed"
+					>
+						{segment.text}
+					</div>
+				);
+			}
 				if (segment.type === "report-artifact") {
 					return (
 						<ReportCard

@@ -7,12 +7,11 @@ import {
 	useCallback,
 	useEffect,
 	useImperativeHandle,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { ChatMessage } from "./chat-message";
-
-const transport = new DefaultChatTransport({ api: "/api/chat" });
 
 /** Imperative handle for parent-driven session control (main page). */
 export type ChatPanelHandle = {
@@ -57,8 +56,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		},
 		ref,
 	) {
-		const { messages, sendMessage, status, stop, error, setMessages } =
-			useChat({ transport });
 		const [input, setInput] = useState("");
 		const [currentSessionId, setCurrentSessionId] = useState<string | null>(
 			null,
@@ -80,6 +77,37 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		);
 
 		const filePath = fileContext?.path ?? null;
+
+		// ── Ref-based session ID for transport ──
+		// The transport body function reads from this ref so it always has
+		// the latest session ID, even when called in the same event-loop
+		// tick as a state update (before the re-render).
+		const sessionIdRef = useRef<string | null>(null);
+
+		// Keep ref in sync with React state.
+		useEffect(() => {
+			sessionIdRef.current = currentSessionId;
+		}, [currentSessionId]);
+
+		// ── Transport (per-instance) ──
+		// Each ChatPanel mounts its own transport. For file-scoped chats the
+		// body function injects the sessionId so the API spawns an isolated
+		// agent process (subagent) per chat session.
+		const transport = useMemo(
+			() =>
+				new DefaultChatTransport({
+					api: "/api/chat",
+					body: () => {
+						const sid = sessionIdRef.current;
+						return sid ? { sessionId: sid } : {};
+					},
+				}),
+			[],
+		);
+
+		const { messages, sendMessage, status, stop, error, setMessages } =
+			useChat({ transport });
+
 		const isStreaming = status === "streaming" || status === "submitted";
 
 		// Auto-scroll to bottom on new messages
@@ -87,38 +115,22 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 		}, [messages]);
 
-		// ── File-scoped sessions ──
+		// ── Session persistence helpers ──
 
-		const fetchFileSessions = useCallback(async () => {
-			if (!filePath) {return;}
-			try {
-				const res = await fetch(
-					`/api/web-sessions?filePath=${encodeURIComponent(filePath)}`,
-				);
+		const createSession = useCallback(
+			async (title: string): Promise<string> => {
+				const body: Record<string, string> = { title };
+				if (filePath) {body.filePath = filePath;}
+				const res = await fetch("/api/web-sessions", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(body),
+				});
 				const data = await res.json();
-				setFileSessions(data.sessions || []);
-			} catch {
-				// ignore
-			}
-		}, [filePath]);
-
-		useEffect(() => {
-			if (filePath) {fetchFileSessions();}
-		}, [filePath, fetchFileSessions]);
-
-		// Reset chat state when the active file changes
-		useEffect(() => {
-			if (!filePath) {return;}
-			stop();
-			setCurrentSessionId(null);
-			onActiveSessionChange?.(null);
-			setMessages([]);
-			savedMessageIdsRef.current.clear();
-			isFirstFileMessageRef.current = true;
-			// eslint-disable-next-line react-hooks/exhaustive-deps -- stable setters
-		}, [filePath]);
-
-		// ── Session persistence ──
+				return data.session.id;
+			},
+			[filePath],
+		);
 
 		const saveMessages = useCallback(
 			async (
@@ -155,27 +167,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					for (const m of msgs)
 						{savedMessageIdsRef.current.add(m.id);}
 					onSessionsChange?.();
-					if (filePath) {fetchFileSessions();}
 				} catch (err) {
 					console.error("Failed to save messages:", err);
 				}
 			},
-			[onSessionsChange, filePath, fetchFileSessions],
-		);
-
-		const createSession = useCallback(
-			async (title: string): Promise<string> => {
-				const body: Record<string, string> = { title };
-				if (filePath) {body.filePath = filePath;}
-				const res = await fetch("/api/web-sessions", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(body),
-				});
-				const data = await res.json();
-				return data.session.id;
-			},
-			[filePath],
+			[onSessionsChange],
 		);
 
 		/** Extract plain text from a UIMessage */
@@ -198,7 +194,94 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			[],
 		);
 
-		// Persist unsaved messages when streaming finishes + live-reload file
+		// ── File-scoped session initialization ──
+		// When the active file changes: reset chat state, fetch existing
+		// sessions for this file, and auto-load the most recent one.
+
+		const fetchFileSessionsRef = useRef<
+			(() => Promise<FileScopedSession[]>) | null
+		>(null);
+
+		fetchFileSessionsRef.current = async () => {
+			if (!filePath) {return [];}
+			try {
+				const res = await fetch(
+					`/api/web-sessions?filePath=${encodeURIComponent(filePath)}`,
+				);
+				const data = await res.json();
+				return (data.sessions || []) as FileScopedSession[];
+			} catch {
+				return [];
+			}
+		};
+
+		useEffect(() => {
+			if (!filePath) {return;}
+			let cancelled = false;
+
+			// Reset state for the new file
+			sessionIdRef.current = null;
+			setCurrentSessionId(null);
+			onActiveSessionChange?.(null);
+			setMessages([]);
+			savedMessageIdsRef.current.clear();
+			isFirstFileMessageRef.current = true;
+
+			// Fetch sessions and auto-load the most recent
+			(async () => {
+				const sessions = await fetchFileSessionsRef.current?.() ?? [];
+				if (cancelled) {return;}
+				setFileSessions(sessions);
+
+				if (sessions.length > 0) {
+					const latest = sessions[0];
+					setCurrentSessionId(latest.id);
+					sessionIdRef.current = latest.id;
+					onActiveSessionChange?.(latest.id);
+					isFirstFileMessageRef.current = false;
+
+					// Load messages for the most recent session
+					try {
+						const msgRes = await fetch(
+							`/api/web-sessions/${latest.id}`,
+						);
+						if (cancelled) {return;}
+						const msgData = await msgRes.json();
+						const sessionMessages: Array<{
+							id: string;
+							role: "user" | "assistant";
+							content: string;
+							parts?: Array<Record<string, unknown>>;
+						}> = msgData.messages || [];
+
+						const uiMessages = sessionMessages.map((msg) => {
+							savedMessageIdsRef.current.add(msg.id);
+							return {
+								id: msg.id,
+								role: msg.role,
+								parts: (msg.parts ?? [
+									{
+										type: "text" as const,
+										text: msg.content,
+									},
+								]) as UIMessage["parts"],
+							};
+						});
+						if (!cancelled) {setMessages(uiMessages);}
+					} catch {
+						// ignore – start with empty messages
+					}
+				}
+			})();
+
+			return () => {
+				cancelled = true;
+			};
+			// eslint-disable-next-line react-hooks/exhaustive-deps -- stable setters
+		}, [filePath]);
+
+		// ── Persist unsaved messages + live-reload after streaming ──
+
 		const prevStatusRef = useRef(status);
 		useEffect(() => {
 			const wasStreaming =
@@ -218,6 +301,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						parts: m.parts,
 					}));
 					saveMessages(currentSessionId, toSave);
+				}
+
+				// Refresh file session list (title/count may have changed)
+				if (filePath) {
+					fetchFileSessionsRef.current?.().then((sessions) => {
+						setFileSessions(sessions);
+					});
 				}
 
 				// Re-fetch file content for live reload after agent edits
@@ -257,7 +347,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				return;
 			}
 
-			// Create session if none
+			// Create session if none exists yet
 			let sessionId = currentSessionId;
 			if (!sessionId) {
 				const title =
@@ -266,21 +356,15 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						: userText;
 				sessionId = await createSession(title);
 				setCurrentSessionId(sessionId);
+				sessionIdRef.current = sessionId;
 				onActiveSessionChange?.(sessionId);
 				onSessionsChange?.();
-				if (filePath) {fetchFileSessions();}
 
-				if (newSessionPendingRef.current) {
-					newSessionPendingRef.current = false;
-					const newMsgId = `system-new-${Date.now()}`;
-					await saveMessages(sessionId, [
-						{
-							id: newMsgId,
-							role: "user",
-							content: "/new",
-							parts: [{ type: "text", text: "/new" }],
-						},
-					]);
+				// Refresh file session tabs
+				if (filePath) {
+					fetchFileSessionsRef.current?.().then((sessions) => {
+						setFileSessions(sessions);
+					});
 				}
 			}
 
@@ -298,8 +382,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			async (sessionId: string) => {
 				if (sessionId === currentSessionId) {return;}
 
+				stop();
 				setLoadingSession(true);
 				setCurrentSessionId(sessionId);
+				sessionIdRef.current = sessionId;
 				onActiveSessionChange?.(sessionId);
 				savedMessageIdsRef.current.clear();
 				isFirstFileMessageRef.current = false; // loaded session has context
@@ -340,16 +426,18 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					setLoadingSession(false);
 				}
 			},
-			[currentSessionId, setMessages, onActiveSessionChange],
+			[currentSessionId, setMessages, onActiveSessionChange, stop],
 		);
 
 		const handleNewSession = useCallback(async () => {
+			stop();
 			setCurrentSessionId(null);
+			sessionIdRef.current = null;
 			onActiveSessionChange?.(null);
 			setMessages([]);
 			savedMessageIdsRef.current.clear();
 			isFirstFileMessageRef.current = true;
-			newSessionPendingRef.current = true;
+			newSessionPendingRef.current = false;
 
 			// Only send /new to backend for non-file sessions (main chat)
 			if (!filePath) {
@@ -362,7 +450,9 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					setStartingNewSession(false);
 				}
 			}
-		}, [setMessages, onActiveSessionChange, filePath]);
+			// NOTE: we intentionally do NOT clear fileSessions so the
+			// session tab list remains intact.
+		}, [setMessages, onActiveSessionChange, filePath, stop]);
 
 		// Expose imperative handle for parent-driven session management
 		useImperativeHandle(
@@ -598,11 +688,35 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					)}
 				</div>
 
-				{/* Error display */}
+				{/* Transport-level error display */}
 				{error && (
-					<div className="px-3 py-1.5 bg-red-900/20 border-t border-red-800/30 flex-shrink-0">
-						<p className="text-xs text-red-400">
-							Error: {error.message}
+					<div
+						className="px-3 py-2 border-t flex-shrink-0 flex items-center gap-2"
+						style={{
+							background:
+								"color-mix(in srgb, var(--color-error, #ef4444) 10%, var(--color-surface))",
+							borderColor:
+								"color-mix(in srgb, var(--color-error, #ef4444) 25%, transparent)",
+							color: "var(--color-error, #ef4444)",
+						}}
+					>
+						<svg
+							width="14"
+							height="14"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							className="flex-shrink-0"
+						>
+							<circle cx="12" cy="12" r="10" />
+							<line x1="12" y1="8" x2="12" y2="12" />
+							<line x1="12" y1="16" x2="12.01" y2="16" />
+						</svg>
+						<p className="text-xs">
+							{error.message}
 						</p>
 					</div>
 				)}

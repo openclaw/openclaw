@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { join, resolve, normalize } from "node:path";
+import { join, resolve, normalize, relative } from "node:path";
 import { homedir } from "node:os";
 
 /**
@@ -20,6 +20,25 @@ export function resolveDenchRoot(): string | null {
     if (existsSync(dir)) {return dir;}
   }
   return null;
+}
+
+/**
+ * Return the workspace path prefix relative to the repo root (agent's cwd).
+ * Tree paths are relative to the dench workspace root (e.g. "knowledge/leads/foo.md"),
+ * but the agent runs from the repo root, so it needs "dench/knowledge/leads/foo.md".
+ * Returns e.g. "dench", or null if the workspace isn't found.
+ */
+export function resolveAgentWorkspacePrefix(): string | null {
+  const root = resolveDenchRoot();
+  if (!root) {return null;}
+
+  const cwd = process.cwd();
+  const repoRoot = cwd.endsWith(join("apps", "web"))
+    ? resolve(cwd, "..", "..")
+    : cwd;
+
+  const rel = relative(repoRoot, root);
+  return rel || null;
 }
 
 /** Path to the DuckDB database file, or null if workspace doesn't exist. */

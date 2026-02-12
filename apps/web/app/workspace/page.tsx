@@ -328,10 +328,12 @@ export default function WorkspacePage() {
               content={content}
               workspaceExists={workspaceExists}
               tree={tree}
+              activePath={activePath}
               members={context?.members}
               onNodeSelect={handleNodeSelect}
               onNavigateToObject={handleNavigateToObject}
               onRefreshObject={refreshCurrentObject}
+              onRefreshTree={refreshTree}
             />
           </div>
 
@@ -364,18 +366,22 @@ function ContentRenderer({
   content,
   workspaceExists,
   tree,
+  activePath,
   members,
   onNodeSelect,
   onNavigateToObject,
   onRefreshObject,
+  onRefreshTree,
 }: {
   content: ContentState;
   workspaceExists: boolean;
   tree: TreeNode[];
+  activePath: string | null;
   members?: Array<{ id: string; name: string; email: string; role: string }>;
   onNodeSelect: (node: TreeNode) => void;
   onNavigateToObject: (objectName: string) => void;
   onRefreshObject: () => void;
+  onRefreshTree: () => void;
 }) {
   switch (content.kind) {
     case "loading":
@@ -406,6 +412,16 @@ function ContentRenderer({
         <DocumentView
           content={content.data.content}
           title={content.title}
+          filePath={activePath ?? undefined}
+          tree={tree}
+          onSave={onRefreshTree}
+          onNavigate={(path) => {
+            // Find the node in the tree and navigate to it
+            const node = findNode(tree, path);
+            if (node) {
+              onNodeSelect(node);
+            }
+          }}
         />
       );
 
