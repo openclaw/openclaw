@@ -1533,10 +1533,6 @@ export async function handleBlueBubblesWebhookRequest(
     if (guid && guid.trim() === token) {
       return true;
     }
-    const remote = req.socket?.remoteAddress ?? "";
-    if (remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1") {
-      return true;
-    }
     return false;
   });
 
