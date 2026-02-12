@@ -32,6 +32,7 @@ health.stop();
 
 // Circuit breaker
 const circuit = new Circuit(logger, { failures: 5, timeout: 30000 });
+
 try {
   const result = await circuit.exec(() => bot.api.getMe());
 } catch (error) {
@@ -43,7 +44,7 @@ try {
 // Retry logic
 const result = await retryWithBackoff(
   () => bot.api.sendMessage(chatId, text),
-  { attempts: 3, minDelayMs: 1000, maxDelayMs: 10000 },
+  { attempts: 3, minDelayMs: 1000, maxDelayMs: 10000 }
 );
 ```
 
