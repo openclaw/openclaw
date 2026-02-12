@@ -1,0 +1,12 @@
+{
+  "name": "penpot-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for PenPot design operations",
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "transit-js": "^0.8.874",
+    "zod": "^3.24.0"
+  }
+}

@@ -120,6 +120,11 @@ function transitToJs(value: unknown): unknown {
     return value.map(transitToJs);
   }
 
+  // Handle transit-js tagged values (custom types like "shape", "matrix")
+  if (value && typeof value === "object" && "tag" in value && "rep" in value) {
+    return transitToJs((value as { tag: string; rep: unknown }).rep);
+  }
+
   // Transit maps have forEach, keys, get methods
   if (
     value &&

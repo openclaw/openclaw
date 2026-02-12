@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "penpot": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/index.js"],
+      "env": {
+        "PENPOT_ACCESS_TOKEN": "${PENPOT_ACCESS_TOKEN}",
+        "PENPOT_BASE_URL": "${PENPOT_BASE_URL}"
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "penpot-design",
+  "version": "1.0.0",
+  "description": "Design UIs in PenPot directly from Claude. Create files, build layouts, add shapes, manage design libraries — all without opening a browser.",
+  "author": {
+    "name": "OpenClaw"
+  },
+  "keywords": ["design", "penpot", "ui", "prototyping", "layout"]
+}
