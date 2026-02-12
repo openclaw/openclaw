@@ -127,6 +127,24 @@ function resolveImageFallbackCandidates(params: {
   return candidates;
 }
 
+/**
+ * Look up per-model fallbacks from agents.defaults.models[key].fallbacks.
+ */
+function getPerModelFallbacks(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+): string[] | undefined {
+  const modelsMap = (cfg?.agents?.defaults as Record<string, unknown> | undefined)?.models as
+    | Record<string, { fallbacks?: string[] }>
+    | undefined;
+  if (!modelsMap) {
+    return undefined;
+  }
+  const key = `${provider}/${model}`;
+  return modelsMap[key]?.fallbacks;
+}
+
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -171,9 +189,41 @@ function resolveFallbackCandidates(params: {
     candidates.push(candidate);
   };
 
-  addCandidate({ provider, model }, false);
+  const resolveRaw = (raw: string): ModelCandidate | null => {
+    const resolved = resolveModelRefFromString({
+      raw: String(raw ?? ""),
+      defaultProvider,
+      aliasIndex,
+    });
+    return resolved?.ref ?? null;
+  };
 
-  const modelFallbacks = (() => {
+  /**
+   * Recursively expand per-model fallbacks. Each model's fallbacks are inserted
+   * immediately after it (depth-first), so the chain is:
+   *   opus → [opus's fallbacks recursively] → global fallbacks
+   *
+   * Per-model fallbacks bypass the allowlist since they are explicitly configured.
+   */
+  const expandPerModelFallbacks = (candidate: ModelCandidate, isRoot: boolean) => {
+    addCandidate(candidate, !isRoot);
+    const perModel = getPerModelFallbacks(params.cfg, candidate.provider, candidate.model);
+    if (perModel && perModel.length > 0) {
+      for (const raw of perModel) {
+        const resolved = resolveRaw(raw);
+        if (resolved && !seen.has(modelKey(resolved.provider, resolved.model))) {
+          // Per-model fallbacks are explicitly configured, treat as "root" (no allowlist)
+          expandPerModelFallbacks(resolved, true);
+        }
+      }
+    }
+  };
+
+  // Start with the requested model and expand its per-model chain
+  expandPerModelFallbacks({ provider, model }, true);
+
+  // Then add global fallbacks (or override), also expanding each one's per-model chain
+  const globalFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
       return params.fallbacksOverride;
     }
@@ -187,16 +237,11 @@ function resolveFallbackCandidates(params: {
     return [];
   })();
 
-  for (const raw of modelFallbacks) {
-    const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
-      defaultProvider,
-      aliasIndex,
-    });
-    if (!resolved) {
-      continue;
+  for (const raw of globalFallbacks) {
+    const resolved = resolveRaw(raw);
+    if (resolved) {
+      expandPerModelFallbacks(resolved, false);
     }
-    addCandidate(resolved.ref, true);
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {

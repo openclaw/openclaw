@@ -363,6 +363,168 @@ describe("runWithModelFallback", () => {
     expect(calls).toEqual([{ provider: "anthropic", model: "claude-opus-4-5" }]);
   });
 
+  it("uses per-model fallbacks before global fallbacks", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "provA/model-primary",
+            fallbacks: ["provC/model-global"],
+          },
+          models: {
+            "provA/model-primary": {
+              alias: "primary",
+              fallbacks: ["provB/model-permodel"],
+            },
+            "provB/model-permodel": {},
+            "provC/model-global": {},
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      calls.push({ provider, model });
+      if (provider === "provb" && model === "model-permodel") {
+        return "ok";
+      }
+      throw Object.assign(new Error("nope"), { status: 401 });
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "provA",
+      model: "model-primary",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    // Should try primary first, then its per-model fallback, NOT the global one
+    // First call uses raw provider (provA), per-model fallback is resolved (provb lowercase)
+    expect(calls[0]).toEqual({ provider: "provA", model: "model-primary" });
+    expect(calls[1]).toEqual({ provider: "provb", model: "model-permodel" });
+    expect(calls.length).toBe(2);
+  });
+
+  it("per-model fallbacks are recursive", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "a/m1",
+            fallbacks: [],
+          },
+          models: {
+            "a/m1": { fallbacks: ["b/m2"] },
+            "b/m2": { fallbacks: ["c/m3"] },
+            "c/m3": { fallbacks: ["d/m4"] },
+            "d/m4": {},
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      calls.push({ provider, model });
+      if (provider === "d" && model === "m4") {
+        return "ok";
+      }
+      throw Object.assign(new Error("nope"), { status: 401 });
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "a",
+      model: "m1",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(calls).toEqual([
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+      { provider: "c", model: "m3" },
+      { provider: "d", model: "m4" },
+    ]);
+  });
+
+  it("per-model fallbacks don't create infinite loops", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "a/m1",
+            fallbacks: [],
+          },
+          models: {
+            "a/m1": { fallbacks: ["b/m2"] },
+            "b/m2": { fallbacks: ["a/m1"] },
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      calls.push({ provider, model });
+      throw Object.assign(new Error("nope"), { status: 401 });
+    });
+
+    await expect(runWithModelFallback({ cfg, provider: "a", model: "m1", run })).rejects.toThrow(
+      "All models failed",
+    );
+
+    // Should try each only once despite circular ref
+    expect(calls).toEqual([
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ]);
+  });
+
+  it("per-model fallbacks merge with global fallbacks", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "a/m1",
+            fallbacks: ["z/global"],
+          },
+          models: {
+            "a/m1": { fallbacks: ["b/m2"] },
+            "b/m2": {},
+            "z/global": {},
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      calls.push({ provider, model });
+      if (provider === "z") {
+        return "ok";
+      }
+      throw Object.assign(new Error("nope"), { status: 401 });
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "a",
+      model: "m1",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    // Order: a/m1 → b/m2 (per-model) → z/global (global fallback)
+    expect(calls).toEqual([
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+      { provider: "z", model: "global" },
+    ]);
+  });
+
   it("defaults provider/model when missing (regression #946)", async () => {
     const cfg = makeCfg({
       agents: {
