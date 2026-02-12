@@ -12,10 +12,29 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron: use requested `agentId` for isolated job auth resolution. (#13983) Thanks @0xRaini.
+- Cron: prevent cron jobs from skipping execution when `nextRunAtMs` advances. (#14068) Thanks @WalterSumbon.
+- Cron: pass `agentId` to `runHeartbeatOnce` for main-session jobs. (#14140) Thanks @ishikawa-pro.
+- Cron: re-arm timers when `onTimer` fires while a job is still executing. (#14233) Thanks @tomron87.
+- Cron: prevent duplicate fires when multiple jobs trigger simultaneously. (#14256) Thanks @xinhuagu.
+- Cron: isolate scheduler errors so one bad job does not break all jobs. (#14385) Thanks @MarvinDontPanic.
+- Cron: prevent one-shot `at` jobs from re-firing on restart after skipped/errored runs. (#13878) Thanks @lailoo.
+- WhatsApp: convert Markdown bold/strikethrough to WhatsApp formatting. (#14285) Thanks @Raikan10.
+- WhatsApp: allow media-only sends and normalize leading blank payloads. (#14408) Thanks @karimnaguib.
+- WhatsApp: default MIME type for voice messages when Baileys omits it. (#14444) Thanks @mcaxtr.
 - Ollama: use configured `models.providers.ollama.baseUrl` for model discovery and normalize `/v1` endpoints to the native Ollama API root. (#14131) Thanks @shtse8.
 - Slack: detect control commands when channel messages start with bot mention prefixes (for example, `@Bot /new`). (#14142) Thanks @beefiker.
 - Discord tests: use a partial @buape/carbon mock in slash command coverage. (#13262) Thanks @arosstale.
 - CLI/Wizard: exit with code 1 when `configure`, `agents add`, or interactive `onboard` wizards are canceled, so `set -e` automation stops correctly. (#14156) Thanks @0xRaini.
+- Feishu: pass `Buffer` directly to the Feishu SDK upload APIs instead of `Readable.from(...)` to avoid form-data upload failures. (#10345) Thanks @youngerstyle.
+- Feishu: trigger mention-gated group handling only when the bot itself is mentioned (not just any mention). (#11088) Thanks @openperf.
+- Feishu: probe status uses the resolved account context for multi-account credential checks. (#11233) Thanks @onevcat.
+- Feishu DocX: preserve top-level converted block order using `firstLevelBlockIds` when writing/appending documents. (#13994) Thanks @Cynosure159.
+- Feishu plugin packaging: remove `workspace:*` `openclaw` dependency from `extensions/feishu` and sync lockfile for install compatibility. (#14423) Thanks @jackcooper2015.
+- Telegram: handle no-text message in model picker editMessageText. (#14397) Thanks @0xRaini.
+- Slack: change default replyToMode from "off" to "all". (#14364) Thanks @nm-de.
+- Tests: update thread ID handling in Slack message collection tests. (#14108) Thanks @swizzmagik.
+- Telegram: surface REACTION_INVALID as non-fatal warning. (#14340) Thanks @0xRaini.
 
 ## 2026.2.9
 
@@ -39,6 +58,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron: prevent one-shot `at` jobs from re-firing on gateway restart when previously skipped or errored. (#13845)
 - Discord: add exec approval cleanup option to delete DMs after approval/denial/timeout. (#13205) Thanks @thewilloftheshadow.
 - Sessions: prune stale entries, cap session store size, rotate large stores, accept duration/size thresholds, default to warn-only maintenance, and prune cron run sessions after retention windows. (#13083) Thanks @skyfallsin, @Glucksberg, @gumadeiras.
 - CI: Implement pipeline and workflow order. Thanks @quotentiroler.
