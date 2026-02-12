@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
+  DefaultResourceLoader,
   estimateTokens,
   SessionManager,
   SettingsManager,
@@ -533,14 +534,26 @@ export async function compactEmbeddedPiSessionDirect(
         settingsManager,
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
-      // Call for side effects (sets compaction/pruning runtime state)
-      buildEmbeddedExtensionPaths({
+      // Call for side effects (sets compaction/pruning runtime state) AND collect extension paths
+      const embeddedExtPaths = buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider,
         modelId,
         model,
       });
+
+      // Create a ResourceLoader with the memory-context / compaction extension paths
+      let resourceLoader: DefaultResourceLoader | undefined;
+      if (embeddedExtPaths.length > 0) {
+        resourceLoader = new DefaultResourceLoader({
+          cwd: resolvedWorkspace,
+          agentDir,
+          settingsManager,
+          additionalExtensionPaths: embeddedExtPaths,
+        });
+        await resourceLoader.reload();
+      }
 
       const { builtInTools, customTools } = splitSdkTools({
         tools,
@@ -558,6 +571,7 @@ export async function compactEmbeddedPiSessionDirect(
         customTools,
         sessionManager,
         settingsManager,
+        ...(resourceLoader ? { resourceLoader } : {}),
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
 

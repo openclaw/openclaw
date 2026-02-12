@@ -1,7 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  SessionManager,
+  SettingsManager,
+  DefaultResourceLoader,
+} from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -31,6 +36,8 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { resolveContextWindowInfo } from "../../context-window-guard.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
@@ -521,13 +528,31 @@ export async function runEmbeddedAttempt(
       });
 
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
+      // When contextTokens is configured below the model's native context window,
+      // we need to inflate Pi's reserveTokens so that Pi triggers compaction
+      // at our desired contextTokens limit instead of the model's native limit.
+      // Formula: effectiveReserve = modelContextWindow - desiredContextTokens + desiredReserve
+      const desiredReserve = resolveCompactionReserveTokensFloor(params.config);
+      const modelCtxWindow = params.model?.contextWindow ?? 128_000;
+      const desiredCtxTokens = resolveContextWindowInfo({
+        cfg: params.config,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelContextWindow: params.model?.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      }).tokens;
+      const effectiveReserve =
+        desiredCtxTokens < modelCtxWindow
+          ? modelCtxWindow - desiredCtxTokens + desiredReserve
+          : desiredReserve;
       ensurePiCompactionReserveTokens({
         settingsManager,
-        minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
+        minReserveTokens: effectiveReserve,
       });
 
-      // Call for side effects (sets compaction/pruning runtime state)
-      buildEmbeddedExtensionPaths({
+      // Call for side effects (sets compaction/pruning/memory-context runtime state)
+      // AND collect extension paths so Pi loads them via ResourceLoader.
+      const embeddedExtPaths = buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
@@ -537,6 +562,18 @@ export async function runEmbeddedAttempt(
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
+
+      // Create a ResourceLoader with compaction/pruning/memory-context extension paths
+      let resourceLoader: DefaultResourceLoader | undefined;
+      if (embeddedExtPaths.length > 0) {
+        resourceLoader = new DefaultResourceLoader({
+          cwd: resolvedWorkspace,
+          agentDir,
+          settingsManager,
+          additionalExtensionPaths: embeddedExtPaths,
+        });
+        await resourceLoader.reload();
+      }
 
       const { builtInTools, customTools } = splitSdkTools({
         tools,
@@ -571,6 +608,7 @@ export async function runEmbeddedAttempt(
         customTools: allCustomTools,
         sessionManager,
         settingsManager,
+        ...(resourceLoader ? { resourceLoader } : {}),
       }));
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {

@@ -1,13 +1,17 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { HashEmbedding } from "../memory-context/embedding.js";
+import {
+  setGlobalMemoryRuntime,
+  type MemoryContextConfig,
+} from "../memory-context/global-runtime.js";
 import { KnowledgeStore } from "../memory-context/knowledge-store.js";
-import { setMemoryContextRuntime, type MemoryContextConfig } from "../memory-context/runtime.js";
 import { WarmStore } from "../memory-context/store.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
@@ -19,9 +23,23 @@ import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-t
 function resolvePiExtensionPath(id: string): string {
   const self = fileURLToPath(import.meta.url);
   const dir = path.dirname(self);
-  // In dev this file is `.ts` (tsx), in production it's `.js`.
   const ext = path.extname(self) === ".ts" ? "ts" : "js";
-  return path.join(dir, "..", "pi-extensions", `${id}.${ext}`);
+  const resolved = path.join(dir, "..", "pi-extensions", `${id}.${ext}`);
+  if (ext === "js") {
+    // In dist mode, .js files may not exist for memory-context extensions;
+    // fall back to .ts source files that jiti can load.
+    if (!fs.existsSync(resolved)) {
+      const tsPath = resolved.replace(/\.js$/, ".ts");
+      if (fs.existsSync(tsPath)) {
+        return tsPath;
+      }
+      const srcPath = path.join(dir, "..", "src", "agents", "pi-extensions", `${id}.ts`);
+      if (fs.existsSync(srcPath)) {
+        return srcPath;
+      }
+    }
+  }
+  return resolved;
 }
 
 function resolveContextWindowTokens(params: {
@@ -144,16 +162,18 @@ export function buildEmbeddedExtensionPaths(params: {
     });
     const knowledgeStore = new KnowledgeStore(resolvedPath);
 
-    setMemoryContextRuntime(params.sessionManager, {
+    const sessionId =
+      (params.sessionManager as unknown as { sessionId?: string }).sessionId ?? "default";
+    setGlobalMemoryRuntime(sessionId, {
       config,
       rawStore,
       knowledgeStore,
       contextWindowTokens,
       maxHistoryShare: compactionCfg?.maxHistoryShare ?? 0.5,
     });
+    console.info(`[memory-context] global runtime set for session=${sessionId}`);
 
-    // Order matters: recall (context event) before archive (session_before_compact)
-    // in paths array, but they listen to different events so order only affects loading.
+    // Push extension paths — Pi runtime will load and execute these via jiti
     paths.push(resolvePiExtensionPath("memory-context-recall"));
     paths.push(resolvePiExtensionPath("memory-context-archive"));
   }

@@ -10,9 +10,9 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
  * Execution order in context chain: runs AFTER context-pruning (micro-level).
  */
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { getGlobalMemoryRuntime, computeHardCap } from "../memory-context/global-runtime.js";
 import { buildRecalledContextBlock } from "../memory-context/recall-format.js";
 import { maybeRedact } from "../memory-context/redaction.js";
-import { getMemoryContextRuntime, computeHardCap } from "../memory-context/runtime.js";
 import { smartTrim, type MessageLike } from "../memory-context/smart-trim.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
@@ -67,7 +67,9 @@ function estimateMessageTokens(msg: MessageLike): number {
 
 export default function memoryContextRecallExtension(api: ExtensionAPI): void {
   api.on("context", async (event: { messages: AgentMessage[] }, ctx: ExtensionContext) => {
-    const runtime = getMemoryContextRuntime(ctx.sessionManager);
+    const sessionId =
+      (ctx.sessionManager as unknown as { sessionId?: string }).sessionId ?? "unknown";
+    const runtime = getGlobalMemoryRuntime(sessionId);
     if (!runtime) {
       return undefined;
     }

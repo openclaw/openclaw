@@ -13,17 +13,38 @@ import {
   archiveCompactedMessages,
   scheduleKnowledgeExtraction,
 } from "../memory-context/compaction-bridge.js";
-import { getMemoryContextRuntime } from "../memory-context/runtime.js";
+import { getGlobalMemoryRuntime } from "../memory-context/global-runtime.js";
 
 export default function memoryContextArchiveExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
-    const runtime = getMemoryContextRuntime(ctx.sessionManager);
+    const sessionId =
+      (ctx.sessionManager as unknown as { sessionId?: string }).sessionId ?? "unknown";
+    const runtime = getGlobalMemoryRuntime(sessionId);
     if (!runtime) {
-      return undefined; // Memory context not enabled for this session
+      return undefined;
     }
 
     const { preparation } = event;
-    const messages = preparation.messagesToSummarize ?? [];
+    const branchEntries = (event as Record<string, unknown>).branchEntries;
+    // Use branchEntries.message payloads when messagesToSummarize is empty.
+    // Pi may expose compacted content as branch entries rather than plain messages.
+    const fallbackMessages = Array.isArray(branchEntries)
+      ? branchEntries
+          .map((entry) =>
+            entry && typeof entry === "object"
+              ? (entry as { message?: { role?: string; content?: unknown } }).message
+              : undefined,
+          )
+          .filter(
+            (m): m is { role?: string; content?: unknown } =>
+              !!m && (m.role === "user" || m.role === "assistant"),
+          )
+      : [];
+    const messages = (
+      preparation.messagesToSummarize?.length > 0
+        ? preparation.messagesToSummarize
+        : fallbackMessages
+    ) as Array<{ role?: string; content?: unknown }>;
 
     if (messages.length === 0) {
       return undefined;
