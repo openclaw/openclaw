@@ -55,10 +55,7 @@ function runBeforeContextSendHook(
     return messages !== original ? { messages } : undefined;
   }
 
-  const result = hookRunner.runBeforeContextSend(
-    { messages },
-    {},
-  );
+  const result = hookRunner.runBeforeContextSend({ messages }, {});
 
   const final = result?.messages ?? messages;
   return final !== original ? { messages: final } : undefined;

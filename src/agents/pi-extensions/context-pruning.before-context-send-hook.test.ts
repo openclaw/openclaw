@@ -1,12 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { default as contextPruningExtension } from "./context-pruning/extension.js";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 
