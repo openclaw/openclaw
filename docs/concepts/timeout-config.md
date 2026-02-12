@@ -89,7 +89,7 @@ In `~/.openclaw/openclaw.json`:
         "baseUrl": "https://api.openai.com/v1",
         "apiKey": "sk-...",
         "timeoutMs": 600000,
-        "timeout": 600000, // Backward compatibility
+        "timeout": 600000,
         "models": [...]
       }
     }
@@ -137,10 +137,12 @@ Example combined configuration:
 
 ```json
 {
-  "agentDefaults": {
-    "subagents": {
-      "maxSpawnDepth": 3,
-      "maxConcurrent": 2
+  "agents": {
+    "defaults": {
+      "subagents": {
+        "maxSpawnDepth": 3,
+        "maxConcurrent": 2
+      }
     }
   },
   "models": {
