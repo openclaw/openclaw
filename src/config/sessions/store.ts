@@ -117,6 +117,11 @@ export function clearSessionStoreCacheForTest(): void {
   SESSION_STORE_CACHE.clear();
 }
 
+/** Expose lock queue size for tests. */
+export function getSessionStoreLockQueueSizeForTest(): number {
+  return LOCK_QUEUES.size;
+}
+
 type LoadSessionStoreOptions = {
   skipCache?: boolean;
 };
@@ -592,10 +597,14 @@ async function withSessionStoreLock<T>(
   _opts: SessionStoreLockOptions = {},
 ): Promise<T> {
   const prev = LOCK_QUEUES.get(storePath) ?? Promise.resolve();
-  const next = prev.catch(() => {}).then(() => fn());
-  LOCK_QUEUES.set(storePath, next);
-  void next.finally(() => {
-    if (LOCK_QUEUES.get(storePath) === next) {
+  const next = prev.then(() => fn());
+  // Store a caught version so unhandled-rejection is never triggered by the
+  // queue reference itself.  Callers still observe the real rejection via the
+  // returned `next` promise.
+  const safe = next.catch(() => {});
+  LOCK_QUEUES.set(storePath, safe);
+  void safe.finally(() => {
+    if (LOCK_QUEUES.get(storePath) === safe) {
       LOCK_QUEUES.delete(storePath);
     }
   });
