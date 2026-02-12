@@ -745,6 +745,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     readStringParam(params, "path", { trim: false }) ??
     readStringParam(params, "filePath", { trim: false });
   const hasCard = params.card != null && typeof params.card === "object";
+  const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(params, "message", {
       required: !mediaHint && !hasCard,
@@ -752,6 +753,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     }) ?? "";
   if (message.includes("\\n")) {
     message = message.replaceAll("\\n", "\n");
+  }
+  if (!message.trim() && caption.trim()) {
+    message = caption;
   }
 
   const parsed = parseReplyDirectives(message);
@@ -804,6 +808,16 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
 
   const mediaUrl = readStringParam(params, "media", { trim: false });
+  if (channel === "whatsapp") {
+    message = message.replace(/^(?:[ \t]*\r?\n)+/, "");
+    if (!message.trim()) {
+      message = "";
+    }
+  }
+  if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0 && !hasCard) {
+    throw new Error("send requires text or media");
+  }
+  params.message = message;
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
   const bestEffort = readBooleanParam(params, "bestEffort");
 

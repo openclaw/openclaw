@@ -84,6 +84,10 @@ jobs:
             esac
 
             case "$path" in
+              # Generated protocol models are already covered by protocol:check and
+              # should not force the full native macOS lane.
+              apps/macos/Sources/OpenClawProtocol/*|apps/shared/OpenClawKit/Sources/OpenClawProtocol/*)
+                ;;
               apps/macos/*|apps/ios/*|apps/shared/*|Swabble/*)
                 run_macos=true
                 ;;
