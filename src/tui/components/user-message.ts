@@ -1,5 +1,6 @@
 import { Container, Markdown, Spacer } from "@mariozechner/pi-tui";
 import { markdownTheme, theme } from "../theme/theme.js";
+import { clampLinesToWidth } from "./safe-render.js";
 
 export class UserMessageComponent extends Container {
   private body: Markdown;
@@ -16,5 +17,9 @@ export class UserMessageComponent extends Container {
 
   setText(text: string) {
     this.body.setText(text);
+  }
+
+  override render(width: number): string[] {
+    return clampLinesToWidth(super.render(width), width);
   }
 }

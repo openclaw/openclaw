@@ -12,6 +12,11 @@ overrides:
   tar: 7.5.7
   tough-cookie: 4.1.3
 
+patchedDependencies:
+  '@mariozechner/pi-tui':
+    hash: 2b2845ff86c7a6bdd009c922ca5a80545c8a8e4d915e2ce51ed3c9a0493f2085
+    path: patches/@mariozechner__pi-tui.patch
+
 importers:
 
   .:
@@ -57,7 +62,7 @@ importers:
         version: 0.52.9(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui':
         specifier: 0.52.9
-        version: 0.52.9
+        version: 0.52.9(patch_hash=2b2845ff86c7a6bdd009c922ca5a80545c8a8e4d915e2ce51ed3c9a0493f2085)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -6911,7 +6916,7 @@ snapshots:
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.52.9(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-ai': 0.52.9(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-tui': 0.52.9
+      '@mariozechner/pi-tui': 0.52.9(patch_hash=2b2845ff86c7a6bdd009c922ca5a80545c8a8e4d915e2ce51ed3c9a0493f2085)
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
       cli-highlight: 2.1.11
@@ -6935,7 +6940,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-tui@0.52.9':
+  '@mariozechner/pi-tui@0.52.9(patch_hash=2b2845ff86c7a6bdd009c922ca5a80545c8a8e4d915e2ce51ed3c9a0493f2085)':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2

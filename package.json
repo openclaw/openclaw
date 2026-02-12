@@ -211,6 +211,9 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ]
+    ],
+    "patchedDependencies": {
+      "@mariozechner/pi-tui": "patches/@mariozechner__pi-tui.patch"
+    }
   }
 }

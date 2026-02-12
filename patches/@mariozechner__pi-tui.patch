@@ -1,0 +1,40 @@
+diff --git a/dist/tui.js b/dist/tui.js
+index 4e5f241982564c60e52686080da004572539f8d3..94a0bda30b3eb8f955cf529daca42d843c16da21 100644
+--- a/dist/tui.js
++++ b/dist/tui.js
+@@ -802,32 +802,10 @@ export class TUI extends Container {
+             const line = newLines[i];
+             const isImage = isImageLine(line);
+             if (!isImage && visibleWidth(line) > width) {
+-                // Log all lines to crash file for debugging
+-                const crashLogPath = path.join(os.homedir(), ".pi", "agent", "pi-crash.log");
+-                const crashData = [
+-                    `Crash at ${new Date().toISOString()}`,
+-                    `Terminal width: ${width}`,
+-                    `Line ${i} visible width: ${visibleWidth(line)}`,
+-                    "",
+-                    "=== All rendered lines ===",
+-                    ...newLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
+-                    "",
+-                ].join("\n");
+-                fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
+-                fs.writeFileSync(crashLogPath, crashData);
+-                // Clean up terminal state before throwing
+-                this.stop();
+-                const errorMsg = [
+-                    `Rendered line ${i} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
+-                    "",
+-                    "This is likely caused by a custom TUI component not truncating its output.",
+-                    "Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
+-                    "",
+-                    `Debug log written to: ${crashLogPath}`,
+-                ].join("\n");
+-                throw new Error(errorMsg);
++                // Gracefully truncate oversized lines instead of crashing (fix #14591)
++                newLines[i] = sliceByColumn(line, 0, width, true);
+             }
+-            buffer += line;
++            buffer += newLines[i];
+         }
+         // Track where cursor ended up after rendering
+         let finalCursorRow = renderEnd;

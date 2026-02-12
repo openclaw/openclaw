@@ -1,6 +1,7 @@
 import { Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { theme } from "../theme/theme.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
+import { clampLinesToWidth } from "./safe-render.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
@@ -100,5 +101,9 @@ export class ChatLog extends Container {
     for (const tool of this.toolById.values()) {
       tool.setExpanded(expanded);
     }
+  }
+
+  override render(width: number): string[] {
+    return clampLinesToWidth(super.render(width), width);
   }
 }
