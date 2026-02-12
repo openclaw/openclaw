@@ -24,7 +24,7 @@ set -euo pipefail
 #   OPENCLAW_INSTALLER=npm|pnpm|auto
 #   OPENCLAW_BIN=openclaw|moltbot
 #   OPENCLAW_RUN_ONBOARD=1|0
-#   OPENCLAW_ONBOARD_ARGS="--install-daemon --auth-choice x402"
+#   OPENCLAW_ONBOARD_ARGS="onboard --install-daemon --auth-choice x402"
 #   OPENCLAW_NPM_SCRIPT_SHELL=/path/to/sh  # optional npm lifecycle shell override
 #
 # SAW overrides:
@@ -50,7 +50,7 @@ OPENCLAW_BRANCH="${OPENCLAW_BRANCH:-}"
 OPENCLAW_INSTALLER="${OPENCLAW_INSTALLER:-npm}"
 OPENCLAW_BIN="${OPENCLAW_BIN:-}"
 OPENCLAW_RUN_ONBOARD="${OPENCLAW_RUN_ONBOARD:-1}"
-OPENCLAW_ONBOARD_ARGS="${OPENCLAW_ONBOARD_ARGS:---install-daemon --auth-choice x402}"
+OPENCLAW_ONBOARD_ARGS="${OPENCLAW_ONBOARD_ARGS:-onboard --install-daemon --auth-choice x402}"
 OPENCLAW_NPM_SCRIPT_SHELL="${OPENCLAW_NPM_SCRIPT_SHELL:-}"
 
 if [[ -z "$OPENCLAW_SPEC" && -z "$OPENCLAW_REF" && -z "$OPENCLAW_BRANCH" ]]; then
@@ -148,7 +148,12 @@ saw_download_and_install() {
 
 saw_create_users() {
   if ! id "$SAW_SERVICE_USER" &>/dev/null; then
-    sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$SAW_SERVICE_USER"
+    if getent group "$SAW_SERVICE_USER" &>/dev/null; then
+      # Group already exists (e.g. from a previous partial run) — use it as primary
+      sudo useradd --system --no-create-home --shell /usr/sbin/nologin --gid "$SAW_SERVICE_USER" "$SAW_SERVICE_USER"
+    else
+      sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$SAW_SERVICE_USER"
+    fi
     echo "==> SAW: created system user '$SAW_SERVICE_USER'"
   else
     echo "==> SAW: system user '$SAW_SERVICE_USER' already exists"
