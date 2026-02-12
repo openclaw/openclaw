@@ -895,8 +895,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const onAbort = () => ws.close();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
-    return await new Promise((resolve) => {
+    return await new Promise((resolve, reject) => {
+      let opened = false;
+
       ws.on("open", () => {
+        opened = true;
         opts.statusSink?.({
           connected: true,
           lastConnectedAt: Date.now(),
@@ -957,7 +960,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
         });
         opts.abortSignal?.removeEventListener("abort", onAbort);
-        resolve();
+        if (opened) {
+          resolve();
+        } else {
+          reject(new Error(`websocket closed before open (code ${code})`));
+        }
       });
 
       ws.on("error", (err) => {

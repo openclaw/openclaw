@@ -130,4 +130,22 @@ describe("runWithReconnect", () => {
 
     expect(connectFn).toHaveBeenCalledTimes(1);
   });
+
+  it("abort signal interrupts backoff sleep immediately", async () => {
+    const abort = new AbortController();
+    const connectFn = vi.fn(async () => {
+      // Schedule abort to fire 10ms into the 60s sleep
+      setTimeout(() => abort.abort(), 10);
+    });
+
+    const start = Date.now();
+    await runWithReconnect(connectFn, {
+      abortSignal: abort.signal,
+      initialDelayMs: 60_000,
+    });
+    const elapsed = Date.now() - start;
+
+    expect(connectFn).toHaveBeenCalledTimes(1);
+    expect(elapsed).toBeLessThan(5000);
+  });
 });
