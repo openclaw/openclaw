@@ -218,7 +218,7 @@ export async function monitorMSTeamsProvider(
   const express = await import("express");
 
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-  const { ActivityHandler, MsalTokenProvider, authorizeJWT } = sdk;
+  const { ActivityHandler, MsalTokenProvider } = sdk;
 
   // Auth configuration - create early so adapter is available for deliverReplies
   const tokenProvider = new MsalTokenProvider(authConfig);
@@ -240,7 +240,12 @@ export async function monitorMSTeamsProvider(
   // Create Express server
   const expressApp = express.default();
   expressApp.use(express.json());
-  expressApp.use(authorizeJWT(authConfig));
+
+  // NOTE: We intentionally do NOT apply the SDK's authorizeJWT middleware here.
+  // CloudAdapter.process() already performs Bot Framework JWT validation internally.
+  // Applying authorizeJWT globally would reject valid Bot Framework webhook requests
+  // that arrive without the expected Authorization header format, returning
+  // {"jwt-auth-error":"authorization header not found"} before the adapter can process them.
 
   // Set up the messages endpoint - use configured path and /api/messages as fallback
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
