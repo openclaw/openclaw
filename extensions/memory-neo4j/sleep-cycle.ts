@@ -90,6 +90,7 @@ export type SleepCycleOptions = {
   skipSemanticDedup?: boolean; // Skip LLM-based semantic dedup (Phase 1b) and conflict detection (Phase 1c)
 
   // Phase 2-3: Pareto-based Promotion
+  skipPromotion?: boolean; // Skip core promotion entirely (default: true — core is user-curated only)
   paretoPercentile?: number; // Top N% for core (default: 0.2 = top 20%)
   promotionMinAgeDays?: number; // Min age before promotion (default: 7)
 
@@ -156,6 +157,7 @@ export async function runSleepCycle(
     abortSignal,
     dedupThreshold = 0.95,
     skipSemanticDedup = false,
+    skipPromotion = true,
     maxSemanticDedupPairs = 500,
     llmConcurrency = 8,
     paretoPercentile = 0.2,
@@ -465,7 +467,11 @@ export async function runSleepCycle(
   // bad core memories are handled manually via memory_forget). The alternative
   // (re-querying scores per phase) adds latency without meaningful accuracy gain.
   // --------------------------------------------------------------------------
-  if (!abortSignal?.aborted && paretoThreshold > 0) {
+  if (skipPromotion) {
+    logger.info(
+      "memory-neo4j: [sleep] Phase 3: Core Promotion — SKIPPED (core is user-curated only)",
+    );
+  } else if (!abortSignal?.aborted && paretoThreshold > 0) {
     onPhaseStart?.("promotion");
     logger.info("memory-neo4j: [sleep] Phase 3: Core Promotion");
 

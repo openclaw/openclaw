@@ -1069,9 +1069,9 @@ export class Neo4jMemoryClient {
     const allIds = [...memoryMeta.keys()];
 
     for (let batchStart = 0; batchStart < allIds.length; batchStart += DEDUP_CONCURRENCY) {
-      if (pairsFound > 500) {
+      if (pairsFound > 2000) {
         this.logger.warn(
-          `memory-neo4j: findDuplicateClusters hit safety bound (500 pairs) — some duplicates may not be detected. Consider running with a higher threshold.`,
+          `memory-neo4j: findDuplicateClusters hit safety bound (2000 pairs) — some duplicates may not be detected. Consider running with a higher threshold.`,
         );
         break;
       }

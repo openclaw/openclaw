@@ -156,6 +156,21 @@ const ASSISTANT_NARRATION_PATTERNS = [
   /^I can see\s/i,
   // A sub-agent task report (quoted or inline)
   /^A sub-?agent task\b/i,
+
+  // --- Injected system/voice context (not user knowledge) ---
+  // Voice mode formatting instructions injected into sessions
+  /^\[VOICE\s*(MODE|OUTPUT)/i,
+  /^\[voice[-\s]?context\]/i,
+  // Voice tag prefix
+  /^\[voice\]\s/i,
+
+  // --- Session completion summaries (ephemeral, not long-term knowledge) ---
+  // "Done ✅ ..." completion messages (assistant summarizing what it just did)
+  /^Done\s*[✅✓☑️]\s/i,
+  // "All good" / "All set" wrap-ups
+  /^All (good|set|done)[!.]/i,
+  // "Here's what changed" / "Summary of changes" (session-specific)
+  /^(here'?s\s+(what|the|a)\s+(changed?|summary|breakdown|recap))/i,
 ];
 
 export function passesAssistantAttentionGate(text: string): boolean {
