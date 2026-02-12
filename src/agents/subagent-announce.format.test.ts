@@ -42,6 +42,16 @@ vi.mock("./tools/agent-step.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
+  canonicalizeRequesterStoreKey: (_cfg: unknown, key: string) => {
+    const raw = key.trim();
+    if (raw.startsWith("agent:")) {
+      return raw;
+    }
+    if (raw === "main") {
+      return "agent:main:main";
+    }
+    return `agent:main:${raw}`;
+  },
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: () => "main",
   resolveStorePath: () => "/tmp/sessions.json",
