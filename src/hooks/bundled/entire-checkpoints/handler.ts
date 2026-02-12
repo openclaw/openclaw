@@ -20,10 +20,14 @@ const execFileAsync = promisify(execFile);
  */
 async function findEntireBin(): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("which", ["entire"]);
-    return stdout.trim() || null;
-  } catch {
-    return null;
+    await execFileAsync("entire", ["--version"]);
+    return "entire";
+  } catch (err: unknown) {
+    if ((err as Record<string, unknown>)?.code === "ENOENT") {
+      return null;
+    }
+    // entire exists but --version failed? Still usable.
+    return "entire";
   }
 }
 
@@ -56,7 +60,7 @@ function buildPayload(event: Parameters<HookHandler>[0]): Record<string, unknown
   return {
     session_id: (sessionEntry.sessionId as string) || event.sessionKey,
     transcript_path: (sessionEntry.sessionFile as string) || undefined,
-    prompt: undefined,
+    prompt: (context.firstUserMessage as string) || undefined,
   };
 }
 
