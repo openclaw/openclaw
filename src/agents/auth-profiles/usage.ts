@@ -45,7 +45,8 @@ export function resolveDominantCooldownReason(
           continue;
         }
         const key = reason as AuthProfileFailureReason;
-        totals[key] = (totals[key] ?? 0) + (count ?? 0);
+        const n = typeof count === "number" && Number.isFinite(count) && count > 0 ? count : 0;
+        totals[key] = (totals[key] ?? 0) + n;
       }
     }
   }
