@@ -37,7 +37,9 @@ function resolveCommand(command: string): string {
  * metacharacters (parentheses, pipes, quotes, etc.).
  */
 function needsShell(resolvedCommand: string): boolean {
-  if (process.platform !== "win32") return false;
+  if (process.platform !== "win32") {
+    return false;
+  }
   const ext = path.extname(resolvedCommand).toLowerCase();
   return ext === ".cmd" || ext === ".bat";
 }
