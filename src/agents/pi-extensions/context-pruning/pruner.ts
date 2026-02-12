@@ -150,8 +150,22 @@ function estimateMessageChars(message: AgentMessage): number {
   return 256;
 }
 
-function estimateContextChars(messages: AgentMessage[]): number {
+export function estimateContextChars(messages: AgentMessage[]): number {
   return messages.reduce((sum, m) => sum + estimateMessageChars(m), 0);
+}
+
+export function estimateContextUsageRatio(
+  messages: AgentMessage[],
+  contextWindowTokens?: number | null,
+): number {
+  if (!contextWindowTokens || !Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
+    return 0;
+  }
+  const charWindow = contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE;
+  if (charWindow <= 0) {
+    return 0;
+  }
+  return estimateContextChars(messages) / charWindow;
 }
 
 function findAssistantCutoffIndex(
@@ -260,16 +274,48 @@ export function pruneContextMessages(params: {
 
   const totalCharsBefore = estimateContextChars(messages);
   let totalChars = totalCharsBefore;
+  let next: AgentMessage[] | null = null;
+
+  if (settings.stripThinking) {
+    for (let i = pruneStartIndex; i < cutoffIndex; i++) {
+      const msg = messages[i];
+      if (!msg || msg.role !== "assistant") {
+        continue;
+      }
+      const content = msg.content;
+      if (!Array.isArray(content)) {
+        continue;
+      }
+      let removedChars = 0;
+      const filtered = content.filter((block) => {
+        if (block.type === "thinking") {
+          removedChars += block.thinking.length;
+          return false;
+        }
+        return true;
+      });
+      if (removedChars === 0) {
+        continue;
+      }
+      const nextContent = filtered.length > 0 ? filtered : [asText("")];
+      if (!next) {
+        next = messages.slice();
+      }
+      next[i] = { ...msg, content: nextContent } as AgentMessage;
+      totalChars = Math.max(0, totalChars - removedChars);
+    }
+  }
+
   let ratio = totalChars / charWindow;
   if (ratio < settings.softTrimRatio) {
-    return messages;
+    return next ?? messages;
   }
 
   const prunableToolIndexes: number[] = [];
-  let next: AgentMessage[] | null = null;
+  const sourceMessages = next ?? messages;
 
   for (let i = pruneStartIndex; i < cutoffIndex; i++) {
-    const msg = messages[i];
+    const msg = sourceMessages[i];
     if (!msg || msg.role !== "toolResult") {
       continue;
     }
