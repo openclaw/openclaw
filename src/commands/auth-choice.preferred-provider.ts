@@ -33,6 +33,8 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "minimax-cloud": "minimax",
   "minimax-api": "minimax",
   "minimax-api-lightning": "minimax",
+  "minimax-api-m25": "minimax",
+  "minimax-api-m25-lightning": "minimax",
   minimax: "lmstudio",
   "opencode-zen": "opencode",
   "xai-api-key": "xai",
