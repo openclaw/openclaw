@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
-import { resolveMattermostRequireMention } from "./monitor.js";
+import { resolveMattermostRequireMention } from "./monitor.ts";
 
 describe("resolveMattermostRequireMention", () => {
   const cfg: OpenClawConfig = {};
