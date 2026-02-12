@@ -394,6 +394,7 @@ export async function compactEmbeddedPiSessionDirect(
         modelId,
         model,
         sessionKey: params.sessionKey,
+        agentId: sessionAgentId,
       });
 
       const { builtInTools, customTools } = splitSdkTools({

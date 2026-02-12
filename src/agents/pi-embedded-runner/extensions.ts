@@ -44,6 +44,7 @@ function buildContextPruningExtension(params: {
   model: Model<Api> | undefined;
   sessionKey?: string;
   storePath?: string;
+  agentId?: string;
 }): { additionalExtensionPaths?: string[] } {
   const raw = params.cfg?.agents?.defaults?.contextPruning;
   if (raw?.mode !== "cache-ttl") {
@@ -58,7 +59,8 @@ function buildContextPruningExtension(params: {
     return {};
   }
 
-  const effectiveStorePath = params.storePath ?? resolveStorePath();
+  const effectiveStorePath =
+    params.storePath ?? resolveStorePath(undefined, { agentId: params.agentId });
 
   setContextPruningRuntime(params.sessionManager, {
     settings,
@@ -86,6 +88,7 @@ export function buildEmbeddedExtensionPaths(params: {
   model: Model<Api> | undefined;
   sessionKey?: string;
   storePath?: string;
+  agentId?: string;
 }): string[] {
   const paths: string[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {

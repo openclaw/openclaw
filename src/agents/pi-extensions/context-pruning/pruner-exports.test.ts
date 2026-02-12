@@ -23,9 +23,7 @@ describe("pruner exports", () => {
     });
 
     it("estimates character count for user string messages", () => {
-      const messages = [
-        { role: "user" as const, content: "hello world" },
-      ];
+      const messages = [{ role: "user" as const, content: "hello world" }];
       expect(estimateContextChars(messages as any)).toBe(11);
     });
 
@@ -48,9 +46,7 @@ describe("pruner exports", () => {
     });
 
     it("token estimate from chars is consistent with CHARS_PER_TOKEN_ESTIMATE", () => {
-      const messages = [
-        { role: "user" as const, content: "x".repeat(4000) },
-      ];
+      const messages = [{ role: "user" as const, content: "x".repeat(4000) }];
       const chars = estimateContextChars(messages as any);
       const tokens = Math.round(chars / CHARS_PER_TOKEN_ESTIMATE);
       expect(tokens).toBe(1000);

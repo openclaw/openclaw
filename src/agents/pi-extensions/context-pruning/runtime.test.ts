@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { EffectiveContextPruningSettings } from "./settings.js";
 import {
   setContextPruningRuntime,
   getContextPruningRuntime,
   type ContextPruningRuntimeValue,
 } from "./runtime.js";
-import type { EffectiveContextPruningSettings } from "./settings.js";
 
 function makeSettings(): EffectiveContextPruningSettings {
   return {

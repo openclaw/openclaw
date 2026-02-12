@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { setContextPruningRuntime, getContextPruningRuntime } from "./runtime.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextPruningRuntimeValue } from "./runtime.js";
-import { CHARS_PER_TOKEN_ESTIMATE, estimateContextChars } from "./pruner.js";
 import type { EffectiveContextPruningSettings } from "./settings.js";
+import { CHARS_PER_TOKEN_ESTIMATE, estimateContextChars } from "./pruner.js";
+import { setContextPruningRuntime, getContextPruningRuntime } from "./runtime.js";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -33,7 +33,9 @@ const { default: contextPruningExtension } = await import("./extension.js");
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeSettings(overrides?: Partial<EffectiveContextPruningSettings>): EffectiveContextPruningSettings {
+function makeSettings(
+  overrides?: Partial<EffectiveContextPruningSettings>,
+): EffectiveContextPruningSettings {
   return {
     mode: "cache-ttl",
     ttlMs: 300_000,

@@ -21,10 +21,7 @@ function persistPrunedTokenCount(params: {
     sessionKey,
     update: async (entry) => ({
       contextTokens: estimatedTokens,
-      totalTokens: Math.max(
-        estimatedTokens,
-        (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0),
-      ),
+      totalTokens: Math.max(estimatedTokens, (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0)),
       updatedAt: Date.now(),
     }),
   }).catch(() => {
@@ -70,9 +67,7 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
     // Persist the reduced token count to sessions.json immediately
     // so dashboards reflect the post-pruning state.  (#14857)
     if (runtime.sessionKey && runtime.storePath) {
-      const estimatedTokens = Math.round(
-        estimateContextChars(next) / CHARS_PER_TOKEN_ESTIMATE,
-      );
+      const estimatedTokens = Math.round(estimateContextChars(next) / CHARS_PER_TOKEN_ESTIMATE);
       persistPrunedTokenCount({
         storePath: runtime.storePath,
         sessionKey: runtime.sessionKey,
