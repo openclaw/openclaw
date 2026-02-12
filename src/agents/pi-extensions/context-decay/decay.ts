@@ -1,7 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ContextDecayConfig } from "../../../config/types.agent-defaults.js";
-import type { GroupSummaryStore } from "../../context-decay/summary-store.js";
-import type { SummaryStore } from "../../context-decay/summary-store.js";
+import type { GroupSummaryStore, SummaryStore } from "../../context-decay/summary-store.js";
 import { computeTurnAges } from "../../context-decay/turn-ages.js";
 import { repairToolUseResultPairing } from "../../session-transcript-repair.js";
 
@@ -147,7 +146,7 @@ export function applyContextDecay(params: {
       }
     }
 
-    // 3. Apply pre-computed individual summaries for old tool results (skip grouped messages)
+    // 3. Apply pre-computed individual summaries for old tool results (skip grouped msgs)
     if (
       hasSummarize &&
       !anchorIndices.has(idx) &&
@@ -191,7 +190,7 @@ export function applyContextDecay(params: {
     return current;
   });
 
-  // 4. Apply maxContextMessages hard cap
+  // 5. Apply maxContextMessages hard cap
   let truncated = false;
   if (hasMaxMessages && result.length > config.maxContextMessages!) {
     result = result.slice(result.length - config.maxContextMessages!);
@@ -203,7 +202,7 @@ export function applyContextDecay(params: {
     return messages;
   }
 
-  // 5. Repair tool use/result pairing after message truncation.
+  // 6. Repair tool use/result pairing after message truncation.
   //    Only needed when maxContextMessages dropped messages from the front,
   //    which can orphan tool_use or toolResult entries.
   if (truncated) {

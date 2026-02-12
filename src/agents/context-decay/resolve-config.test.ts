@@ -250,6 +250,34 @@ describe("mergeDecayConfig — new group fields", () => {
     expect(result?.groupSummarizationModel).toBe("opus");
   });
 
+  it("returns undefined when channel provides only groupSummarizationModel (no activation field)", () => {
+    const config = makeConfig({
+      channels: {
+        discord: {
+          contextDecay: { groupSummarizationModel: "sonnet" },
+        },
+      },
+    });
+    const result = resolveContextDecayConfig("discord:direct:123", config);
+    // Model-only config has no numeric activation fields, so mergeDecayConfig
+    // returns undefined (hasAnything check filters it out).
+    expect(result).toBeUndefined();
+  });
+
+  it("preserves groupSummarizationModel when merged with an activation field", () => {
+    const config = makeConfig({
+      defaults: { summarizeWindowAfterTurns: 6 },
+      channels: {
+        discord: {
+          contextDecay: { groupSummarizationModel: "sonnet" },
+        },
+      },
+    });
+    const result = resolveContextDecayConfig("discord:direct:123", config);
+    expect(result?.summarizeWindowAfterTurns).toBe(6);
+    expect(result?.groupSummarizationModel).toBe("sonnet");
+  });
+
   it("treats summarizeWindowAfterTurns=0 as disabled", () => {
     const config = makeConfig({
       defaults: { summarizeWindowAfterTurns: 6 },

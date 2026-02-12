@@ -45,7 +45,11 @@ function summaryStorePath(sessionFilePath: string): string {
   return path.join(dir, `${base}.summaries.json`);
 }
 
-/** Load the summary store for a session (async). Returns empty store on missing/invalid file. */
+/**
+ * Load the summary store for a session (async). Returns empty store on missing/invalid file.
+ * Note: individual entries are not validated beyond `typeof === "object"` — callers trust
+ * the local file as a persistence boundary. Zod validation happens at config load time.
+ */
 export async function loadSummaryStore(sessionFilePath: string): Promise<SummaryStore> {
   const filePath = summaryStorePath(sessionFilePath);
   try {

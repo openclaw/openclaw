@@ -4,8 +4,7 @@ import { type AuthStorage, estimateTokens, generateSummary } from "@mariozechner
 import type { ContextDecayConfig } from "../../config/types.agent-defaults.js";
 import type { GroupSummaryEntry, GroupSummaryStore, SummaryStore } from "./summary-store.js";
 import { log } from "../pi-embedded-runner/logger.js";
-import { loadGroupSummaryStore, saveGroupSummaryStore } from "./summary-store.js";
-import { loadSummaryStore } from "./summary-store.js";
+import { loadGroupSummaryStore, loadSummaryStore, saveGroupSummaryStore } from "./summary-store.js";
 import { computeTurnAges, groupIndicesByTurn } from "./turn-ages.js";
 
 /** Reserve tokens for the group summarization model response. */
@@ -16,6 +15,20 @@ const MIN_WINDOW_TOKENS = 500;
 
 /** Maximum chars for the summarization prompt payload. */
 const MAX_PROMPT_CHARS = 100_000;
+
+/** Estimate total tokens for a set of message indices. */
+function estimateWindowTokens(messages: AgentMessage[], indices: number[]): number {
+  let total = 0;
+  for (const idx of indices) {
+    const tokenMsg = {
+      role: "user",
+      content: extractContentText(messages[idx]),
+      timestamp: Date.now(),
+    } as AgentMessage;
+    total += estimateTokens(tokenMsg);
+  }
+  return total;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -91,7 +104,7 @@ export function findEligibleWindows(params: {
 
   const windowSize = config.summarizeWindowSize ?? 4;
   const turnAges = computeTurnAges(messages);
-  const turnGroups = groupIndicesByTurn(messages, turnAges);
+  const turnGroups = groupIndicesByTurn(turnAges);
 
   // Build set of indices already covered by existing group summaries
   const coveredIndices = new Set<number>();
@@ -143,15 +156,7 @@ export function findEligibleWindows(params: {
     windowIndices.sort((a, b) => a - b);
 
     // Estimate tokens — skip if too small
-    let estimatedTokens = 0;
-    for (const idx of windowIndices) {
-      const tokenMsg = {
-        role: "user",
-        content: extractContentText(messages[idx]),
-        timestamp: Date.now(),
-      } as AgentMessage;
-      estimatedTokens += estimateTokens(tokenMsg);
-    }
+    const estimatedTokens = estimateWindowTokens(messages, windowIndices);
     if (estimatedTokens < MIN_WINDOW_TOKENS) {
       continue;
     }
@@ -333,17 +338,7 @@ export async function summarizeAgedTurnWindows(params: {
       );
 
       if (summaryText && summaryText.length > 0) {
-        // Estimate original token count for the window
-        let originalTokenEstimate = 0;
-        for (const idx of win.indices) {
-          const tokenMsg = {
-            role: "user",
-            content: extractContentText(messages[idx]),
-            timestamp: Date.now(),
-          } as AgentMessage;
-          originalTokenEstimate += estimateTokens(tokenMsg);
-        }
-
+        const originalTokenEstimate = estimateWindowTokens(messages, win.indices);
         const summaryMsg = {
           role: "user",
           content: summaryText,

@@ -335,12 +335,14 @@ describe("applyContextDecay", () => {
       // repairToolUseResultPairing should handle the orphaned toolResult
       expect(result.length).toBeLessThanOrEqual(3);
       // All remaining messages should have valid pairing (no orphaned toolResults)
-      const toolResults = result.filter((m) => m.role === "toolResult");
-      for (const tr of toolResults) {
-        // Each remaining toolResult should have a preceding assistant with matching tool_use
-        const trIdx = result.indexOf(tr);
-        const trMsg = tr as unknown as { toolCallId?: string };
-        const hasMatchingToolUse = result.slice(0, trIdx).some((m) => {
+      // After repair, no orphaned toolResults should remain
+      for (const msg of result) {
+        if (msg.role !== "toolResult") {
+          continue;
+        }
+        const trMsg = msg as unknown as { toolCallId?: string };
+        const idx = result.indexOf(msg);
+        const hasMatchingToolUse = result.slice(0, idx).some((m) => {
           if (m.role !== "assistant" || !Array.isArray(m.content)) {
             return false;
           }
@@ -348,11 +350,7 @@ describe("applyContextDecay", () => {
             (b) => b.type === "tool_use" && b.id === trMsg.toolCallId,
           );
         });
-        // If the toolResult survived, it must have a matching tool_use OR be removed by repair
-        if (!hasMatchingToolUse) {
-          // Repair should have removed it or the message count should reflect removal
-          expect(result.some((m) => m === tr)).toBe(false);
-        }
+        expect(hasMatchingToolUse).toBe(true);
       }
     });
   });
