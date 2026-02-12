@@ -11,7 +11,6 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
-import { resolveUserTimezone } from "../agents/date-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import {
@@ -41,6 +40,7 @@ import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatErrorMessage } from "./errors.js";
+import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -87,7 +87,6 @@ export type HeartbeatSummary = {
 };
 
 const DEFAULT_HEARTBEAT_TARGET = "last";
-const ACTIVE_HOURS_TIME_PATTERN = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
 
 // Prompt used when an async exec has completed and the result should be relayed to the user.
 // This overrides the standard heartbeat prompt to ensure the model responds with the exec result
@@ -103,98 +102,6 @@ const EXEC_EVENT_PROMPT =
 const CRON_EVENT_PROMPT =
   "A scheduled reminder has been triggered. The reminder message is shown in the system messages above. " +
   "Please relay this reminder to the user in a helpful and friendly way.";
-
-function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "user") {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  }
-  if (trimmed === "local") {
-    const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return host?.trim() || "UTC";
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-    return trimmed;
-  } catch {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  }
-}
-
-function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number | null {
-  if (!raw || !ACTIVE_HOURS_TIME_PATTERN.test(raw)) {
-    return null;
-  }
-  const [hourStr, minuteStr] = raw.split(":");
-  const hour = Number(hourStr);
-  const minute = Number(minuteStr);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return null;
-  }
-  if (hour === 24) {
-    if (!opts.allow24 || minute !== 0) {
-      return null;
-    }
-    return 24 * 60;
-  }
-  return hour * 60 + minute;
-}
-
-function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | null {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(nowMs));
-    const map: Record<string, string> = {};
-    for (const part of parts) {
-      if (part.type !== "literal") {
-        map[part.type] = part.value;
-      }
-    }
-    const hour = Number(map.hour);
-    const minute = Number(map.minute);
-    if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-      return null;
-    }
-    return hour * 60 + minute;
-  } catch {
-    return null;
-  }
-}
-
-function isWithinActiveHours(
-  cfg: OpenClawConfig,
-  heartbeat?: HeartbeatConfig,
-  nowMs?: number,
-): boolean {
-  const active = heartbeat?.activeHours;
-  if (!active) {
-    return true;
-  }
-
-  const startMin = parseActiveHoursTime({ allow24: false }, active.start);
-  const endMin = parseActiveHoursTime({ allow24: true }, active.end);
-  if (startMin === null || endMin === null) {
-    return true;
-  }
-  if (startMin === endMin) {
-    return true;
-  }
-
-  const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
-  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), timeZone);
-  if (currentMin === null) {
-    return true;
-  }
-
-  if (endMin > startMin) {
-    return currentMin >= startMin && currentMin < endMin;
-  }
-  return currentMin >= startMin || currentMin < endMin;
-}
 
 type HeartbeatAgentState = {
   agentId: string;
@@ -637,7 +544,11 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
-    const replyResult = await getReplyFromConfig(ctx, { isHeartbeat: true }, cfg);
+    const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+    const replyOpts = heartbeatModelOverride
+      ? { isHeartbeat: true, heartbeatModelOverride }
+      : { isHeartbeat: true };
+    const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning

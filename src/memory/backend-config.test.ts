@@ -25,6 +25,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.backend).toBe("qmd");
     expect(resolved.qmd?.collections.length).toBeGreaterThanOrEqual(3);
     expect(resolved.qmd?.command).toBe("qmd");
+    expect(resolved.qmd?.searchMode).toBe("query");
     expect(resolved.qmd?.update.intervalMs).toBeGreaterThan(0);
     expect(resolved.qmd?.update.waitForBootSync).toBe(false);
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(30_000);
@@ -92,5 +93,19 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(12_000);
     expect(resolved.qmd?.update.updateTimeoutMs).toBe(480_000);
     expect(resolved.qmd?.update.embedTimeoutMs).toBe(360_000);
+  });
+
+  it("resolves qmd search mode override", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "vsearch",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.qmd?.searchMode).toBe("vsearch");
   });
 });

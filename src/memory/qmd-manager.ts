@@ -24,19 +24,12 @@ import { requireNodeSqlite } from "./sqlite.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 import type { ResolvedMemoryBackendConfig, ResolvedQmdConfig } from "./backend-config.js";
+import { parseQmdQueryJson } from "./qmd-query-parser.js";
 
 const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
-
-type QmdQueryResult = {
-  docid?: string;
-  score?: number;
-  file?: string;
-  snippet?: string;
-  body?: string;
-};
 
 type CollectionRoot = {
   path: string;
@@ -267,23 +260,40 @@ export class QmdMemoryManager implements MemorySearchManager {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
     }
-    const args = ["query", trimmed, "--json", "-n", String(limit), ...collectionFilterArgs];
+    const qmdSearchCommand = this.qmd.searchMode;
+    const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
+    if (qmdSearchCommand === "query") {
+      args.push(...collectionFilterArgs);
+    }
     let stdout: string;
+    let stderr: string;
     try {
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
       stdout = result.stdout;
+      stderr = result.stderr;
     } catch (err) {
-      log.warn(`qmd query failed: ${String(err)}`);
-      throw err instanceof Error ? err : new Error(String(err));
+      if (qmdSearchCommand !== "query" && this.isUnsupportedQmdOptionError(err)) {
+        log.warn(
+          `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
+        );
+        try {
+          const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
+          fallbackArgs.push(...collectionFilterArgs);
+          const fallback = await this.runQmd(fallbackArgs, {
+            timeoutMs: this.qmd.limits.timeoutMs,
+          });
+          stdout = fallback.stdout;
+          stderr = fallback.stderr;
+        } catch (fallbackErr) {
+          log.warn(`qmd query fallback failed: ${String(fallbackErr)}`);
+          throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
+        }
+      } else {
+        log.warn(`qmd ${qmdSearchCommand} failed: ${String(err)}`);
+        throw err instanceof Error ? err : new Error(String(err));
+      }
     }
-    let parsed: QmdQueryResult[] = [];
-    try {
-      parsed = JSON.parse(stdout);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd query returned invalid JSON: ${message}`);
-      throw new Error(`qmd query returned invalid JSON: ${message}`, { cause: err });
-    }
+    const parsed = parseQmdQueryJson(stdout, stderr);
     const results: MemorySearchResult[] = [];
     for (const entry of parsed) {
       const doc = await this.resolveDocLocation(entry.docid);
@@ -965,6 +975,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     return normalized.includes("sqlite_busy") || normalized.includes("database is locked");
   }
 
+  private isUnsupportedQmdOptionError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes("unknown flag") ||
+      normalized.includes("unknown option") ||
+      normalized.includes("unrecognized option") ||
+      normalized.includes("flag provided but not defined") ||
+      normalized.includes("unexpected argument")
+    );
+  }
+
   private createQmdBusyError(err: unknown): Error {
     const message = err instanceof Error ? err.message : String(err);
     return new Error(`qmd index busy while reading results: ${message}`);
@@ -987,5 +1009,16 @@ export class QmdMemoryManager implements MemorySearchManager {
       return [];
     }
     return names.flatMap((name) => ["-c", name]);
+  }
+
+  private buildSearchArgs(
+    command: "query" | "search" | "vsearch",
+    query: string,
+    limit: number,
+  ): string[] {
+    if (command === "query") {
+      return ["query", query, "--json", "-n", String(limit)];
+    }
+    return [command, query, "--json"];
   }
 }

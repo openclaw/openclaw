@@ -292,3 +292,43 @@ describe("web media loading", () => {
     expect(result.buffer.length).toBeLessThanOrEqual(cap);
   });
 });
+
+describe("local media root guard", () => {
+  it("rejects local paths outside allowed roots", async () => {
+    const pngBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#00ff00" },
+    })
+      .png()
+      .toBuffer();
+    const file = await writeTempFile(pngBuffer, ".png");
+
+    // Explicit roots that don't contain the temp file.
+    await expect(
+      loadWebMedia(file, 1024 * 1024, { localRoots: ["/nonexistent-root"] }),
+    ).rejects.toThrow(/not under an allowed directory/i);
+  });
+
+  it("allows local paths under an explicit root", async () => {
+    const pngBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#00ff00" },
+    })
+      .png()
+      .toBuffer();
+    const file = await writeTempFile(pngBuffer, ".png");
+
+    const result = await loadWebMedia(file, 1024 * 1024, { localRoots: [os.tmpdir()] });
+    expect(result.kind).toBe("image");
+  });
+
+  it("allows any path when localRoots is 'any'", async () => {
+    const pngBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#00ff00" },
+    })
+      .png()
+      .toBuffer();
+    const file = await writeTempFile(pngBuffer, ".png");
+
+    const result = await loadWebMedia(file, 1024 * 1024, { localRoots: "any" });
+    expect(result.kind).toBe("image");
+  });
+});
