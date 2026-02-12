@@ -1,11 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import type { PluginRecord } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGatewayMessageChannel } from "./message-channel.js";
 
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
+const createPluginRecord = (id: string, enabled: boolean): PluginRecord => ({
+  id,
+  name: id,
+  source: "test",
+  origin: "bundled",
+  enabled,
+  status: enabled ? "loaded" : "disabled",
+  toolNames: [],
+  hookNames: [],
+  channelIds: [],
+  providerIds: [],
+  gatewayMethods: [],
+  cliCommands: [],
+  services: [],
+  commands: [],
+  httpHandlers: 0,
+  hookCount: 0,
+  configSchema: false,
+  configUiHints: undefined,
+  configJsonSchema: undefined,
+});
+
+const createRegistry = (
+  channels: PluginRegistry["channels"],
+  plugins: PluginRecord[] = [],
+): PluginRegistry => ({
+  plugins,
   tools: [],
   channels,
   providers: [],
@@ -57,5 +83,10 @@ describe("message-channel", () => {
       createRegistry([{ pluginId: "msteams", plugin: msteamsPlugin, source: "test" }]),
     );
     expect(resolveGatewayMessageChannel("teams")).toBe("msteams");
+  });
+
+  it("skips disabled channel plugins when resolving gateway channels", () => {
+    setActivePluginRegistry(createRegistry([], [createPluginRecord("whatsapp", false)]));
+    expect(resolveGatewayMessageChannel("whatsapp")).toBeUndefined();
   });
 });

@@ -122,6 +122,20 @@ export function isDeliverableMessageChannel(value: string): value is Deliverable
   return listDeliverableMessageChannels().includes(value as DeliverableMessageChannel);
 }
 
+function isGatewayMessageChannelEnabled(channel: string): boolean {
+  if (channel === INTERNAL_MESSAGE_CHANNEL) {
+    return true;
+  }
+  const registry = getActivePluginRegistry();
+  const plugin = registry?.plugins.find(
+    (entry) => entry.id.trim().toLowerCase() === channel.trim().toLowerCase(),
+  );
+  if (plugin && !plugin.enabled) {
+    return false;
+  }
+  return true;
+}
+
 export function resolveGatewayMessageChannel(
   raw?: string | null,
 ): GatewayMessageChannel | undefined {
@@ -129,7 +143,10 @@ export function resolveGatewayMessageChannel(
   if (!normalized) {
     return undefined;
   }
-  return isGatewayMessageChannel(normalized) ? normalized : undefined;
+  if (!isGatewayMessageChannel(normalized)) {
+    return undefined;
+  }
+  return isGatewayMessageChannelEnabled(normalized) ? normalized : undefined;
 }
 
 export function resolveMessageChannel(
