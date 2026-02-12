@@ -383,7 +383,7 @@ public struct AgentEvent: Codable, Sendable {
 
 public struct SendParams: Codable, Sendable {
     public let to: String
-    public let message: String
+    public let message: String?
     public let mediaurl: String?
     public let mediaurls: [String]?
     public let gifplayback: Bool?
@@ -394,7 +394,7 @@ public struct SendParams: Codable, Sendable {
 
     public init(
         to: String,
-        message: String,
+        message: String?,
         mediaurl: String?,
         mediaurls: [String]?,
         gifplayback: Bool?,
