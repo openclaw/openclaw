@@ -251,8 +251,15 @@ export async function sendMessageTelegram(
 
   // Build optional params for forum topics and reply threading.
   // Only include these if actually provided to keep API calls clean.
+  // Private chats (positive numeric IDs) do not support message_thread_id;
+  // the Telegram Bot API rejects it with 400 "message thread not found".
+  const isPrivateChat = /^\d+$/.test(chatId);
   const messageThreadId =
-    opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
+    !isPrivateChat && opts.messageThreadId != null
+      ? opts.messageThreadId
+      : !isPrivateChat
+        ? target.messageThreadId
+        : undefined;
   const threadSpec =
     messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
@@ -827,8 +834,14 @@ export async function sendStickerTelegram(
   const client = resolveTelegramClientOptions(account);
   const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
 
+  // Private chats (positive numeric IDs) do not support message_thread_id.
+  const isPrivateChat = /^\d+$/.test(chatId);
   const messageThreadId =
-    opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
+    !isPrivateChat && opts.messageThreadId != null
+      ? opts.messageThreadId
+      : !isPrivateChat
+        ? target.messageThreadId
+        : undefined;
   const threadSpec =
     messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);

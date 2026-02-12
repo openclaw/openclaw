@@ -138,7 +138,7 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("keeps message_thread_id=1 when allowed", async () => {
+  it("omits message_thread_id for DM threads (private chats don't support it)", async () => {
     const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 4,
@@ -160,8 +160,36 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
       expect.any(String),
+      expect.not.objectContaining({
+        message_thread_id: expect.anything(),
+      }),
+    );
+  });
+
+  it("includes message_thread_id for forum threads", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "-1001234567" },
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "Hello" }],
+      chatId: "-1001234567",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      thread: { id: 99, scope: "forum" },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "-1001234567",
+      expect.any(String),
       expect.objectContaining({
-        message_thread_id: 1,
+        message_thread_id: 99,
       }),
     );
   });

@@ -34,7 +34,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessageDraft).toHaveBeenCalledWith(123, 42, "Hello", undefined);
   });
 
-  it("keeps message_thread_id for dm threads", () => {
+  it("omits message_thread_id for dm threads (private chats don't support it)", () => {
     const api = { sendMessageDraft: vi.fn().mockResolvedValue(true) };
     const stream = createTelegramDraftStream({
       // oxlint-disable-next-line typescript/no-explicit-any
@@ -46,8 +46,6 @@ describe("createTelegramDraftStream", () => {
 
     stream.update("Hello");
 
-    expect(api.sendMessageDraft).toHaveBeenCalledWith(123, 42, "Hello", {
-      message_thread_id: 1,
-    });
+    expect(api.sendMessageDraft).toHaveBeenCalledWith(123, 42, "Hello", undefined);
   });
 });

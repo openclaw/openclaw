@@ -479,7 +479,7 @@ describe("sendMessageTelegram", () => {
   });
 
   it("retries without message_thread_id when Telegram reports missing thread", async () => {
-    const chatId = "123";
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendMessage = vi
       .fn()
@@ -509,7 +509,7 @@ describe("sendMessageTelegram", () => {
   });
 
   it("does not retry thread-not-found when no message_thread_id was provided", async () => {
-    const chatId = "123";
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
     const api = { sendMessage } as unknown as {
@@ -615,7 +615,7 @@ describe("sendMessageTelegram", () => {
   });
 
   it("retries media sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123";
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendPhoto = vi
       .fn()
@@ -713,7 +713,7 @@ describe("sendStickerTelegram", () => {
   });
 
   it("retries sticker sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123";
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendSticker = vi
       .fn()
