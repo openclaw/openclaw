@@ -3,6 +3,22 @@ import type { CoreConfig, MatrixConfig } from "../types.js";
 import { resolveMatrixConfigForAccount } from "./client.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials.js";
 
+/** Merge account config with top-level defaults, preserving nested objects. */
+function mergeAccountConfig(base: MatrixConfig, account: MatrixConfig): MatrixConfig {
+  const merged = { ...base, ...account };
+  // Deep-merge known nested objects so partial overrides inherit base fields
+  for (const key of ["dm", "actions"] as const) {
+    const b = base[key];
+    const o = account[key];
+    if (typeof b === "object" && b != null && typeof o === "object" && o != null) {
+      (merged as Record<string, unknown>)[key] = { ...b, ...o };
+    }
+  }
+  // Don't propagate the accounts map into the merged per-account config
+  delete (merged as Record<string, unknown>).accounts;
+  return merged;
+}
+
 export type ResolvedMatrixAccount = {
   accountId: string;
   enabled: boolean;
@@ -74,8 +90,12 @@ export function resolveMatrixAccount(params: {
   // Check if this account exists in accounts structure
   const accountConfig = resolveAccountConfig(params.cfg, accountId);
 
-  // Use account-specific config if available, otherwise fall back to top-level
-  const base: MatrixConfig = accountConfig ?? matrixBase;
+  // Merge account-specific config with top-level defaults so settings like
+  // blockStreaming, groupPolicy, etc. inherit from channels.matrix when not
+  // overridden per account.
+  const base: MatrixConfig = accountConfig
+    ? mergeAccountConfig(matrixBase, accountConfig)
+    : matrixBase;
   const enabled = base.enabled !== false && matrixBase.enabled !== false;
 
   const resolved = resolveMatrixConfigForAccount(params.cfg, accountId, process.env);
