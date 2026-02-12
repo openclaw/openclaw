@@ -271,6 +271,9 @@ export class MemoryIndexManager implements MemorySearchManager {
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]> {
+    if (this.closed) {
+      return [];
+    }
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
       void this.sync({ reason: "search" }).catch((err) => {
@@ -393,6 +396,9 @@ export class MemoryIndexManager implements MemorySearchManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
+    if (this.closed) {
+      return;
+    }
     if (this.syncing) {
       return this.syncing;
     }
@@ -468,6 +474,34 @@ export class MemoryIndexManager implements MemorySearchManager {
   }
 
   status(): MemoryProviderStatus {
+    if (this.closed) {
+      return {
+        backend: "builtin",
+        files: 0,
+        chunks: 0,
+        dirty: false,
+        workspaceDir: this.workspaceDir,
+        dbPath: this.settings.store.path,
+        provider: this.provider.id,
+        model: this.provider.model,
+        requestedProvider: this.requestedProvider,
+        sources: Array.from(this.sources),
+        extraPaths: this.settings.extraPaths,
+        sourceCounts: [],
+        cache: { enabled: false, maxEntries: this.cache.maxEntries },
+        fts: { enabled: false, available: false },
+        vector: { enabled: false, available: false },
+        batch: {
+          enabled: false,
+          failures: 0,
+          limit: 0,
+          wait: false,
+          concurrency: 0,
+          pollIntervalMs: 0,
+          timeoutMs: 0,
+        },
+      };
+    }
     const sourceFilter = this.buildSourceFilter();
     const files = this.db
       .prepare(`SELECT COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql}`)
@@ -605,6 +639,13 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (this.sessionUnsubscribe) {
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;
+    }
+    if (this.syncing) {
+      try {
+        await this.syncing;
+      } catch {
+        /* swallow – we only need to wait for it to finish */
+      }
     }
     this.db.close();
     INDEX_CACHE.delete(this.cacheKey);
@@ -793,6 +834,58 @@ export class MemoryIndexManager implements MemorySearchManager {
   private async removeIndexFiles(basePath: string): Promise<void> {
     const suffixes = ["", "-wal", "-shm"];
     await Promise.all(suffixes.map((suffix) => fs.rm(`${basePath}${suffix}`, { force: true })));
+  }
+
+  /**
+   * Synchronous variant of swapIndexFiles.  Keeps the close → reopen of
+   * this.db atomic from the event-loop perspective so that no concurrent
+   * callback can observe a closed database handle.
+   */
+  private swapIndexFilesSync(targetPath: string, tempPath: string): void {
+    const backupPath = `${targetPath}.backup-${randomUUID()}`;
+    this.moveIndexFilesSync(targetPath, backupPath);
+    try {
+      this.moveIndexFilesSync(tempPath, targetPath);
+    } catch (err) {
+      this.moveIndexFilesSync(backupPath, targetPath);
+      throw err;
+    }
+    this.removeIndexFilesSync(backupPath);
+  }
+
+  private moveIndexFilesSync(sourceBase: string, targetBase: string): void {
+    const suffixes = ["", "-wal", "-shm"];
+    for (const suffix of suffixes) {
+      const source = `${sourceBase}${suffix}`;
+      const target = `${targetBase}${suffix}`;
+      try {
+        fsSync.renameSync(source, target);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw err;
+        }
+      }
+    }
+  }
+
+  private removeIndexFilesSync(basePath: string): void {
+    const suffixes = ["", "-wal", "-shm"];
+    for (const suffix of suffixes) {
+      try {
+        fsSync.rmSync(`${basePath}${suffix}`, { force: true });
+      } catch {}
+    }
+  }
+
+  /**
+   * Fire-and-forget cleanup of leftover temp index files after a failed
+   * reindex.  The DB handle has already been restored synchronously before
+   * this runs, so this.db points to a valid open database.
+   */
+  private removeIndexFilesInBackground(basePath: string): void {
+    this.removeIndexFiles(basePath).catch((err) => {
+      log.debug(`Failed to clean up temp index files: ${String(err)}`);
+    });
   }
 
   private ensureSchema() {
@@ -1445,11 +1538,11 @@ export class MemoryIndexManager implements MemorySearchManager {
     this.vector.dims = undefined;
     this.fts.available = false;
     this.fts.loadError = undefined;
-    this.ensureSchema();
 
     let nextMeta: MemoryIndexMeta | null = null;
 
     try {
+      this.ensureSchema();
       this.seedEmbeddingCache(originalDb);
       const shouldSyncMemory = this.sources.has("memory");
       const shouldSyncSessions = this.shouldSyncSessions(
@@ -1490,7 +1583,13 @@ export class MemoryIndexManager implements MemorySearchManager {
       originalDb.close();
       originalDbClosed = true;
 
-      await this.swapIndexFiles(dbPath, tempDbPath);
+      // Synchronous swap prevents a race condition: between closing the
+      // old DB and opening the new one, this.db is a closed handle.  An
+      // async swap yields to the event loop, letting concurrent callers
+      // (search / status / watcher callbacks) hit the closed handle and
+      // throw "database is not open".  A synchronous swap keeps the
+      // close → reopen atomic from the event-loop's perspective.
+      this.swapIndexFilesSync(dbPath, tempDbPath);
 
       this.db = this.openDatabaseAtPath(dbPath);
       this.vectorReady = null;
@@ -1502,8 +1601,10 @@ export class MemoryIndexManager implements MemorySearchManager {
       try {
         this.db.close();
       } catch {}
-      await this.removeIndexFiles(tempDbPath);
+      // Restore the DB reference synchronously BEFORE any async I/O so
+      // that this.db is never a closed handle when the event loop yields.
       restoreOriginalState();
+      this.removeIndexFilesSync(tempDbPath);
       throw err;
     }
   }
