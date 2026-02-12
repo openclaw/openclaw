@@ -63,8 +63,8 @@ function extractToolInfo(
   toolResultIndex: number,
 ): { toolName: string; args: string } {
   const toolResultMsg = messages[toolResultIndex] as unknown as Record<string, unknown>;
-  const toolUseId = toolResultMsg.toolUseId as string | undefined;
-  if (!toolUseId) {
+  const toolCallId = toolResultMsg.toolCallId as string | undefined;
+  if (!toolCallId) {
     return { toolName: "unknown", args: "{}" };
   }
   for (let i = toolResultIndex - 1; i >= 0; i--) {
@@ -77,7 +77,7 @@ function extractToolInfo(
       continue;
     }
     for (const block of msgContent) {
-      if (block.type === "tool_use" && block.id === toolUseId) {
+      if (block.type === "tool_use" && block.id === toolCallId) {
         return {
           toolName: (block.name as string) ?? "unknown",
           args: JSON.stringify(block.input ?? {}),

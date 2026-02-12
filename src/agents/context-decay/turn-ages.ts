@@ -19,7 +19,7 @@ export function computeTurnAges(messages: AgentMessage[]): Map<number, number> {
 
 /**
  * Group message indices by their turn age.
- * Returns a Map from turn age → sorted array of message indices belonging to that turn.
+ * Returns a Map from turn age → array of message indices belonging to that turn (insertion order; caller must sort if needed).
  */
 export function groupIndicesByTurn(turnAges: Map<number, number>): Map<number, number[]> {
   const groups = new Map<number, number[]>();
