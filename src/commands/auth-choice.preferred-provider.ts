@@ -32,9 +32,11 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   minimax: "lmstudio",
   "opencode-zen": "opencode",
   "xai-api-key": "xai",
+  "litellm-api-key": "litellm",
   "qwen-portal": "qwen-portal",
   "minimax-portal": "minimax-portal",
   "qianfan-api-key": "qianfan",
+  "custom-api-key": "custom",
 };
 
 export function resolvePreferredProviderForAuthChoice(choice: AuthChoice): string | undefined {

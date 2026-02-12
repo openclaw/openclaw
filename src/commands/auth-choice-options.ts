@@ -13,6 +13,7 @@ export type AuthChoiceGroupId =
   | "google"
   | "copilot"
   | "openrouter"
+  | "litellm"
   | "ai-gateway"
   | "cloudflare-ai-gateway"
   | "moonshot"
@@ -25,7 +26,8 @@ export type AuthChoiceGroupId =
   | "qwen"
   | "together"
   | "qianfan"
-  | "xai";
+  | "xai"
+  | "custom";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -143,10 +145,22 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["venice-api-key"],
   },
   {
+    value: "litellm",
+    label: "LiteLLM",
+    hint: "Unified LLM gateway (100+ providers)",
+    choices: ["litellm-api-key"],
+  },
+  {
     value: "cloudflare-ai-gateway",
     label: "Cloudflare AI Gateway",
     hint: "Account ID + Gateway ID + API key",
     choices: ["cloudflare-ai-gateway-api-key"],
+  },
+  {
+    value: "custom",
+    label: "Custom Provider",
+    hint: "Any OpenAI or Anthropic compatible endpoint",
+    choices: ["custom-api-key"],
   },
 ];
 
@@ -175,6 +189,11 @@ export function buildAuthChoiceOptions(params: {
     label: "Qianfan API key",
   });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
+  options.push({
+    value: "litellm-api-key",
+    label: "LiteLLM API key",
+    hint: "Unified gateway for 100+ LLM providers",
+  });
   options.push({
     value: "ai-gateway-api-key",
     label: "Vercel AI Gateway API key",
@@ -252,6 +271,8 @@ export function buildAuthChoiceOptions(params: {
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
   });
+  options.push({ value: "custom-api-key", label: "Custom Provider" });
+
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
   }

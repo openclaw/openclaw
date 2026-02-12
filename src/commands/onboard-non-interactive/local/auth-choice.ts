@@ -24,6 +24,7 @@ import {
   applyVeniceConfig,
   applyTogetherConfig,
   applyVercelAiGatewayConfig,
+  applyLitellmConfig,
   applyXaiConfig,
   applyXiaomiConfig,
   applyZaiConfig,
@@ -32,6 +33,7 @@ import {
   setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
+  setLitellmApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
@@ -44,6 +46,12 @@ import {
   setXiaomiApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
+import {
+  applyCustomApiConfig,
+  CustomApiError,
+  parseNonInteractiveCustomApiFlags,
+  resolveCustomProviderId,
+} from "../../onboard-custom.js";
 import { applyOpenAIConfig } from "../../openai-model-default.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 
@@ -314,6 +322,29 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyOpenrouterConfig(nextConfig);
   }
 
+  if (authChoice === "litellm-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "litellm",
+      cfg: baseConfig,
+      flagValue: opts.litellmApiKey,
+      flagName: "--litellm-api-key",
+      envVar: "LITELLM_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setLitellmApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "litellm:default",
+      provider: "litellm",
+      mode: "api_key",
+    });
+    return applyLitellmConfig(nextConfig);
+  }
+
   if (authChoice === "ai-gateway-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "vercel-ai-gateway",
@@ -567,6 +598,65 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyTogetherConfig(nextConfig);
+  }
+
+  if (authChoice === "custom-api-key") {
+    try {
+      const customAuth = parseNonInteractiveCustomApiFlags({
+        baseUrl: opts.customBaseUrl,
+        modelId: opts.customModelId,
+        compatibility: opts.customCompatibility,
+        apiKey: opts.customApiKey,
+        providerId: opts.customProviderId,
+      });
+      const resolvedProviderId = resolveCustomProviderId({
+        config: nextConfig,
+        baseUrl: customAuth.baseUrl,
+        providerId: customAuth.providerId,
+      });
+      const resolvedCustomApiKey = await resolveNonInteractiveApiKey({
+        provider: resolvedProviderId.providerId,
+        cfg: baseConfig,
+        flagValue: customAuth.apiKey,
+        flagName: "--custom-api-key",
+        envVar: "CUSTOM_API_KEY",
+        envVarName: "CUSTOM_API_KEY",
+        runtime,
+        required: false,
+      });
+      const result = applyCustomApiConfig({
+        config: nextConfig,
+        baseUrl: customAuth.baseUrl,
+        modelId: customAuth.modelId,
+        compatibility: customAuth.compatibility,
+        apiKey: resolvedCustomApiKey?.key,
+        providerId: customAuth.providerId,
+      });
+      if (result.providerIdRenamedFrom && result.providerId) {
+        runtime.log(
+          `Custom provider ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
+        );
+      }
+      return result.config;
+    } catch (err) {
+      if (err instanceof CustomApiError) {
+        switch (err.code) {
+          case "missing_required":
+          case "invalid_compatibility":
+            runtime.error(err.message);
+            break;
+          default:
+            runtime.error(`Invalid custom provider config: ${err.message}`);
+            break;
+        }
+        runtime.exit(1);
+        return null;
+      }
+      const reason = err instanceof Error ? err.message : String(err);
+      runtime.error(`Invalid custom provider config: ${reason}`);
+      runtime.exit(1);
+      return null;
+    }
   }
 
   if (

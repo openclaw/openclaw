@@ -8,7 +8,10 @@ on:
       - "v*"
     paths-ignore:
       - "docs/**"
-      - "*.md"
+      - "**/*.md"
+      - "**/*.mdx"
+      - ".agents/**"
+      - "skills/**"
 
 env:
   REGISTRY: ghcr.io
