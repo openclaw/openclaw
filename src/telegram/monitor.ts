@@ -11,91 +11,23 @@ import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+export { isRecoverableTelegramNetworkError };
 import { makeProxyFetch } from "./proxy.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
-export type MonitorTelegramOpts = {
-  token?: string;
-  accountId?: string;
-  config?: OpenClawConfig;
-  runtime?: RuntimeEnv;
-  abortSignal?: AbortSignal;
-  useWebhook?: boolean;
-  webhookPath?: string;
-  webhookPort?: number;
-  webhookSecret?: string;
-  proxyFetch?: typeof fetch;
-  webhookUrl?: string;
-};
+// ... (imports)
 
-export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
-  return {
-    sink: {
-      concurrency: resolveAgentMaxConcurrent(cfg),
-    },
-    runner: {
-      fetch: {
-        // Match grammY defaults
-        timeout: 30,
-        // Request reactions without dropping default update types.
-        allowed_updates: resolveTelegramAllowedUpdates(),
-      },
-      // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
-      silent: true,
-      // Retry transient failures for a limited window before surfacing errors.
-      maxRetryTime: 5 * 60 * 1000,
-      retryInterval: "exponential",
-    },
-  };
-}
-
-const TELEGRAM_POLL_RESTART_POLICY = {
-  initialMs: 2000,
-  maxMs: 30_000,
-  factor: 1.8,
-  jitter: 0.25,
-};
-
-const isGetUpdatesConflict = (err: unknown) => {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const typed = err as {
-    error_code?: number;
-    errorCode?: number;
-    description?: string;
-    method?: string;
-    message?: string;
-  };
-  const errorCode = typed.error_code ?? typed.errorCode;
-  if (errorCode !== 409) {
-    return false;
-  }
-  const haystack = [typed.method, typed.description, typed.message]
-    .filter((value): value is string => typeof value === "string")
-    .join(" ")
-    .toLowerCase();
-  return haystack.includes("getupdates");
-};
-
-/** Check if error is a Grammy HttpError (used to scope unhandled rejection handling) */
-const isGrammyHttpError = (err: unknown): boolean => {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  return (err as { name?: string }).name === "HttpError";
-};
+// ...
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
 
-  // Register handler for Grammy HttpError unhandled rejections.
-  // This catches network errors that escape the polling loop's try-catch
-  // (e.g., from setMyCommands during bot setup).
-  // We gate on isGrammyHttpError to avoid suppressing non-Telegram errors.
+  // Register handler for unhandled rejections.
+  // This catches network errors that escape the polling loop's try-catch (e.g., from setMyCommands).
+  // We suppress known recoverable network errors to prevent crashing the process.
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
-    if (isGrammyHttpError(err) && isRecoverableTelegramNetworkError(err, { context: "polling" })) {
+    if (isRecoverableTelegramNetworkError(err, { context: "polling" })) {
       log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
       return true; // handled - don't crash
     }
