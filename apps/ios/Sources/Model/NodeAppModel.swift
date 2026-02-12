@@ -109,6 +109,7 @@ final class NodeAppModel {
     private var talkVoiceWakeSuspended = false
     private var backgroundVoiceWakeSuspended = false
     private var backgroundTalkSuspended = false
+    private var backgroundTalkKeptActive = false
     private var backgroundedAt: Date?
     private var reconnectAfterBackgroundArmed = false
 
@@ -264,15 +265,20 @@ final class NodeAppModel {
 
 
     func setScenePhase(_ phase: ScenePhase) {
+        let keepTalkActive = UserDefaults.standard.bool(forKey: "talk.background.enabled")
         switch phase {
         case .background:
             self.isBackgrounded = true
             self.stopGatewayHealthMonitor()
             self.backgroundedAt = Date()
             self.reconnectAfterBackgroundArmed = true
-            // Be conservative: release the mic when the app backgrounds.
+            // Release voice wake mic in background.
             self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
-            self.backgroundTalkSuspended = self.talkMode.suspendForBackground()
+            // When "Background Voice" is enabled and Talk Mode is active, keep the audio
+            // session alive so iOS doesn't suspend us (UIBackgroundModes=audio).
+            let shouldKeepTalkActive = keepTalkActive && self.talkMode.isEnabled
+            self.backgroundTalkKeptActive = shouldKeepTalkActive
+            self.backgroundTalkSuspended = self.talkMode.suspendForBackground(keepActive: shouldKeepTalkActive)
         case .active, .inactive:
             self.isBackgrounded = false
             if self.operatorConnected {
@@ -284,8 +290,12 @@ final class NodeAppModel {
                 Task { [weak self] in
                     guard let self else { return }
                     let suspended = await MainActor.run { self.backgroundTalkSuspended }
-                    await MainActor.run { self.backgroundTalkSuspended = false }
-                    await self.talkMode.resumeAfterBackground(wasSuspended: suspended)
+                    let keptActive = await MainActor.run { self.backgroundTalkKeptActive }
+                    await MainActor.run {
+                        self.backgroundTalkSuspended = false
+                        self.backgroundTalkKeptActive = false
+                    }
+                    await self.talkMode.resumeAfterBackground(wasSuspended: suspended, wasKeptActive: keptActive)
                 }
             }
             if phase == .active, self.reconnectAfterBackgroundArmed {

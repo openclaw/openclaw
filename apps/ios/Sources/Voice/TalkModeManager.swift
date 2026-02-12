@@ -218,9 +218,19 @@ final class TalkModeManager: NSObject {
 
     /// Suspends microphone usage without disabling Talk Mode.
     /// Used when the app backgrounds (or when we need to temporarily release the mic).
-    func suspendForBackground() -> Bool {
+    /// When `keepActiveInBackground` is true, the audio session and recognition remain
+    /// alive so Talk Mode continues working while the app is in the background.
+    func suspendForBackground(keepActive: Bool = false) -> Bool {
         guard self.isEnabled else { return false }
         let wasActive = self.isListening || self.isSpeaking || self.isPushToTalkActive
+
+        if keepActive {
+            // Keep Talk Mode running in the background. The audio session stays active
+            // (UIBackgroundModes=audio keeps the process alive while audio is in use).
+            self.logger.info("backgrounding with talk mode active (keepActive=true)")
+            GatewayDiagnostics.log("talk: background keepActive=true listening=\(self.isListening)")
+            return wasActive
+        }
 
         self.isListening = false
         self.isPushToTalkActive = false
@@ -246,9 +256,14 @@ final class TalkModeManager: NSObject {
         return wasActive
     }
 
-    func resumeAfterBackground(wasSuspended: Bool) async {
+    func resumeAfterBackground(wasSuspended: Bool, wasKeptActive: Bool = false) async {
         guard wasSuspended else { return }
         guard self.isEnabled else { return }
+        // If talk mode was kept active in the background, no restart needed.
+        if wasKeptActive {
+            self.logger.info("foregrounding with talk mode still active (wasKeptActive=true)")
+            return
+        }
         await self.start()
     }
 
