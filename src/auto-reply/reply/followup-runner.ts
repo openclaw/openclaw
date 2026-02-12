@@ -196,6 +196,7 @@ export function createFollowupRunner(params: {
 
       if (storePath && sessionKey) {
         const usage = runResult.meta.agentMeta?.usage;
+        const promptTokens = runResult.meta.agentMeta?.promptTokens;
         const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
         const contextTokensUsed =
           agentCfgContextTokens ??
@@ -207,6 +208,7 @@ export function createFollowupRunner(params: {
           storePath,
           sessionKey,
           usage,
+          promptTokens,
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,

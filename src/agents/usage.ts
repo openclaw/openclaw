@@ -91,6 +91,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
 
 export function derivePromptTokens(usage?: {
   input?: number;
+  output?: number;
   cacheRead?: number;
   cacheWrite?: number;
 }): number | undefined {
@@ -98,32 +99,41 @@ export function derivePromptTokens(usage?: {
     return undefined;
   }
   const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
   const cacheRead = usage.cacheRead ?? 0;
   const cacheWrite = usage.cacheWrite ?? 0;
-  const sum = input + cacheRead + cacheWrite;
+  const sum = input + cacheRead + cacheWrite + output;
   return sum > 0 ? sum : undefined;
 }
 
 export function deriveSessionTotalTokens(params: {
   usage?: {
     input?: number;
+    output?: number;
     total?: number;
     cacheRead?: number;
     cacheWrite?: number;
   };
   contextTokens?: number;
+  promptTokens?: number;
 }): number | undefined {
+  const promptOverride = params.promptTokens;
+  const hasPromptOverride =
+    typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0;
   const usage = params.usage;
-  if (!usage) {
+  if (!usage && !hasPromptOverride) {
     return undefined;
   }
-  const input = usage.input ?? 0;
-  const promptTokens = derivePromptTokens({
-    input: usage.input,
-    cacheRead: usage.cacheRead,
-    cacheWrite: usage.cacheWrite,
-  });
-  let total = promptTokens ?? usage.total ?? input;
+  const input = usage?.input ?? 0;
+  const promptTokens = hasPromptOverride
+    ? promptOverride
+    : derivePromptTokens({
+        input: usage?.input,
+        output: usage?.output,
+        cacheRead: usage?.cacheRead,
+        cacheWrite: usage?.cacheWrite,
+      });
+  let total = promptTokens ?? usage?.total ?? input;
   if (!(total > 0)) {
     return undefined;
   }

@@ -13,6 +13,8 @@ export type EmbeddedPiAgentMeta = {
     cacheWrite?: number;
     total?: number;
   };
+  /** Prompt tokens for the last model call in this run (used for context sizing). */
+  promptTokens?: number;
 };
 
 export type EmbeddedPiRunMeta = {

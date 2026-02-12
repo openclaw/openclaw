@@ -18,6 +18,7 @@ export async function persistSessionUsageUpdate(params: {
   modelUsed?: string;
   providerUsed?: string;
   contextTokensUsed?: number;
+  promptTokens?: number;
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
   logLabel?: string;
@@ -44,6 +45,7 @@ export async function persistSessionUsageUpdate(params: {
               deriveSessionTotalTokens({
                 usage: params.usage,
                 contextTokens: resolvedContextTokens,
+                promptTokens: params.promptTokens,
               }) ?? input,
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,

@@ -1,0 +1,27 @@
+--- a/dist/core/compaction/compaction.js
++++ b/dist/core/compaction/compaction.js
+@@ -56,6 +56,14 @@
+     }
+     return undefined;
+ }
++function findLastContextEntryIndex(entries) {
++    for (let i = entries.length - 1; i >= 0; i--) {
++        if (getMessageFromEntry(entries[i])) {
++            return i;
++        }
++    }
++    return -1;
++}
+ export const DEFAULT_COMPACTION_SETTINGS = {
+     enabled: true,
+     reserveTokens: 16384,
+@@ -455,7 +463,8 @@
+     return textContent;
+ }
+ export function prepareCompaction(pathEntries, settings) {
+-    if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
++    const lastContextEntryIndex = findLastContextEntryIndex(pathEntries);
++    if (lastContextEntryIndex >= 0 && pathEntries[lastContextEntryIndex].type === "compaction") {
+         return undefined;
+     }
+     let prevCompactionIndex = -1;
