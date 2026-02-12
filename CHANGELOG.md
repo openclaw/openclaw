@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: expose `/compact` in the native command menu. (#10352) Thanks @akramcodez.
 - Discord: add role-based allowlists and role-based agent routing. (#10650) Thanks @Minidoracat.
 - Config: avoid redacting `maxTokens`-like fields during config snapshot redaction, preventing round-trip validation failures in `/config`. (#14006) Thanks @constansino.
+- Config: support per-agent compaction overrides via `agents.list[].compaction`. (#14446)
 
 ### Breaking
 

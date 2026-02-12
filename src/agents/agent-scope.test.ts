@@ -50,12 +50,35 @@ describe("resolveAgentConfig", () => {
       workspace: "~/openclaw",
       agentDir: "~/.openclaw/agents/main",
       model: "anthropic/claude-opus-4",
+      compaction: undefined,
       identity: undefined,
       groupChat: undefined,
       subagents: undefined,
       sandbox: undefined,
       tools: undefined,
     });
+  });
+
+  it("returns per-agent compaction overrides (#14446)", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "coordinator",
+            compaction: {
+              maxHistoryShare: 0.8,
+            },
+          },
+          {
+            id: "worker",
+          },
+        ],
+      },
+    };
+    expect(resolveAgentConfig(cfg, "coordinator")?.compaction).toEqual({
+      maxHistoryShare: 0.8,
+    });
+    expect(resolveAgentConfig(cfg, "worker")?.compaction).toBeUndefined();
   });
 
   it("supports per-agent model primary+fallbacks", () => {

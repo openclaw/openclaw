@@ -3,6 +3,8 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentCompactionConfig } from "../../config/types.agent-defaults.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -67,8 +69,24 @@ function buildContextPruningExtension(params: {
   };
 }
 
-function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
-  return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
+function resolveCompactionConfig(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): AgentCompactionConfig | undefined {
+  const defaults = cfg?.agents?.defaults?.compaction;
+  if (!agentId) {
+    return defaults;
+  }
+  const overrides = resolveAgentConfig(cfg ?? {}, agentId)?.compaction;
+  if (!defaults && !overrides) {
+    return undefined;
+  }
+  return {
+    mode: overrides?.mode ?? defaults?.mode,
+    reserveTokensFloor: overrides?.reserveTokensFloor ?? defaults?.reserveTokensFloor,
+    maxHistoryShare: overrides?.maxHistoryShare ?? defaults?.maxHistoryShare,
+    memoryFlush: overrides?.memoryFlush ?? defaults?.memoryFlush,
+  };
 }
 
 export function buildEmbeddedExtensionPaths(params: {
@@ -77,10 +95,11 @@ export function buildEmbeddedExtensionPaths(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  agentId?: string;
 }): string[] {
   const paths: string[] = [];
-  if (resolveCompactionMode(params.cfg) === "safeguard") {
-    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  const compactionCfg = resolveCompactionConfig(params.cfg, params.agentId);
+  if (compactionCfg?.mode === "safeguard") {
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
       provider: params.provider,

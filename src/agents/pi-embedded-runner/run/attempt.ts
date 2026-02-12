@@ -454,6 +454,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        agentId: params.agentId,
       });
 
       // Get hook runner early so it's available when creating tools
