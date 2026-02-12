@@ -387,7 +387,7 @@ describe("QmdMemoryManager", () => {
       );
     expect(searchAndQueryCalls).toEqual([
       ["search", "test", "--json"],
-      ["query", "test", "--json", "-n", String(maxResults)],
+      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace"],
     ]);
     await manager.close();
   });
