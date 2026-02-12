@@ -674,6 +674,91 @@ describe("runMessageAction media caption behavior", () => {
   });
 });
 
+describe("runMessageAction card-only send behavior", () => {
+  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+    jsonResult({
+      ok: true,
+      card: params.card ?? null,
+      message: params.message ?? null,
+    }),
+  );
+
+  const cardPlugin: ChannelPlugin = {
+    id: "cardchat",
+    meta: {
+      id: "cardchat",
+      label: "Card Chat",
+      selectionLabel: "Card Chat",
+      docsPath: "/channels/cardchat",
+      blurb: "Card-only send test plugin.",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ enabled: true }),
+      isConfigured: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+      supportsAction: ({ action }) => action === "send",
+      handleAction,
+    },
+  };
+
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "cardchat",
+          source: "test",
+          plugin: cardPlugin,
+        },
+      ]),
+    );
+    handleAction.mockClear();
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+  });
+
+  it("allows card-only sends without text or media", async () => {
+    const cfg = {
+      channels: {
+        cardchat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const card = {
+      type: "AdaptiveCard",
+      version: "1.4",
+      body: [{ type: "TextBlock", text: "Card-only payload" }],
+    };
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "cardchat",
+        target: "channel:test-card",
+        card,
+      },
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(result.handledBy).toBe("plugin");
+    expect(handleAction).toHaveBeenCalled();
+    expect(result.payload).toMatchObject({
+      ok: true,
+      card,
+    });
+  });
+});
+
 describe("runMessageAction accountId defaults", () => {
   const handleAction = vi.fn(async () => jsonResult({ ok: true }));
   const accountPlugin: ChannelPlugin = {

@@ -812,7 +812,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       message = "";
     }
   }
-  if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0) {
+  if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0 && !hasCard) {
     throw new Error("send requires text or media");
   }
   params.message = message;
