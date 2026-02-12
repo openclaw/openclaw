@@ -486,14 +486,16 @@ describe("statusCommand", () => {
       plugins: { slots: { memory: "memory-lancedb" } },
     });
 
-    (runtime.log as vi.Mock).mockClear();
-    await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse((runtime.log as vi.Mock).mock.calls[0][0]);
-    expect(payload.memoryPlugin.enabled).toBe(true);
-    expect(payload.memoryPlugin.slot).toBe("memory-lancedb");
-    expect(payload.memory).not.toBeNull();
-    expect(payload.memory.vector.available).toBe(true);
-
-    (configMod as Record<string, unknown>).loadConfig = original;
+    try {
+      (runtime.log as vi.Mock).mockClear();
+      await statusCommand({ json: true }, runtime as never);
+      const payload = JSON.parse((runtime.log as vi.Mock).mock.calls[0][0]);
+      expect(payload.memoryPlugin.enabled).toBe(true);
+      expect(payload.memoryPlugin.slot).toBe("memory-lancedb");
+      expect(payload.memory).not.toBeNull();
+      expect(payload.memory.vector.available).toBe(true);
+    } finally {
+      (configMod as Record<string, unknown>).loadConfig = original;
+    }
   });
 });
