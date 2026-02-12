@@ -126,6 +126,37 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
   return "channel";
 }
 
+type ResolveGroupRequireMentionFn = (params: {
+  cfg: OpenClawConfig;
+  channel: "mattermost";
+  accountId?: string | null;
+  groupId?: string | null;
+  requireMentionOverride?: boolean;
+  overrideOrder?: "before-config" | "after-config";
+}) => boolean;
+
+export function resolveMattermostRequireMention(params: {
+  kind: ChatType;
+  cfg: OpenClawConfig;
+  accountId: string;
+  groupId: string;
+  requireMention?: boolean;
+  resolveRequireMention: ResolveGroupRequireMentionFn;
+}): boolean {
+  if (params.kind === "direct") {
+    return false;
+  }
+  return params.resolveRequireMention({
+    cfg: params.cfg,
+    channel: "mattermost",
+    accountId: params.accountId,
+    groupId: params.groupId,
+    // chatmode should set the default mention behavior when no per-group override exists.
+    requireMentionOverride: params.requireMention,
+    overrideOrder: "after-config",
+  });
+}
+
 function normalizeAllowEntry(entry: string): string {
   const trimmed = entry.trim();
   if (!trimmed) {
@@ -547,14 +578,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       : { triggered: false, stripped: rawText };
     const oncharTriggered = oncharResult.triggered;
 
-    const shouldRequireMention =
-      kind !== "direct" &&
-      core.channel.groups.resolveRequireMention({
-        cfg,
-        channel: "mattermost",
-        accountId: account.accountId,
-        groupId: channelId,
-      });
+    const shouldRequireMention = resolveMattermostRequireMention({
+      kind,
+      cfg,
+      accountId: account.accountId,
+      groupId: channelId,
+      requireMention: account.requireMention,
+      resolveRequireMention: core.channel.groups.resolveRequireMention,
+    });
     const shouldBypassMention =
       isControlCommand && shouldRequireMention && !wasMentioned && commandAuthorized;
     const effectiveWasMentioned = wasMentioned || shouldBypassMention || oncharTriggered;
