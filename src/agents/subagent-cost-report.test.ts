@@ -207,3 +207,39 @@ describe("reportSubagentCostToParent", async () => {
     expect(parent.subagentRunCount).toBe(1);
   });
 });
+
+describe("reportSubagentCostToParent — legacy key canonicalization", async () => {
+  const { reportSubagentCostToParent } = await import("./subagent-cost-report.js");
+
+  it("resolves a non-agent-prefixed requesterSessionKey to the canonical store key", async () => {
+    // The store uses the canonical agent-prefixed key
+    writeStore(storePath, {
+      "agent:main:telegram:group:-123:topic:456": {
+        sessionId: "s-parent-legacy",
+        updatedAt: Date.now(),
+        inputTokens: 4000,
+        outputTokens: 800,
+      },
+    });
+
+    // But the requester key passed in is the bare/legacy format
+    await reportSubagentCostToParent({
+      requesterSessionKey: "telegram:group:-123:topic:456",
+      usage: {
+        inputTokens: 2000,
+        outputTokens: 400,
+        totalTokens: 2400,
+        cost: 0.015,
+      },
+    });
+
+    const store = readStore(storePath);
+    const parent = store["agent:main:telegram:group:-123:topic:456"];
+    expect(parent).toBeDefined();
+    expect(parent.subagentInputTokens).toBe(2000);
+    expect(parent.subagentOutputTokens).toBe(400);
+    expect(parent.subagentTotalTokens).toBe(2400);
+    expect(parent.subagentCost).toBe(0.015);
+    expect(parent.subagentRunCount).toBe(1);
+  });
+});

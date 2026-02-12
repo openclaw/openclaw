@@ -1,6 +1,7 @@
 import type { SubagentUsageMetrics } from "./subagent-registry.js";
 import { loadConfig } from "../config/config.js";
 import {
+  canonicalizeRequesterStoreKey,
   loadSessionStore,
   resolveStorePath,
   updateSessionStore,
@@ -17,10 +18,11 @@ export function collectSubagentUsage(params: {
   childSessionKey: string;
 }): SubagentUsageMetrics | undefined {
   const cfg = loadConfig();
-  const agentId = resolveAgentIdFromSessionKey(params.childSessionKey);
+  const canonicalKey = canonicalizeRequesterStoreKey(cfg, params.childSessionKey);
+  const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const entry = store[params.childSessionKey];
+  const entry = store[canonicalKey];
   if (!entry) {
     return undefined;
   }
@@ -69,11 +71,12 @@ export async function reportSubagentCostToParent(params: {
   }
 
   const cfg = loadConfig();
-  const agentId = resolveAgentIdFromSessionKey(requesterSessionKey);
+  const canonicalKey = canonicalizeRequesterStoreKey(cfg, requesterSessionKey);
+  const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
 
   await updateSessionStore(storePath, (store) => {
-    const entry = store[requesterSessionKey];
+    const entry = store[canonicalKey];
     if (!entry) {
       return;
     }
@@ -93,6 +96,6 @@ export async function reportSubagentCostToParent(params: {
     patch.subagentRunCount = (entry.subagentRunCount ?? 0) + 1;
 
     Object.assign(entry, patch);
-    store[requesterSessionKey] = entry;
+    store[canonicalKey] = entry;
   });
 }

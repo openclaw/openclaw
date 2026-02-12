@@ -77,3 +77,34 @@ export function canonicalizeMainSessionAlias(params: {
   }
   return raw;
 }
+
+/**
+ * Canonicalize a requester session key so it can be looked up in the session
+ * store. Keys that already start with `agent:` are returned as-is; legacy /
+ * bare keys are prefixed with `agent:<defaultAgentId>:` so the lookup
+ * targets the correct store file.
+ */
+export function canonicalizeRequesterStoreKey(
+  cfg: {
+    session?: { scope?: SessionScope; mainKey?: string };
+    agents?: { list?: Array<{ id?: string; default?: boolean }> };
+  },
+  requesterSessionKey: string,
+): string {
+  const raw = requesterSessionKey.trim();
+  if (!raw) {
+    return raw;
+  }
+  if (raw === "global" || raw === "unknown") {
+    return raw;
+  }
+  if (raw.startsWith("agent:")) {
+    return raw;
+  }
+  const mainKey = normalizeMainKey(cfg.session?.mainKey);
+  if (raw === "main" || raw === mainKey) {
+    return resolveMainSessionKey(cfg);
+  }
+  const agentId = resolveAgentIdFromSessionKey(raw);
+  return `agent:${agentId}:${raw}`;
+}

@@ -3,14 +3,13 @@ import path from "node:path";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { loadConfig } from "../config/config.js";
 import {
+  canonicalizeRequesterStoreKey,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
-  resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
-import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   type DeliveryContext,
@@ -135,31 +134,9 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   });
 }
 
-function resolveRequesterStoreKey(
-  cfg: ReturnType<typeof loadConfig>,
-  requesterSessionKey: string,
-): string {
-  const raw = requesterSessionKey.trim();
-  if (!raw) {
-    return raw;
-  }
-  if (raw === "global" || raw === "unknown") {
-    return raw;
-  }
-  if (raw.startsWith("agent:")) {
-    return raw;
-  }
-  const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  if (raw === "main" || raw === mainKey) {
-    return resolveMainSessionKey(cfg);
-  }
-  const agentId = resolveAgentIdFromSessionKey(raw);
-  return `agent:${agentId}:${raw}`;
-}
-
 function loadRequesterSessionEntry(requesterSessionKey: string) {
   const cfg = loadConfig();
-  const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
+  const canonicalKey = canonicalizeRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
@@ -174,7 +151,7 @@ async function maybeQueueSubagentAnnounce(params: {
   requesterOrigin?: DeliveryContext;
 }): Promise<"steered" | "queued" | "none"> {
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
-  const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
+  const canonicalKey = canonicalizeRequesterStoreKey(cfg, params.requesterSessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId) {
     return "none";
