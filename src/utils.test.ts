@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs, { type ObjectEncodingOptions, type PathOrFileDescriptor } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -81,13 +81,14 @@ describe("jidToE164", () => {
     const original = fs.readFileSync;
     const spy = vi
       .spyOn(fs, "readFileSync")
-      // biome-ignore lint/suspicious/noExplicitAny: forwarding to native signature
-      .mockImplementation((path: any, encoding?: any) => {
-        if (path === mappingPath) {
-          return `"5551234"`;
-        }
-        return original(path, encoding);
-      });
+      .mockImplementation(
+        (path: PathOrFileDescriptor, encoding?: ObjectEncodingOptions | BufferEncoding | null) => {
+          if (path === mappingPath) {
+            return '"5551234"';
+          }
+          return original(path, encoding as any);
+        },
+      );
     expect(jidToE164("123@lid")).toBe("+5551234");
     spy.mockRestore();
   });
