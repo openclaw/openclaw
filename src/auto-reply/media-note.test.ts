@@ -107,3 +107,23 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
   });
 });
+
+it("returns undefined when MediaMaxBytes is 0", () => {
+  const note = buildInboundMediaNote({
+    MediaPath: "/tmp/a.png",
+    MediaType: "image/png",
+    MediaUrl: "/tmp/a.png",
+    MediaMaxBytes: 0,
+  });
+  expect(note).toBeUndefined();
+});
+
+it("returns media note normally when MediaMaxBytes is set but non-zero", () => {
+  const note = buildInboundMediaNote({
+    MediaPath: "/tmp/a.png",
+    MediaType: "image/png",
+    MediaUrl: "/tmp/a.png",
+    MediaMaxBytes: 5 * 1024 * 1024,
+  });
+  expect(note).toBe("[media attached: /tmp/a.png (image/png) | /tmp/a.png]");
+});

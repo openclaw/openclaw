@@ -18,6 +18,10 @@ function formatMediaAttachedLine(params: {
 }
 
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
+  // When mediaMaxBytes is 0, suppress all media notes
+  if (ctx.MediaMaxBytes === 0) {
+    return undefined;
+  }
   // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
   const suppressed = new Set<number>();
   if (Array.isArray(ctx.MediaUnderstanding)) {

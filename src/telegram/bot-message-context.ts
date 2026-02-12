@@ -99,6 +99,7 @@ export type BuildTelegramMessageContextParams = {
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   ackReactionScope: "off" | "group-mentions" | "group-all" | "direct" | "all";
+  mediaMaxBytes: number;
   logger: TelegramLogger;
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
@@ -139,6 +140,7 @@ export const buildTelegramMessageContext = async ({
   allowFrom,
   groupAllowFrom,
   ackReactionScope,
+  mediaMaxBytes,
   logger,
   resolveGroupActivation,
   resolveGroupRequireMention,
@@ -638,6 +640,7 @@ export const buildTelegramMessageContext = async ({
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,
     OriginatingTo: `telegram:${chatId}`,
+    MediaMaxBytes: mediaMaxBytes,
   });
 
   await recordInboundSession({

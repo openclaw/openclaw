@@ -350,6 +350,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     allowFrom,
     groupAllowFrom,
     ackReactionScope,
+    mediaMaxBytes,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,

@@ -329,10 +329,20 @@ async function extractFileBlocks(params: {
   cache: ReturnType<typeof createMediaAttachmentCache>;
   limits: ReturnType<typeof resolveFileLimits>;
   skipAttachmentIndexes?: Set<number>;
+  mediaMaxBytes?: number;
 }): Promise<string[]> {
-  const { attachments, cache, limits, skipAttachmentIndexes } = params;
+  const { attachments, cache, limits, skipAttachmentIndexes, mediaMaxBytes } = params;
   if (!attachments || attachments.length === 0) {
     return [];
+  }
+  // mediaMaxBytes === 0 means "no media content in session at all"
+  if (mediaMaxBytes === 0) {
+    return attachments
+      .filter((a) => a && !skipAttachmentIndexes?.has(a.index))
+      .map((a) => {
+        const name = a.path ? path.basename(a.path) : (a.url ?? `file-${a.index + 1}`);
+        return `[File skipped: ${name} — media content disabled (mediaMaxMb=0)]`;
+      });
   }
   const blocks: string[] = [];
   for (const attachment of attachments) {
@@ -364,6 +374,20 @@ async function extractFileBlocks(params: {
       if (shouldLogVerbose()) {
         logVerbose(`media: file attachment skipped (buffer): ${String(err)}`);
       }
+      continue;
+    }
+    // Enforce channel-level mediaMaxBytes before injecting content into session
+    if (
+      typeof mediaMaxBytes === "number" &&
+      mediaMaxBytes > 0 &&
+      bufferResult.size > mediaMaxBytes
+    ) {
+      const fileMb = (bufferResult.size / (1024 * 1024)).toFixed(1);
+      const limitMb = (mediaMaxBytes / (1024 * 1024)).toFixed(0);
+      const fileName = bufferResult.fileName ?? attachment.path ?? `file-${attachment.index + 1}`;
+      blocks.push(
+        `[File too large: ${path.basename(fileName)} (${fileMb} MB exceeds limit of ${limitMb} MB)]`,
+      );
       continue;
     }
     const nameHint = bufferResult?.fileName ?? attachment.path ?? attachment.url;
@@ -466,6 +490,19 @@ export async function applyMediaUnderstanding(params: {
       .find((value) => value && value.trim()) ?? undefined;
 
   const attachments = normalizeMediaAttachments(ctx);
+
+  // When mediaMaxBytes is explicitly 0, skip all media processing entirely
+  if (ctx.MediaMaxBytes === 0) {
+    return {
+      outputs: [],
+      decisions: [],
+      appliedImage: false,
+      appliedAudio: false,
+      appliedVideo: false,
+      appliedFile: false,
+    };
+  }
+
   const providerRegistry = buildProviderRegistry(params.providers);
   const cache = createMediaAttachmentCache(attachments);
 
@@ -531,6 +568,7 @@ export async function applyMediaUnderstanding(params: {
       cache,
       limits: resolveFileLimits(cfg),
       skipAttachmentIndexes: audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
+      mediaMaxBytes: ctx.MediaMaxBytes,
     });
     if (fileBlocks.length > 0) {
       ctx.Body = appendFileBlocks(ctx.Body, fileBlocks);
