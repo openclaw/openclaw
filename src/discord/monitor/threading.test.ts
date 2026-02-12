@@ -74,7 +74,7 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
     expect(plan.replyReference.use()).toBeUndefined();
   });
 
-  it("always uses existingId when inside a thread", () => {
+  it("honors replyToMode 'off' even inside a thread", () => {
     const plan = resolveDiscordReplyDeliveryPlan({
       replyTarget: "channel:thread",
       replyToMode: "off",
@@ -82,7 +82,7 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
       threadChannel: { id: "thread" },
       createdThreadId: null,
     });
-    expect(plan.replyReference.use()).toBe("m1");
+    expect(plan.replyReference.use()).toBeUndefined();
   });
 });
 
