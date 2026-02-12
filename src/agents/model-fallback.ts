@@ -1,4 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { FailoverReason } from "./pi-embedded-helpers.js";
+import {
+  ensureAuthProfileStore,
+  isProfileInCooldown,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   coerceToFailoverError,
@@ -13,12 +19,6 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import type { FailoverReason } from "./pi-embedded-helpers.js";
-import {
-  ensureAuthProfileStore,
-  isProfileInCooldown,
-  resolveAuthProfileOrder,
-} from "./auth-profiles.js";
 
 type ModelCandidate = {
   provider: string;
@@ -219,7 +219,12 @@ function resolveFallbackCandidates(params: {
     const model = params.cfg?.agents?.defaults?.model;
     return model && typeof model === "object" && "fallbacks" in model;
   })();
-  if (params.fallbacksOverride === undefined && !hasExplicitModelConfig && primary?.provider && primary.model) {
+  if (
+    params.fallbacksOverride === undefined &&
+    !hasExplicitModelConfig &&
+    primary?.provider &&
+    primary.model
+  ) {
     addCandidate({ provider: primary.provider, model: primary.model }, false);
   }
 
