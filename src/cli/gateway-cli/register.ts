@@ -123,6 +123,13 @@ export function registerGatewayCli(program: Command) {
     program
       .command("gateway")
       .description("Run the WebSocket Gateway")
+      // The gateway parent command and its subcommands (install, run, etc.)
+      // share option names like --force. Enable positional option parsing so
+      // options after a subcommand name are parsed by the subcommand, not the
+      // parent — e.g. `gateway install --force` uses install's --force, while
+      // `gateway --force` uses the parent's --force.
+      .enablePositionalOptions()
+      .passThroughOptions()
       .addHelpText(
         "after",
         () =>

@@ -260,6 +260,45 @@ describe("daemon-cli coverage", () => {
     expect(serviceStop).toHaveBeenCalledTimes(1);
   });
 
+  it("reinstalls when --force is passed and already loaded", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    serviceIsLoaded.mockResolvedValue(true);
+    serviceInstall.mockClear();
+
+    const { registerDaemonCli } = await import("./daemon-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDaemonCli(program);
+
+    await program.parseAsync(["daemon", "install", "--port", "18789", "--force"], {
+      from: "user",
+    });
+
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
+    // Should NOT print the "already loaded" message
+    expect(runtimeLogs.join("\n")).not.toContain("already");
+  });
+
+  it("skips install without --force when already loaded", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    serviceIsLoaded.mockResolvedValue(true);
+    serviceInstall.mockClear();
+
+    const { registerDaemonCli } = await import("./daemon-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDaemonCli(program);
+
+    await program.parseAsync(["daemon", "install", "--port", "18789"], {
+      from: "user",
+    });
+
+    expect(serviceInstall).not.toHaveBeenCalled();
+    expect(runtimeLogs.join("\n")).toContain("already");
+  });
+
   it("emits json for daemon start/stop", async () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;

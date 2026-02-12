@@ -12,6 +12,7 @@ const forceFreePortAndWait = vi.fn(async () => ({
   escalatedToSigkill: false,
 }));
 const serviceIsLoaded = vi.fn().mockResolvedValue(true);
+const serviceInstall = vi.fn().mockResolvedValue(undefined);
 const discoverGatewayBeacons = vi.fn(async () => []);
 const gatewayStatusCommand = vi.fn(async () => {});
 
@@ -88,7 +89,7 @@ vi.mock("../daemon/service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
-    install: vi.fn(),
+    install: serviceInstall,
     uninstall: vi.fn(),
     stop: vi.fn(),
     restart: vi.fn(),
@@ -119,7 +120,7 @@ describe("gateway-cli coverage", () => {
     callGateway.mockClear();
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     program.exitOverride();
     registerGatewayCli(program);
 
@@ -137,7 +138,7 @@ describe("gateway-cli coverage", () => {
     gatewayStatusCommand.mockClear();
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     program.exitOverride();
     registerGatewayCli(program);
 
@@ -164,7 +165,7 @@ describe("gateway-cli coverage", () => {
     ]);
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     program.exitOverride();
     registerGatewayCli(program);
 
@@ -196,7 +197,7 @@ describe("gateway-cli coverage", () => {
     ]);
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     program.exitOverride();
     registerGatewayCli(program);
 
@@ -219,7 +220,7 @@ describe("gateway-cli coverage", () => {
     discoverGatewayBeacons.mockReset();
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     program.exitOverride();
     registerGatewayCli(program);
 
@@ -239,7 +240,7 @@ describe("gateway-cli coverage", () => {
     callGateway.mockClear();
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     program.exitOverride();
     registerGatewayCli(program);
 
@@ -258,7 +259,7 @@ describe("gateway-cli coverage", () => {
     const { registerGatewayCli } = await import("./gateway-cli.js");
 
     // Invalid port
-    const programInvalidPort = new Command();
+    const programInvalidPort = new Command().enablePositionalOptions();
     programInvalidPort.exitOverride();
     registerGatewayCli(programInvalidPort);
     await expect(
@@ -271,7 +272,7 @@ describe("gateway-cli coverage", () => {
     forceFreePortAndWait.mockImplementationOnce(async () => {
       throw new Error("boom");
     });
-    const programForceFail = new Command();
+    const programForceFail = new Command().enablePositionalOptions();
     programForceFail.exitOverride();
     registerGatewayCli(programForceFail);
     await expect(
@@ -283,7 +284,7 @@ describe("gateway-cli coverage", () => {
 
     // Start failure (generic)
     startGatewayServer.mockRejectedValueOnce(new Error("nope"));
-    const programStartFail = new Command();
+    const programStartFail = new Command().enablePositionalOptions();
     programStartFail.exitOverride();
     registerGatewayCli(programStartFail);
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
@@ -319,7 +320,7 @@ describe("gateway-cli coverage", () => {
     );
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     program.exitOverride();
     registerGatewayCli(program);
 
@@ -334,6 +335,35 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).toContain("gateway stop");
   });
 
+  it("gateway install --force reinstalls when already loaded (issue #14845)", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    serviceInstall.mockClear();
+    serviceIsLoaded.mockResolvedValue(true);
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+
+    // Without --force: should print "already loaded" message and NOT install
+    const programNoForce = new Command().enablePositionalOptions();
+    programNoForce.exitOverride();
+    registerGatewayCli(programNoForce);
+    await programNoForce.parseAsync(["gateway", "install"], { from: "user" });
+    expect(serviceInstall).not.toHaveBeenCalled();
+    expect(runtimeLogs.join("\n")).toContain("already");
+
+    // With --force: should call service.install even when already loaded
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    serviceInstall.mockClear();
+    serviceIsLoaded.mockResolvedValue(true);
+
+    const programForce = new Command().enablePositionalOptions();
+    programForce.exitOverride();
+    registerGatewayCli(programForce);
+    await programForce.parseAsync(["gateway", "install", "--force"], { from: "user" });
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
+  });
+
   it("uses env/config port when --port is omitted", async () => {
     await withEnvOverride({ OPENCLAW_GATEWAY_PORT: "19001" }, async () => {
       runtimeLogs.length = 0;
@@ -341,7 +371,7 @@ describe("gateway-cli coverage", () => {
       startGatewayServer.mockClear();
 
       const { registerGatewayCli } = await import("./gateway-cli.js");
-      const program = new Command();
+      const program = new Command().enablePositionalOptions();
       program.exitOverride();
       registerGatewayCli(program);
 
