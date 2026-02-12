@@ -95,6 +95,15 @@ const googlechatActions: ChannelMessageActionAdapter = {
   },
 };
 
+/**
+ * Convert standard Markdown formatting to Google Chat markup.
+ * Google Chat uses: *bold*, _italic_, ~strikethrough~, `code`
+ * Markdown uses:    **bold**, *italic*, ~~strikethrough~~, `code`
+ */
+function markdownToGoogleChat(text: string): string {
+  return text.replace(/\*\*(.+?)\*\*/g, "*$1*").replace(/~~(.+?)~~/g, "~$1~");
+}
+
 export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
   id: "googlechat",
   meta: { ...meta },
@@ -421,7 +430,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       const result = await sendGoogleChatMessage({
         account,
         space,
-        text,
+        text: markdownToGoogleChat(text),
         thread,
       });
       return {
@@ -466,7 +475,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       const result = await sendGoogleChatMessage({
         account,
         space,
-        text,
+        text: markdownToGoogleChat(text),
         thread,
         attachments: upload.attachmentUploadToken
           ? [{ attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName }]
