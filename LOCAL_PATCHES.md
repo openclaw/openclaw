@@ -97,6 +97,17 @@ Quick status:
       - `XDG_CACHE_HOME`
     - ensures agent-run `qmd status` reports the agent’s own index/config, not terminal host defaults.
 
+### 8) Discord native skill commands: scope to channel-bound agents (avoid `_2` duplicates)
+
+- Commit: `764b3b6e5` — `fix(discord): scope native skill commands to bound agents`
+- Why:
+  - Discord slash skill commands were built from **all agents**, not just agents routed for Discord.
+  - In multi-agent setups this produced duplicate names with numeric suffixes (e.g., `askpi`, `askpi_2`).
+- What:
+  - Add `listBoundAgentIds(...)` in `src/routing/bindings.ts` to resolve channel/account-scoped agent IDs using binding semantics.
+  - Update Discord provider command registration (`src/discord/monitor/provider.ts`) to pass those agent IDs into `listSkillCommandsForAgents(...)`.
+  - Add regression tests in `src/routing/bindings.test.ts`.
+
 ## Operating rules
 
 - Treat this file as the **source of truth** for why a local commit exists.
