@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
-  addPairedDevice,
   approveDevicePairing,
   getPairedDevice,
   requestDevicePairing,
