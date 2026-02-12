@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { __testing, acquireSessionWriteLock } from "./session-write-lock.js";
+import {
+  __testing,
+  acquireSessionWriteLock,
+  SESSION_FILE_LOCK_TIMEOUT_CODE,
+} from "./session-write-lock.js";
 
 describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
@@ -67,6 +71,29 @@ describe("acquireSessionWriteLock", () => {
 
       expect(payload.pid).toBe(process.pid);
       await lock.release();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns structured timeout diagnostics", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-timeout-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+        "utf8",
+      );
+
+      await expect(
+        acquireSessionWriteLock({ sessionFile, timeoutMs: 120, staleMs: 60_000 }),
+      ).rejects.toMatchObject({
+        name: "SessionFileLockTimeoutError",
+        code: SESSION_FILE_LOCK_TIMEOUT_CODE,
+        lockPath,
+      });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

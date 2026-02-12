@@ -585,6 +585,85 @@ type SessionStoreLockOptions = {
   staleMs?: number;
 };
 
+type SessionStoreLockPayload = {
+  pid: number;
+  startedAt: number;
+};
+
+export const SESSION_STORE_LOCK_TIMEOUT_CODE = "SESSION_STORE_LOCK_TIMEOUT";
+
+export class SessionStoreLockTimeoutError extends Error {
+  readonly code = SESSION_STORE_LOCK_TIMEOUT_CODE;
+  readonly timeoutMs: number;
+  readonly lockPath: string;
+  readonly ownerPid?: number;
+  readonly ownerStartedAt?: number;
+  readonly ownerAgeMs?: number;
+  readonly ownerAlive?: boolean;
+
+  constructor(params: {
+    timeoutMs: number;
+    lockPath: string;
+    ownerPid?: number;
+    ownerStartedAt?: number;
+    ownerAgeMs?: number;
+    ownerAlive?: boolean;
+    cause?: unknown;
+  }) {
+    const diagnostics: string[] = [];
+    if (typeof params.ownerAlive === "boolean") {
+      diagnostics.push(`owner_alive=${params.ownerAlive ? "1" : "0"}`);
+    }
+    if (typeof params.ownerAgeMs === "number" && Number.isFinite(params.ownerAgeMs)) {
+      diagnostics.push(`owner_age_ms=${Math.max(0, Math.trunc(params.ownerAgeMs))}`);
+    }
+    const suffix = diagnostics.length > 0 ? ` [${diagnostics.join(" ")}]` : "";
+    super(`timeout acquiring session store lock: ${params.lockPath}${suffix}`, {
+      cause: params.cause,
+    });
+    this.name = "SessionStoreLockTimeoutError";
+    this.timeoutMs = params.timeoutMs;
+    this.lockPath = params.lockPath;
+    this.ownerPid = params.ownerPid;
+    this.ownerStartedAt = params.ownerStartedAt;
+    this.ownerAgeMs = params.ownerAgeMs;
+    this.ownerAlive = params.ownerAlive;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readSessionStoreLockPayload(
+  lockPath: string,
+): Promise<SessionStoreLockPayload | null> {
+  try {
+    const raw = await fs.promises.readFile(lockPath, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<SessionStoreLockPayload>;
+    if (typeof parsed.pid !== "number") {
+      return null;
+    }
+    if (typeof parsed.startedAt !== "number") {
+      return null;
+    }
+    return {
+      pid: parsed.pid,
+      startedAt: parsed.startedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function withSessionStoreLock<T>(
   storePath: string,
   fn: () => Promise<T>,
@@ -631,7 +710,21 @@ async function withSessionStoreLock<T>(
 
       const now = Date.now();
       if (now - startedAt > timeoutMs) {
-        throw new Error(`timeout acquiring session store lock: ${lockPath}`, { cause: err });
+        const payload = await readSessionStoreLockPayload(lockPath);
+        const ownerAgeMs =
+          typeof payload?.startedAt === "number" && Number.isFinite(payload.startedAt)
+            ? Date.now() - payload.startedAt
+            : undefined;
+        const ownerAlive = payload?.pid ? isProcessAlive(payload.pid) : undefined;
+        throw new SessionStoreLockTimeoutError({
+          timeoutMs,
+          lockPath,
+          ownerPid: payload?.pid,
+          ownerStartedAt: payload?.startedAt,
+          ownerAgeMs,
+          ownerAlive,
+          cause: err,
+        });
       }
 
       // Best-effort stale lock eviction (e.g. crashed process).

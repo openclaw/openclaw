@@ -13,6 +13,51 @@ type HeldLock = {
   lockPath: string;
 };
 
+export const SESSION_FILE_LOCK_TIMEOUT_CODE = "SESSION_FILE_LOCK_TIMEOUT";
+
+export class SessionFileLockTimeoutError extends Error {
+  readonly code = SESSION_FILE_LOCK_TIMEOUT_CODE;
+  readonly timeoutMs: number;
+  readonly lockPath: string;
+  readonly ownerPid?: number;
+  readonly ownerCreatedAt?: string;
+  readonly ownerAgeMs?: number;
+  readonly ownerAlive?: boolean;
+
+  constructor(params: {
+    timeoutMs: number;
+    lockPath: string;
+    ownerPid?: number;
+    ownerCreatedAt?: string;
+    ownerAgeMs?: number;
+    ownerAlive?: boolean;
+    cause?: unknown;
+  }) {
+    const owner = params.ownerPid ? `pid=${params.ownerPid}` : "unknown";
+    const diagnostics: string[] = [];
+    if (typeof params.ownerAlive === "boolean") {
+      diagnostics.push(`owner_alive=${params.ownerAlive ? "1" : "0"}`);
+    }
+    if (typeof params.ownerAgeMs === "number" && Number.isFinite(params.ownerAgeMs)) {
+      diagnostics.push(`owner_age_ms=${Math.max(0, Math.trunc(params.ownerAgeMs))}`);
+    }
+    const suffix = diagnostics.length > 0 ? ` [${diagnostics.join(" ")}]` : "";
+    super(
+      `session file locked (timeout ${params.timeoutMs}ms): ${owner} ${params.lockPath}${suffix}`,
+      {
+        cause: params.cause,
+      },
+    );
+    this.name = "SessionFileLockTimeoutError";
+    this.timeoutMs = params.timeoutMs;
+    this.lockPath = params.lockPath;
+    this.ownerPid = params.ownerPid;
+    this.ownerCreatedAt = params.ownerCreatedAt;
+    this.ownerAgeMs = params.ownerAgeMs;
+    this.ownerAlive = params.ownerAlive;
+  }
+}
+
 const HELD_LOCKS = new Map<string, HeldLock>();
 const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
 type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
@@ -197,8 +242,17 @@ export async function acquireSessionWriteLock(params: {
   }
 
   const payload = await readLockPayload(lockPath);
-  const owner = payload?.pid ? `pid=${payload.pid}` : "unknown";
-  throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
+  const ownerCreatedAtMs = payload?.createdAt ? Date.parse(payload.createdAt) : NaN;
+  const ownerAgeMs = Number.isFinite(ownerCreatedAtMs) ? Date.now() - ownerCreatedAtMs : undefined;
+  const ownerAlive = payload?.pid ? isAlive(payload.pid) : undefined;
+  throw new SessionFileLockTimeoutError({
+    timeoutMs,
+    lockPath,
+    ownerPid: payload?.pid,
+    ownerCreatedAt: payload?.createdAt,
+    ownerAgeMs,
+    ownerAlive,
+  });
 }
 
 export const __testing = {

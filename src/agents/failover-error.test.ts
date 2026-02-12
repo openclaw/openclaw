@@ -27,6 +27,15 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
   });
 
+  it("does not classify session lock timeouts as provider failover", () => {
+    const lockErr = Object.assign(
+      new Error("timeout acquiring session store lock: /tmp/sessions.json.lock"),
+      { code: "SESSION_STORE_LOCK_TIMEOUT" },
+    );
+    expect(resolveFailoverReasonFromError(lockErr)).toBeNull();
+    expect(coerceToFailoverError(lockErr)).toBeNull();
+  });
+
   it("coerces failover-worthy errors into FailoverError with metadata", () => {
     const err = coerceToFailoverError("credit balance too low", {
       provider: "anthropic",

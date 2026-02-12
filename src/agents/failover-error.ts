@@ -2,6 +2,12 @@ import { classifyFailoverReason, type FailoverReason } from "./pi-embedded-helpe
 
 const TIMEOUT_HINT_RE = /timeout|timed out|deadline exceeded|context deadline exceeded/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
+const SESSION_LOCK_TIMEOUT_HINT_RE =
+  /session file locked|timeout acquiring session store lock|session store lock timeout/i;
+const SESSION_LOCK_ERROR_CODES = new Set([
+  "SESSION_FILE_LOCK_TIMEOUT",
+  "SESSION_STORE_LOCK_TIMEOUT",
+]);
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -112,6 +118,33 @@ function getErrorMessage(err: unknown): string {
   return "";
 }
 
+function hasSessionLockTimeoutHint(err: unknown): boolean {
+  const message = getErrorMessage(err);
+  return Boolean(message && SESSION_LOCK_TIMEOUT_HINT_RE.test(message));
+}
+
+function isSessionLockTimeoutError(err: unknown, depth = 0): boolean {
+  if (!err || depth > 3) {
+    return false;
+  }
+  const code = getErrorCode(err);
+  if (code && SESSION_LOCK_ERROR_CODES.has(code.toUpperCase())) {
+    return true;
+  }
+  const name = getErrorName(err);
+  if (name === "SessionFileLockTimeoutError" || name === "SessionStoreLockTimeoutError") {
+    return true;
+  }
+  if (hasSessionLockTimeoutHint(err)) {
+    return true;
+  }
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const cause = "cause" in err ? (err as { cause?: unknown }).cause : undefined;
+  return isSessionLockTimeoutError(cause, depth + 1);
+}
+
 function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
@@ -145,6 +178,10 @@ export function isTimeoutError(err: unknown): boolean {
 export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
   if (isFailoverError(err)) {
     return err.reason;
+  }
+
+  if (isSessionLockTimeoutError(err)) {
+    return null;
   }
 
   const status = getStatusCode(err);

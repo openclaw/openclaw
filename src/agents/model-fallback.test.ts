@@ -39,6 +39,25 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fall back on session lock timeout errors", async () => {
+    const cfg = makeCfg();
+    const lockError = Object.assign(
+      new Error("session file locked (timeout 10000ms): pid=7 /tmp/session.jsonl.lock"),
+      { code: "SESSION_FILE_LOCK_TIMEOUT" },
+    );
+    const run = vi.fn().mockRejectedValueOnce(lockError).mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("session file locked");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back on auth errors", async () => {
     const cfg = makeCfg();
     const run = vi
