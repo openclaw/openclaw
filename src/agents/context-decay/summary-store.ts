@@ -136,8 +136,10 @@ export async function clearGroupSummaryStore(sessionFilePath: string): Promise<v
   const filePath = groupSummaryStorePath(sessionFilePath);
   try {
     await fs.unlink(filePath);
-  } catch {
-    // File doesn't exist — nothing to clear.
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
   }
 }
 

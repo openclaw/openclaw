@@ -41,7 +41,7 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
-  /** Context decay settings for this channel. */
+  /** Context decay settings for this channel. Note: guild/channel-level resolution is not yet implemented; only global, per-account, and per-DM levels are resolved. */
   contextDecay?: ContextDecayConfig;
 };
 
