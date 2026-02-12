@@ -16,7 +16,14 @@ vi.mock("../logging/diagnostic.js", () => ({
   diagnosticLogger: diagnosticMocks.diag,
 }));
 
-import { enqueueCommand, getQueueSize } from "./command-queue.js";
+import {
+  enqueueCommand,
+  enqueueCommandInLane,
+  getActiveTaskCount,
+  getQueueSize,
+  setCommandLaneConcurrency,
+  waitForActiveTasks,
+} from "./command-queue.js";
 
 describe("command queue", () => {
   beforeEach(() => {
@@ -84,5 +91,107 @@ describe("command queue", () => {
     expect(waited).not.toBeNull();
     expect(waited as number).toBeGreaterThanOrEqual(5);
     expect(queuedAhead).toBe(0);
+  });
+
+  it("getActiveTaskCount returns count of currently executing tasks", async () => {
+    let resolve1!: () => void;
+    const blocker = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+
+    const task = enqueueCommand(async () => {
+      await blocker;
+    });
+
+    // Give the event loop a tick for the task to start.
+    await new Promise((r) => setTimeout(r, 5));
+    expect(getActiveTaskCount()).toBe(1);
+
+    resolve1();
+    await task;
+    expect(getActiveTaskCount()).toBe(0);
+  });
+
+  it("waitForActiveTasks resolves immediately when no tasks are active", async () => {
+    const { drained } = await waitForActiveTasks(1000);
+    expect(drained).toBe(true);
+  });
+
+  it("waitForActiveTasks waits for active tasks to finish", async () => {
+    let resolve1!: () => void;
+    const blocker = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+
+    const task = enqueueCommand(async () => {
+      await blocker;
+    });
+
+    // Give the task a tick to start.
+    await new Promise((r) => setTimeout(r, 5));
+
+    const drainPromise = waitForActiveTasks(5000);
+
+    // Resolve the blocker after a short delay.
+    setTimeout(() => resolve1(), 50);
+
+    const { drained } = await drainPromise;
+    expect(drained).toBe(true);
+
+    await task;
+  });
+
+  it("waitForActiveTasks returns drained=false on timeout", async () => {
+    let resolve1!: () => void;
+    const blocker = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+
+    const task = enqueueCommand(async () => {
+      await blocker;
+    });
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    const { drained } = await waitForActiveTasks(50);
+    expect(drained).toBe(false);
+
+    resolve1();
+    await task;
+  });
+
+  it("waitForActiveTasks ignores tasks that start after the call", async () => {
+    const lane = `drain-snapshot-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 2);
+
+    let resolve1!: () => void;
+    const blocker1 = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+    let resolve2!: () => void;
+    const blocker2 = new Promise<void>((r) => {
+      resolve2 = r;
+    });
+
+    const first = enqueueCommandInLane(lane, async () => {
+      await blocker1;
+    });
+    await new Promise((r) => setTimeout(r, 5));
+
+    const drainPromise = waitForActiveTasks(2000);
+
+    // Starts after waitForActiveTasks snapshot and should not block drain completion.
+    const second = enqueueCommandInLane(lane, async () => {
+      await blocker2;
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(getActiveTaskCount()).toBeGreaterThanOrEqual(2);
+
+    resolve1();
+    const { drained } = await drainPromise;
+    expect(drained).toBe(true);
+
+    resolve2();
+    await Promise.all([first, second]);
   });
 });
