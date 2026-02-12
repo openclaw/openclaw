@@ -32,14 +32,22 @@ const shardCount = isWindowsCi
     : 2
   : 1;
 const windowsCiArgs = isWindowsCi ? ["--dangerouslyIgnoreUnhandledErrors"] : [];
+const silentArgs =
+  process.env.OPENCLAW_TEST_SHOW_PASSED_LOGS === "1" ? [] : ["--silent=passed-only"];
 const rawPassthroughArgs = process.argv.slice(2);
 const passthroughArgs =
   rawPassthroughArgs[0] === "--" ? rawPassthroughArgs.slice(1) : rawPassthroughArgs;
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
-const parallelRuns = runs.filter((entry) => entry.name !== "gateway");
-const serialRuns = runs.filter((entry) => entry.name === "gateway");
+// Keep gateway serial by default to avoid resource contention with unit/extensions.
+// Allow explicit opt-in parallel runs on non-Windows CI/local when requested.
+const keepGatewaySerial =
+  isWindowsCi ||
+  process.env.OPENCLAW_TEST_SERIAL_GATEWAY === "1" ||
+  process.env.OPENCLAW_TEST_PARALLEL_GATEWAY !== "1";
+const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
+const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const defaultUnitWorkers = localWorkers;
 const defaultExtensionsWorkers = Math.max(1, Math.min(4, Math.floor(localWorkers / 4)));
@@ -120,11 +128,12 @@ const runOnce = (entry, extraArgs = []) =>
           ...entry.args,
           "--maxWorkers",
           String(maxWorkers),
+          ...silentArgs,
           ...reporterArgs,
           ...windowsCiArgs,
           ...extraArgs,
         ]
-      : [...entry.args, ...reporterArgs, ...windowsCiArgs, ...extraArgs];
+      : [...entry.args, ...silentArgs, ...reporterArgs, ...windowsCiArgs, ...extraArgs];
     const nodeOptions = process.env.NODE_OPTIONS ?? "";
     const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
@@ -168,8 +177,16 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 if (passthroughArgs.length > 0) {
   const maxWorkers = maxWorkersForRun("unit");
   const args = maxWorkers
-    ? ["vitest", "run", "--maxWorkers", String(maxWorkers), ...windowsCiArgs, ...passthroughArgs]
-    : ["vitest", "run", ...windowsCiArgs, ...passthroughArgs];
+    ? [
+        "vitest",
+        "run",
+        "--maxWorkers",
+        String(maxWorkers),
+        ...silentArgs,
+        ...windowsCiArgs,
+        ...passthroughArgs,
+      ]
+    : ["vitest", "run", ...silentArgs, ...windowsCiArgs, ...passthroughArgs];
   const nodeOptions = process.env.NODE_OPTIONS ?? "";
   const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
     (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),

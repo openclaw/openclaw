@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
@@ -28,6 +29,22 @@ type OnboardEnv = {
   configPath: string;
   runtime: RuntimeMock;
 };
+
+async function removeDirWithRetry(dir: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const isTransient = code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM";
+      if (!isTransient || attempt === 4) {
+        throw error;
+      }
+      await delay(25 * (attempt + 1));
+    }
+  }
+}
 
 function captureEnv(): EnvSnapshot {
   return {
@@ -102,7 +119,7 @@ async function withOnboardEnv(
   try {
     await run({ configPath, runtime });
   } finally {
-    await fs.rm(tempHome, { recursive: true, force: true });
+    await removeDirWithRetry(tempHome);
     restoreEnv(prev);
   }
 }
