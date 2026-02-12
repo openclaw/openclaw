@@ -38,6 +38,15 @@ describe("splitMediaFromOutput - Reproduction of #13790", () => {
     expect(result.mediaUrls).toEqual(["/tmp/file with spaces.opus"]);
   });
 
+  it("should handle prose containing MEDIA: mid-sentence", () => {
+    const input = "Docs: MEDIA:/tmp/foo.png is used for thumbnails";
+    const result = splitMediaFromOutput(input);
+    // The inline MEDIA: token should extract the valid path but preserve surrounding prose
+    expect(result.mediaUrls).toEqual(["/tmp/foo.png"]);
+    expect(result.text).toMatch(/Docs:/);
+    expect(result.text).toMatch(/is used for thumbnails/);
+  });
+
   it("should NOT extract MEDIA from inside code fences (baseline check)", () => {
     const input = "```txt\nMEDIA:/tmp/tts-123/voice.opus\n```";
     const result = splitMediaFromOutput(input);
