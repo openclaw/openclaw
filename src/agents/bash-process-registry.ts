@@ -20,6 +20,8 @@ export type ProcessStatus = "running" | "completed" | "failed" | "killed";
 export type SessionStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
+  // When backed by a real Node stream (child.stdin), this exists; for PTY wrappers it may not.
+  destroy?: () => void;
   destroyed?: boolean;
 };
 
@@ -188,6 +190,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     }
     delete session.stdin;
   }
+
   if (!session.backgrounded) {
     return;
   }
