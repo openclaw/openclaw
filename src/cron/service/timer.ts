@@ -369,7 +369,10 @@ export async function runMissedJobs(state: CronServiceState) {
       return false;
     }
     const next = j.state.nextRunAtMs;
-    if (j.schedule.kind === "at" && j.state.lastStatus === "ok") {
+    if (j.schedule.kind === "at" && j.state.lastStatus) {
+      // Any terminal status (ok, error, skipped) means the job already
+      // ran at least once.  Don't re-fire it on restart — applyJobResult
+      // disables one-shot jobs, but guard here defensively (#13845).
       return false;
     }
     return typeof next === "number" && now >= next;
