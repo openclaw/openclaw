@@ -139,6 +139,60 @@ async function expectApiKeyProfile(params: {
 }
 
 describe("onboard (non-interactive): provider auth", () => {
+  it("stores Z.AI API key and uses coding-global baseUrl by default", async () => {
+    await withOnboardEnv("openclaw-onboard-zai-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          authChoice: "zai-api-key",
+          zaiApiKey: "zai-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+        models?: { providers?: Record<string, { baseUrl?: string }> };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
+      expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7");
+      await expectApiKeyProfile({ profileId: "zai:default", provider: "zai", key: "zai-test-key" });
+    });
+  }, 60_000);
+
+  it("supports Z.AI CN coding endpoint auth choice", async () => {
+    await withOnboardEnv("openclaw-onboard-zai-cn-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          authChoice: "zai-coding-cn",
+          zaiApiKey: "zai-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        models?: { providers?: Record<string, { baseUrl?: string }> };
+      }>(configPath);
+
+      expect(cfg.models?.providers?.zai?.baseUrl).toBe(
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+      );
+    });
+  }, 60_000);
+
   it("stores xAI API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-xai-", async ({ configPath, runtime }) => {
       await runNonInteractive(
