@@ -182,6 +182,10 @@ export function selectAttachments(params: {
 }): MediaAttachment[] {
   const { capability, attachments, policy } = params;
   const matches = attachments.filter((item) => {
+    // Skip already-transcribed audio attachments from preflight
+    if (capability === "audio" && item.alreadyTranscribed) {
+      return false;
+    }
     if (capability === "image") {
       return isImageAttachment(item);
     }
