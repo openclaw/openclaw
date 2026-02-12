@@ -38,6 +38,7 @@ export type IrcClientOptions = {
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
   onLine?: (line: string) => void;
+  log?: (message: string) => void;
 };
 
 export type IrcNickServOptions = {
@@ -51,6 +52,7 @@ export type IrcNickServOptions = {
 export type IrcClient = {
   nick: string;
   isReady: () => boolean;
+  closed: Promise<void>;
   sendRaw: (line: string) => void;
   join: (channel: string) => void;
   sendPrivmsg: (target: string, text: string) => void;
@@ -143,30 +145,56 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   let nickServRecoverAttempted = false;
   let fallbackNickAttempted = false;
 
-  const bypassTlsVerification = Boolean(options.tlsInsecure || options.tlsFingerprints?.length);
-  const socket = options.tls
-    ? tls.connect({
-        host: options.host,
-        port: options.port,
-        servername: options.host,
-        rejectUnauthorized: !bypassTlsVerification,
-      })
-    : net.connect({ host: options.host, port: options.port });
+  const log = options.log ?? (() => {});
 
-  if (options.tls && !options.tlsInsecure && options.tlsFingerprints?.length) {
-    const allowedFingerprints = new Set(options.tlsFingerprints.map(normalizeTlsFingerprint));
-    const tlsSocket = socket as tls.TLSSocket;
-    tlsSocket.once("secureConnect", () => {
-      const cert = tlsSocket.getPeerCertificate();
+  log(`connecting to ${options.host}:${options.port} (tls=${options.tls}, nick=${desiredNick})`);
+
+  const bypassTlsVerification = Boolean(options.tlsInsecure || options.tlsFingerprints?.length);
+  if (options.tls) {
+    log(
+      `tls config: tlsInsecure=${Boolean(options.tlsInsecure)}, ` +
+        `tlsFingerprints=[${(options.tlsFingerprints ?? []).join(", ")}], ` +
+        `rejectUnauthorized=${!bypassTlsVerification}`,
+    );
+  }
+
+  const fingerprintSet =
+    options.tls && !options.tlsInsecure && options.tlsFingerprints?.length
+      ? new Set(options.tlsFingerprints.map(normalizeTlsFingerprint))
+      : null;
+
+  if (fingerprintSet) {
+    log(`fingerprint validation enabled: expecting one of [${[...fingerprintSet].join(", ")}]`);
+  }
+
+  const tlsOptions: tls.ConnectionOptions = {
+    host: options.host,
+    port: options.port,
+    servername: options.host,
+    rejectUnauthorized: !bypassTlsVerification,
+  };
+
+  if (fingerprintSet) {
+    tlsOptions.checkServerIdentity = (_host: string, cert: tls.PeerCertificate) => {
       const peerFingerprint = normalizeTlsFingerprint(cert.fingerprint256 ?? "");
-      if (!peerFingerprint || !allowedFingerprints.has(peerFingerprint)) {
-        tlsSocket.destroy(
-          new Error(
-            `TLS certificate fingerprint mismatch: got ${peerFingerprint}, expected one of [${[...allowedFingerprints].join(", ")}]`,
-          ),
+      log(`peer certificate fingerprint: ${peerFingerprint || "(empty)"}`);
+      if (!peerFingerprint || !fingerprintSet.has(peerFingerprint)) {
+        log(`fingerprint mismatch — aborting handshake`);
+        return new Error(
+          `TLS certificate fingerprint mismatch: got ${peerFingerprint}, expected one of [${[...fingerprintSet].join(", ")}]`,
         );
       }
-    });
+      log(`fingerprint matched`);
+      return undefined;
+    };
+  }
+
+  const socket = options.tls
+    ? tls.connect(tlsOptions)
+    : net.connect({ host: options.host, port: options.port });
+
+  if (options.tls && options.tlsInsecure) {
+    log(`tls verification fully bypassed (tlsInsecure=true)`);
   }
 
   socket.setEncoding("utf8");
@@ -176,6 +204,11 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   const readyPromise = new Promise<void>((resolve, reject) => {
     resolveReady = resolve;
     rejectReady = reject;
+  });
+
+  let resolveClosed: (() => void) | null = null;
+  const closedPromise = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
   });
 
   const fail = (err: unknown) => {
@@ -354,8 +387,12 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         if (nickParam && nickParam.trim()) {
           currentNick = nickParam.trim();
         }
+        log(`received 001 (welcome) as ${currentNick}`);
         try {
           const nickServCommands = buildIrcNickServCommands(options.nickserv);
+          if (nickServCommands.length > 0) {
+            log(`sending ${nickServCommands.length} NickServ command(s)`);
+          }
           for (const command of nickServCommands) {
             sendRaw(command);
           }
@@ -368,6 +405,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
             continue;
           }
           try {
+            log(`joining ${trimmed}`);
             join(trimmed);
           } catch (err) {
             fail(err);
@@ -416,10 +454,13 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   });
 
   socket.once("connect", () => {
+    log(`socket connected to ${options.host}:${options.port}`);
     try {
       if (options.password && options.password.trim()) {
+        log(`sending PASS`);
         sendRaw(`PASS ${options.password.trim()}`);
       }
+      log(`sending NICK ${options.nick.trim()}`);
       sendRaw(`NICK ${options.nick.trim()}`);
       sendRaw(`USER ${options.username.trim()} 0 * :${sanitizeIrcOutboundText(options.realname)}`);
     } catch (err) {
@@ -429,16 +470,20 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   });
 
   socket.once("error", (err: unknown) => {
+    log(`socket error: ${err instanceof Error ? err.message : String(err)}`);
     fail(err);
   });
 
   socket.once("close", () => {
+    log(`socket closed (ready=${ready}, closed=${closed})`);
     if (!closed) {
       closed = true;
       if (!ready) {
         fail(new Error("IRC connection closed before ready"));
       }
     }
+    resolveClosed?.();
+    resolveClosed = null;
   });
 
   if (options.abortSignal) {
@@ -459,6 +504,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       return currentNick;
     },
     isReady: () => ready && !closed,
+    closed: closedPromise,
     sendRaw,
     join,
     sendPrivmsg,
