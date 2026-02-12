@@ -44,6 +44,35 @@ export function isLoopbackAddress(ip: string | undefined): boolean {
   return false;
 }
 
+/**
+ * Check whether an IP belongs to an RFC 1918 private network range.
+ * Covers Docker bridge (172.16-31.x.x), common LAN (192.168.x.x, 10.x.x.x),
+ * and their IPv4-mapped IPv6 equivalents.
+ */
+export function isPrivateNetworkAddress(ip: string | undefined): boolean {
+  if (!ip) {
+    return false;
+  }
+  const raw = ip.startsWith("::ffff:") ? ip.slice("::ffff:".length) : ip;
+  const parts = raw.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((p) => Number.isNaN(p))) {
+    return false;
+  }
+  // 10.0.0.0/8
+  if (parts[0] === 10) {
+    return true;
+  }
+  // 172.16.0.0/12
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
+    return true;
+  }
+  // 192.168.0.0/16
+  if (parts[0] === 192 && parts[1] === 168) {
+    return true;
+  }
+  return false;
+}
+
 function normalizeIPv4MappedAddress(ip: string): string {
   if (ip.startsWith("::ffff:")) {
     return ip.slice("::ffff:".length);

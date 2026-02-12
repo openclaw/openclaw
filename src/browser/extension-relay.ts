@@ -4,7 +4,7 @@ import type { Duplex } from "node:stream";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
-import { isLoopbackAddress, isLoopbackHost } from "../gateway/net.js";
+import { isLoopbackAddress, isLoopbackHost, isPrivateNetworkAddress } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
 
 type CdpCommand = {
@@ -456,7 +456,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
     const pathname = url.pathname;
     const remote = req.socket.remoteAddress;
 
-    if (!isLoopbackAddress(remote)) {
+    const allowPrivate = process.env.OPENCLAW_RELAY_ALLOW_PRIVATE === "1";
+    if (!isLoopbackAddress(remote) && !(allowPrivate && isPrivateNetworkAddress(remote))) {
       rejectUpgrade(socket, 403, "Forbidden");
       return;
     }
