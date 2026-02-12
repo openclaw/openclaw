@@ -1,0 +1,78 @@
+# access_control.yml
+# Human-maintained mapping: phone number -> role + workspace visibility.
+# Note: This file does NOT automatically enforce permissions until we wire it into the gateway/session router.
+# It is the source of truth for future enforcement.
+
+owner:
+  number: "+6586863695"  # Leonard (唯一真正Owner)
+
+roles:
+  admin:
+    description: "高权限（等同Owner级别：可执行工具/读写所有工作区，需显式授权）"
+  staff:
+    description: "员工固定权限（仅指定工具+指定工作区）"
+  friend:
+    description: "普通朋友（默认只聊天/问答；不允许访问文件/执行程序/跨工作区）"
+
+workspaces:
+  family:
+    path: "workspaces/family"
+    description: "家庭文档（Leonard + Ruby）"
+  parents:
+    path: "workspaces/parents"
+    description: "父母工作区（Steven Zhou + Jessica Liu 共用）"
+  maple_education:
+    path: "workspaces/Maple Education"
+    description: "Maple Education（与小五少爷相关）"
+
+users:
+  "+6586863695":
+    name: "Leonard"
+    role: "admin"
+    workspaces: ["family", "parents", "maple_education"]
+
+  "+6582376302":
+    name: "Ruby"
+    role: "admin"
+    workspaces: ["family"]
+
+  "+6587184415":
+    name: "Steven Zhou"
+    role: "staff"
+    workspaces: ["parents"]
+
+  "+6590716699":
+    name: "Jessica Liu"
+    role: "staff"
+    workspaces: ["parents"]
+
+  "+6588723888":
+    name: "小五少爷"
+    english_name: "maple"
+    role: "admin"
+    workspaces: ["maple_education"]
+    notes: "Maple Education 工作区管理员（权限等同 Leonard 但仅限该 workspace）"
+
+  # 普通朋友（默认无文件/程序权限）
+  "+6587412302": { name: "西西弗里斯", role: "friend", workspaces: [] }
+  "+6597531920": { name: "梁小龙", role: "friend", workspaces: [] }
+  "+6592962667": { name: "Joe", role: "friend", workspaces: [] }
+  "+6591282845": { name: "Joe", role: "friend", workspaces: [] }
+  "+6584984351": { name: "飞哥", role: "friend", workspaces: [] }
+  "+6596641957": { name: "老黄", role: "friend", workspaces: [] }
+  "+6592223505": { name: "Tim", role: "friend", workspaces: [] }
+  "+6583440029": { name: "Sun Wei", role: "friend", workspaces: [] }
+
+policy_defaults:
+  friend:
+    tools_allowed: []
+    file_access: "none"
+  staff:
+    tools_allowed:
+      - "message.send"      # 仅允许在当前会话回复/发送
+      - "read_workspace"    # 仅工作区内读
+      - "write_workspace"   # 仅工作区内写
+    file_access: "workspace_only"
+  admin:
+    tools_allowed: ["all"]
+    file_access: "all"

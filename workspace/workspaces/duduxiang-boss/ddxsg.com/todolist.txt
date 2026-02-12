@@ -1,0 +1,39 @@
+already have domain ddxsg.com on cloudflare.
+
+need to do a website for restaurant duduxiang.
+
+
+Website design : 
+
+all deshes have tags, managed by json,
+
+tags are:
+凉菜，热菜，
+
+
+猪肉，牛肉，鸡肉，羊肉，鱼肉等
+
+过敏物质：
+豆，花生等
+
+调料
+辣椒，胡椒 等
+
+辣度
+
+咸度
+
+
+菜品基础介绍等
+
+
+网站需要适配手机端为主。
+
+要让用户体验舒服。
+
+
+主页面进来是 餐厅google map 地址，点击就开始导航。
+
+WhatsApp 定位链接， 微信号点击复制
+
+菜单点开就看，可以加入购物车，点完之后可以复制菜单到粘贴板。

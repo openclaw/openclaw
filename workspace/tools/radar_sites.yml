@@ -1,0 +1,150 @@
+# Official-site radar sources (edit freely)
+# Each entry should point to an official newsroom/blog/press-release page or RSS feed.
+# If rss is provided, prefer it.
+
+- name: OpenAI
+  entity: openai
+  topic: ai-official
+  urls:
+    - https://openai.com/news
+  rss: https://openai.com/news/rss.xml
+
+- name: xAI
+  entity: xai
+  topic: ai-official
+  urls:
+    - https://x.ai/news
+
+- name: Google AI
+  entity: google
+  topic: ai-official
+  urls:
+    - https://ai.google/
+
+- name: Google DeepMind
+  entity: deepmind
+  topic: ai-official
+  urls:
+    - https://deepmind.google/discover/blog/
+
+- name: Anthropic
+  entity: anthropic
+  topic: ai-official
+  urls:
+    - https://www.anthropic.com/news
+
+- name: NVIDIA
+  entity: nvidia
+  topic: ai-hardware
+  urls:
+    - https://blogs.nvidia.com/blog/
+    - https://nvidianews.nvidia.com/
+
+- name: AMD
+  entity: amd
+  topic: ai-hardware
+  urls:
+    - https://www.amd.com/en/corporate/newsroom
+
+- name: Intel
+  entity: intel
+  topic: ai-hardware
+  urls:
+    - https://www.intel.com/content/www/us/en/newsroom/home.html
+
+- name: Apple Newsroom
+  entity: apple
+  topic: ai-hardware
+  urls:
+    - https://www.apple.com/newsroom/
+
+- name: TSMC Press Center
+  entity: tsmc
+  topic: ai-hardware
+  urls:
+    - https://pr.tsmc.com/english
+
+- name: Samsung Semiconductor
+  entity: samsung
+  topic: ai-hardware
+  urls:
+    - https://news.samsung.com/global/tag/semiconductor
+
+- name: ASML News
+  entity: asml
+  topic: ai-hardware
+  urls:
+    - https://www.asml.com/en/news
+
+- name: Mistral
+  entity: mistral
+  topic: ai-official
+  urls:
+    - https://mistral.ai/news/
+
+- name: Cohere
+  entity: cohere
+  topic: ai-official
+  urls:
+    - https://cohere.com/blog
+
+- name: Meta AI
+  entity: meta
+  topic: ai-official
+  urls:
+    - https://ai.meta.com/blog/
+
+- name: Microsoft AI Blog
+  entity: microsoft
+  topic: ai-official
+  urls:
+    - https://blogs.microsoft.com/blog/tag/ai/
+
+- name: Hugging Face
+  entity: huggingface
+  topic: ai-models
+  urls:
+    - https://huggingface.co/blog
+
+- name: Stability AI
+  entity: stability
+  topic: ai-image
+  urls:
+    - https://stability.ai/news
+
+- name: Runway
+  entity: runway
+  topic: ai-video
+  urls:
+    - https://runwayml.com/blog/
+
+- name: Pika
+  entity: pika
+  topic: ai-video
+  urls:
+    - https://pika.art/blog
+
+- name: Luma AI
+  entity: luma
+  topic: ai-video
+  urls:
+    - https://lumalabs.ai/blog
+
+- name: Adobe Firefly
+  entity: adobe
+  topic: ai-image
+  urls:
+    - https://blog.adobe.com/en/topics/firefly
+
+- name: Black Forest Labs (FLUX)
+  entity: bfl
+  topic: ai-image
+  urls:
+    - https://blackforestlabs.ai/news/
+
+- name: zimage_tool (local wrapper)
+  entity: zimage_tool
+  topic: ai-image
+  urls:
+    - https://github.com/leonard/zimage/releases
+  rss: https://github.com/leonard/zimage/releases.atom

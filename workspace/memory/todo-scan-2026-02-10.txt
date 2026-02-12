@@ -1,0 +1,13 @@
+maple_sgedu/docs/STRUCTURE.md:29:  - 官网内容（各业务页面的 md、站点结构与 TODO）。
+maple_sgedu/docs/WEBSITE.md:7:- 站点结构与 TODO（如 Maple_Group_Site_Structure.md / TODO.md / WEBSITE_IMPROVEMENT_PLAN.md）
+maple_sgedu/docs/FINANCE.md:8:- 编号建议：`ME-YYYYMMDD-XXX`
+maple_sgedu/QNA.md:29:## TODO（你一句话我就能补齐）
+maple_sgedu/QNA.md:31:- 发票编号规则是否固定（默认 ME-YYYYMMDD-XXX）
+MEMORY.md:51:- `tools/todo_scan.sh`：全仓 TODO/FIXME/XXX 扫描；从 `tools/ignore_paths.txt` 读取排除项。
+tools/todo_scan.sh:4:# Scan this repo for TODO/FIXME/XXX notes while avoiding common large/third-party dirs.
+tools/todo_scan.sh:14:PATTERN='TODO|FIXME|XXX'
+tools/todo_tracker.py:47:TODO_PATTERN = re.compile(r"^(\s*)-\s*\[([ xX])\]\s*(.+)$")
+tools/todo_tracker.py:94:        match = TODO_PATTERN.match(line)
+tools/todo_tracker.py:273:    m = TODO_PATTERN.match(line)
+tools/README.md:176:全仓 TODO/FIXME/XXX 扫描（避开常见大目录/第三方依赖目录）。
+tools/README.md:180:bash tools/todo_scan.sh 'TODO|FIXME|XXX|HACK'

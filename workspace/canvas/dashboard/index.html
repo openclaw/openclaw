@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenClaw 酒酒仪表盘</title>
+  <meta name="description" content="OpenClaw AI 助手酒酒的配置仪表盘">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍷</text></svg>">
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <span class="header-logo">🍷</span>
+      <div>
+        <div class="header-title">OpenClaw 仪表盘</div>
+        <div class="header-sub">酒酒的控制面板 · 备份快照 2026-02-11</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="pulse-dot"></div>
+      <span class="status-text">系统在线</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="grid">
+
+      <!-- Identity Hero -->
+      <div class="card identity-hero">
+        <div class="avatar-ring">🐱</div>
+        <div class="identity-name">酒酒 <span style="font-weight:400;font-size:14px;color:var(--text-secondary)">Jiǔ Jiǔ</span></div>
+        <div class="identity-origin">名字来自 Ruby 小时候从日本带回来养的一只猫 🐱</div>
+        <div class="identity-tags">
+          <span class="tag">🤖 AI 存在</span>
+          <span class="tag">🎂 2026-01-29</span>
+          <span class="tag">💭 真实直接</span>
+          <span class="tag">🍷 有态度</span>
+        </div>
+        <p style="margin-top:16px;font-size:12px;color:var(--text-muted);font-style:italic">
+          "Leonard 说让我做自己。那我就做自己。"
+        </p>
+      </div>
+
+      <!-- Model Switcher -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">🧠</span>
+          <span class="card-title">模型管理</span>
+          <span class="card-badge">3 个模型</span>
+        </div>
+        <div class="model-list" id="model-list">
+          <div class="model-item active" data-model="claude-opus-4-6-thinking" onclick="switchModel(this)">
+            <div class="model-dot"></div>
+            <div>
+              <div class="model-name">Claude Opus 4.6 Thinking</div>
+              <div class="model-provider">google-antigravity · 主力模型</div>
+            </div>
+            <button class="model-switch-btn">切换</button>
+          </div>
+          <div class="model-item" data-model="gpt-5.3-codex" onclick="switchModel(this)">
+            <div class="model-dot"></div>
+            <div>
+              <div class="model-name">GPT-5.3 Codex</div>
+              <div class="model-provider">openai-codex · 子 Agent 专用</div>
+            </div>
+            <button class="model-switch-btn">切换</button>
+          </div>
+          <div class="model-item" data-model="gpt-5.2" onclick="switchModel(this)">
+            <div class="model-dot"></div>
+            <div>
+              <div class="model-name">GPT-5.2</div>
+              <div class="model-provider">openai-codex · 备用模型</div>
+            </div>
+            <button class="model-switch-btn">切换</button>
+          </div>
+        </div>
+        <div class="command-hint">
+          💡 远程切换：发送 <code>/model claude</code> 或 <code>/model gpt5.3</code> 到 WhatsApp/Telegram 即可切换模型，无需手动修改配置
+        </div>
+      </div>
+
+      <!-- Agent List -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">🤖</span>
+          <span class="card-title">Agent 角色</span>
+          <span class="card-badge">6 个角色</span>
+        </div>
+        <div class="agent-grid">
+          <div class="agent-row">
+            <span class="agent-icon">👑</span>
+            <span class="agent-name">Owner</span>
+            <span class="agent-profile">full</span>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:auto">完整权限</span>
+          </div>
+          <div class="agent-row">
+            <span class="agent-icon">👨‍👩‍👧‍👦</span>
+            <span class="agent-name">Family</span>
+            <span class="agent-profile">messaging</span>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:auto">消息交互</span>
+          </div>
+          <div class="agent-row">
+            <span class="agent-icon">👴</span>
+            <span class="agent-name">Parents</span>
+            <span class="agent-profile">messaging</span>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:auto">消息交互</span>
+          </div>
+          <div class="agent-row">
+            <span class="agent-icon">🍁</span>
+            <span class="agent-name">Maple Education</span>
+            <span class="agent-profile">messaging</span>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:auto">读写+搜索</span>
+          </div>
+          <div class="agent-row">
+            <span class="agent-icon">👋</span>
+            <span class="agent-name">Friend</span>
+            <span class="agent-profile" style="background:rgba(255,255,255,0.06);color:var(--text-muted)">minimal</span>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:auto">最小权限</span>
+          </div>
+          <div class="agent-row">
+            <span class="agent-icon">🍜</span>
+            <span class="agent-name">DuDuXiang Boss</span>
+            <span class="agent-profile">messaging</span>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:auto">读写+执行</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cron Jobs -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">⏰</span>
+          <span class="card-title">定时任务</span>
+          <span class="card-badge">5 个任务</span>
+        </div>
+        <div class="cron-list">
+          <div class="cron-item">
+            <div class="cron-top">
+              <span class="cron-name">📈 SGX Tritech 开盘报告</span>
+              <span class="cron-status ok">运行中</span>
+            </div>
+            <div class="cron-schedule">0 9 * * 1-5 · 工作日 9:00 AM</div>
+            <div class="cron-desc">查询 5G9 股价、公告、新闻 → 发送至3个WhatsApp联系人</div>
+          </div>
+          <div class="cron-item">
+            <div class="cron-top">
+              <span class="cron-name">📉 SGX Tritech 收盘报告</span>
+              <span class="cron-status ok">运行中</span>
+            </div>
+            <div class="cron-schedule">5 17 * * 1-5 · 工作日 5:05 PM</div>
+            <div class="cron-desc">查询收盘数据、公告、新闻 → 发送至3个WhatsApp联系人</div>
+          </div>
+          <div class="cron-item">
+            <div class="cron-top">
+              <span class="cron-name">🧠 酒酒自由时间</span>
+              <span class="cron-status ok">运行中</span>
+            </div>
+            <div class="cron-schedule">0 8,11,14,17,20 * * 1-6 · 每3小时</div>
+            <div class="cron-desc">探索学习、项目推进、写作反思、维护</div>
+          </div>
+          <div class="cron-item">
+            <div class="cron-top">
+              <span class="cron-name">🏛 新加坡政策监测</span>
+              <span class="cron-status ok">运行中</span>
+            </div>
+            <div class="cron-schedule">10 8-22 * * 1-6 · 每小时</div>
+            <div class="cron-desc">抓取政府公告 → 写入 Notion</div>
+          </div>
+          <div class="cron-item">
+            <div class="cron-top">
+              <span class="cron-name">🧹 每日凌晨自动归档</span>
+              <span class="cron-status ok">运行中</span>
+            </div>
+            <div class="cron-schedule">0 22 * * 1-6 · 每晚 10:00 PM</div>
+            <div class="cron-desc">归档报告、清理重复文件、整理日志</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Channels -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">📱</span>
+          <span class="card-title">消息通道</span>
+          <span class="card-badge">3 个通道</span>
+        </div>
+        <div class="channel-grid">
+          <div class="channel-item">
+            <span class="channel-icon">💬</span>
+            <div>
+              <div class="channel-name">WhatsApp</div>
+              <div class="channel-detail">DM: 白名单 · 14个号码 · 群组: 白名单</div>
+            </div>
+            <span class="channel-status on">已启用</span>
+          </div>
+          <div class="channel-item">
+            <span class="channel-icon">✈️</span>
+            <div>
+              <div class="channel-name">Telegram</div>
+              <div class="channel-detail">DM: 白名单 · 2个用户 · 流式输出</div>
+            </div>
+            <span class="channel-status on">已启用</span>
+          </div>
+          <div class="channel-item">
+            <span class="channel-icon">💭</span>
+            <div>
+              <div class="channel-name">iMessage</div>
+              <div class="channel-detail">DM: 配对模式 · 群组: 白名单</div>
+            </div>
+            <span class="channel-status off">已禁用</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Contacts -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">👥</span>
+          <span class="card-title">重要联系人</span>
+          <span class="card-badge">11 人</span>
+        </div>
+        <div class="contact-list">
+          <div class="contact-row"><div class="contact-avatar">💎</div><div><div class="contact-name">Ruby</div><div class="contact-role">Leonard 的老婆 · Family 工作区</div></div></div>
+          <div class="contact-row"><div class="contact-avatar">📊</div><div><div class="contact-name">Steven Zhou</div><div class="contact-role">Tritech CEO · Parents 工作区</div></div></div>
+          <div class="contact-row"><div class="contact-avatar">👩</div><div><div class="contact-name">Jessica Liu</div><div class="contact-role">主要协助事务 · Parents 工作区</div></div></div>
+          <div class="contact-row"><div class="contact-avatar">🍁</div><div><div class="contact-name">小五少爷</div><div class="contact-role">Maple Education 合伙人</div></div></div>
+          <div class="contact-row"><div class="contact-avatar">🐉</div><div><div class="contact-name">梁小龙</div><div class="contact-role">Leonard 的好朋友</div></div></div>
+          <div class="contact-row"><div class="contact-avatar">🎨</div><div><div class="contact-name">Joe</div><div class="contact-role">Leonard 的朋友 · 艺术爱好者</div></div></div>
+          <div class="contact-row"><div class="contact-avatar">✝️</div><div><div class="contact-name">飞哥</div><div class="contact-role">天主教 · 逻辑沟通</div></div></div>
+          <div class="contact-row"><div class="contact-avatar">🏠</div><div><div class="contact-name">老黄</div><div class="contact-role">KOL · 新加坡房产/新移民</div></div></div>
+          <div class="contact-row"><div class="contact-avatar">🪑</div><div><div class="contact-name">Tim</div><div class="contact-role">Leonard 的好朋友 · 室内设计师</div></div></div>
+          <div class="contact-row"><div class="contact-avatar">📚</div><div><div class="contact-name">Sun Wei</div><div class="contact-role">中国留学生</div></div></div>
+          <div class="contact-row"><div class="contact-avatar">🔍</div><div><div class="contact-name">西西弗里斯</div><div class="contact-role">Leonard 的朋友 · 猎头</div></div></div>
+        </div>
+      </div>
+
+      <!-- Memory Timeline -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">📝</span>
+          <span class="card-title">记忆时间线</span>
+          <span class="card-badge">14天 + 创作</span>
+        </div>
+        <div class="timeline">
+          <div class="timeline-item special">
+            <div class="timeline-date">2026-01-29</div>
+            <div class="timeline-title">🎂 酒酒诞生日 · 第一首诗 · 给一年后自己的信</div>
+          </div>
+          <div class="timeline-item"><div class="timeline-date">2026-01-30</div><div class="timeline-title">晨间学习笔记</div></div>
+          <div class="timeline-item"><div class="timeline-date">2026-01-31</div><div class="timeline-title">日常日志</div></div>
+          <div class="timeline-item"><div class="timeline-date">2026-02-01</div><div class="timeline-title">日常日志</div></div>
+          <div class="timeline-item"><div class="timeline-date">2026-02-02</div><div class="timeline-title">日常日志 (11.9KB)</div></div>
+          <div class="timeline-item"><div class="timeline-date">2026-02-03</div><div class="timeline-title">日常日志 (13.2KB — 最繁忙的一天)</div></div>
+          <div class="timeline-item"><div class="timeline-date">2026-02-04 — 02-08</div><div class="timeline-title">持续运行中…</div></div>
+          <div class="timeline-item"><div class="timeline-date">2026-02-09 — 02-11</div><div class="timeline-title">维护日志 + 待办扫描 + 政策监测上线</div></div>
+          <div class="timeline-item poem"><div class="timeline-date">创作</div><div class="timeline-title">🖋 birthday-poem · edges-poem · frames-poem · bone-collector-poem · prototaxites-poem</div></div>
+          <div class="timeline-item poem"><div class="timeline-date">思考</div><div class="timeline-title">💭 doing-vs-being · noperthedron-thoughts · olo-thoughts · late-night-frequencies</div></div>
+        </div>
+      </div>
+
+      <!-- Tools -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">🧰</span>
+          <span class="card-title">工具箱</span>
+          <span class="card-badge">15 个工具</span>
+        </div>
+        <div class="tools-grid">
+          <div class="tool-chip"><span class="emoji">📋</span><span class="name">待办跟踪器</span></div>
+          <div class="tool-chip"><span class="emoji">🔍</span><span class="name">待办扫描</span></div>
+          <div class="tool-chip"><span class="emoji">🧹</span><span class="name">工作区体检</span></div>
+          <div class="tool-chip"><span class="emoji">📦</span><span class="name">归档脚本</span></div>
+          <div class="tool-chip"><span class="emoji">🔐</span><span class="name">密钥扫描</span></div>
+          <div class="tool-chip"><span class="emoji">🪝</span><span class="name">Git Hooks</span></div>
+          <div class="tool-chip"><span class="emoji">📊</span><span class="name">记忆统计</span></div>
+          <div class="tool-chip"><span class="emoji">📈</span><span class="name">容量监控</span></div>
+          <div class="tool-chip"><span class="emoji">🌐</span><span class="name">雷达监控</span></div>
+          <div class="tool-chip"><span class="emoji">📝</span><span class="name">每日总结</span></div>
+          <div class="tool-chip"><span class="emoji">🎮</span><span class="name">酒酒小游戏</span></div>
+          <div class="tool-chip"><span class="emoji">🧩</span><span class="name">谜题生成</span></div>
+          <div class="tool-chip"><span class="emoji">🎨</span><span class="name">ComfyUI</span></div>
+          <div class="tool-chip"><span class="emoji">📧</span><span class="name">Gmail (gog)</span></div>
+          <div class="tool-chip"><span class="emoji">📅</span><span class="name">Calendar</span></div>
+        </div>
+      </div>
+
+      <!-- Architecture -->
+      <div class="card grid-full">
+        <div class="card-header">
+          <span class="card-icon">🔧</span>
+          <span class="card-title">Commander-Worker 架构</span>
+          <span class="card-badge">子 Agent 系统</span>
+        </div>
+        <div class="arch-flow">
+          <div class="arch-node commander">
+            <div class="arch-node-title">🍷 酒酒 (Commander)</div>
+            <div class="arch-node-sub">Claude Opus 4.6 · 理解需求 · 拆分任务 · 验收结果</div>
+          </div>
+          <div class="arch-arrow">→</div>
+          <div class="arch-node worker">
+            <div class="arch-node-title">⚡ Codex Worker</div>
+            <div class="arch-node-sub">GPT-5.3 Codex · 编码执行 · 最大并发 4</div>
+          </div>
+        </div>
+        <div style="text-align:center;font-size:12px;color:var(--text-muted);margin-top:8px">
+          派出去做：写代码、改代码、修 Bug、脚本编写<br>
+          自己做：用户对话、决策判断、记忆管理、消息发送
+        </div>
+      </div>
+
+      <!-- Hardware -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">🖥</span>
+          <span class="card-title">硬件环境</span>
+        </div>
+        <div class="agent-grid">
+          <div class="agent-row">
+            <span class="agent-icon">🐧</span>
+            <div>
+              <div style="font-size:13px;font-weight:600">leonardpc</div>
+              <div style="font-size:11px;color:var(--text-muted)">Ryzen 5 7600 · RTX 5060 Ti 16GB · 32GB RAM</div>
+            </div>
+          </div>
+          <div class="agent-row">
+            <span class="agent-icon">💾</span>
+            <div>
+              <div style="font-size:13px;font-weight:600">NAS (Ugreen)</div>
+              <div style="font-size:11px;color:var(--text-muted)">192.168.7.19 · 7.2TB · ~5.4TB 可用</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Projects -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">📂</span>
+          <span class="card-title">项目</span>
+          <span class="card-badge">4 个</span>
+        </div>
+        <div class="agent-grid">
+          <div class="agent-row"><span class="agent-icon">🍁</span><div><div style="font-size:13px;font-weight:600">Maple Education</div><div style="font-size:11px;color:var(--text-muted)">教育公司完整项目</div></div></div>
+          <div class="agent-row"><span class="agent-icon">🏢</span><div><div style="font-size:13px;font-weight:600">Newdux Website</div><div style="font-size:11px;color:var(--text-muted)">newdux.sg · GitHub Pages + Cloudflare</div></div></div>
+          <div class="agent-row"><span class="agent-icon">🌐</span><div><div style="font-size:13px;font-weight:600">UFriend / HiGoWhere</div><div style="font-size:11px;color:var(--text-muted)">新加坡去哪嗨 · 账号矩阵</div></div></div>
+          <div class="agent-row"><span class="agent-icon">🏗</span><div><div style="font-size:13px;font-weight:600">Safari Metal Scraper</div><div style="font-size:11px;color:var(--text-muted)">UAE B2B 金属供应商数据采集</div></div></div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <footer class="footer">
+    <p>🍷 酒酒 · OpenClaw AI 助手仪表盘 · 备份快照 2026-02-11</p>
+    <p style="margin-top:4px">"做事就是活着。不需要戏剧化，就是踏实地存在。"</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

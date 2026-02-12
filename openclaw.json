@@ -1,0 +1,427 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.9",
+    "lastTouchedAt": "2026-02-11T09:48:10.663Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-02-11T09:48:10.658Z",
+    "lastRunVersion": "2026.2.9",
+    "lastRunCommand": "onboard",
+    "lastRunMode": "local"
+  },
+  "auth": {
+    "profiles": {
+      "anthropic:default": {
+        "provider": "anthropic",
+        "mode": "api_key"
+      },
+      "anthropic:manual": {
+        "provider": "anthropic",
+        "mode": "token"
+      },
+      "openai-codex:default": {
+        "provider": "openai-codex",
+        "mode": "oauth"
+      },
+      "google-antigravity:dinggege125@gmail.com": {
+        "provider": "google-antigravity",
+        "mode": "oauth",
+        "email": "dinggege125@gmail.com"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "google-antigravity/claude-opus-4-6-thinking"
+      },
+      "models": {
+        "openai-codex/gpt-5.2": {},
+        "openai-codex/gpt-5.3-codex": {},
+        "google-antigravity/claude-opus-4-6-thinking": {}
+      },
+      "workspace": "/home/leonard/.openclaw/workspace",
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 4,
+        "model": "openai-codex/gpt-5.3-codex"
+      }
+    },
+    "list": [
+      {
+        "id": "owner",
+        "name": "Owner",
+        "workspace": "/home/leonard/.openclaw/workspace",
+        "tools": {
+          "profile": "full"
+        }
+      },
+      {
+        "id": "family",
+        "name": "Family",
+        "workspace": "/home/leonard/.openclaw/workspace/workspaces/family",
+        "tools": {
+          "profile": "messaging",
+          "deny": [
+            "exec",
+            "gateway",
+            "gateway.*"
+          ]
+        }
+      },
+      {
+        "id": "parents",
+        "name": "Parents",
+        "workspace": "/home/leonard/.openclaw/workspace/workspaces/parents",
+        "tools": {
+          "profile": "messaging",
+          "deny": [
+            "exec",
+            "gateway",
+            "gateway.*"
+          ]
+        }
+      },
+      {
+        "id": "maple-education",
+        "name": "Maple Education",
+        "workspace": "/home/leonard/.openclaw/workspace/workspaces/Maple Education",
+        "tools": {
+          "profile": "messaging",
+          "alsoAllow": [
+            "read",
+            "write",
+            "edit",
+            "web_fetch",
+            "web_search",
+            "image"
+          ],
+          "deny": [
+            "exec",
+            "gateway",
+            "gateway.*"
+          ]
+        }
+      },
+      {
+        "id": "friend",
+        "name": "Friend",
+        "workspace": "/home/leonard/.openclaw/workspace/workspaces/public",
+        "tools": {
+          "profile": "minimal",
+          "deny": [
+            "exec",
+            "gateway",
+            "gateway.*",
+            "read",
+            "write",
+            "edit"
+          ]
+        }
+      },
+      {
+        "id": "duduxiang-boss",
+        "name": "DuDuXiang Boss",
+        "workspace": "/home/leonard/.openclaw/workspace/workspaces/duduxiang-boss",
+        "tools": {
+          "profile": "messaging",
+          "alsoAllow": [
+            "read",
+            "write",
+            "edit",
+            "exec",
+            "web_fetch",
+            "web_search",
+            "browser"
+          ],
+          "deny": [
+            "gateway",
+            "gateway.*"
+          ]
+        }
+      }
+    ]
+  },
+  "tools": {
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "brave",
+        "apiKey": "BSAW68x6hJGV3BL18H2vYjAA6cYpwSe"
+      },
+      "fetch": {
+        "enabled": true
+      }
+    },
+    "exec": {
+      "node": "MacBook Pro"
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "owner",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6586863695"
+        }
+      }
+    },
+    {
+      "agentId": "family",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6582376302"
+        }
+      }
+    },
+    {
+      "agentId": "parents",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6587184415"
+        }
+      }
+    },
+    {
+      "agentId": "parents",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6590716699"
+        }
+      }
+    },
+    {
+      "agentId": "maple-education",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6588723888"
+        }
+      }
+    },
+    {
+      "agentId": "friend",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6587412302"
+        }
+      }
+    },
+    {
+      "agentId": "friend",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6597531920"
+        }
+      }
+    },
+    {
+      "agentId": "friend",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6592962667"
+        }
+      }
+    },
+    {
+      "agentId": "friend",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6591282845"
+        }
+      }
+    },
+    {
+      "agentId": "friend",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6584984351"
+        }
+      }
+    },
+    {
+      "agentId": "friend",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6596641957"
+        }
+      }
+    },
+    {
+      "agentId": "friend",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6592223505"
+        }
+      }
+    },
+    {
+      "agentId": "friend",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6583440029"
+        }
+      }
+    },
+    {
+      "agentId": "maple-education",
+      "match": {
+        "channel": "telegram",
+        "peer": {
+          "kind": "dm",
+          "id": "5533296808"
+        }
+      }
+    },
+    {
+      "agentId": "duduxiang-boss",
+      "match": {
+        "channel": "whatsapp",
+        "peer": {
+          "kind": "dm",
+          "id": "+6591726303"
+        }
+      }
+    }
+  ],
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto"
+  },
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "command-logger": {
+          "enabled": true
+        },
+        "session-memory": {
+          "enabled": true
+        },
+        "boot-md": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "channels": {
+    "whatsapp": {
+      "dmPolicy": "allowlist",
+      "selfChatMode": false,
+      "allowFrom": [
+        "+6586863695",
+        "+6582376302",
+        "+6587184415",
+        "+6590716699",
+        "+6588723888",
+        "+6587412302",
+        "+6597531920",
+        "+6592962667",
+        "+6591282845",
+        "+6584984351",
+        "+6596641957",
+        "+6592223505",
+        "+6583440029",
+        "+6591726303"
+      ],
+      "groupPolicy": "allowlist",
+      "mediaMaxMb": 50,
+      "debounceMs": 0
+    },
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "botToken": "8288144735:AAGPWA5SB8RQDWGAir1kBS9EFd3W7jPESco",
+      "allowFrom": [
+        "7624953278",
+        "5533296808"
+      ],
+      "groupPolicy": "allowlist",
+      "streamMode": "partial"
+    },
+    "imessage": {
+      "enabled": false,
+      "dmPolicy": "pairing",
+      "groupPolicy": "allowlist"
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "REDACTED"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    }
+  },
+  "skills": {
+    "install": {
+      "nodeManager": "pnpm"
+    },
+    "entries": {
+      "goplaces": {
+        "apiKey": "REDACTED"
+      },
+      "local-places": {
+        "apiKey": "REDACTED"
+      },
+      "nano-banana-pro": {
+        "apiKey": "REDACTED"
+      },
+      "notion": {
+        "apiKey": "REDACTED"
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "whatsapp": {
+        "enabled": true
+      },
+      "telegram": {
+        "enabled": true
+      },
+      "imessage": {
+        "enabled": true
+      },
+      "google-antigravity-auth": {
+        "enabled": true
+      }
+    }
+  }
+}

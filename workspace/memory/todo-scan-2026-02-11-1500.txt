@@ -1,0 +1,61 @@
+MEMORY.md:52:- `tools/todo_scan.sh`：全仓 TODO/FIXME/XXX 扫描；从 `tools/ignore_paths.txt` 读取排除项。
+tools/todo_scan.sh:4:# Scan this repo for TODO/FIXME/XXX notes while avoiding common large/third-party dirs.
+tools/todo_scan.sh:14:PATTERN='TODO|FIXME|XXX'
+tools/todo_tracker.py:47:TODO_PATTERN = re.compile(r"^(\s*)-\s*\[([ xX])\]\s*(.+)$")
+tools/todo_tracker.py:94:        match = TODO_PATTERN.match(line)
+tools/todo_tracker.py:273:    m = TODO_PATTERN.match(line)
+tools/README.md:177:全仓 TODO/FIXME/XXX 扫描（避开常见大目录/第三方依赖目录）。
+tools/README.md:181:bash tools/todo_scan.sh 'TODO|FIXME|XXX|HACK'
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/README.md.md:57:- `TODO.md`  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/MAPLE_EDUCATION_SUMMARY.md.md:39:  - 说明文档层级：顶层 README、TODO、信笺说明、各类模板 `.md` 作为「文字母版」、以及整理结果快照。
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/MAPLE_EDUCATION_SUMMARY.md.md:41:- `TODO.md`  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/MAPLE_EDUCATION_SUMMARY.md.md:130:  - `DEEPSEEK_TASKS.md`、`WEBSITE_IMPROVEMENT_PLAN.md`、`TODO.md` – 已完成与待完成的网站改版任务清单。  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/MAPLE_EDUCATION_SUMMARY.md.md:177:  - 技术与 UI 待办：`05_Company_Website/WEBSITE_IMPROVEMENT_PLAN.md` 与 `TODO.md`。
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/MAPLE_EDUCATION_SUMMARY.md.md:195:- **Next-Step Focus (from TODO) 后续重点方向（摘自 TODO）**  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/project_overview.md.md:41:- 任务与缺口：`TODO.md` – 品牌统一、合同更新、官网与素材的后续工作清单。
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/目录.md:18:- `TODO.md.md` — 内容概述：# Maple Education Project TODO（tags: 合同, 返佣, 财务, 流程, 模板, 表格, 清单, 说明, 服务, 新加坡）
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/School_Matchboard.html.md:406:	              <input id="contract-no" type="text" placeholder="MAPLE-YYYYMMDD-XXXX" />
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:262:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:280:  - TODO：需要由你确认按“每孩子 / 每家庭 / 学校数量”计价的标准。  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:286:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:304:  - TODO：由你确认是否采用“基础咨询 + 递交服务 + 可选长期跟进”的阶梯价。  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:309:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:324:  - TODO：确认是否与 S1 合并为“本科路径产品线”，或独立一个价格表。  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:329:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:343:  - TODO：由你确认是否需要高端申请的溢价（比如单独一档“名校专项顾问服务费”）。  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:350:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:369:  - TODO：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/Service_Portfolio_By_Client_Segment.md.md:377:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/TODO.md.md:2:title: "TODO.md"
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/TODO.md.md:3:source_path: "TODO.md"
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/TODO.md.md:8:# TODO.md
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/TODO.md.md:10:简介：内容概述：# Maple Education Project TODO
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/TODO.md.md:15:# Maple Education Project TODO
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education/TODO.md.md:93:- 根据 `05_Company_Website/TODO.md`，收集：
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/MAPLE_EDUCATION_SUMMARY.md.md:39:  - 说明文档层级：顶层 README、TODO、信笺说明、各类模板 `.md` 作为「文字母版」、以及整理结果快照。
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/MAPLE_EDUCATION_SUMMARY.md.md:41:- `TODO.md`  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/MAPLE_EDUCATION_SUMMARY.md.md:130:  - `DEEPSEEK_TASKS.md`、`WEBSITE_IMPROVEMENT_PLAN.md`、`TODO.md` – 已完成与待完成的网站改版任务清单。  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/MAPLE_EDUCATION_SUMMARY.md.md:177:  - 技术与 UI 待办：`05_Company_Website/WEBSITE_IMPROVEMENT_PLAN.md` 与 `TODO.md`。
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/MAPLE_EDUCATION_SUMMARY.md.md:195:- **Next-Step Focus (from TODO) 后续重点方向（摘自 TODO）**  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:262:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:280:  - TODO：需要由你确认按“每孩子 / 每家庭 / 学校数量”计价的标准。  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:286:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:304:  - TODO：由你确认是否采用“基础咨询 + 递交服务 + 可选长期跟进”的阶梯价。  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:309:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:324:  - TODO：确认是否与 S1 合并为“本科路径产品线”，或独立一个价格表。  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:329:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:343:  - TODO：由你确认是否需要高端申请的溢价（比如单独一档“名校专项顾问服务费”）。  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:350:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:369:  - TODO：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/Service_Portfolio_By_Client_Segment.md.md:377:- TODO / 缺口：  
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/TODO.md.md:2:title: "TODO.md"
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/TODO.md.md:3:source_path: "TODO.md"
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/TODO.md.md:8:# TODO.md
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/TODO.md.md:15:# Maple Education Project TODO
+workspaces/Maple Education/files/imports/2026-02-07-md_output/md_output_maple_education_codex/TODO.md.md:93:- 根据 `05_Company_Website/TODO.md`，收集：
+workspaces/Maple Education/files/backups/leonard.work.git/hooks/sendemail-validate.sample:22:# Replace the TODO placeholders with appropriate checks according to your
+workspaces/Maple Education/files/backups/leonard.work.git/hooks/sendemail-validate.sample:27:	# TODO: Replace with appropriate checks (e.g. spell checking).
+workspaces/Maple Education/files/backups/leonard.work.git/hooks/sendemail-validate.sample:35:	# TODO: Replace with appropriate checks for this patch
+workspaces/Maple Education/files/backups/leonard.work.git/hooks/sendemail-validate.sample:41:	# TODO: Replace with appropriate checks for the whole series
+workspaces/Maple Education/files/backups/leonard.work.git/hooks/sendemail-validate.sample:52:	worktree=$(mktemp --tmpdir -d sendemail-validate.XXXXXXX) &&
+workspaces/duduxiang-boss/ddxsg.com/plan.md:24:## TODOs

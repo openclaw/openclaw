@@ -1,0 +1,2278 @@
+{
+  "restaurant": {
+    "name": {
+      "zh": "嘟嘟香",
+      "en": "Du Du Xiang",
+      "ms": "Du Du Xiang",
+      "ta": "டு டு சியாங்"
+    },
+    "slogan": {
+      "zh": "正宗东北风味 · 麻辣鲜香",
+      "en": "Authentic Northeast Chinese · Spicy & Delicious",
+      "ms": "Masakan Cina Timur Laut · Pedas & Lazat",
+      "ta": "உண்மையான வடகிழக்கு சீன உணவு"
+    },
+    "phone": "88199509",
+    "address": "711 Ang Mo Kio Avenue 8, BLK711#01-3501A, S560711",
+    "whatsapp": "6588199509",
+    "wechat": "duduxiang_sg",
+    "google_maps": "https://maps.google.com/?q=711+Ang+Mo+Kio+Avenue+8+Singapore+560711"
+  },
+  "i18n": {
+    "nav": {
+      "zh": "导航到店",
+      "en": "Navigate",
+      "ms": "Navigasi",
+      "ta": "வழிநடத்தல்"
+    },
+    "whatsapp": {
+      "zh": "WhatsApp 订餐",
+      "en": "WhatsApp Order",
+      "ms": "Pesanan WhatsApp",
+      "ta": "WhatsApp ஆர்டர்"
+    },
+    "wechat": {
+      "zh": "微信点击复制",
+      "en": "WeChat (tap to copy)",
+      "ms": "WeChat (ketik untuk salin)",
+      "ta": "WeChat (நகலெடுக்க)"
+    },
+    "cart": {
+      "zh": "我的订单",
+      "en": "My Order",
+      "ms": "Pesanan Saya",
+      "ta": "என் ஆர்டர்"
+    },
+    "total": {
+      "zh": "总计",
+      "en": "Total",
+      "ms": "Jumlah",
+      "ta": "மொத்தம்"
+    },
+    "clear": {
+      "zh": "清空",
+      "en": "Clear",
+      "ms": "Kosongkan",
+      "ta": "அழி"
+    },
+    "sendWhatsApp": {
+      "zh": "发送到 WhatsApp",
+      "en": "Send to WhatsApp",
+      "ms": "Hantar ke WhatsApp",
+      "ta": "WhatsApp க்கு அனுப்பு"
+    },
+    "emptyCart": {
+      "zh": "购物车是空的",
+      "en": "Your cart is empty",
+      "ms": "Troli anda kosong",
+      "ta": "உங்கள் வண்டி காலியாக உள்ளது"
+    },
+    "search": {
+      "zh": "搜索菜品...",
+      "en": "Search dishes...",
+      "ms": "Cari hidangan...",
+      "ta": "உணவுகளைத் தேடு..."
+    },
+    "history": {
+      "zh": "常点菜品",
+      "en": "Frequently Ordered",
+      "ms": "Kerap Dipesan",
+      "ta": "அடிக்கடி ஆர்டர்"
+    },
+    "noResults": {
+      "zh": "没有找到符合条件的菜品",
+      "en": "No dishes found",
+      "ms": "Tiada hidangan dijumpai",
+      "ta": "உணவுகள் இல்லை"
+    },
+    "copied": {
+      "zh": "已复制到剪贴板",
+      "en": "Copied to clipboard",
+      "ms": "Disalin ke papan keratan",
+      "ta": "கிளிப்போர்டுக்கு நகலெடுக்கப்பட்டது"
+    },
+    "orderNote": {
+      "zh": "备注（如：不要香菜、少盐）",
+      "en": "Notes (e.g., no cilantro, less salt)",
+      "ms": "Nota (cth: tanpa daun ketumbar)",
+      "ta": "குறிப்புகள்"
+    },
+    "all": {
+      "zh": "全部",
+      "en": "All",
+      "ms": "Semua",
+      "ta": "அனைத்தும்"
+    },
+    "signature": {
+      "zh": "🌟 特色",
+      "en": "🌟 Signature",
+      "ms": "🌟 Istimewa",
+      "ta": "🌟 சிறப்பு"
+    },
+    "stirFry": {
+      "zh": "🍳 炒菜",
+      "en": "🍳 Stir-Fry",
+      "ms": "🍳 Tumis",
+      "ta": "🍳 வறுவல்"
+    },
+    "cold": {
+      "zh": "🥗 凉菜",
+      "en": "🥗 Cold Dish",
+      "ms": "🥗 Hidangan Sejuk",
+      "ta": "🥗 குளிர் உணவு"
+    },
+    "bbqMeat": {
+      "zh": "🍖 烤肉",
+      "en": "🍖 BBQ Meat",
+      "ms": "🍖 Daging BBQ",
+      "ta": "🍖 இறைச்சி"
+    },
+    "bbqSeafood": {
+      "zh": "🦐 海鲜",
+      "en": "🦐 Seafood",
+      "ms": "🦐 Makanan Laut",
+      "ta": "🦐 கடல் உணவு"
+    },
+    "bbqVeg": {
+      "zh": "🥬 素烤",
+      "en": "🥬 Veg BBQ",
+      "ms": "🥬 BBQ Sayur",
+      "ta": "🥬 காய்கறி"
+    },
+    "notSpicy": {
+      "zh": "😊 不辣",
+      "en": "😊 Not Spicy",
+      "ms": "😊 Tidak Pedas",
+      "ta": "😊 காரமில்லை"
+    },
+    "mildSpicy": {
+      "zh": "🌶️ 微辣",
+      "en": "🌶️ Mild",
+      "ms": "🌶️ Sedikit Pedas",
+      "ta": "🌶️ லேசான காரம்"
+    },
+    "mediumSpicy": {
+      "zh": "🌶️🌶️ 中辣",
+      "en": "🌶️🌶️ Medium",
+      "ms": "🌶️🌶️ Sederhana",
+      "ta": "🌶️🌶️ நடுத்தர காரம்"
+    },
+    "verySpicy": {
+      "zh": "🔥 特辣",
+      "en": "🔥 Very Spicy",
+      "ms": "🔥 Sangat Pedas",
+      "ta": "🔥 மிகவும் காரம்"
+    },
+    "vegetarian": {
+      "zh": "🥬 素食",
+      "en": "🥬 Vegetarian",
+      "ms": "🥬 Vegetarian",
+      "ta": "🥬 சைவம்"
+    },
+    "seafood": {
+      "zh": "🦐 海鲜",
+      "en": "🦐 Seafood",
+      "ms": "🦐 Makanan Laut",
+      "ta": "🦐 கடல் உணவு"
+    }
+  },
+  "tags": {
+    "category": [
+      "特色主打",
+      "炒菜",
+      "凉菜",
+      "烧烤-肉类",
+      "烧烤-海鲜",
+      "烧烤-其他"
+    ],
+    "meat": [
+      "猪肉",
+      "牛肉",
+      "鸡肉",
+      "羊肉",
+      "海鲜",
+      "素食"
+    ],
+    "spicy": [
+      "不辣",
+      "微辣",
+      "中辣",
+      "特辣"
+    ],
+    "allergen": [
+      "豆制品",
+      "花生",
+      "海鲜",
+      "蛋类"
+    ]
+  },
+  "dishes": [
+    {
+      "id": 1,
+      "name": "麻辣烫",
+      "name_en": "Mala Tang (Spicy Hot Pot)",
+      "name_ms": "Mala Tang",
+      "name_ta": "மாலா டாங்",
+      "keywords": [
+        "malatang",
+        "mala",
+        "hotpot",
+        "hot pot",
+        "spicy soup",
+        "汤",
+        "烫",
+        "麻辣",
+        "火锅",
+        "串串"
+      ],
+      "category": "特色主打",
+      "price": 2.68,
+      "unit": "100克",
+      "unit_en": "100g",
+      "tags": [
+        "特色主打",
+        "中辣"
+      ],
+      "description": "东北改良版，汤底加芝麻酱，自选食材，咸辣鲜香",
+      "desc_en": "Northeast style, sesame paste broth, pick your ingredients, savory & spicy",
+      "image": "malatang.jpg",
+      "image_url": "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=400&q=80",
+      "desc_ms": "Gaya Timur Laut, kuah pes bijan, pilih bahan anda, pedas & lazat",
+      "desc_ta": "வடகிழக்கு பாணி, எள் பேஸ்ட் குழம்பு, காரமான & சுவையான"
+    },
+    {
+      "id": 2,
+      "name": "麻辣香锅",
+      "name_en": "Mala Xiang Guo (Spicy Stir-Fry Pot)",
+      "name_ms": "Mala Xiang Guo",
+      "name_ta": "மாலா சியாங் குவோ",
+      "keywords": [
+        "malaxiangguo",
+        "mala",
+        "dry pot",
+        "stir fry",
+        "香锅",
+        "干锅",
+        "炒"
+      ],
+      "category": "特色主打",
+      "price": 2.98,
+      "unit": "100克",
+      "unit_en": "100g",
+      "tags": [
+        "特色主打",
+        "特辣"
+      ],
+      "description": "干锅爆炒，香辣过瘾，食材丰富自由搭配",
+      "desc_en": "Dry stir-fried, intensely spicy, rich ingredients to choose",
+      "image": "malaxiangguo.jpg",
+      "image_url": "https://images.unsplash.com/photo-1623689046286-01cfaab0d002?w=400&q=80",
+      "desc_ms": "Goreng kering, sangat pedas, pilihan bahan kaya",
+      "desc_ta": "உலர்ந்த வறுத்த, மிகவும் காரமான, சுவையான"
+    },
+    {
+      "id": 3,
+      "name": "麻辣鸭货",
+      "name_en": "Spicy Duck Offal",
+      "name_ms": "Bebek Pedas",
+      "name_ta": "காரமான வாத்து",
+      "keywords": [
+        "duck",
+        "ya",
+        "鸭",
+        "鸭货",
+        "卤味",
+        "braised"
+      ],
+      "category": "特色主打",
+      "price": 2.68,
+      "unit": "100克",
+      "unit_en": "100g",
+      "tags": [
+        "特色主打",
+        "中辣"
+      ],
+      "description": "卤制鸭货，麻辣入味，口感独特下酒首选",
+      "desc_en": "Braised duck parts, spicy & flavorful, perfect drinking snack",
+      "image": "malayahuo.jpg",
+      "image_url": "https://images.unsplash.com/photo-1518492104633-130d0cc84637?w=400&q=80",
+      "desc_ms": "Bebek rebus, pedas & berperisa, snek minuman sempurna",
+      "desc_ta": "வேகவைத்த வாத்து, காரமான & சுவையான"
+    },
+    {
+      "id": 4,
+      "name": "红焖羊排锅",
+      "name_en": "Braised Lamb Ribs Pot",
+      "name_ms": "Periuk Rusuk Kambing",
+      "name_ta": "ஆட்டுக்குட்டி விலா எலும்புகள்",
+      "keywords": [
+        "lamb",
+        "mutton",
+        "ribs",
+        "yang",
+        "羊",
+        "羊排",
+        "红焖",
+        "kambing",
+        "lamb chop"
+      ],
+      "category": "炒菜",
+      "price": 28.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "羊肉",
+        "中辣"
+      ],
+      "description": "红焖炖制，羊排软烂脱骨，汤汁浓郁滋补",
+      "desc_en": "Braised lamb ribs, tender & fall-off-bone, rich nourishing broth",
+      "image": "hongmenyangpai.jpg",
+      "image_url": "https://images.unsplash.com/photo-1603360946369-dc9bb6258143?w=400&q=80",
+      "desc_ms": "Tulang rusuk kambing rebus, lembut & terpisah tulang, sup berkhasiat",
+      "desc_ta": "வேகவைத்த ஆட்டு விலா எலும்புகள், மென்மையான & சுவையான"
+    },
+    {
+      "id": 5,
+      "name": "麻排骨锅",
+      "name_en": "Numbing Pork Ribs Pot",
+      "name_ms": "Periuk Tulang Rusuk Babi",
+      "name_ta": "பன்றி விலா எலும்புகள்",
+      "keywords": [
+        "pork",
+        "ribs",
+        "排骨",
+        "猪排",
+        "zhu",
+        "babi",
+        "spare ribs"
+      ],
+      "category": "炒菜",
+      "price": 28.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "猪肉",
+        "中辣"
+      ],
+      "description": "麻辣排骨，花椒飘香，肉香浓郁入味",
+      "desc_en": "Numbing spicy pork ribs, Sichuan pepper fragrance, deeply flavored",
+      "image": "mapaiguguo.jpg",
+      "image_url": "https://images.unsplash.com/photo-1544025162-d76694265947?w=400&q=80",
+      "desc_ms": "Tulang rusuk babi pedas kebas, wangi lada Sichuan",
+      "desc_ta": "காரமான பன்றி விலா எலும்புகள், மிளகு வாசனை"
+    },
+    {
+      "id": 6,
+      "name": "干煸蚕蛹",
+      "name_en": "Dry-Fried Silkworm Pupae",
+      "name_ms": "Kepompong Ulat Sutera Goreng",
+      "name_ta": "பட்டுப்புழு கூட்டுப்புழு",
+      "keywords": [
+        "silkworm",
+        "canyu",
+        "蚕蛹",
+        "虫",
+        "protein",
+        "insect"
+      ],
+      "category": "炒菜",
+      "price": 28.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "微辣"
+      ],
+      "description": "东北特色，酥脆蚕蛹，高蛋白营养丰富",
+      "desc_en": "Northeast specialty, crispy silkworm pupae, high protein nutritious",
+      "image": "ganbiancanyu.jpg",
+      "image_url": "https://images.unsplash.com/photo-1566478989037-eec170784d0b?w=400&q=80",
+      "desc_ms": "Keistimewaan Timur Laut, kepompong rangup, protein tinggi",
+      "desc_ta": "வடகிழக்கு சிறப்பு, மொறுமொறுப்பான, புரதம் நிறைந்த"
+    },
+    {
+      "id": 7,
+      "name": "烤鱼（香辣/番茄/藤椒）",
+      "name_en": "Grilled Fish (Spicy/Tomato/Green Pepper)",
+      "name_ms": "Ikan Panggang",
+      "name_ta": "சுட்ட மீன்",
+      "keywords": [
+        "fish",
+        "yu",
+        "鱼",
+        "烤鱼",
+        "grilled",
+        "ikan",
+        "tomato",
+        "番茄"
+      ],
+      "category": "炒菜",
+      "price": 26.8,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "海鲜",
+        "中辣"
+      ],
+      "description": "三种口味可选，外酥里嫩，香辣鲜美",
+      "desc_en": "Three flavors available, crispy outside tender inside",
+      "image": "kaoyu.jpg",
+      "image_url": "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=400&q=80",
+      "desc_ms": "Tiga perisa tersedia, rangup luar lembut dalam",
+      "desc_ta": "மூன்று சுவைகள், வெளியே மொறுமொறுப்பு உள்ளே மென்மை"
+    },
+    {
+      "id": 8,
+      "name": "香辣小河虾",
+      "name_en": "Spicy River Shrimp",
+      "name_ms": "Udang Sungai Pedas",
+      "name_ta": "காரமான இறால்",
+      "keywords": [
+        "shrimp",
+        "prawn",
+        "xia",
+        "虾",
+        "河虾",
+        "udang",
+        "小龙虾"
+      ],
+      "category": "炒菜",
+      "price": 20.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "海鲜",
+        "中辣"
+      ],
+      "description": "新鲜河虾，香辣爆炒，壳脆肉嫩",
+      "desc_en": "Fresh river shrimp, spicy stir-fried, crispy shell tender meat",
+      "image": "xianglaxiaohexia.jpg",
+      "image_url": "https://images.unsplash.com/photo-1565680018434-b513d5e5fd47?w=400&q=80",
+      "desc_ms": "Udang sungai segar, goreng pedas, kulit rangup daging lembut",
+      "desc_ta": "புதிய ஆற்று இறால், காரமான வறுத்த"
+    },
+    {
+      "id": 9,
+      "name": "辣炒龙虾尾",
+      "name_en": "Spicy Crayfish Tails",
+      "name_ms": "Ekor Udang Karang Pedas",
+      "name_ta": "காரமான இறால் வால்",
+      "keywords": [
+        "crayfish",
+        "lobster",
+        "龙虾",
+        "虾尾",
+        "crawfish",
+        "小龙虾"
+      ],
+      "category": "炒菜",
+      "price": 20.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "海鲜",
+        "特辣"
+      ],
+      "description": "小龙虾尾，麻辣鲜香，夏季人气菜品",
+      "desc_en": "Crayfish tails, numbing spicy flavor, summer favorite",
+      "image": "lachaolongxiawei.jpg",
+      "image_url": "https://images.unsplash.com/photo-1565680018434-b513d5e5fd47?w=400&q=80",
+      "desc_ms": "Ekor udang galah, rasa pedas kebas, kegemaran musim panas",
+      "desc_ta": "இறால் வால்கள், காரமான சுவை, கோடைகால விருப்பம்"
+    },
+    {
+      "id": 10,
+      "name": "老式锅包肉",
+      "name_en": "Sweet & Sour Crispy Pork",
+      "name_ms": "Daging Babi Manis Masam",
+      "name_ta": "இனிப்பு புளிப்பு பன்றி",
+      "keywords": [
+        "guobaorou",
+        "pork",
+        "sweet sour",
+        "锅包肉",
+        "糖醋",
+        "东北",
+        "酸甜",
+        "crispy"
+      ],
+      "category": "炒菜",
+      "price": 16.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "猪肉",
+        "不辣"
+      ],
+      "description": "东北名菜，外酥里嫩，酸甜可口",
+      "desc_en": "Northeast famous dish, crispy outside tender inside, sweet & sour",
+      "image": "guobaorou.jpg",
+      "image_url": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=400&q=80",
+      "desc_ms": "Hidangan terkenal Timur Laut, rangup luar lembut dalam, masam manis",
+      "desc_ta": "வடகிழக்கு பிரபல உணவு, புளிப்பு இனிப்பு"
+    },
+    {
+      "id": 11,
+      "name": "辣子鸡",
+      "name_en": "Spicy Chicken with Chilies",
+      "name_ms": "Ayam Cili",
+      "name_ta": "மிளகாய் சிக்கன்",
+      "keywords": [
+        "chicken",
+        "laziji",
+        "ji",
+        "鸡",
+        "辣子鸡",
+        "ayam",
+        "chilli",
+        "sichuan"
+      ],
+      "category": "炒菜",
+      "price": 15.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "鸡肉",
+        "特辣"
+      ],
+      "description": "川式做法，鸡丁酥脆，辣椒飘香",
+      "desc_en": "Sichuan style, crispy chicken pieces, chili pepper fragrance",
+      "image": "laziji.jpg",
+      "image_url": "https://images.unsplash.com/photo-1598103442097-8b74394b95c6?w=400&q=80",
+      "desc_ms": "Gaya Sichuan, kepingan ayam rangup, wangi cili",
+      "desc_ta": "சிச்சுவான் பாணி, மொறுமொறுப்பான கோழி, மிளகாய் வாசனை"
+    },
+    {
+      "id": 12,
+      "name": "辣炒花甲",
+      "name_en": "Spicy Stir-Fried Clams",
+      "name_ms": "Kerang Tumis Pedas",
+      "name_ta": "காரமான சிப்பி",
+      "keywords": [
+        "clam",
+        "huajia",
+        "花甲",
+        "蛤蜊",
+        "贝",
+        "shellfish",
+        "kerang",
+        "lala"
+      ],
+      "category": "炒菜",
+      "price": 12.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "海鲜",
+        "中辣"
+      ],
+      "description": "爆炒花甲，鲜嫩入味，蒜香四溢",
+      "desc_en": "Stir-fried clams, tender & flavorful, garlic aroma",
+      "image": "lachaohuajia.jpg",
+      "image_url": "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=400&q=80",
+      "desc_ms": "Kerang goreng, lembut & berperisa, aroma bawang putih",
+      "desc_ta": "வறுத்த சிப்பிகள், மென்மையான & சுவையான"
+    },
+    {
+      "id": 13,
+      "name": "蒜香炒鸡脚",
+      "name_en": "Garlic Chicken Feet",
+      "name_ms": "Kaki Ayam Bawang Putih",
+      "name_ta": "பூண்டு சிக்கன் கால்கள்",
+      "keywords": [
+        "chicken feet",
+        "jijiao",
+        "鸡脚",
+        "鸡爪",
+        "凤爪",
+        "garlic",
+        "kaki ayam"
+      ],
+      "category": "炒菜",
+      "price": 12.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "鸡肉",
+        "微辣"
+      ],
+      "description": "蒜香浓郁，鸡脚软糯，越嚼越香",
+      "desc_en": "Garlic fragrance, soft chicken feet, more chewy more delicious",
+      "image": "suanxiangchaojijiao.jpg",
+      "image_url": "https://images.unsplash.com/photo-1598103442097-8b74394b95c6?w=400&q=80",
+      "desc_ms": "Wangi bawang putih, kaki ayam lembut, makin kunyah makin sedap",
+      "desc_ta": "பூண்டு வாசனை, மென்மையான கோழி கால்கள்"
+    },
+    {
+      "id": 14,
+      "name": "香辣炒猪脚",
+      "name_en": "Spicy Pig Trotters",
+      "name_ms": "Kaki Babi Pedas",
+      "name_ta": "காரமான பன்றி கால்கள்",
+      "keywords": [
+        "pig feet",
+        "trotter",
+        "zhujiao",
+        "猪脚",
+        "猪蹄",
+        "kaki babi",
+        "collagen"
+      ],
+      "category": "炒菜",
+      "price": 20.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "炒菜",
+        "猪肉",
+        "中辣"
+      ],
+      "description": "香辣炒制，猪脚筋道，胶原满满",
+      "desc_en": "Spicy stir-fried, chewy pig's feet, collagen rich",
+      "image": "xianglaicaozhujiao.jpg",
+      "image_url": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=400&q=80",
+      "desc_ms": "Goreng pedas, kaki babi kenyal, kaya kolagen",
+      "desc_ta": "காரமான வறுத்த, கொலாஜன் நிறைந்த பன்றி கால்கள்"
+    },
+    {
+      "id": 15,
+      "name": "下酒菜拼盘",
+      "name_en": "Appetizer Platter",
+      "name_ms": "Piring Pembuka Selera",
+      "name_ta": "ஆரம்ப உணவு தட்டு",
+      "keywords": [
+        "platter",
+        "appetizer",
+        "拼盘",
+        "下酒",
+        "combo",
+        "mixed"
+      ],
+      "category": "凉菜",
+      "price": 24.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "微辣"
+      ],
+      "description": "多样小食拼盘，佐酒必点",
+      "desc_en": "Various snack platter, perfect with drinks",
+      "image": "xiajiucaipinpan.jpg",
+      "image_url": "https://images.unsplash.com/photo-1547496502-affa22d38842?w=400&q=80",
+      "desc_ms": "Pelbagai snek platter, sesuai dengan minuman",
+      "desc_ta": "பல்வேறு சிற்றுண்டி தட்டு"
+    },
+    {
+      "id": 16,
+      "name": "凉拌牛肉",
+      "name_en": "Cold Beef Salad",
+      "name_ms": "Salad Daging Lembu Sejuk",
+      "name_ta": "குளிர் மாட்டிறைச்சி",
+      "keywords": [
+        "beef",
+        "niu",
+        "牛肉",
+        "凉拌",
+        "cold",
+        "daging lembu",
+        "salad"
+      ],
+      "category": "凉菜",
+      "price": 10.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "牛肉",
+        "中辣"
+      ],
+      "description": "麻辣鲜香，牛肉薄片，爽口开胃",
+      "desc_en": "Numbing spicy, thin beef slices, refreshing appetizer",
+      "image": "liangbanniurou.jpg",
+      "image_url": "https://images.unsplash.com/photo-1544025162-d76694265947?w=400&q=80",
+      "desc_ms": "Pedas kebas, hirisan daging nipis, pembuka selera segar",
+      "desc_ta": "காரமான, மெல்லிய மாட்டிறைச்சி துண்டுகள்"
+    },
+    {
+      "id": 17,
+      "name": "蘸酱菜",
+      "name_en": "Fresh Vegetables with Dipping Sauce",
+      "name_ms": "Sayur dengan Sos Celup",
+      "name_ta": "சாஸ் காய்கறிகள்",
+      "keywords": [
+        "vegetable",
+        "veg",
+        "dip",
+        "蘸酱",
+        "蔬菜",
+        "东北",
+        "sayur",
+        "fresh"
+      ],
+      "category": "凉菜",
+      "price": 10.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "素食",
+        "不辣"
+      ],
+      "description": "东北特色，新鲜蔬菜配大酱，清爽解腻",
+      "desc_en": "Northeast specialty, fresh vegetables with sauce, refreshing",
+      "image": "zhanjiangcai.jpg",
+      "image_url": "https://images.unsplash.com/photo-1540420773420-3366772f4999?w=400&q=80",
+      "desc_ms": "Keistimewaan Timur Laut, sayur segar dengan sos, menyegarkan",
+      "desc_ta": "வடகிழக்கு சிறப்பு, புதிய காய்கறிகள் சாஸுடன்"
+    },
+    {
+      "id": 18,
+      "name": "猪耳拌黄瓜",
+      "name_en": "Pig Ear with Cucumber",
+      "name_ms": "Telinga Babi dengan Timun",
+      "name_ta": "பன்றி காது வெள்ளரி",
+      "keywords": [
+        "pig ear",
+        "cucumber",
+        "猪耳",
+        "黄瓜",
+        "timun",
+        "ear"
+      ],
+      "category": "凉菜",
+      "price": 8.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "猪耳爽脆，黄瓜清凉，凉拌爽口",
+      "desc_en": "Crispy pig ear, cool cucumber, refreshing cold dish",
+      "image": "zhuerbianhuanggua.jpg",
+      "image_url": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=400&q=80",
+      "desc_ms": "Telinga babi rangup, timun sejuk, hidangan sejuk segar",
+      "desc_ta": "மொறுமொறுப்பான பன்றி காது, குளிர்ந்த வெள்ளரி"
+    },
+    {
+      "id": 19,
+      "name": "牛肉拍黄瓜",
+      "name_en": "Beef with Smashed Cucumber",
+      "name_ms": "Daging dengan Timun",
+      "name_ta": "மாட்டிறைச்சி வெள்ளரி",
+      "keywords": [
+        "beef",
+        "cucumber",
+        "牛肉",
+        "黄瓜",
+        "拍黄瓜",
+        "timun"
+      ],
+      "category": "凉菜",
+      "price": 8.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "牛肉",
+        "微辣"
+      ],
+      "description": "牛肉鲜香，黄瓜脆爽，清凉解腻",
+      "desc_en": "Savory beef, crispy cucumber, cool & refreshing",
+      "image": "niuroupaihuanggua.jpg",
+      "image_url": "https://images.unsplash.com/photo-1544025162-d76694265947?w=400&q=80",
+      "desc_ms": "Daging sapi lazat, timun rangup, sejuk & segar",
+      "desc_ta": "சுவையான மாட்டிறைச்சி, மொறுமொறுப்பான வெள்ளரி"
+    },
+    {
+      "id": 20,
+      "name": "皮蛋豆腐",
+      "name_en": "Century Egg with Tofu",
+      "name_ms": "Telur Pidan dengan Tauhu",
+      "name_ta": "நூற்றாண்டு முட்டை தோஃபு",
+      "keywords": [
+        "century egg",
+        "tofu",
+        "皮蛋",
+        "豆腐",
+        "pidan",
+        "preserved egg",
+        "tauhu"
+      ],
+      "category": "凉菜",
+      "price": 8.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "素食",
+        "不辣",
+        "豆制品",
+        "蛋类"
+      ],
+      "description": "皮蛋绵滑，豆腐嫩白，清凉爽口",
+      "desc_en": "Smooth preserved egg, tender tofu, cool & refreshing",
+      "image": "pidandoufu.jpg",
+      "image_url": "https://images.unsplash.com/photo-1628246491219-fc83eb920a5e?w=400&q=80",
+      "desc_ms": "Telur pidan lembut, tauhu lembut, sejuk & segar",
+      "desc_ta": "மென்மையான நூற்றாண்டு முட்டை, மென்மையான டோஃபு"
+    },
+    {
+      "id": 21,
+      "name": "凉拌鸡架",
+      "name_en": "Cold Chicken Carcass",
+      "name_ms": "Rangka Ayam Sejuk",
+      "name_ta": "குளிர் சிக்கன்",
+      "keywords": [
+        "chicken",
+        "jijia",
+        "鸡架",
+        "凉拌",
+        "chicken frame",
+        "ayam"
+      ],
+      "category": "凉菜",
+      "price": 8.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "鸡肉",
+        "中辣"
+      ],
+      "description": "鸡架肉香，麻辣入味，东北特色凉菜",
+      "desc_en": "Chicken carcass, spicy flavored, Northeast specialty cold dish",
+      "image": "liangbanjijia.jpg",
+      "image_url": "https://images.unsplash.com/photo-1598103442097-8b74394b95c6?w=400&q=80",
+      "desc_ms": "Rangka ayam, berperisa pedas, hidangan sejuk Timur Laut",
+      "desc_ta": "கோழி எலும்புக்கூடு, காரமான சுவை"
+    },
+    {
+      "id": 22,
+      "name": "拍黄瓜",
+      "name_en": "Smashed Cucumber",
+      "name_ms": "Timun Ketuk",
+      "name_ta": "நொறுக்கப்பட்ட வெள்ளரி",
+      "keywords": [
+        "cucumber",
+        "huanggua",
+        "黄瓜",
+        "拍黄瓜",
+        "timun",
+        "refreshing"
+      ],
+      "category": "凉菜",
+      "price": 6.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "素食",
+        "不辣"
+      ],
+      "description": "清脆爽口，蒜香浓郁，经典凉菜",
+      "desc_en": "Crispy & refreshing, garlic fragrance, classic cold dish",
+      "image": "paihuanggua.jpg",
+      "image_url": "https://images.unsplash.com/photo-1449300079323-02e209d9d3a6?w=400&q=80",
+      "desc_ms": "Rangup & segar, wangi bawang putih, hidangan sejuk klasik",
+      "desc_ta": "மொறுமொறுப்பான & புத்துணர்ச்சியான, பூண்டு வாசனை"
+    },
+    {
+      "id": 23,
+      "name": "老虎菜",
+      "name_en": "Tiger Salad",
+      "name_ms": "Salad Harimau",
+      "name_ta": "புலி சாலட்",
+      "keywords": [
+        "tiger",
+        "laohucai",
+        "老虎菜",
+        "东北",
+        "cilantro",
+        "pepper",
+        "onion"
+      ],
+      "category": "凉菜",
+      "price": 6.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "素食",
+        "中辣"
+      ],
+      "description": "东北名菜，尖椒香菜洋葱，辣中带香",
+      "desc_en": "Northeast famous dish, chili cilantro onion, spicy & aromatic",
+      "image": "laohucai.jpg",
+      "image_url": "https://images.unsplash.com/photo-1547496502-affa22d38842?w=400&q=80",
+      "desc_ms": "Hidangan terkenal Timur Laut, cili ketumbar bawang, pedas & wangi",
+      "desc_ta": "வடகிழக்கு பிரபல உணவு, மிளகாய் கொத்தமல்லி வெங்காயம்"
+    },
+    {
+      "id": 24,
+      "name": "五香花生毛豆",
+      "name_en": "Five-Spice Peanuts & Edamame",
+      "name_ms": "Kacang & Edamame Lima Rempah",
+      "name_ta": "ஐந்து மசாலா வேர்க்கடலை",
+      "keywords": [
+        "peanut",
+        "edamame",
+        "花生",
+        "毛豆",
+        "五香",
+        "kacang",
+        "bean"
+      ],
+      "category": "凉菜",
+      "price": 6.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "素食",
+        "不辣",
+        "花生",
+        "豆制品"
+      ],
+      "description": "五香入味，花生酥脆，毛豆软糯",
+      "desc_en": "Five-spice flavored, crispy peanuts, soft edamame",
+      "image": "wuxianghuashengmaodou.jpg",
+      "image_url": "https://images.unsplash.com/photo-1567892320421-1c657571ea4e?w=400&q=80",
+      "desc_ms": "Perisa rempah lima, kacang rangup, edamame lembut",
+      "desc_ta": "ஐந்து மசாலா சுவை, மொறுமொறுப்பான வேர்க்கடலை"
+    },
+    {
+      "id": 25,
+      "name": "哈尔滨红肠",
+      "name_en": "Harbin Red Sausage",
+      "name_ms": "Sosej Merah Harbin",
+      "name_ta": "ஹார்பின் சிவப்பு தொத்திறைச்சி",
+      "keywords": [
+        "sausage",
+        "harbin",
+        "红肠",
+        "哈尔滨",
+        "sosej",
+        "hong chang"
+      ],
+      "category": "凉菜",
+      "price": 6.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "猪肉",
+        "不辣"
+      ],
+      "description": "哈尔滨特产，肉香浓郁，口感紧实",
+      "desc_en": "Harbin specialty, rich meat flavor, firm texture",
+      "image": "haerbinhongchang.jpg",
+      "image_url": "https://images.unsplash.com/photo-1587329310686-91414b8e3cb7?w=400&q=80",
+      "desc_ms": "Keistimewaan Harbin, rasa daging kaya, tekstur padat",
+      "desc_ta": "ஹார்பின் சிறப்பு, நிறைந்த இறைச்சி சுவை"
+    },
+    {
+      "id": 26,
+      "name": "凉拌木耳",
+      "name_en": "Cold Black Fungus",
+      "name_ms": "Kulat Hitam Sejuk",
+      "name_ta": "குளிர் கருப்பு பூஞ்சை",
+      "keywords": [
+        "fungus",
+        "muer",
+        "木耳",
+        "黑木耳",
+        "kulat",
+        "mushroom"
+      ],
+      "category": "凉菜",
+      "price": 6.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "素食",
+        "微辣"
+      ],
+      "description": "木耳爽脆，酸辣开胃，清凉解暑",
+      "desc_en": "Crispy wood ear, sour & spicy appetizer, cooling",
+      "image": "liangbanmuer.jpg",
+      "image_url": "https://images.unsplash.com/photo-1504545102780-26774c1bb073?w=400&q=80",
+      "desc_ms": "Kulat hitam rangup, pembuka selera masam pedas, menyejukkan",
+      "desc_ta": "மொறுமொறுப்பான மர காது, புளிப்பு & காரமான"
+    },
+    {
+      "id": 27,
+      "name": "花生米",
+      "name_en": "Fried Peanuts",
+      "name_ms": "Kacang Goreng",
+      "name_ta": "வறுத்த வேர்க்கடலை",
+      "keywords": [
+        "peanut",
+        "huasheng",
+        "花生",
+        "kacang",
+        "nuts"
+      ],
+      "category": "凉菜",
+      "price": 6.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "素食",
+        "不辣",
+        "花生"
+      ],
+      "description": "酥脆花生米，香酥可口，下酒必备",
+      "desc_en": "Crispy peanuts, fragrant & crispy, perfect with drinks",
+      "image": "huashengmi.jpg",
+      "image_url": "https://images.unsplash.com/photo-1567892320421-1c657571ea4e?w=400&q=80",
+      "desc_ms": "Kacang rangup, wangi & rangup, sesuai dengan minuman",
+      "desc_ta": "மொறுமொறுப்பான வேர்க்கடலை, நறுமணமான & மொறுமொறுப்பான"
+    },
+    {
+      "id": 28,
+      "name": "家常凉菜",
+      "name_en": "Home-Style Cold Dish",
+      "name_ms": "Hidangan Sejuk Gaya Rumah",
+      "name_ta": "வீட்டு பாணி குளிர் உணவு",
+      "keywords": [
+        "homestyle",
+        "jiachang",
+        "家常",
+        "凉菜",
+        "daily special"
+      ],
+      "category": "凉菜",
+      "price": 6.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "凉菜",
+        "素食",
+        "微辣"
+      ],
+      "description": "多种凉菜拼盘，清爽开胃",
+      "desc_en": "Various cold dish platter, refreshing appetizer",
+      "image": "jiachangliangcai.jpg",
+      "image_url": "https://images.unsplash.com/photo-1547496502-affa22d38842?w=400&q=80",
+      "desc_ms": "Pelbagai hidangan sejuk platter, pembuka selera segar",
+      "desc_ta": "பல்வேறு குளிர் உணவு தட்டு"
+    },
+    {
+      "id": 29,
+      "name": "烤羊排",
+      "name_en": "Grilled Lamb Chops",
+      "name_ms": "Rusuk Kambing Panggang",
+      "name_ta": "சுட்ட ஆட்டுக்குட்டி",
+      "keywords": [
+        "lamb",
+        "chop",
+        "yangpai",
+        "羊排",
+        "烤",
+        "kambing",
+        "bbq"
+      ],
+      "category": "烧烤-肉类",
+      "price": 15.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "烧烤-肉类",
+        "羊肉",
+        "微辣"
+      ],
+      "description": "外焦里嫩，羊肉鲜香，孜然飘香",
+      "desc_en": "Crispy outside tender inside, lamb flavor, cumin fragrance",
+      "image": "kaoyangpai.jpg",
+      "image_url": "https://images.unsplash.com/photo-1603360946369-dc9bb6258143?w=400&q=80",
+      "desc_ms": "Rangup luar lembut dalam, rasa kambing, wangi jintan",
+      "desc_ta": "வெளியே மொறுமொறுப்பு உள்ளே மென்மை, ஆட்டுக்குட்டி சுவை"
+    },
+    {
+      "id": 30,
+      "name": "烤羊蛋",
+      "name_en": "Grilled Lamb Testicles",
+      "name_ms": "Testis Kambing Panggang",
+      "name_ta": "சுட்ட ஆட்டு",
+      "keywords": [
+        "lamb",
+        "testicle",
+        "yangdan",
+        "羊蛋",
+        "羊腰子",
+        "kambing"
+      ],
+      "category": "烧烤-肉类",
+      "price": 10.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "烧烤-肉类",
+        "羊肉",
+        "微辣"
+      ],
+      "description": "烧烤特色，外酥内嫩，口感独特",
+      "desc_en": "BBQ specialty, crispy outside soft inside, unique texture",
+      "image": "kaoyangdan.jpg",
+      "image_url": "https://images.unsplash.com/photo-1603360946369-dc9bb6258143?w=400&q=80",
+      "desc_ms": "Keistimewaan BBQ, rangup luar lembut dalam, tekstur unik",
+      "desc_ta": "BBQ சிறப்பு, தனித்துவமான அமைப்பு"
+    },
+    {
+      "id": 31,
+      "name": "烤猪脚",
+      "name_en": "Grilled Pig Trotters",
+      "name_ms": "Kaki Babi Panggang",
+      "name_ta": "சுட்ட பன்றி கால்",
+      "keywords": [
+        "pig",
+        "trotter",
+        "zhujiao",
+        "猪脚",
+        "猪蹄",
+        "kaki babi",
+        "collagen"
+      ],
+      "category": "烧烤-肉类",
+      "price": 8.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "外皮焦脆，肉质鲜嫩，孜然辣椒入味",
+      "desc_en": "Crispy skin, tender meat, cumin & chili seasoned",
+      "image": "kaozhujiao.jpg",
+      "image_url": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=400&q=80",
+      "desc_ms": "Kulit rangup, daging lembut, perisa jintan & cili",
+      "desc_ta": "மொறுமொறுப்பான தோல், மென்மையான இறைச்சி"
+    },
+    {
+      "id": 32,
+      "name": "烤鸡头",
+      "name_en": "Grilled Chicken Heads",
+      "name_ms": "Kepala Ayam Panggang",
+      "name_ta": "சுட்ட கோழி தலை",
+      "keywords": [
+        "chicken",
+        "head",
+        "jitou",
+        "鸡头",
+        "ayam",
+        "kepala"
+      ],
+      "category": "烧烤-肉类",
+      "price": 6.0,
+      "unit": "3串",
+      "unit_en": "3 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "鸡肉",
+        "微辣"
+      ],
+      "description": "鸡头开边烤制，外皮焦香，滋味独特",
+      "desc_en": "Split chicken head grilled, crispy skin, unique flavor",
+      "image": "kaojitou.jpg",
+      "image_url": "https://images.unsplash.com/photo-1598103442097-8b74394b95c6?w=400&q=80",
+      "desc_ms": "Kepala ayam belah panggang, kulit rangup, rasa unik",
+      "desc_ta": "பிளவுபட்ட கோழி தலை வறுக்கப்பட்டது"
+    },
+    {
+      "id": 33,
+      "name": "牛肉串",
+      "name_en": "Beef Skewers",
+      "name_ms": "Sate Daging Lembu",
+      "name_ta": "மாட்டிறைச்சி சிக்கன்",
+      "keywords": [
+        "beef",
+        "skewer",
+        "niurou",
+        "牛肉",
+        "串",
+        "satay",
+        "sate",
+        "daging"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "牛肉",
+        "微辣"
+      ],
+      "description": "肥瘦相间，大火速烤，肉质多汁",
+      "desc_en": "Marbled meat, quick grilled, juicy",
+      "image": "niurouchuan.jpg",
+      "image_url": "https://images.unsplash.com/photo-1544025162-d76694265947?w=400&q=80",
+      "desc_ms": "Daging berlemak, panggang cepat, berair",
+      "desc_ta": "மார்பிள் இறைச்சி, விரைவான வறுத்த"
+    },
+    {
+      "id": 34,
+      "name": "羊肉串",
+      "name_en": "Lamb Skewers",
+      "name_ms": "Sate Kambing",
+      "name_ta": "ஆட்டுக்குட்டி சிக்கன்",
+      "keywords": [
+        "lamb",
+        "mutton",
+        "skewer",
+        "yangrou",
+        "羊肉",
+        "串",
+        "satay",
+        "kambing",
+        "xinjiang"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "羊肉",
+        "微辣"
+      ],
+      "description": "东北传统，不腌原味，孜然辣椒烤制",
+      "desc_en": "Northeast traditional, unmarinated, cumin & chili grilled",
+      "image": "yangrouchuan.jpg",
+      "image_url": "https://images.unsplash.com/photo-1603360946369-dc9bb6258143?w=400&q=80",
+      "desc_ms": "Tradisional Timur Laut, tanpa perap, panggang jintan & cili",
+      "desc_ta": "வடகிழக்கு பாரம்பரியம், ஊறவைக்கப்படாத"
+    },
+    {
+      "id": 35,
+      "name": "猪肉串",
+      "name_en": "Pork Skewers",
+      "name_ms": "Sate Babi",
+      "name_ta": "பன்றி சிக்கன்",
+      "keywords": [
+        "pork",
+        "skewer",
+        "zhurou",
+        "猪肉",
+        "串",
+        "satay",
+        "babi"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "梅花肉或前槽肉，外焦里嫩，油香爆浆",
+      "desc_en": "Pork shoulder, crispy outside juicy inside",
+      "image": "zhurouchuan.jpg",
+      "image_url": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=400&q=80",
+      "desc_ms": "Bahu babi, rangup luar berair dalam",
+      "desc_ta": "பன்றி தோள்பட்டை, வெளியே மொறுமொறுப்பு"
+    },
+    {
+      "id": 36,
+      "name": "鸡肉串",
+      "name_en": "Chicken Skewers",
+      "name_ms": "Sate Ayam",
+      "name_ta": "சிக்கன் சிக்கன்",
+      "keywords": [
+        "chicken",
+        "skewer",
+        "jirou",
+        "鸡肉",
+        "串",
+        "satay",
+        "ayam"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "鸡肉",
+        "微辣"
+      ],
+      "description": "鸡腿肉切块，香味浓郁，酥烂鲜咸",
+      "desc_en": "Chicken thigh cubes, rich aroma, crispy & savory",
+      "image": "jirouchuan.jpg",
+      "image_url": "https://images.unsplash.com/photo-1598103442097-8b74394b95c6?w=400&q=80",
+      "desc_ms": "Kiub paha ayam, aroma kaya, rangup & lazat",
+      "desc_ta": "கோழி தொடை துண்டுகள், நிறைந்த நறுமணம்"
+    },
+    {
+      "id": 37,
+      "name": "牛蹄筋",
+      "name_en": "Beef Tendon Skewers",
+      "name_ms": "Urat Daging Lembu",
+      "name_ta": "மாட்டு தசைநார்",
+      "keywords": [
+        "beef",
+        "tendon",
+        "tijin",
+        "蹄筋",
+        "牛筋",
+        "urat"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "牛肉",
+        "微辣"
+      ],
+      "description": "牛蹄筋Q弹，外焦内嫩，撒孜然芝麻",
+      "desc_en": "Beef tendon chewy, crispy outside tender inside, cumin sesame",
+      "image": "niutijin.jpg",
+      "image_url": "https://images.unsplash.com/photo-1544025162-d76694265947?w=400&q=80",
+      "desc_ms": "Urat lembu kenyal, rangup luar lembut dalam, jintan bijan",
+      "desc_ta": "மாட்டு தசைநார் மெல்லும், வெளியே மொறுமொறுப்பு"
+    },
+    {
+      "id": 38,
+      "name": "牛胸口",
+      "name_en": "Beef Brisket Skewers",
+      "name_ms": "Dada Lembu",
+      "name_ta": "மாட்டு மார்பகம்",
+      "keywords": [
+        "beef",
+        "brisket",
+        "xiongkou",
+        "胸口",
+        "牛胸",
+        "dada"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "牛肉",
+        "微辣"
+      ],
+      "description": "牛胸口脂肪，烤至金黄，油脂爆浆",
+      "desc_en": "Beef brisket fat, grilled golden, oil bursting",
+      "image": "niuxiongkou.jpg",
+      "image_url": "https://images.unsplash.com/photo-1544025162-d76694265947?w=400&q=80",
+      "desc_ms": "Lemak dada lembu, panggang keemasan, minyak meletup",
+      "desc_ta": "மாட்டு மார்பு கொழுப்பு, தங்க நிறமாக வறுக்கப்பட்டது"
+    },
+    {
+      "id": 39,
+      "name": "肥瘦",
+      "name_en": "Fatty & Lean Pork Skewers",
+      "name_ms": "Daging Babi Lemak",
+      "name_ta": "கொழுப்பு பன்றி",
+      "keywords": [
+        "pork",
+        "fatty",
+        "feishou",
+        "肥瘦",
+        "五花",
+        "babi"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "五花肉肥瘦相间，外焦内嫩，油汁四溅",
+      "desc_en": "Pork belly marbled, crispy outside juicy inside",
+      "image": "feishou.jpg",
+      "image_url": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=400&q=80",
+      "desc_ms": "Perut babi berlemak, rangup luar berair dalam",
+      "desc_ta": "பன்றி வயிறு மார்பிள், வெளியே மொறுமொறுப்பு"
+    },
+    {
+      "id": 40,
+      "name": "酱油筋",
+      "name_en": "Soy Sauce Tendon",
+      "name_ms": "Urat Kicap",
+      "name_ta": "சோயா சாஸ் தசைநார்",
+      "keywords": [
+        "tendon",
+        "soy",
+        "jiangyou",
+        "酱油筋",
+        "筋",
+        "kicap"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "牛筋卤制入味，多次刷酱，油香酱香",
+      "desc_en": "Braised beef tendon, sauce glazed, savory & aromatic",
+      "image": "jiangyoujin.jpg",
+      "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=400&q=80",
+      "desc_ms": "Urat lembu rebus, disapu sos, lazat & wangi",
+      "desc_ta": "வேகவைத்த மாட்டு தசைநார், சாஸ் தடவப்பட்டது"
+    },
+    {
+      "id": 41,
+      "name": "板筋",
+      "name_en": "Pork Neck Tendon",
+      "name_ms": "Urat Leher Babi",
+      "name_ta": "பன்றி கழுத்து",
+      "keywords": [
+        "tendon",
+        "neck",
+        "banjin",
+        "板筋",
+        "筋",
+        "urat"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "牛板筋切薄片，麻辣鲜香，耐嚼化渣",
+      "desc_en": "Thin sliced beef tendon, numbing spicy, chewy & melting",
+      "image": "banjin.jpg",
+      "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=400&q=80",
+      "desc_ms": "Urat lembu nipis, pedas kebas, kenyal & meleleh",
+      "desc_ta": "மெல்லிய மாட்டு தசைநார், காரமான"
+    },
+    {
+      "id": 42,
+      "name": "心管",
+      "name_en": "Heart Aorta Skewers",
+      "name_ms": "Urat Jantung",
+      "name_ta": "இதய குழாய்",
+      "keywords": [
+        "heart",
+        "aorta",
+        "xinguan",
+        "心管",
+        "jantung"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "猪心管烤至焦脆，外香内嫩，蘸孜然辣椒",
+      "desc_en": "Pig aorta grilled crispy, fragrant outside tender inside",
+      "image": "xinguan.jpg",
+      "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=400&q=80",
+      "desc_ms": "Aorta babi panggang rangup, wangi luar lembut dalam",
+      "desc_ta": "பன்றி பெருந்தமனி மொறுமொறுப்பாக வறுக்கப்பட்டது"
+    },
+    {
+      "id": 43,
+      "name": "猪腰子",
+      "name_en": "Pork Kidney Skewers",
+      "name_ms": "Buah Pinggang Babi",
+      "name_ta": "பன்றி சிறுநீரகம்",
+      "keywords": [
+        "kidney",
+        "yaozi",
+        "猪腰",
+        "腰子",
+        "buah pinggang"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "猪腰去腺烤制，口感鲜嫩，快烤即食",
+      "desc_en": "Pig kidney grilled, tender texture, quick roasted",
+      "image": "zhuyaozi.jpg",
+      "image_url": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=400&q=80",
+      "desc_ms": "Buah pinggang babi panggang, tekstur lembut, panggang cepat",
+      "desc_ta": "பன்றி சிறுநீரகம் வறுக்கப்பட்டது, மென்மையான அமைப்பு"
+    },
+    {
+      "id": 44,
+      "name": "猪肥肠",
+      "name_en": "Pork Intestine Skewers",
+      "name_ms": "Usus Babi",
+      "name_ta": "பன்றி குடல்",
+      "keywords": [
+        "intestine",
+        "feichang",
+        "肥肠",
+        "大肠",
+        "usus"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "猪肠串烤，外焦里嫩，干香十足",
+      "desc_en": "Pig intestine skewered, crispy outside tender inside, dry fragrant",
+      "image": "zhufeichang.jpg",
+      "image_url": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=400&q=80",
+      "desc_ms": "Usus babi dicucuk, rangup luar lembut dalam, wangi kering",
+      "desc_ta": "பன்றி குடல் குச்சியில், வெளியே மொறுமொறுப்பு"
+    },
+    {
+      "id": 45,
+      "name": "大油边",
+      "name_en": "Pork Fat Skewers",
+      "name_ms": "Lemak Babi",
+      "name_ta": "பன்றி கொழுப்பு",
+      "keywords": [
+        "fat",
+        "youbian",
+        "油边",
+        "肥肉",
+        "lemak"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "猪护心肉，外焦油亮，汁水充足",
+      "desc_en": "Pig heart meat, crispy oily, juicy inside",
+      "image": "dayoubian.jpg",
+      "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=400&q=80",
+      "desc_ms": "Daging jantung babi, rangup berminyak, berair dalam",
+      "desc_ta": "பன்றி இதய இறைச்சி, மொறுமொறுப்பான எண்ணெய்"
+    },
+    {
+      "id": 46,
+      "name": "梅花肉",
+      "name_en": "Pork Shoulder Skewers",
+      "name_ms": "Bahu Babi",
+      "name_ta": "பன்றி தோள்",
+      "keywords": [
+        "pork",
+        "shoulder",
+        "meihua",
+        "梅花肉",
+        "bahu"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "梅花肉雪花筋脉，香气浓郁，肉质鲜嫩",
+      "desc_en": "Pork shoulder marbled, rich aroma, tender meat",
+      "image": "meihuarou.jpg",
+      "image_url": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=400&q=80",
+      "desc_ms": "Bahu babi berlemak, aroma kaya, daging lembut",
+      "desc_ta": "பன்றி தோள்பட்டை மார்பிள், நிறைந்த நறுமணம்"
+    },
+    {
+      "id": 47,
+      "name": "鸡胗",
+      "name_en": "Chicken Gizzard Skewers",
+      "name_ms": "Pedal Ayam",
+      "name_ta": "கோழி வயிறு",
+      "keywords": [
+        "chicken",
+        "gizzard",
+        "jizhen",
+        "鸡胗",
+        "pedal",
+        "ayam"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "鸡肉",
+        "微辣"
+      ],
+      "description": "鸡胗去膜烤制，脆爽有嚼劲，焦香可口",
+      "desc_en": "Chicken gizzard grilled, crispy chewy, fragrant & delicious",
+      "image": "jizhen.jpg",
+      "image_url": "https://images.unsplash.com/photo-1598103442097-8b74394b95c6?w=400&q=80",
+      "desc_ms": "Pedal ayam panggang, rangup kenyal, wangi & sedap",
+      "desc_ta": "கோழி மணிக்கட்டு வறுக்கப்பட்டது, மொறுமொறுப்பான மெல்லும்"
+    },
+    {
+      "id": 48,
+      "name": "烤脆骨",
+      "name_en": "Grilled Cartilage",
+      "name_ms": "Rawan Panggang",
+      "name_ta": "சுட்ட குருத்தெலும்பு",
+      "keywords": [
+        "cartilage",
+        "cuigu",
+        "脆骨",
+        "软骨",
+        "rawan"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "5串",
+      "unit_en": "5 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "猪脆骨外焦里嫩，花椒腌制，酥脆可口",
+      "desc_en": "Pig cartilage crispy tender, pepper marinated, crunchy",
+      "image": "kaocuigu.jpg",
+      "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=400&q=80",
+      "desc_ms": "Tulang rawan babi rangup lembut, diperapis lada, rangup",
+      "desc_ta": "பன்றி குருத்தெலும்பு மொறுமொறுப்பான மென்மை"
+    },
+    {
+      "id": 49,
+      "name": "烤鸡翅",
+      "name_en": "Grilled Chicken Wings",
+      "name_ms": "Sayap Ayam Panggang",
+      "name_ta": "சுட்ட சிக்கன் இறக்கைகள்",
+      "keywords": [
+        "chicken",
+        "wing",
+        "jichi",
+        "鸡翅",
+        "翅膀",
+        "sayap",
+        "ayam"
+      ],
+      "category": "烧烤-肉类",
+      "price": 5.0,
+      "unit": "2串",
+      "unit_en": "2 skewers",
+      "tags": [
+        "烧烤-肉类",
+        "鸡肉",
+        "微辣"
+      ],
+      "description": "全翅烤制，三段口感，外焦里嫩",
+      "desc_en": "Whole wing grilled, three textures, crispy outside tender inside",
+      "image": "kaojichi.jpg",
+      "image_url": "https://images.unsplash.com/photo-1527477396000-e27163b481c2?w=400&q=80",
+      "desc_ms": "Sayap penuh panggang, tiga tekstur, rangup luar lembut dalam",
+      "desc_ta": "முழு சிறகு வறுக்கப்பட்டது, மூன்று அமைப்புகள்"
+    },
+    {
+      "id": 50,
+      "name": "大块肉",
+      "name_en": "Big Chunk Pork",
+      "name_ms": "Daging Besar",
+      "name_ta": "பெரிய இறைச்சி",
+      "keywords": [
+        "pork",
+        "chunk",
+        "dakuai",
+        "大块",
+        "肉",
+        "daging"
+      ],
+      "category": "烧烤-肉类",
+      "price": 3.0,
+      "unit": "串",
+      "unit_en": "skewer",
+      "tags": [
+        "烧烤-肉类",
+        "猪肉",
+        "微辣"
+      ],
+      "description": "原切大块肉，烤时不散，肉汁飙出",
+      "desc_en": "Whole cut big meat, holds together when grilled, juicy",
+      "image": "dakuairou.jpg",
+      "image_url": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=400&q=80",
+      "desc_ms": "Daging besar potong penuh, kekal bersama bila panggang, berair",
+      "desc_ta": "முழு வெட்டு பெரிய இறைச்சி, சாறு நிறைந்த"
+    },
+    {
+      "id": 51,
+      "name": "羊腰子",
+      "name_en": "Lamb Kidney",
+      "name_ms": "Buah Pinggang Kambing",
+      "name_ta": "ஆட்டு சிறுநீரகம்",
+      "keywords": [
+        "lamb",
+        "kidney",
+        "yangyao",
+        "羊腰",
+        "腰子",
+        "kambing"
+      ],
+      "category": "烧烤-肉类",
+      "price": 3.0,
+      "unit": "串",
+      "unit_en": "skewer",
+      "tags": [
+        "烧烤-肉类",
+        "羊肉",
+        "微辣"
+      ],
+      "description": "外焦里嫩，肥油入口即化，几乎无膻味",
+      "desc_en": "Crispy outside tender inside, fat melts instantly, no gamey smell",
+      "image": "yangyaozi.jpg",
+      "image_url": "https://images.unsplash.com/photo-1603360946369-dc9bb6258143?w=400&q=80",
+      "desc_ms": "Rangup luar lembut dalam, lemak cair serta-merta, tiada bau hancing",
+      "desc_ta": "வெளியே மொறுமொறுப்பு உள்ளே மென்மை, கொழுப்பு உடனடியாக உருகும்"
+    },
+    {
+      "id": 52,
+      "name": "烤生蚝",
+      "name_en": "Grilled Oysters",
+      "name_ms": "Tiram Panggang",
+      "name_ta": "சுட்ட சிப்பிகள்",
+      "keywords": [
+        "oyster",
+        "shenghao",
+        "生蚝",
+        "蚝",
+        "tiram",
+        "garlic"
+      ],
+      "category": "烧烤-海鲜",
+      "price": 20.0,
+      "unit": "4个",
+      "unit_en": "4 pcs",
+      "tags": [
+        "烧烤-海鲜",
+        "海鲜",
+        "微辣"
+      ],
+      "description": "蒜蓉调味，蚝肉鲜嫩，汁水晶莹",
+      "desc_en": "Garlic seasoned, oyster meat tender, juice glistening",
+      "image": "kaoshenghao.jpg",
+      "image_url": "https://images.unsplash.com/photo-1606731219412-8a30ed06e436?w=400&q=80",
+      "desc_ms": "Perisa bawang putih, daging tiram lembut, jus berkilat",
+      "desc_ta": "பூண்டு சுவை, சிப்பி இறைச்சி மென்மை"
+    },
+    {
+      "id": 53,
+      "name": "烤大虾",
+      "name_en": "Grilled Prawns",
+      "name_ms": "Udang Panggang",
+      "name_ta": "சுட்ட இறால்",
+      "keywords": [
+        "prawn",
+        "shrimp",
+        "daxia",
+        "大虾",
+        "虾",
+        "udang"
+      ],
+      "category": "烧烤-海鲜",
+      "price": 10.0,
+      "unit": "6串",
+      "unit_en": "6 skewers",
+      "tags": [
+        "烧烤-海鲜",
+        "海鲜",
+        "微辣"
+      ],
+      "description": "大虾去线烤制，内嫩外焦，鲜美可口",
+      "desc_en": "Shrimp deveined grilled, tender inside crispy outside, delicious",
+      "image": "kaodaxia.jpg",
+      "image_url": "https://images.unsplash.com/photo-1565680018434-b513d5e5fd47?w=400&q=80",
+      "desc_ms": "Udang buang urat panggang, lembut dalam rangup luar, sedap",
+      "desc_ta": "இறால் நரம்பு நீக்கப்பட்டு வறுக்கப்பட்டது"
+    },
+    {
+      "id": 54,
+      "name": "大鱿鱼",
+      "name_en": "Large Squid",
+      "name_ms": "Sotong Besar",
+      "name_ta": "பெரிய கணவாய்",
+      "keywords": [
+        "squid",
+        "youyu",
+        "鱿鱼",
+        "墨鱼",
+        "sotong",
+        "calamari"
+      ],
+      "category": "烧烤-海鲜",
+      "price": 10.0,
+      "unit": "2串",
+      "unit_en": "2 skewers",
+      "tags": [
+        "烧烤-海鲜",
+        "海鲜",
+        "微辣"
+      ],
+      "description": "鱿鱼切条烤制，口感紧致弹牙，香辣风味",
+      "desc_en": "Squid sliced grilled, firm chewy texture, spicy flavor",
+      "image": "dayouyu.jpg",
+      "image_url": "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=400&q=80",
+      "desc_ms": "Sotong hiris panggang, tekstur padat kenyal, rasa pedas",
+      "desc_ta": "கணவாய் துண்டாக்கி வறுக்கப்பட்டது, உறுதியான மெல்லும் அமைப்பு"
+    },
+    {
+      "id": 55,
+      "name": "烤干针鱼",
+      "name_en": "Grilled Needlefish",
+      "name_ms": "Ikan Jarum Panggang",
+      "name_ta": "சுட்ட ஊசி மீன்",
+      "keywords": [
+        "fish",
+        "needlefish",
+        "zhenyu",
+        "针鱼",
+        "鱼",
+        "ikan"
+      ],
+      "category": "烧烤-海鲜",
+      "price": 5.0,
+      "unit": "3串",
+      "unit_en": "3 skewers",
+      "tags": [
+        "烧烤-海鲜",
+        "海鲜",
+        "微辣"
+      ],
+      "description": "马步鱼烤制，油光可鉴，口感紧致弹牙",
+      "desc_en": "Needlefish grilled, glistening, firm chewy texture",
+      "image": "kaoganzhenyu.jpg",
+      "image_url": "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=400&q=80",
+      "desc_ms": "Ikan jarum panggang, berkilat, tekstur padat kenyal",
+      "desc_ta": "ஊசி மீன் வறுக்கப்பட்டது, பளபளப்பான"
+    },
+    {
+      "id": 56,
+      "name": "烤蚕蛹",
+      "name_en": "Grilled Silkworm Pupae",
+      "name_ms": "Kepompong Ulat Sutera Panggang",
+      "name_ta": "சுட்ட பட்டுப்புழு",
+      "keywords": [
+        "silkworm",
+        "canyu",
+        "蚕蛹",
+        "虫",
+        "insect",
+        "protein"
+      ],
+      "category": "烧烤-其他",
+      "price": 10.0,
+      "unit": "3串",
+      "unit_en": "3 skewers",
+      "tags": [
+        "烧烤-其他",
+        "微辣"
+      ],
+      "description": "蚕蛹烤至表皮微脆，蛋白丰富，香香脆脆",
+      "desc_en": "Silkworm pupae grilled crispy, protein rich, crispy delicious",
+      "image": "kaocanyu.jpg",
+      "image_url": "https://images.unsplash.com/photo-1566478989037-eec170784d0b?w=400&q=80",
+      "desc_ms": "Kepompong panggang rangup, kaya protein, rangup sedap",
+      "desc_ta": "பட்டுப்புழு கூட்டுப்புழு மொறுமொறுப்பாக வறுக்கப்பட்டது"
+    },
+    {
+      "id": 57,
+      "name": "烤茄子",
+      "name_en": "Grilled Eggplant",
+      "name_ms": "Terung Panggang",
+      "name_ta": "சுட்ட கத்திரிக்காய்",
+      "keywords": [
+        "eggplant",
+        "aubergine",
+        "qiezi",
+        "茄子",
+        "terung",
+        "garlic"
+      ],
+      "category": "烧烤-其他",
+      "price": 6.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "烧烤-其他",
+        "素食",
+        "微辣"
+      ],
+      "description": "紫茄烤至软糯，蒜香四溢，入口即融",
+      "desc_en": "Eggplant grilled soft, garlic fragrance, melts in mouth",
+      "image": "kaoqiezi.jpg",
+      "image_url": "https://images.unsplash.com/photo-1635939618910-fb0fc7c5aa1a?w=400&q=80",
+      "desc_ms": "Terung panggang lembut, wangi bawang putih, cair dalam mulut",
+      "desc_ta": "கத்தரிக்காய் மென்மையாக வறுக்கப்பட்டது, பூண்டு நறுமணம்"
+    },
+    {
+      "id": 58,
+      "name": "烤面筋",
+      "name_en": "Grilled Wheat Gluten",
+      "name_ms": "Gluten Panggang",
+      "name_ta": "சுட்ட கோதுமை",
+      "keywords": [
+        "gluten",
+        "mianjin",
+        "面筋",
+        "seitan",
+        "vegetarian"
+      ],
+      "category": "烧烤-其他",
+      "price": 6.0,
+      "unit": "3串",
+      "unit_en": "3 skewers",
+      "tags": [
+        "烧烤-其他",
+        "素食",
+        "微辣"
+      ],
+      "description": "高蛋白素食，刷酱烤制，香辣有嚼劲",
+      "desc_en": "High protein vegetarian, sauce glazed grilled, spicy chewy",
+      "image": "kaomianjin.jpg",
+      "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=400&q=80",
+      "desc_ms": "Vegetarian protein tinggi, disapu sos panggang, pedas kenyal",
+      "desc_ta": "அதிக புரத சைவம், சாஸ் தடவி வறுக்கப்பட்டது"
+    },
+    {
+      "id": 59,
+      "name": "烤金针菇",
+      "name_en": "Grilled Enoki Mushrooms",
+      "name_ms": "Cendawan Enoki Panggang",
+      "name_ta": "சுட்ட எனோகி காளான்",
+      "keywords": [
+        "enoki",
+        "mushroom",
+        "jinzhengu",
+        "金针菇",
+        "蘑菇",
+        "cendawan"
+      ],
+      "category": "烧烤-其他",
+      "price": 5.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "烧烤-其他",
+        "素食",
+        "不辣"
+      ],
+      "description": "金针菇蒜香烤制，韧脆爽口，低蛋白健康",
+      "desc_en": "Enoki mushroom garlic grilled, crispy chewy, healthy low protein",
+      "image": "kaojinzhengu.jpg",
+      "image_url": "https://images.unsplash.com/photo-1504545102780-26774c1bb073?w=400&q=80",
+      "desc_ms": "Cendawan enoki bawang putih panggang, rangup kenyal, sihat protein rendah",
+      "desc_ta": "எனோக்கி காளான் பூண்டு வறுக்கப்பட்டது"
+    },
+    {
+      "id": 60,
+      "name": "烤油麦菜",
+      "name_en": "Grilled Chinese Lettuce",
+      "name_ms": "Salad Cina Panggang",
+      "name_ta": "சுட்ட சீன கீரை",
+      "keywords": [
+        "lettuce",
+        "youmaicai",
+        "油麦菜",
+        "蔬菜",
+        "sayur",
+        "vegetable"
+      ],
+      "category": "烧烤-其他",
+      "price": 5.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "烧烤-其他",
+        "素食",
+        "不辣"
+      ],
+      "description": "油麦菜快烤，口感脆嫩，清香爽口",
+      "desc_en": "Romaine lettuce quick grilled, crispy tender, fresh & refreshing",
+      "image": "kaoyoumaicai.jpg",
+      "image_url": "https://images.unsplash.com/photo-1540420773420-3366772f4999?w=400&q=80",
+      "desc_ms": "Salad romaine panggang cepat, rangup lembut, segar",
+      "desc_ta": "ரொமைன் லெட்யூஸ் விரைவாக வறுக்கப்பட்டது"
+    },
+    {
+      "id": 61,
+      "name": "烤面包",
+      "name_en": "Grilled Bread",
+      "name_ms": "Roti Panggang",
+      "name_ta": "சுட்ட ரொட்டி",
+      "keywords": [
+        "bread",
+        "mianbao",
+        "面包",
+        "toast",
+        "roti"
+      ],
+      "category": "烧烤-其他",
+      "price": 5.0,
+      "unit": "份",
+      "unit_en": "portion",
+      "tags": [
+        "烧烤-其他",
+        "素食",
+        "不辣"
+      ],
+      "description": "面包片涂油烤制，表面金黄，香甜酥脆",
+      "desc_en": "Bread slice oiled grilled, golden surface, sweet & crispy",
+      "image": "kaomianbao.jpg",
+      "image_url": "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=400&q=80",
+      "desc_ms": "Roti disapu minyak panggang, permukaan keemasan, manis & rangup",
+      "desc_ta": "ரொட்டி துண்டு எண்ணெய் தடவி வறுக்கப்பட்டது"
+    },
+    {
+      "id": 62,
+      "name": "烤豆皮",
+      "name_en": "Grilled Tofu Skin",
+      "name_ms": "Kulit Tauhu Panggang",
+      "name_ta": "சுட்ட தோஃபு தோல்",
+      "keywords": [
+        "tofu",
+        "doupi",
+        "豆皮",
+        "豆腐皮",
+        "tauhu",
+        "beancurd"
+      ],
+      "category": "烧烤-其他",
+      "price": 5.0,
+      "unit": "15串",
+      "unit_en": "15 skewers",
+      "tags": [
+        "烧烤-其他",
+        "素食",
+        "微辣",
+        "豆制品"
+      ],
+      "description": "干豆腐直火烤制，外皮酥脆，内里咸香",
+      "desc_en": "Tofu skin direct grilled, crispy outside, savory inside",
+      "image": "kaodoupi.jpg",
+      "image_url": "https://images.unsplash.com/photo-1628246491219-fc83eb920a5e?w=400&q=80",
+      "desc_ms": "Kulit tauhu panggang terus, rangup luar, lazat dalam",
+      "desc_ta": "டோஃபு தோல் நேரடியாக வறுக்கப்பட்டது"
+    },
+    {
+      "id": 63,
+      "name": "豆皮卷香菜",
+      "name_en": "Tofu Skin with Cilantro",
+      "name_ms": "Kulit Tauhu dengan Ketumbar",
+      "name_ta": "தோஃபு கொத்தமல்லி",
+      "keywords": [
+        "tofu",
+        "cilantro",
+        "doupi",
+        "豆皮",
+        "香菜",
+        "coriander",
+        "ketumbar"
+      ],
+      "category": "烧烤-其他",
+      "price": 5.0,
+      "unit": "3串",
+      "unit_en": "3 skewers",
+      "tags": [
+        "烧烤-其他",
+        "素食",
+        "微辣",
+        "豆制品"
+      ],
+      "description": "香菜卷入豆皮烤制，外酥内嫩，香气馥郁",
+      "desc_en": "Cilantro rolled in tofu skin grilled, crispy tender, aromatic",
+      "image": "doupijuanxiangcai.jpg",
+      "image_url": "https://images.unsplash.com/photo-1628246491219-fc83eb920a5e?w=400&q=80",
+      "desc_ms": "Ketumbar digulung kulit tauhu panggang, rangup lembut, wangi",
+      "desc_ta": "கொத்தமல்லி டோஃபு தோலில் சுருட்டி வறுக்கப்பட்டது"
+    },
+    {
+      "id": 64,
+      "name": "烤辣椒",
+      "name_en": "Grilled Chili Peppers",
+      "name_ms": "Cili Panggang",
+      "name_ta": "சுட்ட மிளகாய்",
+      "keywords": [
+        "chili",
+        "pepper",
+        "lajiao",
+        "辣椒",
+        "虎皮",
+        "cili"
+      ],
+      "category": "烧烤-其他",
+      "price": 5.0,
+      "unit": "3串",
+      "unit_en": "3 skewers",
+      "tags": [
+        "烧烤-其他",
+        "素食",
+        "中辣"
+      ],
+      "description": "尖椒直火烤制，口感鲜嫩，微辣开胃",
+      "desc_en": "Chili pepper direct grilled, tender texture, mildly spicy appetizer",
+      "image": "kaolajiao.jpg",
+      "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=400&q=80",
+      "desc_ms": "Cili panggang terus, tekstur lembut, pembuka selera sedikit pedas",
+      "desc_ta": "மிளகாய் நேரடியாக வறுக்கப்பட்டது"
+    },
+    {
+      "id": 65,
+      "name": "烤实蛋",
+      "name_en": "Grilled Solid Eggs",
+      "name_ms": "Telur Pejal Panggang",
+      "name_ta": "சுட்ட திட முட்டை",
+      "keywords": [
+        "egg",
+        "shidan",
+        "实蛋",
+        "鸡蛋",
+        "telur",
+        "northeastern"
+      ],
+      "category": "烧烤-其他",
+      "price": 5.0,
+      "unit": "2串",
+      "unit_en": "2 skewers",
+      "tags": [
+        "烧烤-其他",
+        "蛋类",
+        "微辣"
+      ],
+      "description": "蛋清制成，外焦内嫩，口感弹牙",
+      "desc_en": "Made from egg white, crispy outside tender inside, chewy texture",
+      "image": "kaoshidan.jpg",
+      "image_url": "https://images.unsplash.com/photo-1598103442097-8b74394b95c6?w=400&q=80",
+      "desc_ms": "Dibuat dari putih telur, rangup luar lembut dalam, tekstur kenyal",
+      "desc_ta": "முட்டை வெள்ளையிலிருந்து செய்யப்பட்டது"
+    },
+    {
+      "id": 66,
+      "name": "烤香肠",
+      "name_en": "Grilled Chinese Sausage",
+      "name_ms": "Sosej Cina Panggang",
+      "name_ta": "சுட்ட சீன தொத்திறைச்சி",
+      "keywords": [
+        "sausage",
+        "xiangchang",
+        "香肠",
+        "腊肠",
+        "sosej"
+      ],
+      "category": "烧烤-其他",
+      "price": 5.0,
+      "unit": "2串",
+      "unit_en": "2 skewers",
+      "tags": [
+        "烧烤-其他",
+        "猪肉",
+        "不辣"
+      ],
+      "description": "香肠划刀烤制，外酥内嫩，香气袭人",
+      "desc_en": "Sausage scored grilled, crispy outside tender inside, aromatic",
+      "image": "kaoxiangchang.jpg",
+      "image_url": "https://images.unsplash.com/photo-1587329310686-91414b8e3cb7?w=400&q=80",
+      "desc_ms": "Sosej dipotong panggang, rangup luar lembut dalam, wangi",
+      "desc_ta": "தொத்திறைச்சி வெட்டி வறுக்கப்பட்டது"
+    },
+    {
+      "id": 67,
+      "name": "烤火腿肠",
+      "name_en": "Grilled Ham Sausage",
+      "name_ms": "Sosej Ham Panggang",
+      "name_ta": "சுட்ட ஹாம்",
+      "keywords": [
+        "ham",
+        "sausage",
+        "huotui",
+        "火腿",
+        "火腿肠",
+        "sosej"
+      ],
+      "category": "烧烤-其他",
+      "price": 5.0,
+      "unit": "2串",
+      "unit_en": "2 skewers",
+      "tags": [
+        "烧烤-其他",
+        "猪肉",
+        "不辣"
+      ],
+      "description": "火腿肠烤至微焦，肠衣酥脆，内馅鲜香",
+      "desc_en": "Ham sausage grilled slightly charred, crispy casing, savory filling",
+      "image": "kaohuotuichang.jpg",
+      "image_url": "https://images.unsplash.com/photo-1587329310686-91414b8e3cb7?w=400&q=80",
+      "desc_ms": "Sosej ham panggang sedikit hangus, kulit rangup, inti lazat",
+      "desc_ta": "ஹாம் தொத்திறைச்சி சிறிது கருகல் வறுக்கப்பட்டது"
+    },
+    {
+      "id": 68,
+      "name": "烤活珠子",
+      "name_en": "Grilled Balut",
+      "name_ms": "Balut Panggang",
+      "name_ta": "சுட்ட பலூட்",
+      "keywords": [
+        "balut",
+        "huozhuzi",
+        "活珠子",
+        "毛蛋",
+        "embryo",
+        "egg"
+      ],
+      "category": "烧烤-其他",
+      "price": 5.0,
+      "unit": "串",
+      "unit_en": "skewer",
+      "tags": [
+        "烧烤-其他",
+        "蛋类",
+        "微辣"
+      ],
+      "description": "孵化鸡蛋胚胎，口感嫩滑，东北特色",
+      "desc_en": "Incubated chicken egg embryo, tender smooth, Northeast specialty",
+      "image": "kaohuozhuzi.jpg",
+      "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=400&q=80",
+      "desc_ms": "Embrio telur ayam dierami, lembut licin, keistimewaan Timur Laut",
+      "desc_ta": "அடைகாத்த கோழி முட்டை கரு, மென்மையான வழுவழுப்பான"
+    }
+  ]
+}

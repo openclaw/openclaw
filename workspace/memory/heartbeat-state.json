@@ -1,0 +1,9 @@
+{
+  "lastChecks": {
+    "email": null,
+    "calendar": null,
+    "weather": null,
+    "mentions": null
+  },
+  "notes": "Created 2026-02-01 for batching periodic checks via HEARTBEAT.md"
+}

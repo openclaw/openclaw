@@ -1,0 +1,2 @@
+# Instruct type checkers to look for inline type annotations in this package.
+# See PEP 561.

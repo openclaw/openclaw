@@ -1,0 +1,23 @@
+
+7-Zip 23.01 (x64) : Copyright (c) 1999-2023 Igor Pavlov : 2023-06-20
+ 64-bit locale=zh_CN.UTF-8 Threads:12 OPEN_MAX:1048576
+
+Scanning the drive for archives:
+1 file, 323598 bytes (317 KiB)
+
+Extracting archive: file_14---f2db5e5d-a9b4-4152-8498-8858988209bc.7z
+--
+Path = file_14---f2db5e5d-a9b4-4152-8498-8858988209bc.7z
+Type = 7z
+Physical Size = 323598
+Headers Size = 1700
+Method = LZMA2:21
+Solid = +
+Blocks = 1
+
+Everything is Ok
+
+Folders: 11
+Files: 65
+Size:       1647415
+Compressed: 323598

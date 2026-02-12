@@ -1,0 +1,24 @@
+CacheControl==0.13.1  # Make sure to update the license in pyproject.toml for this.
+colorama==0.4.6
+distlib==0.3.8
+distro==1.8.0
+msgpack==1.0.5
+packaging==21.3
+platformdirs==3.8.1
+pyparsing==3.1.0
+pyproject-hooks==1.0.0
+requests==2.31.0
+    certifi==2023.7.22
+    chardet==5.1.0
+    idna==3.4
+    urllib3==1.26.17
+rich==13.4.2
+    pygments==2.15.1
+    typing_extensions==4.7.1
+resolvelib==1.0.1
+setuptools==68.0.0
+six==1.16.0
+tenacity==8.2.2
+tomli==2.0.1
+truststore==0.8.0
+webencodings==0.5.1

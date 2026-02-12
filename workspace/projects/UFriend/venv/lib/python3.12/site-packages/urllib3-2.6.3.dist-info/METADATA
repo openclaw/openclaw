@@ -1,0 +1,164 @@
+Metadata-Version: 2.4
+Name: urllib3
+Version: 2.6.3
+Summary: HTTP library with thread-safe connection pooling, file post, and more.
+Project-URL: Changelog, https://github.com/urllib3/urllib3/blob/main/CHANGES.rst
+Project-URL: Documentation, https://urllib3.readthedocs.io
+Project-URL: Code, https://github.com/urllib3/urllib3
+Project-URL: Issue tracker, https://github.com/urllib3/urllib3/issues
+Author-email: Andrey Petrov <andrey.petrov@shazow.net>
+Maintainer-email: Seth Michael Larson <sethmichaellarson@gmail.com>, Quentin Pradet <quentin@pradet.me>, Illia Volochii <illia.volochii@gmail.com>
+License-Expression: MIT
+License-File: LICENSE.txt
+Keywords: filepost,http,httplib,https,pooling,ssl,threadsafe,urllib
+Classifier: Environment :: Web Environment
+Classifier: Intended Audience :: Developers
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Programming Language :: Python :: 3.14
+Classifier: Programming Language :: Python :: Free Threading :: 2 - Beta
+Classifier: Programming Language :: Python :: Implementation :: CPython
+Classifier: Programming Language :: Python :: Implementation :: PyPy
+Classifier: Topic :: Internet :: WWW/HTTP
+Classifier: Topic :: Software Development :: Libraries
+Requires-Python: >=3.9
+Provides-Extra: brotli
+Requires-Dist: brotli>=1.2.0; (platform_python_implementation == 'CPython') and extra == 'brotli'
+Requires-Dist: brotlicffi>=1.2.0.0; (platform_python_implementation != 'CPython') and extra == 'brotli'
+Provides-Extra: h2
+Requires-Dist: h2<5,>=4; extra == 'h2'
+Provides-Extra: socks
+Requires-Dist: pysocks!=1.5.7,<2.0,>=1.5.6; extra == 'socks'
+Provides-Extra: zstd
+Requires-Dist: backports-zstd>=1.0.0; (python_version < '3.14') and extra == 'zstd'
+Description-Content-Type: text/markdown
+
+<h1 align="center">
+
+![urllib3](https://github.com/urllib3/urllib3/raw/main/docs/_static/banner_github.svg)
+
+</h1>
+
+<p align="center">
+  <a href="https://pypi.org/project/urllib3"><img alt="PyPI Version" src="https://img.shields.io/pypi/v/urllib3.svg?maxAge=86400" /></a>
+  <a href="https://pypi.org/project/urllib3"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/urllib3.svg?maxAge=86400" /></a>
+  <a href="https://discord.gg/urllib3"><img alt="Join our Discord" src="https://img.shields.io/discord/756342717725933608?color=%237289da&label=discord" /></a>
+  <a href="https://github.com/urllib3/urllib3/actions?query=workflow%3ACI"><img alt="Coverage Status" src="https://img.shields.io/badge/coverage-100%25-success" /></a>
+  <a href="https://github.com/urllib3/urllib3/actions/workflows/ci.yml?query=branch%3Amain"><img alt="Build Status on GitHub" src="https://github.com/urllib3/urllib3/actions/workflows/ci.yml/badge.svg?branch:main&workflow:CI" /></a>
+  <a href="https://urllib3.readthedocs.io"><img alt="Documentation Status" src="https://readthedocs.org/projects/urllib3/badge/?version=latest" /></a><br>
+  <a href="https://deps.dev/pypi/urllib3"><img alt="OpenSSF Scorecard" src="https://api.securityscorecards.dev/projects/github.com/urllib3/urllib3/badge" /></a>
+  <a href="https://slsa.dev"><img alt="SLSA 3" src="https://slsa.dev/images/gh-badge-level3.svg" /></a>
+  <a href="https://bestpractices.coreinfrastructure.org/projects/6227"><img alt="CII Best Practices" src="https://bestpractices.coreinfrastructure.org/projects/6227/badge" /></a>
+</p>
+
+urllib3 is a powerful, *user-friendly* HTTP client for Python.
+urllib3 brings many critical features that are missing from the Python
+standard libraries:
+
+- Thread safety.
+- Connection pooling.
+- Client-side SSL/TLS verification.
+- File uploads with multipart encoding.
+- Helpers for retrying requests and dealing with HTTP redirects.
+- Support for gzip, deflate, brotli, and zstd encoding.
+- Proxy support for HTTP and SOCKS.
+- 100% test coverage.
+
+... and many more features, but most importantly: Our maintainers have a 15+
+year track record of maintaining urllib3 with the highest code standards and
+attention to security and safety.
+
+[Much of the Python ecosystem already uses urllib3](https://urllib3.readthedocs.io/en/stable/#who-uses)
+and you should too.
+
+
+## Installing
+
+urllib3 can be installed with [pip](https://pip.pypa.io):
+
+```bash
+$ python -m pip install urllib3
+```
+
+Alternatively, you can grab the latest source code from [GitHub](https://github.com/urllib3/urllib3):
+
+```bash
+$ git clone https://github.com/urllib3/urllib3.git
+$ cd urllib3
+$ pip install .
+```
+
+## Getting Started
+
+urllib3 is easy to use:
+
+```python3
+>>> import urllib3
+>>> resp = urllib3.request("GET", "http://httpbin.org/robots.txt")
+>>> resp.status
+200
+>>> resp.data
+b"User-agent: *\nDisallow: /deny\n"
+```
+
+urllib3 has usage and reference documentation at [urllib3.readthedocs.io](https://urllib3.readthedocs.io).
+
+
+## Community
+
+urllib3 has a [community Discord channel](https://discord.gg/urllib3) for asking questions and
+collaborating with other contributors. Drop by and say hello 👋
+
+
+## Contributing
+
+urllib3 happily accepts contributions. Please see our
+[contributing documentation](https://urllib3.readthedocs.io/en/latest/contributing.html)
+for some tips on getting started.
+
+
+## Security Disclosures
+
+To report a security vulnerability, please use the
+[Tidelift security contact](https://tidelift.com/security).
+Tidelift will coordinate the fix and disclosure with maintainers.
+
+
+## Maintainers
+
+Meet our maintainers since 2008:
+
+- Current Lead: [@illia-v](https://github.com/illia-v) (Illia Volochii)
+- [@sethmlarson](https://github.com/sethmlarson) (Seth M. Larson)
+- [@pquentin](https://github.com/pquentin) (Quentin Pradet)
+- [@theacodes](https://github.com/theacodes) (Thea Flowers)
+- [@haikuginger](https://github.com/haikuginger) (Jess Shapiro)
+- [@lukasa](https://github.com/lukasa) (Cory Benfield)
+- [@sigmavirus24](https://github.com/sigmavirus24) (Ian Stapleton Cordasco)
+- [@shazow](https://github.com/shazow) (Andrey Petrov)
+
+👋
+
+
+## Sponsorship
+
+If your company benefits from this library, please consider [sponsoring its
+development](https://urllib3.readthedocs.io/en/latest/sponsors.html).
+
+
+## For Enterprise
+
+Professional support for urllib3 is available as part of the [Tidelift
+Subscription][1]. Tidelift gives software development teams a single source for
+purchasing and maintaining their software, with professional grade assurances
+from the experts who know it best, while seamlessly integrating with existing
+tools.
+
+[1]: https://tidelift.com/subscription/pkg/pypi-urllib3?utm_source=pypi-urllib3&utm_medium=referral&utm_campaign=readme

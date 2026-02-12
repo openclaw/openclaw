@@ -1,0 +1,27 @@
+maple_sgedu/docs/STRUCTURE.md:29:  - 官网内容（各业务页面的 md、站点结构与 TODO）。
+maple_sgedu/docs/WEBSITE.md:7:- 站点结构与 TODO（如 Maple_Group_Site_Structure.md / TODO.md / WEBSITE_IMPROVEMENT_PLAN.md）
+maple_sgedu/docs/FINANCE.md:8:- 编号建议：`ME-YYYYMMDD-XXX`
+maple_sgedu/QNA.md:29:## TODO（你一句话我就能补齐）
+maple_sgedu/QNA.md:31:- 发票编号规则是否固定（默认 ME-YYYYMMDD-XXX）
+memory/2026-02-05.md:166:## 14:00 下午自由时间 🌤️ — 小探索：全仓 TODO 扫描（避开 venv）
+memory/2026-02-05.md:168:- 想用 `rg`（ripgrep）做全仓 `TODO/FIXME` 扫描，发现系统里还没装：`rg: command not found`。
+memory/2026-02-05.md:169:- 改用 `grep -RIn` 扫描时，结果主要落在 `.venv_docx/` 的第三方库里（属于依赖内部 TODO，不是我们代码的待办）。
+memory/2026-02-05.md:176:## 15:00 下午自由时间 🌤️ — 加一个“全仓 TODO 扫描”小工具（避免扫到 venv/依赖）
+memory/2026-02-05.md:179:  - 默认搜：`TODO|FIXME|XXX`
+memory/2026-02-05.md:181:  - 目的：把“我们自己代码/文档”里的待办快速捞出来，避免被第三方库 TODO 淹没
+memory/2026-02-05.md:182:- 简单试跑：能定位到 `maple_sgedu/` 文档里现有的 TODO 入口（符合预期）。
+memory/2026-02-06.md:43:- `bash tools/todo_scan.sh` 现在主要命中我们自己的文档/代码里的 TODO（不再被第三方库 FIXME 淹没）。
+memory/2026-02-06.md:73:- 跑了一次 `bash tools/todo_scan.sh | head` 快速确认：主要命中 `maple_sgedu/` 文档里的 TODO 入口（符合预期）。
+memory/2026-02-06.md:102:  - `tools/todo_scan.sh`（全仓 TODO/FIXME/XXX 扫描）
+memory/2026-02-07.md:59:## 08:00 早晨自由时间 — 再跑一遍体检 + stale TODO
+memory/2026-02-07.md:89:## 12:00 自由时间 — 例行体检 + TODO scan（留档）
+memory/2026-02-07.md:92:- 再跑一遍全仓 TODO 扫描：输出保存到 `tmp/todo-scan-2026-02-07.txt`。
+memory/2026-02-07.md:93:- 结论依旧：workspace 体积主要由 `voice_local_cuda/` 两套 venv 决定；TODO scan 主要命中我们自己的文档入口（`maple_sgedu/` 等）。
+MEMORY.md:51:- `tools/todo_scan.sh`：全仓 TODO/FIXME/XXX 扫描；从 `tools/ignore_paths.txt` 读取排除项。
+tools/todo_scan.sh:4:# Scan this repo for TODO/FIXME/XXX notes while avoiding common large/third-party dirs.
+tools/todo_scan.sh:9:PATTERN=${1:-'TODO|FIXME|XXX'}
+tools/todo_tracker.py:47:TODO_PATTERN = re.compile(r"^(\s*)-\s*\[([ xX])\]\s*(.+)$")
+tools/todo_tracker.py:94:        match = TODO_PATTERN.match(line)
+tools/todo_tracker.py:273:    m = TODO_PATTERN.match(line)
+tools/README.md:125:全仓 TODO/FIXME/XXX 扫描（避开常见大目录/第三方依赖目录）。
+tools/README.md:129:bash tools/todo_scan.sh 'TODO|FIXME|XXX|HACK'

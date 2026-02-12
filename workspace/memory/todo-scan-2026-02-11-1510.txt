@@ -1,0 +1,9 @@
+MEMORY.md:52:- `tools/todo_scan.sh`：全仓 TODO/FIXME/XXX 扫描；从 `tools/ignore_paths.txt` 读取排除项。
+tools/todo_scan.sh:4:# Scan this repo for TODO/FIXME/XXX notes while avoiding common large/third-party dirs.
+tools/todo_scan.sh:14:PATTERN='TODO|FIXME|XXX'
+tools/todo_tracker.py:47:TODO_PATTERN = re.compile(r"^(\s*)-\s*\[([ xX])\]\s*(.+)$")
+tools/todo_tracker.py:94:        match = TODO_PATTERN.match(line)
+tools/todo_tracker.py:273:    m = TODO_PATTERN.match(line)
+tools/README.md:177:全仓 TODO/FIXME/XXX 扫描（避开常见大目录/第三方依赖目录）。
+tools/README.md:181:bash tools/todo_scan.sh 'TODO|FIXME|XXX|HACK'
+workspaces/duduxiang-boss/ddxsg.com/plan.md:24:## TODOs

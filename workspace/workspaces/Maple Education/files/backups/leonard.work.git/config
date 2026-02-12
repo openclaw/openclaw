@@ -1,0 +1,8 @@
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = true
+[remote "origin"]
+	url = git@github.com:shuaige121/leonard.work.git
+	fetch = +refs/*:refs/*
+	mirror = true

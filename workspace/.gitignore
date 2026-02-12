@@ -1,0 +1,11 @@
+node_modules/
+.venv/
+__pycache__/
+tmp/
+generated/
+logs/
+voice_local/
+voice_local_cuda/
+/tools/secrets.local.md
+projects/ddxsg.com/
+projects/newdux-website/

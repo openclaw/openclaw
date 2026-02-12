@@ -1,0 +1,6 @@
+Wheel-Version: 1.0
+Generator: setuptools (80.9.0)
+Root-Is-Purelib: false
+Tag: cp312-cp312-manylinux_2_26_x86_64
+Tag: cp312-cp312-manylinux_2_28_x86_64
+

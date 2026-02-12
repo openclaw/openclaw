@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Invoice ME-20260203-001</title>
+  <style>
+    body{font-family: Arial, Helvetica, sans-serif; margin:40px; color:#111;}
+    .header{display:flex; justify-content:space-between; align-items:flex-start; gap:24px;}
+    .brand h1{margin:0; font-size:26px; letter-spacing:0.5px;}
+    .brand .meta{margin-top:8px; line-height:1.55; font-size:13px; color:#333;}
+    .invbox{border:1px solid #ddd; padding:14px 16px; min-width:320px;}
+    .invbox .k{color:#666; font-size:12px;}
+    .invbox .v{font-weight:700; margin-bottom:10px;}
+    hr{border:none; border-top:1px solid #eee; margin:18px 0;}
+    table{width:100%; border-collapse:collapse;}
+    th,td{border:1px solid #e5e5e5; padding:10px; font-size:13px; vertical-align:top;}
+    th{background:#fafafa; text-align:left;}
+    td.num{text-align:right; white-space:nowrap;}
+    .totals{margin-top:14px; display:flex; justify-content:flex-end;}
+    .totals table{width:380px;}
+    .note{margin-top:14px; font-size:12px; color:#333; line-height:1.55;}
+    .muted{color:#666;}
+    .paygrid{margin-top:10px; border:1px solid #eee; padding:10px 12px; background:#fcfcfc;}
+    .payrow{display:flex; gap:14px; margin:4px 0;}
+    .payrow .k{width:140px; color:#666;}
+    .payrow .v{flex:1;}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <h1>INVOICE</h1>
+      <div class="meta">
+        <div><b>Maple Education Pte. Ltd.</b></div>
+        <div>UEN: 202349302E</div>
+        <div>Address: 111 North Bridge Road, #25-01, Peninsula Plaza, Singapore 179098</div>
+        <div>Email: Maple@maplesgedu.com</div>
+        <div>Website: maplesgedu.com</div>
+      </div>
+    </div>
+
+    <div class="invbox">
+      <div class="k">Invoice No.</div>
+      <div class="v">ME-20260203-001</div>
+
+      <div class="k">Date</div>
+      <div class="v">2026-02-03</div>
+
+      <div class="k">Bill To</div>
+      <div class="v">Amity<br/><span class="muted">Attn: Dr Karen</span></div>
+    </div>
+  </div>
+
+  <hr />
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:50px">#</th>
+        <th>Description</th>
+        <th style="width:80px">Qty</th>
+        <th style="width:140px">Unit Price</th>
+        <th style="width:140px">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="num">1</td>
+        <td>
+          <b>Commission</b> — Jan 2026<br/>
+          Student: LIU HAOYU<br/>
+          Course: DIC<br/>
+          Basis: 20% × 9,000 = 1,800
+        </td>
+        <td class="num">1</td>
+        <td class="num">SGD 1,800.00</td>
+        <td class="num">SGD 1,800.00</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="totals">
+    <table>
+      <tr><th>Subtotal</th><td class="num">SGD 1,800.00</td></tr>
+      <tr><th>Total Due</th><td class="num"><b>SGD 1,800.00</b></td></tr>
+    </table>
+  </div>
+
+  <div class="note">
+    <div><b>Payment Terms:</b> Due upon receipt</div>
+
+    <div class="paygrid">
+      <div style="font-weight:700; margin-bottom:6px;">Bank Transfer Details</div>
+      <div class="payrow"><div class="k">Beneficiary</div><div class="v">MAPLE EDUCATION PTE. LTD.</div></div>
+      <div class="payrow"><div class="k">Bank</div><div class="v">OCBC BANK</div></div>
+      <div class="payrow"><div class="k">Bank Account</div><div class="v">596-1491-38001</div></div>
+      <div class="payrow"><div class="k">Bank Code</div><div class="v">7339</div></div>
+      <div class="payrow"><div class="k">Branch Code</div><div class="v">713</div></div>
+      <div class="payrow"><div class="k">SWIFT Code</div><div class="v">OCBCSGSG</div></div>
+      <div class="payrow"><div class="k">Bank Address</div><div class="v">65 Chulia Street, #01-100 OCBC Centre, Singapore 049513</div></div>
+    </div>
+
+    <div style="margin-top:10px" class="muted">Note: This invoice is a billing document. Specific service scope and related terms are subject to the parties’ agreed arrangement.</div>
+  </div>
+</body>
+</html>

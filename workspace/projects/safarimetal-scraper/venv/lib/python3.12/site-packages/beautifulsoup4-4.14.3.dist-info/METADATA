@@ -1,0 +1,123 @@
+Metadata-Version: 2.4
+Name: beautifulsoup4
+Version: 4.14.3
+Summary: Screen-scraping library
+Project-URL: Download, https://www.crummy.com/software/BeautifulSoup/bs4/download/
+Project-URL: Homepage, https://www.crummy.com/software/BeautifulSoup/bs4/
+Author-email: Leonard Richardson <leonardr@segfault.org>
+License: MIT License
+License-File: AUTHORS
+License-File: LICENSE
+Keywords: HTML,XML,parse,soup
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Topic :: Text Processing :: Markup :: HTML
+Classifier: Topic :: Text Processing :: Markup :: SGML
+Classifier: Topic :: Text Processing :: Markup :: XML
+Requires-Python: >=3.7.0
+Requires-Dist: soupsieve>=1.6.1
+Requires-Dist: typing-extensions>=4.0.0
+Provides-Extra: cchardet
+Requires-Dist: cchardet; extra == 'cchardet'
+Provides-Extra: chardet
+Requires-Dist: chardet; extra == 'chardet'
+Provides-Extra: charset-normalizer
+Requires-Dist: charset-normalizer; extra == 'charset-normalizer'
+Provides-Extra: html5lib
+Requires-Dist: html5lib; extra == 'html5lib'
+Provides-Extra: lxml
+Requires-Dist: lxml; extra == 'lxml'
+Description-Content-Type: text/markdown
+
+Beautiful Soup is a library that makes it easy to scrape information
+from web pages. It sits atop an HTML or XML parser, providing Pythonic
+idioms for iterating, searching, and modifying the parse tree.
+
+# Quick start
+
+```
+>>> from bs4 import BeautifulSoup
+>>> soup = BeautifulSoup("<p>Some<b>bad<i>HTML")
+>>> print(soup.prettify())
+<html>
+ <body>
+  <p>
+   Some
+   <b>
+    bad
+    <i>
+     HTML
+    </i>
+   </b>
+  </p>
+ </body>
+</html>
+>>> soup.find(string="bad")
+'bad'
+>>> soup.i
+<i>HTML</i>
+#
+>>> soup = BeautifulSoup("<tag1>Some<tag2/>bad<tag3>XML", "xml")
+#
+>>> print(soup.prettify())
+<?xml version="1.0" encoding="utf-8"?>
+<tag1>
+ Some
+ <tag2/>
+ bad
+ <tag3>
+  XML
+ </tag3>
+</tag1>
+```
+
+To go beyond the basics, [comprehensive documentation is available](https://www.crummy.com/software/BeautifulSoup/bs4/doc/).
+
+# Links
+
+* [Homepage](https://www.crummy.com/software/BeautifulSoup/bs4/)
+* [Documentation](https://www.crummy.com/software/BeautifulSoup/bs4/doc/)
+* [Discussion group](https://groups.google.com/group/beautifulsoup/)
+* [Development](https://code.launchpad.net/beautifulsoup/)
+* [Bug tracker](https://bugs.launchpad.net/beautifulsoup/)
+* [Complete changelog](https://git.launchpad.net/beautifulsoup/tree/CHANGELOG)
+
+# Note on Python 2 sunsetting
+
+Beautiful Soup's support for Python 2 was discontinued on December 31,
+2020: one year after the sunset date for Python 2 itself. From this
+point onward, new Beautiful Soup development will exclusively target
+Python 3. The final release of Beautiful Soup 4 to support Python 2
+was 4.9.3.
+
+# Supporting the project
+
+If you use Beautiful Soup as part of your professional work, please consider a
+[Tidelift subscription](https://tidelift.com/subscription/pkg/pypi-beautifulsoup4?utm_source=pypi-beautifulsoup4&utm_medium=referral&utm_campaign=readme).
+This will support many of the free software projects your organization
+depends on, not just Beautiful Soup.
+
+If you use Beautiful Soup for personal projects, the best way to say
+thank you is to read
+[Tool Safety](https://www.crummy.com/software/BeautifulSoup/zine/), a zine I
+wrote about what Beautiful Soup has taught me about software
+development.
+
+# Building the documentation
+
+The bs4/doc/ directory contains full documentation in Sphinx
+format. Run `make html` in that directory to create HTML
+documentation.
+
+# Running the unit tests
+
+Beautiful Soup supports unit test discovery using Pytest:
+
+```
+$ pytest
+```
+

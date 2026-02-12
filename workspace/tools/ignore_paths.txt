@@ -1,0 +1,27 @@
+# tools/ignore_paths.txt
+# Shared ignore list for repo-scanning helpers (todo_scan, housekeeping, etc.)
+# One entry per line. Comments and blank lines are ignored.
+
+.git
+node_modules
+projects
+generated
+tmp
+logs
+canvas
+voice_local
+voice_local_cuda
+comfyui
+contacts
+documents
+edumundo
+.venv
+.venv_*
+.venv_docx
+.venv_xls
+memory
+tmp_sgx
+tools/__pycache__
+imports
+backups
+workspaces/*/.git

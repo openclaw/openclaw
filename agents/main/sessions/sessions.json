@@ -1,0 +1,1432 @@
+{
+  "agent:main:main": {
+    "sessionId": "2072850d-87fd-4032-8f95-f90507f24bf4",
+    "updatedAt": 1770689719703,
+    "systemSent": true,
+    "skillsSnapshot": {
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\n\n<available_skills>\n  <skill>\n    <name>bluebubbles</name>\n    <description>Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).</description>\n    <location>/home/leonard/moltbot/skills/bluebubbles/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>coding-agent</name>\n    <description>Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.</description>\n    <location>/home/leonard/moltbot/skills/coding-agent/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.</description>\n    <location>/home/leonard/moltbot/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>tmux</name>\n    <description>Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.</description>\n    <location>/home/leonard/moltbot/skills/tmux/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts (no API key required).</description>\n    <location>/home/leonard/moltbot/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "bluebubbles"
+        },
+        {
+          "name": "coding-agent"
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "tmux"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "bluebubbles",
+          "description": "Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).",
+          "filePath": "/home/leonard/moltbot/skills/bluebubbles/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/bluebubbles",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "coding-agent",
+          "description": "Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.",
+          "filePath": "/home/leonard/moltbot/skills/coding-agent/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/coding-agent",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "filePath": "/home/leonard/moltbot/skills/skill-creator/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/skill-creator",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "filePath": "/home/leonard/moltbot/skills/tmux/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/tmux",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "filePath": "/home/leonard/moltbot/skills/weather/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/weather",
+          "source": "moltbot-bundled"
+        }
+      ],
+      "version": 0
+    },
+    "deliveryContext": {
+      "channel": "whatsapp",
+      "to": "+6586863695",
+      "accountId": "default"
+    },
+    "lastChannel": "whatsapp",
+    "lastTo": "+6586863695",
+    "lastAccountId": "default",
+    "channel": "whatsapp",
+    "modelProvider": "openai-codex",
+    "model": "gpt-5.2",
+    "contextTokens": 400000,
+    "abortedLastRun": false,
+    "inputTokens": 212134,
+    "outputTokens": 148,
+    "totalTokens": 212134,
+    "origin": {
+      "label": "+6586863695",
+      "provider": "whatsapp",
+      "surface": "whatsapp",
+      "chatType": "direct",
+      "from": "+6586863695",
+      "to": "+6586863695",
+      "accountId": "default"
+    },
+    "chatType": "direct",
+    "sessionFile": "/home/leonard/.clawdbot/agents/main/sessions/2072850d-87fd-4032-8f95-f90507f24bf4.jsonl",
+    "authProfileOverride": "openai-codex:default",
+    "authProfileOverrideSource": "auto",
+    "authProfileOverrideCompactionCount": 2,
+    "systemPromptReport": {
+      "source": "run",
+      "generatedAt": 1770688007430,
+      "sessionId": "2072850d-87fd-4032-8f95-f90507f24bf4",
+      "sessionKey": "agent:main:main",
+      "provider": "openai-codex",
+      "model": "gpt-5.2",
+      "workspaceDir": "/home/leonard/clawd",
+      "bootstrapMaxChars": 20000,
+      "sandbox": {
+        "mode": "off",
+        "sandboxed": false
+      },
+      "systemPrompt": {
+        "chars": 24580,
+        "projectContextChars": 15529,
+        "nonProjectContextChars": 9051
+      },
+      "injectedWorkspaceFiles": [
+        {
+          "name": "AGENTS.md",
+          "path": "/home/leonard/clawd/AGENTS.md",
+          "missing": false,
+          "rawChars": 7783,
+          "injectedChars": 7783,
+          "truncated": false
+        },
+        {
+          "name": "SOUL.md",
+          "path": "/home/leonard/clawd/SOUL.md",
+          "missing": false,
+          "rawChars": 1664,
+          "injectedChars": 1664,
+          "truncated": false
+        },
+        {
+          "name": "TOOLS.md",
+          "path": "/home/leonard/clawd/TOOLS.md",
+          "missing": false,
+          "rawChars": 816,
+          "injectedChars": 816,
+          "truncated": false
+        },
+        {
+          "name": "IDENTITY.md",
+          "path": "/home/leonard/clawd/IDENTITY.md",
+          "missing": false,
+          "rawChars": 234,
+          "injectedChars": 234,
+          "truncated": false
+        },
+        {
+          "name": "USER.md",
+          "path": "/home/leonard/clawd/USER.md",
+          "missing": false,
+          "rawChars": 193,
+          "injectedChars": 193,
+          "truncated": false
+        },
+        {
+          "name": "HEARTBEAT.md",
+          "path": "/home/leonard/clawd/HEARTBEAT.md",
+          "missing": false,
+          "rawChars": 166,
+          "injectedChars": 166,
+          "truncated": false
+        },
+        {
+          "name": "BOOTSTRAP.md",
+          "path": "/home/leonard/clawd/BOOTSTRAP.md",
+          "missing": true,
+          "rawChars": 0,
+          "injectedChars": 55,
+          "truncated": false
+        },
+        {
+          "name": "MEMORY.md",
+          "path": "/home/leonard/clawd/MEMORY.md",
+          "missing": false,
+          "rawChars": 4280,
+          "injectedChars": 4280,
+          "truncated": false
+        }
+      ],
+      "skills": {
+        "promptChars": 1462,
+        "entries": [
+          {
+            "name": "bluebubbles",
+            "blockChars": 276
+          },
+          {
+            "name": "coding-agent",
+            "blockChars": 261
+          },
+          {
+            "name": "skill-creator",
+            "blockChars": 278
+          },
+          {
+            "name": "tmux",
+            "blockChars": 237
+          },
+          {
+            "name": "weather",
+            "blockChars": 202
+          }
+        ]
+      },
+      "tools": {
+        "listChars": 2076,
+        "schemaChars": 14216,
+        "entries": [
+          {
+            "name": "read",
+            "summaryChars": 232,
+            "schemaChars": 398,
+            "propertiesCount": 4
+          },
+          {
+            "name": "edit",
+            "summaryChars": 129,
+            "schemaChars": 617,
+            "propertiesCount": 6
+          },
+          {
+            "name": "write",
+            "summaryChars": 127,
+            "schemaChars": 313,
+            "propertiesCount": 3
+          },
+          {
+            "name": "exec",
+            "summaryChars": 181,
+            "schemaChars": 1037,
+            "propertiesCount": 12
+          },
+          {
+            "name": "process",
+            "summaryChars": 85,
+            "schemaChars": 844,
+            "propertiesCount": 11
+          },
+          {
+            "name": "whatsapp_login",
+            "summaryChars": 74,
+            "schemaChars": 162,
+            "propertiesCount": 3
+          },
+          {
+            "name": "browser",
+            "summaryChars": 1243,
+            "schemaChars": 1869,
+            "propertiesCount": 28
+          },
+          {
+            "name": "canvas",
+            "summaryChars": 106,
+            "schemaChars": 661,
+            "propertiesCount": 18
+          },
+          {
+            "name": "nodes",
+            "summaryChars": 94,
+            "schemaChars": 1399,
+            "propertiesCount": 31
+          },
+          {
+            "name": "cron",
+            "summaryChars": 1959,
+            "schemaChars": 530,
+            "propertiesCount": 12
+          },
+          {
+            "name": "message",
+            "summaryChars": 110,
+            "schemaChars": 3213,
+            "propertiesCount": 79
+          },
+          {
+            "name": "tts",
+            "summaryChars": 129,
+            "schemaChars": 223,
+            "propertiesCount": 2
+          },
+          {
+            "name": "gateway",
+            "summaryChars": 225,
+            "schemaChars": 465,
+            "propertiesCount": 11
+          },
+          {
+            "name": "agents_list",
+            "summaryChars": 72,
+            "schemaChars": 33,
+            "propertiesCount": 0
+          },
+          {
+            "name": "sessions_list",
+            "summaryChars": 54,
+            "schemaChars": 176,
+            "propertiesCount": 4
+          },
+          {
+            "name": "sessions_history",
+            "summaryChars": 36,
+            "schemaChars": 149,
+            "propertiesCount": 3
+          },
+          {
+            "name": "sessions_send",
+            "summaryChars": 84,
+            "schemaChars": 203,
+            "propertiesCount": 5
+          },
+          {
+            "name": "sessions_spawn",
+            "summaryChars": 107,
+            "schemaChars": 312,
+            "propertiesCount": 8
+          },
+          {
+            "name": "session_status",
+            "summaryChars": 207,
+            "schemaChars": 89,
+            "propertiesCount": 2
+          },
+          {
+            "name": "web_search",
+            "summaryChars": 175,
+            "schemaChars": 733,
+            "propertiesCount": 6
+          },
+          {
+            "name": "web_fetch",
+            "summaryChars": 129,
+            "schemaChars": 360,
+            "propertiesCount": 3
+          },
+          {
+            "name": "image",
+            "summaryChars": 184,
+            "schemaChars": 163,
+            "propertiesCount": 4
+          },
+          {
+            "name": "memory_search",
+            "summaryChars": 235,
+            "schemaChars": 139,
+            "propertiesCount": 3
+          },
+          {
+            "name": "memory_get",
+            "summaryChars": 151,
+            "schemaChars": 128,
+            "propertiesCount": 3
+          }
+        ]
+      }
+    },
+    "compactionCount": 2
+  },
+  "agent:main:cron:1a9a1120-676f-4927-ae24-9884b97796bd": {
+    "sessionId": "6b277d54-bc87-43b0-a63e-4d89f7e10a50",
+    "updatedAt": 1770688800006,
+    "systemSent": true,
+    "model": "gpt-5.2",
+    "contextTokens": 400000,
+    "skillsSnapshot": {
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\n\n<available_skills>\n  <skill>\n    <name>bluebubbles</name>\n    <description>Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).</description>\n    <location>/home/leonard/moltbot/skills/bluebubbles/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>coding-agent</name>\n    <description>Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.</description>\n    <location>/home/leonard/moltbot/skills/coding-agent/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.</description>\n    <location>/home/leonard/moltbot/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>tmux</name>\n    <description>Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.</description>\n    <location>/home/leonard/moltbot/skills/tmux/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>video-frames</name>\n    <description>Extract frames or short clips from videos using ffmpeg.</description>\n    <location>/home/leonard/moltbot/skills/video-frames/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts (no API key required).</description>\n    <location>/home/leonard/moltbot/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "bluebubbles"
+        },
+        {
+          "name": "coding-agent"
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "tmux"
+        },
+        {
+          "name": "video-frames"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "bluebubbles",
+          "description": "Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).",
+          "filePath": "/home/leonard/moltbot/skills/bluebubbles/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/bluebubbles",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "coding-agent",
+          "description": "Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.",
+          "filePath": "/home/leonard/moltbot/skills/coding-agent/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/coding-agent",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "filePath": "/home/leonard/moltbot/skills/skill-creator/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/skill-creator",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "filePath": "/home/leonard/moltbot/skills/tmux/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/tmux",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "video-frames",
+          "description": "Extract frames or short clips from videos using ffmpeg.",
+          "filePath": "/home/leonard/moltbot/skills/video-frames/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/video-frames",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "filePath": "/home/leonard/moltbot/skills/weather/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/weather",
+          "source": "moltbot-bundled"
+        }
+      ],
+      "version": 0
+    },
+    "modelProvider": "openai-codex",
+    "inputTokens": 675,
+    "outputTokens": 168,
+    "totalTokens": 21539
+  },
+  "agent:main:cron:22fda8d4-046e-4a03-a04f-a1abcc4db93b": {
+    "sessionId": "404aeb2e-9f41-4d73-9b67-8368395c4ac3",
+    "updatedAt": 1770685200006,
+    "systemSent": true,
+    "model": "gpt-5.2",
+    "contextTokens": 400000,
+    "skillsSnapshot": {
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\n\n<available_skills>\n  <skill>\n    <name>bluebubbles</name>\n    <description>Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).</description>\n    <location>/home/leonard/moltbot/skills/bluebubbles/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>coding-agent</name>\n    <description>Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.</description>\n    <location>/home/leonard/moltbot/skills/coding-agent/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.</description>\n    <location>/home/leonard/moltbot/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>tmux</name>\n    <description>Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.</description>\n    <location>/home/leonard/moltbot/skills/tmux/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>video-frames</name>\n    <description>Extract frames or short clips from videos using ffmpeg.</description>\n    <location>/home/leonard/moltbot/skills/video-frames/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts (no API key required).</description>\n    <location>/home/leonard/moltbot/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "bluebubbles"
+        },
+        {
+          "name": "coding-agent"
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "tmux"
+        },
+        {
+          "name": "video-frames"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "bluebubbles",
+          "description": "Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).",
+          "filePath": "/home/leonard/moltbot/skills/bluebubbles/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/bluebubbles",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "coding-agent",
+          "description": "Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.",
+          "filePath": "/home/leonard/moltbot/skills/coding-agent/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/coding-agent",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "filePath": "/home/leonard/moltbot/skills/skill-creator/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/skill-creator",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "filePath": "/home/leonard/moltbot/skills/tmux/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/tmux",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "video-frames",
+          "description": "Extract frames or short clips from videos using ffmpeg.",
+          "filePath": "/home/leonard/moltbot/skills/video-frames/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/video-frames",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "filePath": "/home/leonard/moltbot/skills/weather/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/weather",
+          "source": "moltbot-bundled"
+        }
+      ],
+      "version": 0
+    },
+    "modelProvider": "openai-codex",
+    "inputTokens": 2183,
+    "outputTokens": 6,
+    "totalTokens": 42503
+  },
+  "agent:main:cron:cdf41da0-5ca3-4b83-b2f9-6358ebb45de8": {
+    "sessionId": "9dc575a0-d4c5-430a-a239-f6a932a128c3",
+    "updatedAt": 1770681775069,
+    "systemSent": true,
+    "model": "gpt-5.2",
+    "contextTokens": 400000,
+    "skillsSnapshot": {
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\n\n<available_skills>\n  <skill>\n    <name>bluebubbles</name>\n    <description>Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).</description>\n    <location>/home/leonard/moltbot/skills/bluebubbles/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>coding-agent</name>\n    <description>Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.</description>\n    <location>/home/leonard/moltbot/skills/coding-agent/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>gog</name>\n    <description>Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.</description>\n    <location>/home/leonard/moltbot/skills/gog/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.</description>\n    <location>/home/leonard/moltbot/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>tmux</name>\n    <description>Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.</description>\n    <location>/home/leonard/moltbot/skills/tmux/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>video-frames</name>\n    <description>Extract frames or short clips from videos using ffmpeg.</description>\n    <location>/home/leonard/moltbot/skills/video-frames/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts (no API key required).</description>\n    <location>/home/leonard/moltbot/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "bluebubbles"
+        },
+        {
+          "name": "coding-agent"
+        },
+        {
+          "name": "gog"
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "tmux"
+        },
+        {
+          "name": "video-frames"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "bluebubbles",
+          "description": "Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).",
+          "filePath": "/home/leonard/moltbot/skills/bluebubbles/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/bluebubbles",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "coding-agent",
+          "description": "Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.",
+          "filePath": "/home/leonard/moltbot/skills/coding-agent/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/coding-agent",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "gog",
+          "description": "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.",
+          "filePath": "/home/leonard/moltbot/skills/gog/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/gog",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "filePath": "/home/leonard/moltbot/skills/skill-creator/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/skill-creator",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "filePath": "/home/leonard/moltbot/skills/tmux/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/tmux",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "video-frames",
+          "description": "Extract frames or short clips from videos using ffmpeg.",
+          "filePath": "/home/leonard/moltbot/skills/video-frames/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/video-frames",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "filePath": "/home/leonard/moltbot/skills/weather/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/weather",
+          "source": "moltbot-bundled"
+        }
+      ],
+      "version": 0
+    },
+    "modelProvider": "openai-codex",
+    "inputTokens": 1717,
+    "outputTokens": 6,
+    "totalTokens": 29749
+  },
+  "agent:main:cron:bc6fc2a5-0691-42c7-8100-b86697f0d384": {
+    "sessionId": "0cdb63f3-0fd4-4ecc-9617-1c5e258677b9",
+    "updatedAt": 1770627900006,
+    "systemSent": true,
+    "model": "gpt-5.2",
+    "contextTokens": 400000,
+    "skillsSnapshot": {
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\n\n<available_skills>\n  <skill>\n    <name>bluebubbles</name>\n    <description>Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).</description>\n    <location>/home/leonard/moltbot/skills/bluebubbles/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>coding-agent</name>\n    <description>Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.</description>\n    <location>/home/leonard/moltbot/skills/coding-agent/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>gog</name>\n    <description>Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.</description>\n    <location>/home/leonard/moltbot/skills/gog/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.</description>\n    <location>/home/leonard/moltbot/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>tmux</name>\n    <description>Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.</description>\n    <location>/home/leonard/moltbot/skills/tmux/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>video-frames</name>\n    <description>Extract frames or short clips from videos using ffmpeg.</description>\n    <location>/home/leonard/moltbot/skills/video-frames/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts (no API key required).</description>\n    <location>/home/leonard/moltbot/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "bluebubbles"
+        },
+        {
+          "name": "coding-agent"
+        },
+        {
+          "name": "gog"
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "tmux"
+        },
+        {
+          "name": "video-frames"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "bluebubbles",
+          "description": "Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).",
+          "filePath": "/home/leonard/moltbot/skills/bluebubbles/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/bluebubbles",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "coding-agent",
+          "description": "Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.",
+          "filePath": "/home/leonard/moltbot/skills/coding-agent/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/coding-agent",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "gog",
+          "description": "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.",
+          "filePath": "/home/leonard/moltbot/skills/gog/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/gog",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "filePath": "/home/leonard/moltbot/skills/skill-creator/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/skill-creator",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "filePath": "/home/leonard/moltbot/skills/tmux/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/tmux",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "video-frames",
+          "description": "Extract frames or short clips from videos using ffmpeg.",
+          "filePath": "/home/leonard/moltbot/skills/video-frames/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/video-frames",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "filePath": "/home/leonard/moltbot/skills/weather/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/weather",
+          "source": "moltbot-bundled"
+        }
+      ],
+      "version": 0
+    },
+    "modelProvider": "openai-codex",
+    "inputTokens": 2424,
+    "outputTokens": 6,
+    "totalTokens": 114296
+  },
+  "agent:main:whatsapp:group:120363408356121021@g.us": {
+    "updatedAt": 1770092723154,
+    "deliveryContext": {
+      "channel": "whatsapp",
+      "to": "120363408356121021@g.us",
+      "accountId": "default"
+    },
+    "lastChannel": "whatsapp",
+    "lastTo": "120363408356121021@g.us",
+    "lastAccountId": "default",
+    "chatType": "group",
+    "channel": "whatsapp",
+    "groupId": "120363408356121021@g.us",
+    "subject": "AI小分队",
+    "displayName": "whatsapp:g-ai",
+    "origin": {
+      "label": "120363408356121021@g.us",
+      "provider": "whatsapp",
+      "surface": "whatsapp",
+      "chatType": "group",
+      "from": "120363408356121021@g.us",
+      "to": "120363408356121021@g.us",
+      "accountId": "default"
+    },
+    "sessionId": "904c9f58-89ae-4e32-a347-dc2b86d68fc3",
+    "systemSent": true,
+    "abortedLastRun": false,
+    "sessionFile": "/home/leonard/.clawdbot/agents/main/sessions/904c9f58-89ae-4e32-a347-dc2b86d68fc3.jsonl",
+    "skillsSnapshot": {
+      "prompt": "Remote macOS node available (MacBook Pro). Run macOS-only skills via nodes.run on that node.\n\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\n\n<available_skills>\n  <skill>\n    <name>bluebubbles</name>\n    <description>Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).</description>\n    <location>/home/leonard/moltbot/skills/bluebubbles/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>coding-agent</name>\n    <description>Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.</description>\n    <location>/home/leonard/moltbot/skills/coding-agent/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>gog</name>\n    <description>Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.</description>\n    <location>/home/leonard/moltbot/skills/gog/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.</description>\n    <location>/home/leonard/moltbot/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>tmux</name>\n    <description>Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.</description>\n    <location>/home/leonard/moltbot/skills/tmux/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>video-frames</name>\n    <description>Extract frames or short clips from videos using ffmpeg.</description>\n    <location>/home/leonard/moltbot/skills/video-frames/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts (no API key required).</description>\n    <location>/home/leonard/moltbot/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "bluebubbles"
+        },
+        {
+          "name": "coding-agent"
+        },
+        {
+          "name": "gog"
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "tmux"
+        },
+        {
+          "name": "video-frames"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "bluebubbles",
+          "description": "Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).",
+          "filePath": "/home/leonard/moltbot/skills/bluebubbles/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/bluebubbles",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "coding-agent",
+          "description": "Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.",
+          "filePath": "/home/leonard/moltbot/skills/coding-agent/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/coding-agent",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "gog",
+          "description": "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.",
+          "filePath": "/home/leonard/moltbot/skills/gog/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/gog",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "filePath": "/home/leonard/moltbot/skills/skill-creator/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/skill-creator",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "filePath": "/home/leonard/moltbot/skills/tmux/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/tmux",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "video-frames",
+          "description": "Extract frames or short clips from videos using ffmpeg.",
+          "filePath": "/home/leonard/moltbot/skills/video-frames/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/video-frames",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "filePath": "/home/leonard/moltbot/skills/weather/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/weather",
+          "source": "moltbot-bundled"
+        }
+      ],
+      "version": 0
+    },
+    "authProfileOverride": "openai-codex:default",
+    "authProfileOverrideSource": "auto",
+    "authProfileOverrideCompactionCount": 0,
+    "inputTokens": 433,
+    "outputTokens": 74,
+    "totalTokens": 75185,
+    "modelProvider": "openai-codex",
+    "model": "gpt-5.2",
+    "contextTokens": 400000,
+    "systemPromptReport": {
+      "source": "run",
+      "generatedAt": 1770074591721,
+      "sessionId": "904c9f58-89ae-4e32-a347-dc2b86d68fc3",
+      "sessionKey": "agent:main:whatsapp:group:120363408356121021@g.us",
+      "provider": "openai-codex",
+      "model": "gpt-5.2",
+      "workspaceDir": "/home/leonard/clawd",
+      "bootstrapMaxChars": 20000,
+      "sandbox": {
+        "mode": "off",
+        "sandboxed": false
+      },
+      "systemPrompt": {
+        "chars": 24178,
+        "projectContextChars": 14324,
+        "nonProjectContextChars": 9854
+      },
+      "injectedWorkspaceFiles": [
+        {
+          "name": "AGENTS.md",
+          "path": "/home/leonard/clawd/AGENTS.md",
+          "missing": false,
+          "rawChars": 7783,
+          "injectedChars": 7783,
+          "truncated": false
+        },
+        {
+          "name": "SOUL.md",
+          "path": "/home/leonard/clawd/SOUL.md",
+          "missing": false,
+          "rawChars": 1664,
+          "injectedChars": 1664,
+          "truncated": false
+        },
+        {
+          "name": "TOOLS.md",
+          "path": "/home/leonard/clawd/TOOLS.md",
+          "missing": false,
+          "rawChars": 816,
+          "injectedChars": 816,
+          "truncated": false
+        },
+        {
+          "name": "IDENTITY.md",
+          "path": "/home/leonard/clawd/IDENTITY.md",
+          "missing": false,
+          "rawChars": 234,
+          "injectedChars": 234,
+          "truncated": false
+        },
+        {
+          "name": "USER.md",
+          "path": "/home/leonard/clawd/USER.md",
+          "missing": false,
+          "rawChars": 193,
+          "injectedChars": 193,
+          "truncated": false
+        },
+        {
+          "name": "HEARTBEAT.md",
+          "path": "/home/leonard/clawd/HEARTBEAT.md",
+          "missing": false,
+          "rawChars": 166,
+          "injectedChars": 166,
+          "truncated": false
+        },
+        {
+          "name": "BOOTSTRAP.md",
+          "path": "/home/leonard/clawd/BOOTSTRAP.md",
+          "missing": true,
+          "rawChars": 0,
+          "injectedChars": 55,
+          "truncated": false
+        },
+        {
+          "name": "MEMORY.md",
+          "path": "/home/leonard/clawd/MEMORY.md",
+          "missing": false,
+          "rawChars": 3075,
+          "injectedChars": 3075,
+          "truncated": false
+        }
+      ],
+      "skills": {
+        "promptChars": 1988,
+        "entries": [
+          {
+            "name": "bluebubbles",
+            "blockChars": 276
+          },
+          {
+            "name": "coding-agent",
+            "blockChars": 261
+          },
+          {
+            "name": "gog",
+            "blockChars": 214
+          },
+          {
+            "name": "skill-creator",
+            "blockChars": 278
+          },
+          {
+            "name": "tmux",
+            "blockChars": 237
+          },
+          {
+            "name": "video-frames",
+            "blockChars": 211
+          },
+          {
+            "name": "weather",
+            "blockChars": 202
+          }
+        ]
+      },
+      "tools": {
+        "listChars": 2076,
+        "schemaChars": 14232,
+        "entries": [
+          {
+            "name": "read",
+            "summaryChars": 232,
+            "schemaChars": 398,
+            "propertiesCount": 4
+          },
+          {
+            "name": "edit",
+            "summaryChars": 129,
+            "schemaChars": 617,
+            "propertiesCount": 6
+          },
+          {
+            "name": "write",
+            "summaryChars": 127,
+            "schemaChars": 313,
+            "propertiesCount": 3
+          },
+          {
+            "name": "exec",
+            "summaryChars": 181,
+            "schemaChars": 1037,
+            "propertiesCount": 12
+          },
+          {
+            "name": "process",
+            "summaryChars": 85,
+            "schemaChars": 844,
+            "propertiesCount": 11
+          },
+          {
+            "name": "whatsapp_login",
+            "summaryChars": 74,
+            "schemaChars": 162,
+            "propertiesCount": 3
+          },
+          {
+            "name": "browser",
+            "summaryChars": 1243,
+            "schemaChars": 1869,
+            "propertiesCount": 28
+          },
+          {
+            "name": "canvas",
+            "summaryChars": 106,
+            "schemaChars": 661,
+            "propertiesCount": 18
+          },
+          {
+            "name": "nodes",
+            "summaryChars": 94,
+            "schemaChars": 1399,
+            "propertiesCount": 31
+          },
+          {
+            "name": "cron",
+            "summaryChars": 1959,
+            "schemaChars": 530,
+            "propertiesCount": 12
+          },
+          {
+            "name": "message",
+            "summaryChars": 110,
+            "schemaChars": 3229,
+            "propertiesCount": 79
+          },
+          {
+            "name": "tts",
+            "summaryChars": 129,
+            "schemaChars": 223,
+            "propertiesCount": 2
+          },
+          {
+            "name": "gateway",
+            "summaryChars": 225,
+            "schemaChars": 465,
+            "propertiesCount": 11
+          },
+          {
+            "name": "agents_list",
+            "summaryChars": 72,
+            "schemaChars": 33,
+            "propertiesCount": 0
+          },
+          {
+            "name": "sessions_list",
+            "summaryChars": 54,
+            "schemaChars": 176,
+            "propertiesCount": 4
+          },
+          {
+            "name": "sessions_history",
+            "summaryChars": 36,
+            "schemaChars": 149,
+            "propertiesCount": 3
+          },
+          {
+            "name": "sessions_send",
+            "summaryChars": 84,
+            "schemaChars": 203,
+            "propertiesCount": 5
+          },
+          {
+            "name": "sessions_spawn",
+            "summaryChars": 107,
+            "schemaChars": 312,
+            "propertiesCount": 8
+          },
+          {
+            "name": "session_status",
+            "summaryChars": 207,
+            "schemaChars": 89,
+            "propertiesCount": 2
+          },
+          {
+            "name": "web_search",
+            "summaryChars": 175,
+            "schemaChars": 733,
+            "propertiesCount": 6
+          },
+          {
+            "name": "web_fetch",
+            "summaryChars": 129,
+            "schemaChars": 360,
+            "propertiesCount": 3
+          },
+          {
+            "name": "image",
+            "summaryChars": 184,
+            "schemaChars": 163,
+            "propertiesCount": 4
+          },
+          {
+            "name": "memory_search",
+            "summaryChars": 235,
+            "schemaChars": 139,
+            "propertiesCount": 3
+          },
+          {
+            "name": "memory_get",
+            "summaryChars": 151,
+            "schemaChars": 128,
+            "propertiesCount": 3
+          }
+        ]
+      }
+    }
+  },
+  "agent:main:cron:50403853-252d-4c16-8b67-3db863cb5dc5": {
+    "sessionId": "0a0220f7-c19a-4fbd-b4b0-ba7dd0b36ed8",
+    "updatedAt": 1770638432780,
+    "systemSent": true,
+    "model": "gpt-5.2",
+    "contextTokens": 400000,
+    "skillsSnapshot": {
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\n\n<available_skills>\n  <skill>\n    <name>bluebubbles</name>\n    <description>Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).</description>\n    <location>/home/leonard/moltbot/skills/bluebubbles/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>coding-agent</name>\n    <description>Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.</description>\n    <location>/home/leonard/moltbot/skills/coding-agent/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>gog</name>\n    <description>Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.</description>\n    <location>/home/leonard/moltbot/skills/gog/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.</description>\n    <location>/home/leonard/moltbot/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>tmux</name>\n    <description>Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.</description>\n    <location>/home/leonard/moltbot/skills/tmux/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>video-frames</name>\n    <description>Extract frames or short clips from videos using ffmpeg.</description>\n    <location>/home/leonard/moltbot/skills/video-frames/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts (no API key required).</description>\n    <location>/home/leonard/moltbot/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "bluebubbles"
+        },
+        {
+          "name": "coding-agent"
+        },
+        {
+          "name": "gog"
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "tmux"
+        },
+        {
+          "name": "video-frames"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "bluebubbles",
+          "description": "Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).",
+          "filePath": "/home/leonard/moltbot/skills/bluebubbles/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/bluebubbles",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "coding-agent",
+          "description": "Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.",
+          "filePath": "/home/leonard/moltbot/skills/coding-agent/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/coding-agent",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "gog",
+          "description": "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.",
+          "filePath": "/home/leonard/moltbot/skills/gog/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/gog",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "filePath": "/home/leonard/moltbot/skills/skill-creator/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/skill-creator",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "filePath": "/home/leonard/moltbot/skills/tmux/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/tmux",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "video-frames",
+          "description": "Extract frames or short clips from videos using ffmpeg.",
+          "filePath": "/home/leonard/moltbot/skills/video-frames/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/video-frames",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "filePath": "/home/leonard/moltbot/skills/weather/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/weather",
+          "source": "moltbot-bundled"
+        }
+      ],
+      "version": 0
+    },
+    "modelProvider": "openai-codex",
+    "inputTokens": 1549,
+    "outputTokens": 260,
+    "totalTokens": 18317
+  },
+  "agent:main:cron:8e85d133-8f7e-4211-bb86-994ae05b0e77": {
+    "sessionId": "afede848-ac00-4b5c-af2f-12ae43bf3208",
+    "updatedAt": 1770649244053,
+    "systemSent": true,
+    "model": "gpt-5.2",
+    "contextTokens": 400000,
+    "skillsSnapshot": {
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\n\n<available_skills>\n  <skill>\n    <name>bluebubbles</name>\n    <description>Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).</description>\n    <location>/home/leonard/moltbot/skills/bluebubbles/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>coding-agent</name>\n    <description>Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.</description>\n    <location>/home/leonard/moltbot/skills/coding-agent/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>gog</name>\n    <description>Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.</description>\n    <location>/home/leonard/moltbot/skills/gog/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.</description>\n    <location>/home/leonard/moltbot/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>tmux</name>\n    <description>Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.</description>\n    <location>/home/leonard/moltbot/skills/tmux/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>video-frames</name>\n    <description>Extract frames or short clips from videos using ffmpeg.</description>\n    <location>/home/leonard/moltbot/skills/video-frames/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts (no API key required).</description>\n    <location>/home/leonard/moltbot/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "bluebubbles"
+        },
+        {
+          "name": "coding-agent"
+        },
+        {
+          "name": "gog"
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "tmux"
+        },
+        {
+          "name": "video-frames"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "bluebubbles",
+          "description": "Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).",
+          "filePath": "/home/leonard/moltbot/skills/bluebubbles/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/bluebubbles",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "coding-agent",
+          "description": "Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.",
+          "filePath": "/home/leonard/moltbot/skills/coding-agent/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/coding-agent",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "gog",
+          "description": "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.",
+          "filePath": "/home/leonard/moltbot/skills/gog/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/gog",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "filePath": "/home/leonard/moltbot/skills/skill-creator/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/skill-creator",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "filePath": "/home/leonard/moltbot/skills/tmux/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/tmux",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "video-frames",
+          "description": "Extract frames or short clips from videos using ffmpeg.",
+          "filePath": "/home/leonard/moltbot/skills/video-frames/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/video-frames",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "filePath": "/home/leonard/moltbot/skills/weather/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/weather",
+          "source": "moltbot-bundled"
+        }
+      ],
+      "version": 0
+    },
+    "modelProvider": "openai-codex",
+    "inputTokens": 999,
+    "outputTokens": 77,
+    "totalTokens": 19815
+  },
+  "agent:main:cron:3646afb1-aefe-4b6e-a8d9-71c1b855f301": {
+    "sessionId": "a99e0a4a-6884-45f3-96f7-8bc2c8da801a",
+    "updatedAt": 1770685458653,
+    "systemSent": true,
+    "model": "gpt-5.2",
+    "contextTokens": 400000,
+    "skillsSnapshot": {
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\n\n<available_skills>\n  <skill>\n    <name>bluebubbles</name>\n    <description>Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).</description>\n    <location>/home/leonard/moltbot/skills/bluebubbles/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>coding-agent</name>\n    <description>Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.</description>\n    <location>/home/leonard/moltbot/skills/coding-agent/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>gog</name>\n    <description>Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.</description>\n    <location>/home/leonard/moltbot/skills/gog/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.</description>\n    <location>/home/leonard/moltbot/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>tmux</name>\n    <description>Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.</description>\n    <location>/home/leonard/moltbot/skills/tmux/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>video-frames</name>\n    <description>Extract frames or short clips from videos using ffmpeg.</description>\n    <location>/home/leonard/moltbot/skills/video-frames/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts (no API key required).</description>\n    <location>/home/leonard/moltbot/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "bluebubbles"
+        },
+        {
+          "name": "coding-agent"
+        },
+        {
+          "name": "gog"
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "tmux"
+        },
+        {
+          "name": "video-frames"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "bluebubbles",
+          "description": "Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).",
+          "filePath": "/home/leonard/moltbot/skills/bluebubbles/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/bluebubbles",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "coding-agent",
+          "description": "Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.",
+          "filePath": "/home/leonard/moltbot/skills/coding-agent/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/coding-agent",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "gog",
+          "description": "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.",
+          "filePath": "/home/leonard/moltbot/skills/gog/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/gog",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "filePath": "/home/leonard/moltbot/skills/skill-creator/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/skill-creator",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "filePath": "/home/leonard/moltbot/skills/tmux/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/tmux",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "video-frames",
+          "description": "Extract frames or short clips from videos using ffmpeg.",
+          "filePath": "/home/leonard/moltbot/skills/video-frames/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/video-frames",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "filePath": "/home/leonard/moltbot/skills/weather/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/weather",
+          "source": "moltbot-bundled"
+        }
+      ],
+      "version": 0
+    },
+    "modelProvider": "openai-codex",
+    "inputTokens": 504,
+    "outputTokens": 6,
+    "totalTokens": 15224
+  },
+  "agent:main:cron:147f0737-7926-4234-9e04-9d54b1297b1d": {
+    "sessionId": "c01a936d-b22c-4b61-abbf-fb5b408a0c89",
+    "updatedAt": 1770545400012,
+    "systemSent": true,
+    "model": "gpt-5.2",
+    "contextTokens": 400000,
+    "skillsSnapshot": {
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\n\n<available_skills>\n  <skill>\n    <name>bluebubbles</name>\n    <description>Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).</description>\n    <location>/home/leonard/moltbot/skills/bluebubbles/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>coding-agent</name>\n    <description>Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.</description>\n    <location>/home/leonard/moltbot/skills/coding-agent/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>gog</name>\n    <description>Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.</description>\n    <location>/home/leonard/moltbot/skills/gog/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.</description>\n    <location>/home/leonard/moltbot/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>tmux</name>\n    <description>Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.</description>\n    <location>/home/leonard/moltbot/skills/tmux/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>video-frames</name>\n    <description>Extract frames or short clips from videos using ffmpeg.</description>\n    <location>/home/leonard/moltbot/skills/video-frames/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts (no API key required).</description>\n    <location>/home/leonard/moltbot/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "bluebubbles"
+        },
+        {
+          "name": "coding-agent"
+        },
+        {
+          "name": "gog"
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "tmux"
+        },
+        {
+          "name": "video-frames"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "bluebubbles",
+          "description": "Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).",
+          "filePath": "/home/leonard/moltbot/skills/bluebubbles/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/bluebubbles",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "coding-agent",
+          "description": "Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.",
+          "filePath": "/home/leonard/moltbot/skills/coding-agent/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/coding-agent",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "gog",
+          "description": "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.",
+          "filePath": "/home/leonard/moltbot/skills/gog/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/gog",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "filePath": "/home/leonard/moltbot/skills/skill-creator/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/skill-creator",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "filePath": "/home/leonard/moltbot/skills/tmux/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/tmux",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "video-frames",
+          "description": "Extract frames or short clips from videos using ffmpeg.",
+          "filePath": "/home/leonard/moltbot/skills/video-frames/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/video-frames",
+          "source": "moltbot-bundled"
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "filePath": "/home/leonard/moltbot/skills/weather/SKILL.md",
+          "baseDir": "/home/leonard/moltbot/skills/weather",
+          "source": "moltbot-bundled"
+        }
+      ],
+      "version": 0
+    },
+    "modelProvider": "openai-codex",
+    "inputTokens": 366,
+    "outputTokens": 401,
+    "totalTokens": 13294
+  }
+}

@@ -1,0 +1,115 @@
+Metadata-Version: 2.4
+Name: soupsieve
+Version: 2.8.3
+Summary: A modern CSS selector implementation for Beautiful Soup.
+Project-URL: Homepage, https://github.com/facelessuser/soupsieve
+Author-email: Isaac Muse <Isaac.Muse@gmail.com>
+License-Expression: MIT
+License-File: LICENSE.md
+Keywords: CSS,HTML,XML,filter,query,selector,soup
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Programming Language :: Python :: 3.14
+Classifier: Topic :: Internet :: WWW/HTTP :: Dynamic Content
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Typing :: Typed
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+
+[![Donate via PayPal][donate-image]][donate-link]
+[![Build][github-ci-image]][github-ci-link]
+[![Coverage Status][codecov-image]][codecov-link]
+[![PyPI Version][pypi-image]][pypi-link]
+[![PyPI Downloads][pypi-down]][pypi-link]
+[![PyPI - Python Version][python-image]][pypi-link]
+[![License][license-image-mit]][license-link]
+
+# Soup Sieve
+
+## Overview
+
+Soup Sieve is a CSS selector library designed to be used with [Beautiful Soup 4][bs4]. It aims to provide selecting,
+matching, and filtering using modern CSS selectors. Soup Sieve currently provides selectors from the CSS level 1
+specifications up through the latest CSS level 4 drafts and beyond (though some are not yet implemented).
+
+Soup Sieve was written with the intent to replace Beautiful Soup's builtin select feature, and as of Beautiful Soup
+version 4.7.0, it now is :confetti_ball:. Soup Sieve can also be imported in order to use its API directly for
+more controlled, specialized parsing.
+
+Soup Sieve has implemented most of the CSS selectors up through the latest CSS draft specifications, though there are a
+number that don't make sense in a non-browser environment. Selectors that cannot provide meaningful functionality simply
+do not match anything. Some of the supported selectors are:
+
+- `.classes`
+- `#ids`
+- `[attributes=value]`
+- `parent child`
+- `parent > child`
+- `sibling ~ sibling`
+- `sibling + sibling`
+- `:not(element.class, element2.class)`
+- `:is(element.class, element2.class)`
+- `parent:has(> child)`
+- and [many more](https://facelessuser.github.io/soupsieve/selectors/)
+
+
+## Installation
+
+You must have Beautiful Soup already installed:
+
+```
+pip install beautifulsoup4
+```
+
+In most cases, assuming you've installed version 4.7.0, that should be all you need to do, but if you've installed via
+some alternative method, and Soup Sieve is not automatically installed, you can install it directly:
+
+```
+pip install soupsieve
+```
+
+If you want to manually install it from source, first ensure that [`build`](https://pypi.org/project/build/) is
+installed:
+
+```
+pip install build
+```
+
+Then navigate to the root of the project and build the wheel and install (replacing `<ver>` with the current version):
+
+```
+python -m build -w
+pip install dist/soupsieve-<ver>-py3-none-any.whl
+```
+
+## Documentation
+
+Documentation is found here: https://facelessuser.github.io/soupsieve/.
+
+## License
+
+MIT
+
+[bs4]: https://beautiful-soup-4.readthedocs.io/en/latest/#
+
+[github-ci-image]: https://github.com/facelessuser/soupsieve/workflows/build/badge.svg
+[github-ci-link]: https://github.com/facelessuser/soupsieve/actions?query=workflow%3Abuild+branch%3Amain
+[codecov-image]: https://img.shields.io/codecov/c/github/facelessuser/soupsieve/master.svg?logo=codecov&logoColor=aaaaaa&labelColor=333333
+[codecov-link]: https://codecov.io/github/facelessuser/soupsieve
+[pypi-image]: https://img.shields.io/pypi/v/soupsieve.svg?logo=pypi&logoColor=aaaaaa&labelColor=333333
+[pypi-down]: https://img.shields.io/pypi/dm/soupsieve.svg?logo=pypi&logoColor=aaaaaa&labelColor=333333
+[pypi-link]: https://pypi.python.org/pypi/soupsieve
+[python-image]: https://img.shields.io/pypi/pyversions/soupsieve?logo=python&logoColor=aaaaaa&labelColor=333333
+[license-image-mit]: https://img.shields.io/badge/license-MIT-blue.svg?labelColor=333333
+[license-link]: https://github.com/facelessuser/soupsieve/blob/main/LICENSE.md
+[donate-image]: https://img.shields.io/badge/Donate-PayPal-3fabd1?logo=paypal
+[donate-link]: https://www.paypal.me/facelessuser

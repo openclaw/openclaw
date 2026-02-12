@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>嘟嘟香 - Du Du Xiang | 新加坡麻辣烫 烧烤</title>
+    <meta name="description" content="嘟嘟香 - 新加坡宏茂桥正宗东北麻辣烫、麻辣香锅、烧烤。订餐电话：88199509">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#dc2626',
+                        secondary: '#fbbf24',
+                        dark: '#1f2937'
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Custom styles -->
+    <link rel="stylesheet" href="src/styles.css">
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-50 font-sans">
+    <!-- Header -->
+    <header class="bg-primary text-white sticky top-0 z-50 shadow-lg">
+        <div class="container mx-auto px-4 py-3">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="text-2xl font-bold">🔥 嘟嘟香</div>
+                    <div class="text-sm opacity-90 hidden sm:block">Du Du Xiang</div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <!-- Language Switcher -->
+                    <div class="lang-switcher flex gap-1 mr-2">
+                        <button class="lang-btn active" data-lang="zh">中</button>
+                        <button class="lang-btn" data-lang="en">EN</button>
+                        <button class="lang-btn" data-lang="ms">MY</button>
+                        <button class="lang-btn" data-lang="ta">த</button>
+                    </div>
+                    <button id="cart-btn" class="relative bg-white/20 hover:bg-white/30 px-4 py-2 rounded-full transition">
+                        🛒 <span id="cart-count" class="font-bold">0</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="bg-gradient-to-br from-primary to-red-700 text-white py-6 px-4">
+        <div class="container mx-auto text-center">
+            <h1 class="text-2xl font-bold mb-2" data-i18n="restaurantName">嘟嘟香麻辣烫</h1>
+            <p class="text-base opacity-90 mb-3" data-i18n="slogan">正宗东北风味 · 麻辣鲜香</p>
+            <div class="flex flex-wrap justify-center gap-2">
+                <span class="bg-white/20 px-3 py-1 rounded-full text-sm">🌶️ 麻辣烫</span>
+                <span class="bg-white/20 px-3 py-1 rounded-full text-sm">🍲 麻辣香锅</span>
+                <span class="bg-white/20 px-3 py-1 rounded-full text-sm">🍢 烧烤</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section class="bg-white py-4 px-4 shadow-sm">
+        <div class="container mx-auto">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <!-- Google Maps -->
+                <a href="https://maps.google.com/?q=711+Ang+Mo+Kio+Avenue+8+Singapore+560711"
+                   target="_blank"
+                   class="flex items-center gap-3 p-3 bg-blue-50 rounded-xl hover:bg-blue-100 transition">
+                    <div class="text-2xl">📍</div>
+                    <div>
+                        <div class="font-medium text-blue-800" data-i18n="nav">导航到店</div>
+                        <div class="text-xs text-gray-600">711 Ang Mo Kio Ave 8</div>
+                    </div>
+                </a>
+
+                <!-- WhatsApp -->
+                <a href="https://wa.me/6588199509"
+                   target="_blank"
+                   class="flex items-center gap-3 p-3 bg-green-50 rounded-xl hover:bg-green-100 transition">
+                    <div class="text-2xl">💬</div>
+                    <div>
+                        <div class="font-medium text-green-800" data-i18n="whatsapp">WhatsApp 订餐</div>
+                        <div class="text-xs text-gray-600">88199509</div>
+                    </div>
+                </a>
+
+                <!-- WeChat -->
+                <button id="copy-wechat"
+                        class="flex items-center gap-3 p-3 bg-emerald-50 rounded-xl hover:bg-emerald-100 transition text-left w-full">
+                    <div class="text-2xl">📱</div>
+                    <div>
+                        <div class="font-medium text-emerald-800" data-i18n="wechat">微信点击复制</div>
+                        <div class="text-xs text-gray-600">duduxiang_sg</div>
+                    </div>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Search Section -->
+    <section class="bg-white py-3 px-4 border-b">
+        <div class="container mx-auto">
+            <div class="relative">
+                <input type="text"
+                       id="search-input"
+                       placeholder="搜索菜品..."
+                       class="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary">
+                <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- History Section (常点菜品) -->
+    <section id="history-section" class="bg-amber-50 py-3 px-4 border-b hidden">
+        <div class="container mx-auto">
+            <h3 class="text-sm font-medium text-amber-800 mb-2">♥ <span data-i18n="history">常点菜品</span></h3>
+            <div class="history-items flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                <!-- Dynamic content -->
+            </div>
+        </div>
+    </section>
+
+    <!-- Filter Section -->
+    <section class="bg-white py-3 px-4 border-b sticky top-14 z-40">
+        <div class="container mx-auto">
+            <div class="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                <button class="filter-btn active" data-filter="all" data-i18n="all">全部</button>
+                <button class="filter-btn" data-filter="特色主打" data-i18n="signature">🌟 特色</button>
+                <button class="filter-btn" data-filter="炒菜" data-i18n="stirFry">🍳 炒菜</button>
+                <button class="filter-btn" data-filter="凉菜" data-i18n="cold">🥗 凉菜</button>
+                <button class="filter-btn" data-filter="烧烤-肉类" data-i18n="bbqMeat">🍖 烤肉</button>
+                <button class="filter-btn" data-filter="烧烤-海鲜" data-i18n="bbqSeafood">🦐 海鲜</button>
+                <button class="filter-btn" data-filter="烧烤-其他" data-i18n="bbqVeg">🥬 素烤</button>
+            </div>
+
+            <!-- Secondary filters -->
+            <div class="flex gap-2 overflow-x-auto mt-2 scrollbar-hide">
+                <button class="tag-btn" data-tag="不辣" data-i18n="notSpicy">😊 不辣</button>
+                <button class="tag-btn" data-tag="微辣" data-i18n="mildSpicy">🌶️ 微辣</button>
+                <button class="tag-btn" data-tag="中辣" data-i18n="mediumSpicy">🌶️🌶️ 中辣</button>
+                <button class="tag-btn" data-tag="特辣" data-i18n="verySpicy">🔥 特辣</button>
+                <button class="tag-btn" data-tag="素食" data-i18n="vegetarian">🥬 素食</button>
+                <button class="tag-btn" data-tag="海鲜" data-i18n="seafood">🦐 海鲜</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Menu Section -->
+    <main class="container mx-auto px-4 py-4">
+        <div id="menu-container" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            <!-- Menu items will be dynamically inserted here -->
+        </div>
+
+        <!-- Empty state -->
+        <div id="empty-state" class="hidden text-center py-12 text-gray-500">
+            <div class="text-4xl mb-4">🔍</div>
+            <p data-i18n="noResults">没有找到符合条件的菜品</p>
+        </div>
+    </main>
+
+    <!-- Shopping Cart Modal -->
+    <div id="cart-modal" class="fixed inset-0 bg-black/50 z-50 hidden">
+        <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl max-h-[85vh] overflow-hidden animate-slide-up">
+            <div class="sticky top-0 bg-white border-b px-4 py-3 flex justify-between items-center">
+                <h2 class="text-lg font-bold">🛒 <span data-i18n="cart">我的订单</span></h2>
+                <button id="close-cart" class="text-2xl text-gray-400 hover:text-gray-600">&times;</button>
+            </div>
+
+            <div id="cart-items" class="p-4 overflow-y-auto max-h-[40vh]">
+                <!-- Cart items will be inserted here -->
+            </div>
+
+            <!-- Order Note -->
+            <div id="order-note-section" class="px-4 py-2 border-t bg-gray-50">
+                <input type="text"
+                       id="order-note"
+                       placeholder="备注（如：不要香菜、少盐）"
+                       data-i18n-placeholder="orderNote"
+                       class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+            </div>
+
+            <div id="cart-empty" class="hidden p-8 text-center text-gray-500">
+                <div class="text-4xl mb-4">🛒</div>
+                <p data-i18n="emptyCart">购物车是空的</p>
+            </div>
+
+            <div id="cart-footer" class="sticky bottom-0 bg-white border-t p-4">
+                <div class="flex justify-between items-center mb-3">
+                    <span class="text-gray-600" data-i18n="total">总计</span>
+                    <span class="text-2xl font-bold text-primary">$<span id="cart-total">0.00</span></span>
+                </div>
+                <div class="flex gap-3">
+                    <button id="clear-cart" class="flex-1 py-2.5 border border-gray-300 rounded-xl hover:bg-gray-50 transition text-sm" data-i18n="clear">
+                        清空
+                    </button>
+                    <button id="send-whatsapp" class="flex-2 py-2.5 px-4 bg-green-500 text-white rounded-xl hover:bg-green-600 transition font-medium flex items-center justify-center gap-2">
+                        <span>💬</span>
+                        <span data-i18n="sendWhatsApp">发送到 WhatsApp</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast notification -->
+    <div id="toast" class="fixed bottom-20 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-lg z-50 opacity-0 transition-opacity pointer-events-none">
+        <span id="toast-message">已复制到剪贴板</span>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="src/app.js"></script>
+</body>
+</html>

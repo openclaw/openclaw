@@ -1,0 +1,438 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --border: #334;
+    --text: #e0e0e0;
+    --dim: #888;
+    --accent: #4fc3f7;
+    --danger: #ef5350;
+    --ok: #66bb6a;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 'Inter', system-ui, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* tabs */
+#tabs {
+    display: flex;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.tab {
+    background: none;
+    border: none;
+    color: var(--dim);
+    padding: 12px 24px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    border-bottom: 2px solid transparent;
+}
+
+.tab:hover {
+    color: var(--text);
+}
+
+.tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+/* panels */
+main {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+}
+
+.panel {
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+    padding: 16px;
+    display: none;
+}
+
+.panel.active {
+    display: block;
+}
+
+/* workflow */
+#drawflow {
+    width: 100%;
+    height: 100%;
+    background: #0d1117;
+    border-radius: 8px;
+}
+
+.drawflow .drawflow-node {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    min-width: 180px;
+    padding: 10px;
+}
+
+.drawflow .drawflow-node .title-box {
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.drawflow .drawflow-node.selected {
+    border-color: var(--accent);
+}
+
+.drawflow .connection .main-path {
+    stroke: var(--accent);
+    stroke-width: 2;
+}
+
+.node-type {
+    font-size: 11px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.node-detail {
+    font-size: 12px;
+    margin-top: 4px;
+    color: var(--dim);
+}
+
+/* monitor */
+.monitor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+.monitor-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.monitor-card h3 {
+    font-size: 13px;
+    color: var(--dim);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.monitor-card canvas {
+    width: 100% !important;
+    height: 200px !important;
+}
+
+#top-actions table,
+#agent-config table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+#top-actions td,
+#top-actions th,
+#agent-config td,
+#agent-config th {
+    padding: 6px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+
+#top-actions th,
+#agent-config th {
+    color: var(--dim);
+    font-weight: 600;
+}
+
+.budget-input,
+.hours-input,
+.ctx-input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 8px;
+    border-radius: 4px;
+    width: 80px;
+}
+
+/* cron */
+#cron-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.cron-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 16px;
+    align-items: center;
+}
+
+.cron-toggle {
+    width: 44px;
+    height: 24px;
+    background: var(--border);
+    border-radius: 12px;
+    position: relative;
+    cursor: pointer;
+    border: none;
+    transition: background .2s;
+}
+
+.cron-toggle.on {
+    background: var(--ok);
+}
+
+.cron-toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform .2s;
+}
+
+.cron-toggle.on::after {
+    transform: translateX(20px);
+}
+
+.cron-name {
+    font-weight: 600;
+}
+
+.cron-schedule {
+    color: var(--dim);
+    font-size: 12px;
+    font-family: monospace;
+}
+
+.cron-status {
+    font-size: 12px;
+}
+
+.cron-status .ok {
+    color: var(--ok);
+}
+
+.cron-status .err {
+    color: var(--danger);
+}
+
+.cron-actions button {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.cron-actions button:hover {
+    border-color: var(--accent);
+}
+
+/* editor */
+.editor-layout {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 0;
+    height: calc(100vh - 60px);
+}
+
+#file-list {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+#file-list .file-item {
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    word-break: break-all;
+}
+
+#file-list .file-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+#file-list .file-item.active {
+    background: rgba(79, 195, 247, 0.15);
+    color: var(--accent);
+}
+
+#editor-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+#editor-filename {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+#btn-save {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    padding: 6px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+#btn-save:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+#codemirror-wrap {
+    flex: 1;
+    overflow: hidden;
+}
+
+#editor-area {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.CodeMirror {
+    height: 100% !important;
+    font-size: 13px;
+}
+
+/* modal */
+.modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-content {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    width: min(500px, 90vw);
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.modal-content h3 {
+    margin-bottom: 12px;
+}
+
+.modal-content label {
+    display: block;
+    font-size: 12px;
+    color: var(--dim);
+    margin-top: 8px;
+}
+
+.modal-content input,
+.modal-content select,
+.modal-content textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 4px;
+    margin-top: 4px;
+    font-size: 13px;
+}
+
+.modal-content textarea {
+    height: 80px;
+    resize: vertical;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    justify-content: flex-end;
+}
+
+.modal-actions button {
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    font-size: 13px;
+}
+
+#modal-save {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+    font-weight: 600;
+}
+
+#modal-close {
+    background: none;
+    color: var(--text);
+}
+
+/* toast */
+#toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    color: var(--text);
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    opacity: 0;
+    transition: opacity .3s;
+    pointer-events: none;
+    z-index: 1000;
+}
+
+#toast.show {
+    opacity: 1;
+}

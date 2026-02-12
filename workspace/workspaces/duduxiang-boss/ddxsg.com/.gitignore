@@ -1,0 +1,16 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+
+# System
+.DS_Store
+Thumbs.db
+
+# Dev files (not needed for production)
+prompts/
+generate_images.py
+generate_images_v2.py
+generate_single.py

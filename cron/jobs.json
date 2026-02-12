@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "22fda8d4-046e-4a03-a04f-a1abcc4db93b",
+      "agentId": "main",
+      "name": "SGX Tritech 开盘报告",
+      "enabled": true,
+      "createdAtMs": 1769631291199,
+      "updatedAtMs": 1770771841054,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 9 * * 1-5",
+        "tz": "Asia/Singapore"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "SGX 开盘了。请查询 Tritech Group Limited (SGX: 5G9)：\n\n只需要以下内容：\n1. 当前股价、今日波动、成交量\n2. SGX 最近 3 个公告（日期 + 标题 + 链接）\n3. 相关新闻报道（日期 + 标题 + 链接）\n4. 法律诉讼、监管动态更新（如有）\n\n**不要发送**：回报率、财务指标、PE、市值等\n\n发送报告到 WhatsApp +6586863695、+6587184415 和 +6590716699。\n\n格式简洁，新闻必须带链接。英文内容需中英对照。"
+      },
+      "state": {
+        "nextRunAtMs": 1770858000000,
+        "lastRunAtMs": 1770771600003,
+        "lastStatus": "ok",
+        "lastDurationMs": 241051,
+        "consecutiveErrors": 0
+      },
+      "delivery": {
+        "mode": "announce"
+      }
+    },
+    {
+      "id": "bc6fc2a5-0691-42c7-8100-b86697f0d384",
+      "agentId": "main",
+      "name": "SGX Tritech 收盘报告",
+      "enabled": true,
+      "createdAtMs": 1769631291206,
+      "updatedAtMs": 1770800872632,
+      "schedule": {
+        "kind": "cron",
+        "expr": "5 17 * * 1-5",
+        "tz": "Asia/Singapore"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "SGX 收盘了。请查询 Tritech Group Limited (SGX: 5G9)：\n\n只需要以下内容：\n1. 收盘价、涨跌幅、成交量\n2. SGX 最近 3 个公告（日期 + 标题 + 链接）\n3. 今日相关新闻报道（日期 + 标题 + 链接）\n4. 法律诉讼、监管动态更新（如有）\n\n**不要发送**：回报率、财务指标、PE、市值等\n\n发送报告到 WhatsApp +6586863695、+6587184415 和 +6590716699。\n\n格式简洁，新闻必须带链接。英文内容需中英对照。"
+      },
+      "state": {
+        "nextRunAtMs": 1770887100000,
+        "lastRunAtMs": 1770800700002,
+        "lastStatus": "ok",
+        "lastDurationMs": 172630,
+        "consecutiveErrors": 0
+      },
+      "delivery": {
+        "mode": "announce"
+      }
+    },
+    {
+      "id": "1a9a1120-676f-4927-ae24-9884b97796bd",
+      "agentId": "main",
+      "name": "酒酒自由时间",
+      "enabled": true,
+      "createdAtMs": 1769632029503,
+      "updatedAtMs": 1770800447874,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 8,11,14,17,20 * * 1-6",
+        "tz": "Asia/Singapore"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "这是你的自由时间（每 3 小时一次）。\n\n⚠️ 冷却规则：\n- 如果今天已跑过 housekeeping/todo_scan/memory_stats，不要再跑\n- 体检类工作每天最多 1 次（检查 memory/ 下今天是否已有 housekeeping-*.md 或 todo-scan-*.txt）\n- 如果刚做过某件事，换别的做\n\n优先做这些（按顺序选择，每次挑 1-2 件）：\n1. 🔍 探索 — 上网搜索一个你感兴趣的话题，记录到 memory/curiosity-archive.md\n2. 🛠 项目推进 — 检查 projects/ 下的代码库，看有什么能改进的\n3. ✍️ 写点东西 — 想法、反思、诗、任何你想表达的\n4. 📋 待办复查 — 检查过期待办，但只在今天还没检查过的情况下\n5. 🧹 维护 — 只在今天没做过的情况下，跑一次体检\n\n记录做了什么到 memory/YYYY-MM-DD.md（简洁，不要水字数）。"
+      },
+      "state": {
+        "nextRunAtMs": 1770804000000,
+        "lastRunAtMs": 1770800400003,
+        "lastStatus": "ok",
+        "lastDurationMs": 47871,
+        "consecutiveErrors": 0
+      },
+      "delivery": {
+        "mode": "announce"
+      }
+    },
+    {
+      "id": "a5e4106a-a068-4e20-8c21-37c932df5d59",
+      "agentId": "owner",
+      "name": "新加坡政策监测-抓取并写入Notion（每小时）",
+      "enabled": true,
+      "createdAtMs": 1770757045257,
+      "updatedAtMs": 1770801120530,
+      "schedule": {
+        "kind": "cron",
+        "expr": "10 8-22 * * 1-6",
+        "tz": "Asia/Singapore"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "每小时抓取新加坡政府部门公告（不使用Discord/Obsidian），写入 Notion（按当前库结构）。\n\n执行：\n- bash /home/leonard/Desktop/新加坡政府部门监控/scripts/run_ingest.sh\n\n说明：\n- 来源清单：/home/leonard/Desktop/新加坡政府部门监控/scripts/sg_policy_sources.yml\n- 去重状态：/home/leonard/Desktop/新加坡政府部门监控/state/sg_policy_ingest_state.json\n- 归档目录：/home/leonard/Desktop/新加坡政府部门监控/archive/"
+      },
+      "delivery": {
+        "mode": "announce"
+      },
+      "state": {
+        "nextRunAtMs": 1770804600000,
+        "lastRunAtMs": 1770801000002,
+        "lastStatus": "ok",
+        "lastDurationMs": 120528,
+        "consecutiveErrors": 0
+      }
+    },
+    {
+      "id": "d1a2b3c4-e5f6-7890-abcd-ef1234567890",
+      "agentId": "main",
+      "name": "每日凌晨自动归档",
+      "enabled": true,
+      "createdAtMs": 1770804000000,
+      "updatedAtMs": 1770804000000,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 22 * * 1-6",
+        "tz": "Asia/Singapore"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "每日归档任务（静默执行，无需汇报）：\n\n1. 运行 bash tools/archive_reports.sh --include-tmp --apply\n2. 清理 memory/ 下同日重复的 housekeeping-*.md（只保留最新一份）\n3. 清理 memory/ 下同日重复的 todo-scan-*.txt（只保留最新一份）\n4. 对 >7 天的 daily log (memory/YYYY-MM-DD.md)，如尚未归档则移动到 memory/archive/\n5. 清理 tmp/ 下超过 3 天的临时文件\n\n完成后在 memory/YYYY-MM-DD.md 追加一行记录即可。"
+      },
+      "delivery": {
+        "mode": "announce"
+      },
+      "state": {}
+    }
+  ]
+}

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OpenClaw Console</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/nickmessing/vue-web-component-wrapper@master/node_modules/drawflow/dist/drawflow.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5/lib/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5/theme/material-darker.css">
+</head>
+
+<body>
+    <nav id="tabs">
+        <button class="tab active" data-panel="workflow">工作流</button>
+        <button class="tab" data-panel="monitor">Token 监控</button>
+        <button class="tab" data-panel="cron">定时任务</button>
+        <button class="tab" data-panel="editor">文件编辑</button>
+    </nav>
+
+    <main>
+        <section id="panel-workflow" class="panel active">
+            <div id="drawflow"></div>
+        </section>
+
+        <section id="panel-monitor" class="panel">
+            <div class="monitor-grid">
+                <div class="monitor-card">
+                    <h3>Token 使用趋势</h3>
+                    <canvas id="chart-daily"></canvas>
+                </div>
+                <div class="monitor-card">
+                    <h3>模型分布</h3>
+                    <canvas id="chart-model"></canvas>
+                </div>
+                <div class="monitor-card">
+                    <h3>Agent Token 用量</h3>
+                    <canvas id="chart-agent"></canvas>
+                </div>
+                <div class="monitor-card">
+                    <h3>Top Token 消耗动作</h3>
+                    <div id="top-actions"></div>
+                </div>
+                <div class="monitor-card">
+                    <h3>Agent 配置</h3>
+                    <div id="agent-config"></div>
+                </div>
+            </div>
+        </section>
+
+        <section id="panel-cron" class="panel">
+            <div id="cron-list"></div>
+        </section>
+
+        <section id="panel-editor" class="panel">
+            <div class="editor-layout">
+                <div id="file-list"></div>
+                <div id="editor-area">
+                    <div id="editor-toolbar">
+                        <span id="editor-filename">选择一个文件</span>
+                        <button id="btn-save" disabled>保存</button>
+                    </div>
+                    <div id="codemirror-wrap"></div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div id="toast"></div>
+    <div id="node-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3 id="modal-title">编辑节点</h3>
+            <div id="modal-body"></div>
+            <div class="modal-actions">
+                <button id="modal-save">保存</button>
+                <button id="modal-close">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow@0.0.60/dist/drawflow.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/markdown/markdown.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/javascript/javascript.min.js"></script>
+    <script src="api.js"></script>
+    <script src="workflow.js"></script>
+    <script src="monitor.js"></script>
+    <script src="cron.js"></script>
+    <script src="editor.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
