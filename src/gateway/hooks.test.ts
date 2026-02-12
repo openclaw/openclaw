@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createIMessageTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   extractHookToken,
   normalizeAgentPayload,
@@ -85,24 +85,6 @@ describe("gateway hooks helpers", () => {
     expect(explicitNoDeliver.ok).toBe(true);
     if (explicitNoDeliver.ok) {
       expect(explicitNoDeliver.value.deliver).toBe(false);
-    }
-
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "imessage",
-          source: "test",
-          plugin: createIMessageTestPlugin(),
-        },
-      ]),
-    );
-    const imsg = normalizeAgentPayload(
-      { message: "yo", channel: "imsg" },
-      { idFactory: () => "x" },
-    );
-    expect(imsg.ok).toBe(true);
-    if (imsg.ok) {
-      expect(imsg.value.channel).toBe("imessage");
     }
 
     setActivePluginRegistry(

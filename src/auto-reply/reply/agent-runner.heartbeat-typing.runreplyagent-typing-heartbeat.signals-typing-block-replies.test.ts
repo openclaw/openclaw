@@ -198,18 +198,21 @@ describe("runReplyAgent typing (heartbeat)", () => {
       },
     );
 
+    const onBlockReply = vi.fn();
     const { run } = createMinimalRun({
       resolvedVerboseLevel: "on",
       sessionEntry,
       sessionStore,
       sessionKey: "main",
       storePath,
+      opts: { onBlockReply },
     });
-    const res = await run();
-    expect(Array.isArray(res)).toBe(true);
-    const payloads = res as { text?: string }[];
-    expect(payloads[0]?.text).toContain("Auto-compaction complete");
-    expect(payloads[0]?.text).toContain("count 1");
+    await run();
+    const compactionCall = onBlockReply.mock.calls.find(
+      ([p]: [{ text?: string }]) => p.text && p.text.includes("Auto-compaction complete"),
+    );
+    expect(compactionCall).toBeDefined();
+    expect(compactionCall![0].text).toContain("count 1");
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 });
