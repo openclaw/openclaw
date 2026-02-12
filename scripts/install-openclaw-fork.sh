@@ -12,8 +12,9 @@ set -euo pipefail
 # which triggers a source build (requires pnpm + all devDeps).
 #
 # SAW setup (enabled by default, disable with SAW_INSTALL=0):
-#   Downloads prebuilt SAW binaries, creates system users, generates wallet key,
-#   writes conservative policy, installs systemd service, and starts daemon.
+#   Downloads prebuilt SAW binaries, generates wallet key, writes conservative
+#   policy, and starts daemon. On Linux: systemd service + dedicated system user.
+#   On macOS: LaunchAgent + current user (developer laptop mode).
 #
 # Overrides:
 #   OPENCLAW_SPEC=<npm-install-spec>       # optional direct spec (e.g. file:/path, git+https://...)
@@ -71,8 +72,8 @@ fi
 
 SAW_INSTALL="${SAW_INSTALL:-1}"
 SAW_VERSION="${SAW_VERSION:-}"
-SAW_ROOT="${SAW_ROOT:-/opt/saw}"
-SAW_SOCKET="${SAW_SOCKET:-/run/saw/saw.sock}"
+SAW_ROOT="${SAW_ROOT:-}"
+SAW_SOCKET="${SAW_SOCKET:-}"
 SAW_WALLET="${SAW_WALLET:-main}"
 SAW_CHAIN="${SAW_CHAIN:-evm}"
 SAW_RELEASE_REPO="${SAW_RELEASE_REPO:-daydreamsai/agent-wallet}"
@@ -99,6 +100,29 @@ saw_detect_platform() {
     *)             echo "ERROR: Unsupported architecture: $arch" >&2; return 1 ;;
   esac
   SAW_ARCHIVE="saw-${SAW_OS_NAME}-${SAW_ARCH}.tar.gz"
+}
+
+saw_set_platform_defaults() {
+  if [[ -z "$SAW_ROOT" ]]; then
+    if [[ "$SAW_OS_NAME" == "macos" ]]; then
+      SAW_ROOT="$HOME/.saw"
+    else
+      SAW_ROOT="/opt/saw"
+    fi
+  fi
+  if [[ -z "$SAW_SOCKET" ]]; then
+    if [[ "$SAW_OS_NAME" == "macos" ]]; then
+      SAW_SOCKET="$HOME/.saw/saw.sock"
+    else
+      SAW_SOCKET="/run/saw/saw.sock"
+    fi
+  fi
+
+  if [[ "$SAW_OS_NAME" == "macos" ]]; then
+    SAW_PLIST_LABEL="com.daydreamsai.saw"
+    SAW_PLIST_PATH="$HOME/Library/LaunchAgents/${SAW_PLIST_LABEL}.plist"
+    SAW_LOG_DIR="$HOME/Library/Logs/saw"
+  fi
 }
 
 saw_resolve_version() {
@@ -140,13 +164,30 @@ saw_download_and_install() {
   fi
 
   tar xzf "${tmpdir}/${SAW_ARCHIVE}" -C "$tmpdir"
-  sudo cp "${tmpdir}/saw" "${tmpdir}/saw-daemon" /usr/local/bin/
-  sudo chmod 755 /usr/local/bin/saw /usr/local/bin/saw-daemon
+  # Stop daemon if running — can't overwrite a running binary ("text file busy")
+  if [[ "$SAW_OS_NAME" == "linux" ]]; then
+    if systemctl is-active saw &>/dev/null; then
+      sudo systemctl stop saw
+      echo "==> SAW: stopped running daemon for binary upgrade"
+    fi
+  elif [[ "$SAW_OS_NAME" == "macos" ]]; then
+    if launchctl list "$SAW_PLIST_LABEL" &>/dev/null 2>&1; then
+      launchctl bootout "gui/$(id -u)" "$SAW_PLIST_PATH" 2>/dev/null || true
+      echo "==> SAW: stopped running daemon for binary upgrade"
+    fi
+  fi
+  sudo install -m 755 "${tmpdir}/saw" /usr/local/bin/saw
+  sudo install -m 755 "${tmpdir}/saw-daemon" /usr/local/bin/saw-daemon
   rm -rf "$tmpdir"
   echo "==> SAW: binaries installed to /usr/local/bin/"
 }
 
 saw_create_users() {
+  if [[ "$SAW_OS_NAME" == "macos" ]]; then
+    echo "==> SAW: running as current user ($(whoami)), no system user needed"
+    return 0
+  fi
+
   if ! id "$SAW_SERVICE_USER" &>/dev/null; then
     if getent group "$SAW_SERVICE_USER" &>/dev/null; then
       # Group already exists (e.g. from a previous partial run) — use it as primary
@@ -177,7 +218,12 @@ saw_init_root() {
     echo "==> SAW: data directory already initialized at $SAW_ROOT"
     return 0
   fi
-  sudo /usr/local/bin/saw install --root "$SAW_ROOT"
+  if [[ "$SAW_OS_NAME" == "macos" ]]; then
+    mkdir -p "$SAW_ROOT"
+    /usr/local/bin/saw install --root "$SAW_ROOT"
+  else
+    sudo /usr/local/bin/saw install --root "$SAW_ROOT"
+  fi
   echo "==> SAW: initialized data directory at $SAW_ROOT"
 }
 
@@ -188,14 +234,23 @@ saw_generate_key() {
   fi
 
   local key_file="${SAW_ROOT}/keys/${SAW_CHAIN}/${SAW_WALLET}.key"
+
   if [[ -f "$key_file" ]]; then
     echo "==> SAW: wallet '${SAW_WALLET}' already exists for chain '${SAW_CHAIN}'"
-    sudo /usr/local/bin/saw address --chain "$SAW_CHAIN" --wallet "$SAW_WALLET" --root "$SAW_ROOT" 2>/dev/null || true
+    if [[ "$SAW_OS_NAME" == "macos" ]]; then
+      /usr/local/bin/saw address --chain "$SAW_CHAIN" --wallet "$SAW_WALLET" --root "$SAW_ROOT" 2>/dev/null || true
+    else
+      sudo /usr/local/bin/saw address --chain "$SAW_CHAIN" --wallet "$SAW_WALLET" --root "$SAW_ROOT" 2>/dev/null || true
+    fi
     return 0
   fi
 
   echo "==> SAW: generating key (chain=${SAW_CHAIN}, wallet=${SAW_WALLET})"
-  sudo /usr/local/bin/saw gen-key --chain "$SAW_CHAIN" --wallet "$SAW_WALLET" --root "$SAW_ROOT"
+  if [[ "$SAW_OS_NAME" == "macos" ]]; then
+    /usr/local/bin/saw gen-key --chain "$SAW_CHAIN" --wallet "$SAW_WALLET" --root "$SAW_ROOT"
+  else
+    sudo /usr/local/bin/saw gen-key --chain "$SAW_CHAIN" --wallet "$SAW_WALLET" --root "$SAW_ROOT"
+  fi
   echo "==> SAW: key generated on-device (never exported)"
   echo ""
   echo "    IMPORTANT: Fund this wallet address with ETH (gas) and USDC on Base"
@@ -211,13 +266,22 @@ saw_write_policy() {
     return 0
   fi
 
-  if [[ -f "$policy_file" ]] && sudo grep -q "^  ${SAW_WALLET}:" "$policy_file" 2>/dev/null; then
+  local _policy_exists=0
+  if [[ -f "$policy_file" ]]; then
+    if [[ "$SAW_OS_NAME" == "macos" ]]; then
+      grep -q "^  ${SAW_WALLET}:" "$policy_file" 2>/dev/null && _policy_exists=1
+    else
+      sudo grep -q "^  ${SAW_WALLET}:" "$policy_file" 2>/dev/null && _policy_exists=1
+    fi
+  fi
+  if [[ "$_policy_exists" == "1" ]]; then
     echo "==> SAW: policy already configured for wallet '${SAW_WALLET}', skipping"
     return 0
   fi
 
   echo "==> SAW: writing conservative default policy"
-  sudo tee "$policy_file" > /dev/null << 'POLICY_EOF'
+  if [[ "$SAW_OS_NAME" == "macos" ]]; then
+    tee "$policy_file" > /dev/null << 'POLICY_EOF'
 wallets:
   main:
     chain: evm
@@ -227,6 +291,18 @@ wallets:
     allowlist_addresses: []
     rate_limit_per_minute: 10
 POLICY_EOF
+  else
+    sudo tee "$policy_file" > /dev/null << 'POLICY_EOF'
+wallets:
+  main:
+    chain: evm
+    allowed_chains: [8453]
+    max_tx_value_eth: 0.01
+    allow_contract_calls: false
+    allowlist_addresses: []
+    rate_limit_per_minute: 10
+POLICY_EOF
+  fi
   echo ""
   echo "    NOTE: The default policy has an EMPTY allowlist."
   echo "    SAW will deny all signing requests until you add the x402"
@@ -236,14 +312,62 @@ POLICY_EOF
 }
 
 saw_fix_permissions() {
-  sudo chown -R "$SAW_SERVICE_USER:$SAW_SERVICE_USER" "$SAW_ROOT"
-  sudo find "$SAW_ROOT/keys" -type d -exec chmod 0700 {} \;
-  sudo find "$SAW_ROOT/keys" -type f -exec chmod 0600 {} \;
-  sudo chmod 0640 "$SAW_ROOT/policy.yaml"
-  if [[ -f "$SAW_ROOT/audit.log" ]]; then
-    sudo chmod 0640 "$SAW_ROOT/audit.log"
+  if [[ "$SAW_OS_NAME" == "macos" ]]; then
+    # Current user owns everything; just tighten modes
+    chmod -R go-rwx "$SAW_ROOT/keys"
+    chmod 0640 "$SAW_ROOT/policy.yaml" 2>/dev/null || true
+    [[ -f "$SAW_ROOT/audit.log" ]] && chmod 0640 "$SAW_ROOT/audit.log"
+  else
+    sudo chown -R "$SAW_SERVICE_USER:$SAW_SERVICE_USER" "$SAW_ROOT"
+    sudo find "$SAW_ROOT/keys" -type d -exec chmod 0700 {} \;
+    sudo find "$SAW_ROOT/keys" -type f -exec chmod 0600 {} \;
+    sudo chmod 0640 "$SAW_ROOT/policy.yaml"
+    if [[ -f "$SAW_ROOT/audit.log" ]]; then
+      sudo chmod 0640 "$SAW_ROOT/audit.log"
+    fi
   fi
   echo "==> SAW: permissions hardened"
+}
+
+saw_install_launchagent() {
+  mkdir -p "$(dirname "$SAW_PLIST_PATH")"
+  mkdir -p "$SAW_LOG_DIR"
+
+  cat > "$SAW_PLIST_PATH" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${SAW_PLIST_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/saw-daemon</string>
+    <string>--socket</string>
+    <string>${SAW_SOCKET}</string>
+    <string>--root</string>
+    <string>${SAW_ROOT}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${SAW_LOG_DIR}/stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>${SAW_LOG_DIR}/stderr.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>
+PLIST_EOF
+
+  plutil -lint "$SAW_PLIST_PATH" >/dev/null
+  echo "==> SAW: LaunchAgent installed at $SAW_PLIST_PATH"
 }
 
 saw_install_systemd() {
@@ -286,8 +410,21 @@ SERVICE_EOF
   echo "==> SAW: systemd service installed and enabled"
 }
 
+saw_install_service() {
+  if [[ "$SAW_OS_NAME" == "macos" ]]; then
+    saw_install_launchagent
+  else
+    saw_install_systemd
+  fi
+}
+
 saw_start_and_verify() {
-  sudo systemctl restart saw
+  if [[ "$SAW_OS_NAME" == "macos" ]]; then
+    launchctl bootout "gui/$(id -u)" "$SAW_PLIST_PATH" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$SAW_PLIST_PATH"
+  else
+    sudo systemctl restart saw
+  fi
   echo "==> SAW: daemon starting..."
 
   local waited=0
@@ -300,12 +437,22 @@ saw_start_and_verify() {
     echo "==> SAW: daemon running, socket at $SAW_SOCKET"
   else
     echo "WARNING: SAW socket not found after 5s at $SAW_SOCKET" >&2
-    echo "    Check: sudo systemctl status saw" >&2
-    echo "    Check: sudo journalctl -u saw --no-pager -n 20" >&2
+    if [[ "$SAW_OS_NAME" == "macos" ]]; then
+      echo "    Check: launchctl list $SAW_PLIST_LABEL" >&2
+      echo "    Logs:  cat $SAW_LOG_DIR/stderr.log" >&2
+    else
+      echo "    Check: sudo systemctl status saw" >&2
+      echo "    Check: sudo journalctl -u saw --no-pager -n 20" >&2
+    fi
   fi
 }
 
 saw_grant_gateway_access() {
+  if [[ "$SAW_OS_NAME" == "macos" ]]; then
+    echo "==> SAW: socket access via current user (no group needed)"
+    return 0
+  fi
+
   local gateway_user="${SAW_GATEWAY_USER}"
 
   if [[ -z "$gateway_user" ]]; then
@@ -340,6 +487,7 @@ if [[ "$SAW_INSTALL" == "1" ]]; then
   echo "============================================"
   echo ""
   saw_detect_platform
+  saw_set_platform_defaults
   saw_resolve_version
   saw_download_and_install
   saw_create_users
@@ -347,7 +495,7 @@ if [[ "$SAW_INSTALL" == "1" ]]; then
   saw_generate_key
   saw_write_policy
   saw_fix_permissions
-  saw_install_systemd
+  saw_install_service
   saw_start_and_verify
   saw_grant_gateway_access
   echo ""
@@ -448,7 +596,10 @@ resolve_npm_script_shell() {
 
 resolve_path() {
   local input="$1"
-  readlink -f "$input" 2>/dev/null || realpath "$input" 2>/dev/null || printf '%s\n' ""
+  readlink -f "$input" 2>/dev/null \
+    || realpath "$input" 2>/dev/null \
+    || (cd "$(dirname "$input")" 2>/dev/null && echo "$PWD/$(basename "$input")") \
+    || printf '%s\n' ""
 }
 
 run_npm() {
