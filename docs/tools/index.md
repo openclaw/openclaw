@@ -143,7 +143,7 @@ Use these in `tools.allow` / `tools.deny`.
 Available groups:
 
 - `group:runtime`: `exec`, `bash`, `process`
-- `group:fs`: `read`, `write`, `edit`, `apply_patch`
+- `group:fs`: `read`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`
 - `group:web`: `web_search`, `web_fetch`

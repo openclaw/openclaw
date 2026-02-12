@@ -54,15 +54,7 @@ describe("sandbox explain helpers", () => {
     };
 
     const policy = resolveSandboxToolPolicyForAgent(cfg, "work");
-    expect(policy.allow).toEqual([
-      "memory_search",
-      "memory_get",
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "image",
-    ]);
+    expect(policy.allow).toEqual(["memory_search", "memory_get", "read", "apply_patch", "image"]);
   });
 
   it("denies still win after group expansion", () => {

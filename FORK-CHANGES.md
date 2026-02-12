@@ -88,6 +88,18 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
 - **Ollama**
   - Support `OLLAMA_HOST` for cloud/remote discovery and requests (`8cb58d65d`). When `OLLAMA_HOST` is set, discovery uses a 15s timeout (vs 5s for local) to reduce timeouts on VPS/remote.
   - After merging upstream (openclaw#14131), both behaviors are preserved: (1) **Configured base URL** — when an explicit `baseUrl` is provided (e.g. via config or `explicitProviders.ollama.baseUrl`), it is used for discovery and the provider; (2) **OLLAMA_HOST fallback** — when no base URL is configured, `OLLAMA_HOST` (or the default localhost) is used. `resolveOllamaApiBase(configuredBaseUrl?)` and `buildOllamaProvider(configuredBaseUrl?)` in `src/agents/models-config.providers.ts` implement this; tests cover both “OLLAMA_HOST for provider baseUrl” and “preserve explicit ollama baseUrl on implicit provider injection”.
+  - **Per-agent models.json safety** — `update.run` now clears `~/.openclaw/agents/*/agent/models.json` after successful updates so any hallucinated or stale model registries are discarded and regenerated from the canonical config on next boot.
+
+### Foundry / Cursor integration hardening
+
+- **Tool group tightening for agents**
+  - `group:fs` now expands to `read` + `apply_patch` only. Direct `write`/`edit` are no longer part of the global fs group and must be granted explicitly on a per-agent basis (for example, to a dedicated analyst workspace) instead of every agent inheriting broad write access.
+  - Gateway docs and examples have been updated so `tools.profile: "coding"` plus `group:fs` describe read + structured patch access, matching the new behavior.
+- **Config template guidance**
+  - The default `openclaw.json` example under `docs/gateway/configuration-examples.md` now recommends granting global `exec`/`process` + `group:fs` only, with a comment pointing operators toward per-agent tool grants for high-privilege writers.
+  - `.env.example` documents `GATEWAY_BOOTSTRAP_TIMEOUT=120000` as the recommended baseline when running heavy Foundry-style plugin stacks so cold-start SIGKILLs are less likely.
+- **Foundry-side config writes (external repo)**
+  - When updating the OpenClaw-Foundry extension, ensure its `foundry_write_extension` (or equivalent) performs a pre-flight check before committing any `models.providers` or provider entries into `openclaw.json`: for each new provider, verify the corresponding API key/token environment variables are present, and abort with a clear error if they are not. This keeps the gateway from booting into an invalid provider config.
 
 - _(Add further customizations, fixes, or config here as you make them.)_
 

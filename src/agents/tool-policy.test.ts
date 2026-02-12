@@ -10,8 +10,10 @@ describe("tool-policy", () => {
     expect(set.has("bash")).toBe(false);
     expect(set.has("apply_patch")).toBe(true);
     expect(set.has("read")).toBe(true);
-    expect(set.has("write")).toBe(true);
-    expect(set.has("edit")).toBe(true);
+    // write/edit are no longer part of the global fs group; they must be
+    // granted explicitly in tightly scoped configs.
+    expect(set.has("write")).toBe(false);
+    expect(set.has("edit")).toBe(false);
   });
 
   it("resolves known profiles and ignores unknown ones", () => {

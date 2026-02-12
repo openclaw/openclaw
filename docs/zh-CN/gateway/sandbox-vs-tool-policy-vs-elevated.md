@@ -93,7 +93,7 @@ openclaw sandbox explain --json
 可用的组：
 
 - `group:runtime`：`exec`、`bash`、`process`
-- `group:fs`：`read`、`write`、`edit`、`apply_patch`
+- `group:fs`：`read`、`apply_patch`
 - `group:sessions`：`sessions_list`、`sessions_history`、`sessions_send`、`sessions_spawn`、`session_status`
 - `group:memory`：`memory_search`、`memory_get`
 - `group:ui`：`browser`、`canvas`

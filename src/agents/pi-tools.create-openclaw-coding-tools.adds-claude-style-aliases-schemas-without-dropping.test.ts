@@ -363,8 +363,10 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has("read")).toBe(true);
-    expect(names.has("write")).toBe(true);
-    expect(names.has("edit")).toBe(true);
+    // write/edit are no longer part of the global fs group; they must be
+    // granted explicitly via per-agent or sandbox tool policies.
+    expect(names.has("write")).toBe(false);
+    expect(names.has("edit")).toBe(false);
     expect(names.has("exec")).toBe(false);
     expect(names.has("browser")).toBe(false);
   });
@@ -374,8 +376,10 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has("read")).toBe(false);
-    expect(names.has("write")).toBe(false);
-    expect(names.has("edit")).toBe(false);
+    // write/edit are unaffected by denying group:fs since they are no longer
+    // part of that group; they remain available unless explicitly denied.
+    expect(names.has("write")).toBe(true);
+    expect(names.has("edit")).toBe(true);
     expect(names.has("exec")).toBe(true);
   });
   it("lets agent profiles override global profiles", () => {

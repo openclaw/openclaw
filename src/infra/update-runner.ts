@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
 import {
   resolveControlUiDistIndexHealth,
@@ -107,6 +108,30 @@ function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
   const binName = path.basename(normalized);
   const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
   return path.join(nodeModulesDir, binName);
+}
+
+async function cleanupAgentModelsJsonFiles() {
+  const stateDir = resolveStateDir();
+  const agentsRoot = path.join(stateDir, "agents");
+  let entries: fs.Dirent[];
+  try {
+    // If there is no agents directory yet, nothing to clean up.
+    entries = await fs.readdir(agentsRoot, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map(async (entry) => {
+        const candidate = path.join(agentsRoot, entry.name, "agent", "models.json");
+        try {
+          await fs.rm(candidate, { force: true });
+        } catch {
+          // Best-effort cleanup; ignore per-agent failures.
+        }
+      }),
+  );
 }
 
 function buildStartDirs(opts: UpdateRunnerOptions): string[] {
@@ -840,6 +865,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     steps.push(afterShaStep);
     const afterVersion = await readPackageVersion(gitRoot);
 
+    // After a successful git-based update, drop any per-agent models.json
+    // files so the next gateway boot regenerates them from the canonical
+    // config instead of stale or hallucinated data.
+    if (!failedStep) {
+      await cleanupAgentModelsJsonFiles();
+    }
+
     return {
       status: failedStep ? "error" : "ok",
       mode: "git",
@@ -888,6 +920,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     });
     const steps = [updateStep];
     const afterVersion = await readPackageVersion(pkgRoot);
+
+    // For global installs, also clear any stale per-agent models.json so
+    // fresh model metadata is derived from the updated config on next run.
+    if (updateStep.exitCode === 0) {
+      await cleanupAgentModelsJsonFiles();
+    }
     return {
       status: updateStep.exitCode === 0 ? "ok" : "error",
       mode: globalManager,

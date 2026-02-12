@@ -233,7 +233,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 工具策略（全局、智能体、沙箱）支持 `group:*` 条目，可扩展为多个具体工具：
 
 - `group:runtime`：`exec`、`bash`、`process`
-- `group:fs`：`read`、`write`、`edit`、`apply_patch`
+- `group:fs`：`read`、`apply_patch`
 - `group:sessions`：`sessions_list`、`sessions_history`、`sessions_send`、`sessions_spawn`、`session_status`
 - `group:memory`：`memory_search`、`memory_get`
 - `group:ui`：`browser`、`canvas`

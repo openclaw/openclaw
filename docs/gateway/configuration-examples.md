@@ -302,7 +302,11 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   },
 
   tools: {
-    allow: ["exec", "process", "read", "write", "edit", "apply_patch"],
+    // Global default: execution + read/patch access only. Write/edit are
+    // granted explicitly on a per-agent basis so that high-risk agents
+    // (for example, autonomous optimizers) can be scoped to a dedicated
+    // workspace directory instead of the full config root.
+    allow: ["exec", "process", "group:fs"],
     deny: ["browser", "canvas"],
     exec: {
       backgroundMs: 10000,

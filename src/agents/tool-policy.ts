@@ -17,7 +17,11 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   "group:memory": ["memory_search", "memory_get"],
   "group:web": ["web_search", "web_fetch"],
   // Basic workspace/file tools
-  "group:fs": ["read", "write", "edit", "apply_patch"],
+  // Intentionally read + structured patch only. Direct write/edit are
+  // no longer part of the global fs group so they can be granted only
+  // in tightly scoped, path-restricted configs (for example a dedicated
+  // analyst workspace) instead of every agent inheriting full fs writes.
+  "group:fs": ["read", "apply_patch"],
   // Host/runtime execution tools
   "group:runtime": ["exec", "process"],
   // Session management tools
