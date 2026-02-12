@@ -8,7 +8,7 @@ export type FailoverReason = "auth" | "format" | "rate_limit" | "billing" | "tim
  * payment info in the error response body (topup URL, balance, scheme).
  */
 export type X402PaymentInfo = {
-  /** URL where credits can be purchased (e.g., "https://openclaw.rocks/fuel"). */
+  /** URL where credits can be purchased (e.g., "https://example.com/billing"). */
   topupUrl?: string;
   /** Current balance information from the provider. */
   balance?: {

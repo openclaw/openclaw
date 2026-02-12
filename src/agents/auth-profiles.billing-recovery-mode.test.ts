@@ -12,9 +12,9 @@ function createTempStore() {
     JSON.stringify({
       version: 1,
       profiles: {
-        "bifrost:fuel": {
+        "test-provider:main": {
           type: "api_key",
-          provider: "bifrost",
+          provider: "test-provider",
           key: "vk-test",
         },
       },
@@ -30,12 +30,12 @@ describe("billingRecoveryMode", () => {
       const startedAt = Date.now();
       await markAuthProfileFailure({
         store,
-        profileId: "bifrost:fuel",
+        profileId: "test-provider:main",
         reason: "billing",
         agentDir,
       });
 
-      const stats = store.usageStats?.["bifrost:fuel"];
+      const stats = store.usageStats?.["test-provider:main"];
       expect(stats?.disabledUntil).toBeDefined();
       expect(stats?.disabledReason).toBe("billing");
       const remainingMs = (stats?.disabledUntil as number) - startedAt;
@@ -51,7 +51,7 @@ describe("billingRecoveryMode", () => {
       const startedAt = Date.now();
       await markAuthProfileFailure({
         store,
-        profileId: "bifrost:fuel",
+        profileId: "test-provider:main",
         reason: "billing",
         agentDir,
         cfg: {
@@ -59,7 +59,7 @@ describe("billingRecoveryMode", () => {
         } as never,
       });
 
-      const stats = store.usageStats?.["bifrost:fuel"];
+      const stats = store.usageStats?.["test-provider:main"];
       // Should use cooldownUntil (not disabledUntil) for short retry
       expect(stats?.cooldownUntil).toBeDefined();
       expect(stats?.disabledUntil).toBeUndefined();
@@ -78,7 +78,7 @@ describe("billingRecoveryMode", () => {
     try {
       await markAuthProfileFailure({
         store,
-        profileId: "bifrost:fuel",
+        profileId: "test-provider:main",
         reason: "billing",
         agentDir,
         cfg: {
@@ -86,7 +86,7 @@ describe("billingRecoveryMode", () => {
         } as never,
       });
 
-      const stats = store.usageStats?.["bifrost:fuel"];
+      const stats = store.usageStats?.["test-provider:main"];
       expect(stats?.disabledUntil).toBeUndefined();
       expect(stats?.disabledReason).toBeUndefined();
       expect(stats?.cooldownUntil).toBeUndefined();
@@ -104,19 +104,19 @@ describe("billingRecoveryMode", () => {
       // Step 1: billing failure with default "disable" mode → profile disabled for hours
       await markAuthProfileFailure({
         store,
-        profileId: "bifrost:fuel",
+        profileId: "test-provider:main",
         reason: "billing",
         agentDir,
       });
 
-      const afterDisable = store.usageStats?.["bifrost:fuel"];
+      const afterDisable = store.usageStats?.["test-provider:main"];
       expect(afterDisable?.disabledUntil).toBeDefined();
       expect(afterDisable?.disabledReason).toBe("billing");
 
       // Step 2: config switches to "notify" mode → next failure must clear stale state
       await markAuthProfileFailure({
         store,
-        profileId: "bifrost:fuel",
+        profileId: "test-provider:main",
         reason: "billing",
         agentDir,
         cfg: {
@@ -124,7 +124,7 @@ describe("billingRecoveryMode", () => {
         } as never,
       });
 
-      const afterNotify = store.usageStats?.["bifrost:fuel"];
+      const afterNotify = store.usageStats?.["test-provider:main"];
       expect(afterNotify?.disabledUntil).toBeUndefined();
       expect(afterNotify?.disabledReason).toBeUndefined();
       expect(afterNotify?.cooldownUntil).toBeUndefined();
@@ -142,12 +142,12 @@ describe("billingRecoveryMode", () => {
       // Step 1: billing failure with default "disable" mode → profile disabled for hours
       await markAuthProfileFailure({
         store,
-        profileId: "bifrost:fuel",
+        profileId: "test-provider:main",
         reason: "billing",
         agentDir,
       });
 
-      const afterDisable = store.usageStats?.["bifrost:fuel"];
+      const afterDisable = store.usageStats?.["test-provider:main"];
       expect(afterDisable?.disabledUntil).toBeDefined();
       expect(afterDisable?.disabledReason).toBe("billing");
 
@@ -155,7 +155,7 @@ describe("billingRecoveryMode", () => {
       const beforeRetry = Date.now();
       await markAuthProfileFailure({
         store,
-        profileId: "bifrost:fuel",
+        profileId: "test-provider:main",
         reason: "billing",
         agentDir,
         cfg: {
@@ -163,7 +163,7 @@ describe("billingRecoveryMode", () => {
         } as never,
       });
 
-      const afterRetry = store.usageStats?.["bifrost:fuel"];
+      const afterRetry = store.usageStats?.["test-provider:main"];
       expect(afterRetry?.disabledUntil).toBeUndefined();
       expect(afterRetry?.disabledReason).toBeUndefined();
       expect(afterRetry?.cooldownUntil).toBeDefined();

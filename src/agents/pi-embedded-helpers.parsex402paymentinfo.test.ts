@@ -9,10 +9,10 @@ describe("parseX402PaymentInfo", () => {
   });
 
   it("extracts topup URL from error body", () => {
-    const raw = '402 {"error": "Credits exhausted", "topup": "https://openclaw.rocks/fuel"}';
+    const raw = '402 {"error": "Credits exhausted", "topup": "https://example.com/billing"}';
     const info = parseX402PaymentInfo(raw);
     expect(info).not.toBeNull();
-    expect(info?.topupUrl).toBe("https://openclaw.rocks/fuel");
+    expect(info?.topupUrl).toBe("https://example.com/billing");
   });
 
   it("extracts top_up URL (underscore variant)", () => {
@@ -25,13 +25,13 @@ describe("parseX402PaymentInfo", () => {
     const raw = JSON.stringify({
       error: "Credits exhausted",
       balance: { budgetLimit: 20, budgetUsed: 20, remaining: 0 },
-      topup: "https://openclaw.rocks/fuel",
+      topup: "https://example.com/billing",
     });
     const info = parseX402PaymentInfo(raw);
     expect(info?.balance?.budgetLimit).toBe(20);
     expect(info?.balance?.budgetUsed).toBe(20);
     expect(info?.balance?.remaining).toBe(0);
-    expect(info?.topupUrl).toBe("https://openclaw.rocks/fuel");
+    expect(info?.topupUrl).toBe("https://example.com/billing");
   });
 
   it("extracts from x402 accepts array", () => {
@@ -42,15 +42,15 @@ describe("parseX402PaymentInfo", () => {
           scheme: "fiat-redirect",
           network: "stripe",
           amount: "500",
-          payTo: "https://openclaw.rocks/fuel",
-          extra: { topupUrl: "https://openclaw.rocks/fuel" },
+          payTo: "https://example.com/billing",
+          extra: { topupUrl: "https://example.com/billing" },
         },
       ],
     });
     const info = parseX402PaymentInfo(raw);
     expect(info?.scheme).toBe("fiat-redirect");
     expect(info?.minAmountCents).toBe(500);
-    expect(info?.topupUrl).toBe("https://openclaw.rocks/fuel");
+    expect(info?.topupUrl).toBe("https://example.com/billing");
   });
 
   it("handles HTTP status code prefix", () => {
@@ -83,11 +83,11 @@ describe("formatBillingErrorMessage", () => {
 
   it("includes balance and topup URL when available", () => {
     const msg = formatBillingErrorMessage({
-      topupUrl: "https://openclaw.rocks/fuel",
+      topupUrl: "https://example.com/billing",
       balance: { remaining: 0, budgetLimit: 20 },
     });
     expect(msg).toContain("$0.00 of $20.00");
-    expect(msg).toContain("https://openclaw.rocks/fuel");
+    expect(msg).toContain("https://example.com/billing");
   });
 
   it("includes only remaining when budgetLimit is absent", () => {

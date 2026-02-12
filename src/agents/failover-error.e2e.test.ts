@@ -57,17 +57,17 @@ describe("failover-error", () => {
   it("extracts x402 payment info from billing error with JSON body", () => {
     const body = JSON.stringify({
       error: "Credits exhausted",
-      topup: "https://openclaw.rocks/fuel",
+      topup: "https://example.com/billing",
       balance: { budgetLimit: 20, budgetUsed: 20, remaining: 0 },
     });
     const err = coerceToFailoverError(`402 ${body}`, {
-      provider: "bifrost",
-      model: "kimi-k2p5",
+      provider: "test-gateway",
+      model: "test-model",
     });
     expect(err?.reason).toBe("billing");
     expect(err?.status).toBe(402);
     expect(err?.paymentInfo).toBeDefined();
-    expect(err?.paymentInfo?.topupUrl).toBe("https://openclaw.rocks/fuel");
+    expect(err?.paymentInfo?.topupUrl).toBe("https://example.com/billing");
     expect(err?.paymentInfo?.balance?.remaining).toBe(0);
   });
 

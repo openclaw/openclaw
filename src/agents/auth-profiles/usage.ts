@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import { parseDurationMs } from "../../cli/parse-duration.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 
@@ -92,22 +93,24 @@ type ResolvedAuthCooldownConfig = {
   billingRecoveryMode: BillingRecoveryMode;
 };
 
+function resolveDuration(raw: unknown, fallback: string): number {
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      return parseDurationMs(raw, { defaultUnit: "h" });
+    } catch {
+      // Invalid duration string — fall through to default
+    }
+  }
+  return parseDurationMs(fallback, { defaultUnit: "h" });
+}
+
 function resolveAuthCooldownConfig(params: {
   cfg?: OpenClawConfig;
   providerId: string;
 }): ResolvedAuthCooldownConfig {
-  const defaults = {
-    billingBackoffHours: 5,
-    billingMaxHours: 24,
-    failureWindowHours: 24,
-  } as const;
-
-  const resolveHours = (value: unknown, fallback: number) =>
-    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
-
   const cooldowns = params.cfg?.auth?.cooldowns;
   const billingOverride = (() => {
-    const map = cooldowns?.billingBackoffHoursByProvider;
+    const map = cooldowns?.billingBackoffByProvider;
     if (!map) {
       return undefined;
     }
@@ -119,23 +122,13 @@ function resolveAuthCooldownConfig(params: {
     return undefined;
   })();
 
-  const billingBackoffHours = resolveHours(
-    billingOverride ?? cooldowns?.billingBackoffHours,
-    defaults.billingBackoffHours,
-  );
-  const billingMaxHours = resolveHours(cooldowns?.billingMaxHours, defaults.billingMaxHours);
-  const failureWindowHours = resolveHours(
-    cooldowns?.failureWindowHours,
-    defaults.failureWindowHours,
-  );
-
   const billingRecoveryMode: BillingRecoveryMode =
     (cooldowns?.billingRecoveryMode as BillingRecoveryMode | undefined) ?? "disable";
 
   return {
-    billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
-    billingMaxMs: billingMaxHours * 60 * 60 * 1000,
-    failureWindowMs: failureWindowHours * 60 * 60 * 1000,
+    billingBackoffMs: resolveDuration(billingOverride ?? cooldowns?.billingBackoff, "5h"),
+    billingMaxMs: resolveDuration(cooldowns?.billingMax, "24h"),
+    failureWindowMs: resolveDuration(cooldowns?.failureWindow, "24h"),
     billingRecoveryMode,
   };
 }
