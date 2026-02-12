@@ -1,0 +1,27 @@
+{
+  "id": "amazon-nova",
+  "providers": ["amazon-nova"],
+  "providerAuthEnvVars": {
+    "amazon-nova": ["NOVA_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "amazon-nova",
+      "method": "api-key",
+      "choiceId": "amazon-nova-api-key",
+      "choiceLabel": "Amazon Nova API key",
+      "groupId": "amazon-nova",
+      "groupLabel": "Amazon Nova",
+      "groupHint": "API key",
+      "optionKey": "novaApiKey",
+      "cliFlag": "--nova-api-key",
+      "cliOption": "--nova-api-key <key>",
+      "cliDescription": "Amazon Nova API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/amazon-nova-provider",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw Amazon Nova provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
