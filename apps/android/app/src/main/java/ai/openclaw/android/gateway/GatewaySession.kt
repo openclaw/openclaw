@@ -292,12 +292,24 @@ class GatewaySession(
     }
 
     private suspend fun sendConnect(connectNonce: String?) {
-      val identity = identityStore.loadOrCreate()
-      val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
+      var identity = identityStore.loadOrCreate()
       val trimmedToken = token?.trim().orEmpty()
-      val authToken = if (storedToken.isNullOrBlank()) trimmedToken else storedToken
+      var storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
+      var authToken = if (storedToken.isNullOrBlank()) trimmedToken else storedToken
+      var payload = buildConnectParams(identity, connectNonce, authToken, password?.trim())
+
+      // If device auth fields could not be produced, regenerate identity and retry once.
+      if (payload["device"] == null) {
+        identity = identityStore.regenerate()
+        storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
+        authToken = if (storedToken.isNullOrBlank()) trimmedToken else storedToken
+        payload = buildConnectParams(identity, connectNonce, authToken, password?.trim())
+      }
+      if (payload["device"] == null) {
+        throw IllegalStateException("device identity unavailable")
+      }
+
       val canFallbackToShared = !storedToken.isNullOrBlank() && trimmedToken.isNotBlank()
-      val payload = buildConnectParams(identity, connectNonce, authToken, password?.trim())
       val res = request("connect", payload, timeoutMs = 8_000)
       if (!res.ok) {
         val msg = res.error?.message ?: "connect failed"
@@ -618,20 +630,40 @@ class GatewaySession(
     val host = parsed?.host?.trim().orEmpty()
     val port = parsed?.port ?: -1
     val scheme = parsed?.scheme?.trim().orEmpty().ifBlank { "http" }
+    val manualEndpoint = endpoint.stableId.startsWith("manual|")
+    val endpointHost = endpoint.host.trim()
+    val endpointScheme = if (endpoint.tlsEnabled || endpoint.port == 443) "https" else scheme
 
     if (trimmed.isNotBlank() && !isLoopbackHost(host)) {
+      if (
+        manualEndpoint &&
+          endpoint.port > 0 &&
+          port > 0 &&
+          endpoint.port != port &&
+          isSameEndpointHost(host, endpoint)
+      ) {
+        val formattedHost = if (endpointHost.contains(":")) "[${endpointHost}]" else endpointHost
+        return "$endpointScheme://$formattedHost:${endpoint.port}"
+      }
       return trimmed
     }
 
     val fallbackHost =
       endpoint.tailnetDns?.trim().takeIf { !it.isNullOrEmpty() }
         ?: endpoint.lanHost?.trim().takeIf { !it.isNullOrEmpty() }
-        ?: endpoint.host.trim()
+        ?: endpointHost
     if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
 
-    val fallbackPort = endpoint.canvasPort ?: if (port > 0) port else 18793
+    val fallbackPort =
+      when {
+        manualEndpoint && endpoint.port > 0 -> endpoint.port
+        endpoint.canvasPort != null -> endpoint.canvasPort
+        port > 0 -> port
+        endpoint.port > 0 -> endpoint.port
+        else -> 18793
+      }
     val formattedHost = if (fallbackHost.contains(":")) "[${fallbackHost}]" else fallbackHost
-    return "$scheme://$formattedHost:$fallbackPort"
+    return "$endpointScheme://$formattedHost:$fallbackPort"
   }
 
   private fun isLoopbackHost(raw: String?): Boolean {
@@ -641,6 +673,24 @@ class GatewaySession(
     if (host == "::1") return true
     if (host == "0.0.0.0" || host == "::") return true
     return host.startsWith("127.")
+  }
+
+  private fun isSameEndpointHost(rawHost: String?, endpoint: GatewayEndpoint): Boolean {
+    val host = normalizeHost(rawHost)
+    if (host.isEmpty()) return false
+    if (host == normalizeHost(endpoint.host)) return true
+    if (host == normalizeHost(endpoint.tailnetDns)) return true
+    if (host == normalizeHost(endpoint.lanHost)) return true
+    return false
+  }
+
+  private fun normalizeHost(rawHost: String?): String {
+    return rawHost
+      ?.trim()
+      ?.removePrefix("[")
+      ?.removeSuffix("]")
+      ?.lowercase()
+      .orEmpty()
   }
 }
 

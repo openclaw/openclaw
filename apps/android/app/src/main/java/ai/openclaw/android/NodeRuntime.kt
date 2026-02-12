@@ -164,6 +164,7 @@ class NodeRuntime(context: Context) {
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         applyMainSessionKey(mainSessionKey)
         updateStatus()
+        maybeNavigateToA2uiOnConnect()
         scope.launch { refreshBrandingFromGateway() }
         scope.launch { refreshWakeWordsFromGateway() }
       },
@@ -202,7 +203,11 @@ class NodeRuntime(context: Context) {
         nodeConnected = false
         nodeStatusText = message
         updateStatus()
-        showLocalCanvasOnDisconnect()
+        if (operatorConnected) {
+          maybeNavigateToA2uiOnConnect()
+        } else {
+          showLocalCanvasOnDisconnect()
+        }
       },
       onEvent = { _, _ -> },
       onInvoke = { req ->
@@ -258,12 +263,18 @@ class NodeRuntime(context: Context) {
   }
 
   private fun maybeNavigateToA2uiOnConnect() {
-    val a2uiUrl = resolveA2uiHostUrl() ?: return
     val current = canvas.currentUrl()?.trim().orEmpty()
-    if (current.isEmpty() || current == lastAutoA2uiUrl) {
-      lastAutoA2uiUrl = a2uiUrl
-      canvas.navigate(a2uiUrl)
+    if (current.isNotEmpty() && current != lastAutoA2uiUrl) return
+
+    val a2uiUrl = resolveA2uiHostUrl()
+    if (a2uiUrl.isNullOrBlank() || !canReachCanvasHost(a2uiUrl)) {
+      lastAutoA2uiUrl = null
+      canvas.navigate("")
+      return
     }
+
+    lastAutoA2uiUrl = a2uiUrl
+    canvas.navigate(a2uiUrl)
   }
 
   private fun showLocalCanvasOnDisconnect() {
@@ -358,7 +369,7 @@ class NodeRuntime(context: Context) {
           val port = manualPort.value
           if (host.isNotEmpty() && port in 1..65535) {
             didAutoConnect = true
-            connect(GatewayEndpoint.manual(host = host, port = port))
+            connect(GatewayEndpoint.manual(host = host, port = port, tlsEnabled = manualTls.value))
           }
           return@collect
         }
@@ -541,7 +552,9 @@ class NodeRuntime(context: Context) {
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-control-ui", clientMode = "ui"),
+      // Use native Android client identity for operator connections.
+      // "openclaw-control-ui" is browser-only and triggers strict Origin checks.
+      client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
   }
@@ -604,7 +617,7 @@ class NodeRuntime(context: Context) {
       _statusText.value = "Failed: invalid manual host/port"
       return
     }
-    connect(GatewayEndpoint.manual(host = host, port = port))
+    connect(GatewayEndpoint.manual(host = host, port = port, tlsEnabled = manualTls.value))
   }
 
   fun disconnect() {
@@ -1116,6 +1129,31 @@ class NodeRuntime(context: Context) {
     if (raw.isBlank()) return null
     val base = raw.trimEnd('/')
     return "${base}/__openclaw__/a2ui/?platform=android"
+  }
+
+  private fun canReachCanvasHost(a2uiUrl: String): Boolean {
+    var conn: java.net.HttpURLConnection? = null
+    return try {
+      val url = java.net.URI(a2uiUrl).toURL()
+      conn = (url.openConnection() as? java.net.HttpURLConnection) ?: return false
+      conn.connectTimeout = 1800
+      conn.readTimeout = 2200
+      conn.instanceFollowRedirects = true
+      conn.requestMethod = "GET"
+
+      val code = conn.responseCode
+      if (code !in 200..299) return false
+
+      val content =
+        conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+          reader.readText()
+        }
+      !content.contains("A2UI assets not found", ignoreCase = true)
+    } catch (_: Throwable) {
+      false
+    } finally {
+      conn?.disconnect()
+    }
   }
 
   private suspend fun ensureA2uiReady(a2uiUrl: String): Boolean {

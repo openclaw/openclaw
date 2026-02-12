@@ -78,6 +78,13 @@ In the Android app:
 - Open **Settings**.
 - Under **Discovered Gateways**, select your gateway and hit **Connect**.
 - If mDNS is blocked, use **Advanced → Manual Gateway** (host + port) and **Connect (Manual)**.
+- Manual gateway defaults:
+  - Port: `443`
+  - TLS: enabled (`Require TLS`)
+- For Tailscale Serve, use:
+  - Host: `<gateway-magicdns-host>`
+  - Port: `443`
+  - TLS: enabled
 
 After the first successful pairing, Android auto-reconnects on launch:
 
@@ -89,11 +96,17 @@ After the first successful pairing, Android auto-reconnects on launch:
 On the gateway machine:
 
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
+openclaw devices list
+openclaw devices approve <requestId>
+openclaw devices reject <requestId>
 ```
 
 Pairing details: [Gateway pairing](/gateway/pairing).
+
+Notes:
+
+- For Android/WebSocket node handshakes, use `openclaw devices ...` (role-based device pairing).
+- `openclaw nodes pending/approve/reject` manages the separate `node.pair.*` store and does not gate WS `connect`.
 
 ### 5) Verify the node is connected
 
@@ -149,3 +162,41 @@ Camera commands (foreground only; permission-gated):
 - `camera.clip` (mp4)
 
 See [Camera node](/nodes/camera) for parameters and CLI helpers.
+
+## A2UI landing behavior (Android)
+
+When the Android app is connected and idle, the canvas shows a centered readiness hint:
+
+- `Ready!`
+- `Chat or speak.`
+
+This means the app is connected and waiting for A2UI updates from the agent.
+You will only see dynamic A2UI content after the agent (or CLI) pushes messages.
+
+Quick smoke test:
+
+```bash
+openclaw nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello from A2UI"
+```
+
+If the gateway canvas/A2UI host is not reachable (or A2UI assets are missing),
+Android falls back to the local scaffold instead of staying on a hard error page.
+
+## Common Android gateway errors
+
+- `pairing required`
+  - Approve with `openclaw devices list` then `openclaw devices approve <requestId>`.
+- `device identity unavailable`
+  - The app could not produce required device identity fields for `connect`; update to the latest Android build and reconnect.
+- `origin not allowed (open the control ui from the gateway host or allow it in gateway.controlUi.allowedOrigins)`
+  - Use a matching HTTPS endpoint in Manual Gateway (Tailscale Serve: MagicDNS host + port `443` + TLS enabled), or explicitly allow the origin:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      allowedOrigins: ["https://<gateway-magicdns-host>"],
+    },
+  },
+}
+```

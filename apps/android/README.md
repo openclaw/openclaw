@@ -30,15 +30,30 @@ pnpm openclaw gateway --port 18789 --verbose
 
 2) In the Android app:
 - Open **Settings**
-- Either select a discovered gateway under **Discovered Gateways**, or use **Advanced → Manual Gateway** (host + port).
+- Either select a discovered gateway under **Discovered Gateways**, or use **Advanced → Manual Gateway**.
+- Manual gateway defaults:
+  - Port: `443`
+  - TLS: enabled (`Require TLS`)
+- For Tailscale Serve setups:
+  - Host: your tailnet DNS name (for example `my-host.tailnet.ts.net`)
+  - Port: `443`
+  - TLS: enabled
 
 3) Approve pairing (on the gateway machine):
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
+openclaw devices list
+openclaw devices approve <requestId>
 ```
 
+For Android WS pairing, use `openclaw devices ...` (not `openclaw nodes pending/...`).
+
 More details: `docs/platforms/android.md`.
+
+## Canvas landing behavior
+
+- Connected + idle canvas shows: `Ready!` / `Chat or speak.`
+- A2UI content appears after agent/CLI pushes messages (for example `canvas.a2ui.push`).
+- If gateway A2UI assets are unavailable, Android falls back to a local scaffold instead of failing hard.
 
 ## Permissions
 

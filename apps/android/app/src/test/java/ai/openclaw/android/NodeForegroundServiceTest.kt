@@ -9,10 +9,12 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows
+import org.robolectric.annotation.ConscryptMode
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@ConscryptMode(ConscryptMode.Mode.OFF)
 class NodeForegroundServiceTest {
   @Test
   fun buildNotificationSetsLaunchIntent() {

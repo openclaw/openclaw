@@ -22,6 +22,7 @@ import androidx.webkit.WebViewFeature
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
@@ -37,6 +39,8 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
@@ -189,6 +193,22 @@ fun RootScreen(viewModel: MainViewModel) {
         else -> GatewayState.Disconnected
       }
     }
+  val warningBannerText =
+    remember(isForeground, statusText) {
+      when {
+        !isForeground -> "Canvas commands paused in background"
+        statusText.contains("node offline", ignoreCase = true) ->
+          "Node connection offline; canvas updates paused"
+        else -> null
+      }
+    }
+  val showReadyCard =
+    remember(isForeground, gatewayState, statusText, talkEnabled) {
+      isForeground &&
+        !talkEnabled &&
+        gatewayState == GatewayState.Connected &&
+        !statusText.contains("node offline", ignoreCase = true)
+    }
 
   val voiceEnabled =
     ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
@@ -212,6 +232,64 @@ fun RootScreen(viewModel: MainViewModel) {
       onClick = { sheet = Sheet.Settings },
       modifier = Modifier.windowInsetsPadding(safeOverlayInsets).padding(start = 12.dp, top = 12.dp),
     )
+  }
+
+  if (warningBannerText != null) {
+    Popup(alignment = Alignment.TopCenter, properties = PopupProperties(focusable = false)) {
+      Surface(
+        modifier = Modifier.windowInsetsPadding(safeOverlayInsets).padding(top = 12.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.96f),
+        tonalElevation = 4.dp,
+        shadowElevation = 0.dp,
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Report,
+            contentDescription = "Background pause notice",
+            tint = MaterialTheme.colorScheme.onTertiaryContainer,
+            modifier = Modifier.size(16.dp),
+          )
+          Text(
+            text = warningBannerText,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+          )
+        }
+      }
+    }
+  }
+
+  if (showReadyCard) {
+    Popup(alignment = Alignment.Center, properties = PopupProperties(focusable = false)) {
+      Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.97f),
+        tonalElevation = 10.dp,
+        shadowElevation = 3.dp,
+      ) {
+        Column(
+          modifier = Modifier.padding(horizontal = 28.dp, vertical = 24.dp),
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          Text(
+            text = "Ready!",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+          )
+          Text(
+            text = "Chat or speak.",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.92f),
+          )
+        }
+      }
+    }
   }
 
   Popup(alignment = Alignment.TopEnd, properties = PopupProperties(focusable = false)) {
