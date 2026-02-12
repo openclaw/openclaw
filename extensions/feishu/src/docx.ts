@@ -134,9 +134,13 @@ function splitMarkdownByHeadings(markdown: string): string[] {
   const lines = markdown.split("\n");
   const chunks: string[] = [];
   let current: string[] = [];
+  let inFencedBlock = false;
 
   for (const line of lines) {
-    if (/^#{1,2}\s/.test(line) && current.length > 0) {
+    if (/^(`{3,}|~{3,})/.test(line)) {
+      inFencedBlock = !inFencedBlock;
+    }
+    if (!inFencedBlock && /^#{1,2}\s/.test(line) && current.length > 0) {
       chunks.push(current.join("\n"));
       current = [];
     }
