@@ -196,6 +196,73 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("strips leading blank lines for WhatsApp text payloads", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 4000 } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "\n\nHello from WhatsApp" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "Hello from WhatsApp",
+      expect.objectContaining({ verbose: false }),
+    );
+  });
+
+  it("drops whitespace-only WhatsApp text payloads when no media is attached", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 4000 } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "   \n\t   " }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+
+  it("keeps WhatsApp media payloads but clears whitespace-only captions", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 4000 } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: " \n\t ", mediaUrl: "https://example.com/photo.png" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/photo.png",
+        verbose: false,
+      }),
+    );
+  });
+
   it("preserves fenced blocks for markdown chunkers in newline mode", async () => {
     const chunker = vi.fn((text: string) => (text ? [text] : []));
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
