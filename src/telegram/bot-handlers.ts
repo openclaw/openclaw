@@ -504,7 +504,16 @@ export const registerTelegramHandlers = ({
             );
           } catch (editErr) {
             const errStr = String(editErr);
-            if (!errStr.includes("message is not modified")) {
+            if (errStr.includes("no text in the message")) {
+              try {
+                await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
+              } catch {}
+              await bot.api.sendMessage(
+                callbackMessage.chat.id,
+                text,
+                keyboard ? { reply_markup: keyboard } : undefined,
+              );
+            } else if (!errStr.includes("message is not modified")) {
               throw editErr;
             }
           }
