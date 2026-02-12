@@ -341,4 +341,12 @@ export function registerConfigCli(program: Command) {
         defaultRuntime.exit(1);
       }
     });
+
+  cmd
+    .command("optimize-tokens")
+    .description("Apply token optimization settings (local memory, aggressive pruning)")
+    .action(async () => {
+      const { optimizeTokens } = await import("./optimize-tokens.js");
+      await optimizeTokens();
+    });
 }
