@@ -166,15 +166,22 @@ interface ControlUiInjectionOpts {
   assistantAvatar?: string;
 }
 
+function safeInlineJson(value: unknown): string {
+  // Escape < to \u003c to prevent </script> injection in inline script tags.
+  // JSON.stringify does not escape <, so a value containing "</script>" would
+  // prematurely close the script element and allow arbitrary HTML injection.
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
 function injectControlUiConfig(html: string, opts: ControlUiInjectionOpts): string {
   const { basePath, assistantName, assistantAvatar } = opts;
   const script =
     `<script>` +
-    `window.__OPENCLAW_CONTROL_UI_BASE_PATH__=${JSON.stringify(basePath)};` +
-    `window.__OPENCLAW_ASSISTANT_NAME__=${JSON.stringify(
+    `window.__OPENCLAW_CONTROL_UI_BASE_PATH__=${safeInlineJson(basePath)};` +
+    `window.__OPENCLAW_ASSISTANT_NAME__=${safeInlineJson(
       assistantName ?? DEFAULT_ASSISTANT_IDENTITY.name,
     )};` +
-    `window.__OPENCLAW_ASSISTANT_AVATAR__=${JSON.stringify(
+    `window.__OPENCLAW_ASSISTANT_AVATAR__=${safeInlineJson(
       assistantAvatar ?? DEFAULT_ASSISTANT_IDENTITY.avatar,
     )};` +
     `</script>`;
