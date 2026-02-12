@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { normalizeSignalAccountInput } from "./signal.js";
 
 describe("normalizeSignalAccountInput", () => {
@@ -18,6 +17,11 @@ describe("normalizeSignalAccountInput", () => {
   it("rejects non-numeric input", () => {
     expect(normalizeSignalAccountInput("ok")).toBeNull();
     expect(normalizeSignalAccountInput("++--")).toBeNull();
+  });
+
+  it("rejects inputs with stray + characters", () => {
+    expect(normalizeSignalAccountInput("++12345")).toBeNull();
+    expect(normalizeSignalAccountInput("+1+2345")).toBeNull();
   });
 
   it("rejects numbers that are too short or too long", () => {
