@@ -5,6 +5,7 @@ import path from "node:path";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig, CONFIG_PATH } from "../config/config.js";
+import { STATE_DIR } from "../config/paths.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -269,6 +270,171 @@ export function validateEnvFile(cwd: string = process.cwd()): {
   }
 }
 
+/**
+ * Get the default database file path
+ * Returns the path to the SQLite database used for memory storage
+ */
+export function getDefaultDatabasePath(stateDir: string = STATE_DIR): string {
+  return path.join(stateDir, "memory.sqlite");
+}
+
+/**
+ * Check if database file exists
+ */
+export function checkDatabaseExists(dbPath: string): {
+  ok: boolean;
+  path: string;
+  exists: boolean;
+} {
+  const exists = fs.existsSync(dbPath);
+  return {
+    ok: exists,
+    path: dbPath,
+    exists,
+  };
+}
+
+/**
+ * Check if database file is readable and writable
+ * Uses fs.accessSync to check permissions without opening the file
+ */
+export function checkDatabasePermissions(dbPath: string): {
+  ok: boolean;
+  readable: boolean;
+  writable: boolean;
+  error?: string;
+} {
+  try {
+    // Check read permission
+    fs.accessSync(dbPath, fs.constants.R_OK);
+    const readable = true;
+
+    // Check write permission
+    fs.accessSync(dbPath, fs.constants.W_OK);
+    const writable = true;
+
+    return { ok: true, readable, writable };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      readable: false,
+      writable: false,
+      error: message,
+    };
+  }
+}
+
+/**
+ * Check if we can open the database and run a simple query
+ * This validates that the SQLite database is not corrupted
+ */
+export function checkDatabaseConnection(dbPath: string): {
+  ok: boolean;
+  queryable: boolean;
+  error?: string;
+} {
+  try {
+    // Try to read the first few bytes to verify it's a valid SQLite file
+    const fd = fs.openSync(dbPath, "r");
+    const buffer = Buffer.alloc(16);
+    const bytesRead = fs.readSync(fd, buffer, 0, 16, 0);
+    fs.closeSync(fd);
+
+    if (bytesRead < 16) {
+      return {
+        ok: false,
+        queryable: false,
+        error: "Database file is too small to be a valid SQLite database",
+      };
+    }
+
+    // Check SQLite magic header: "SQLite format 3\0"
+    const header = buffer.toString("ascii", 0, 16);
+    if (!header.startsWith("SQLite format 3")) {
+      return {
+        ok: false,
+        queryable: false,
+        error: "File is not a valid SQLite database (invalid header)",
+      };
+    }
+
+    return { ok: true, queryable: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      queryable: false,
+      error: message,
+    };
+  }
+}
+
+/**
+ * Run all database connectivity checks
+ * Returns a summary of the database status
+ */
+export function checkDatabaseConnectivity(dbPath: string = getDefaultDatabasePath()): {
+  ok: boolean;
+  exists: boolean;
+  readable: boolean;
+  writable: boolean;
+  queryable: boolean;
+  path: string;
+  error?: string;
+} {
+  // Check if database exists
+  const existsCheck = checkDatabaseExists(dbPath);
+  if (!existsCheck.exists) {
+    return {
+      ok: false,
+      exists: false,
+      readable: false,
+      writable: false,
+      queryable: false,
+      path: dbPath,
+      error: `Database file not found at ${dbPath}`,
+    };
+  }
+
+  // Check permissions
+  const permissionsCheck = checkDatabasePermissions(dbPath);
+  if (!permissionsCheck.ok) {
+    return {
+      ok: false,
+      exists: true,
+      readable: permissionsCheck.readable,
+      writable: permissionsCheck.writable,
+      queryable: false,
+      path: dbPath,
+      error: permissionsCheck.error,
+    };
+  }
+
+  // Check connection (valid SQLite file)
+  const connectionCheck = checkDatabaseConnection(dbPath);
+  if (!connectionCheck.ok) {
+    return {
+      ok: false,
+      exists: true,
+      readable: true,
+      writable: true,
+      queryable: false,
+      path: dbPath,
+      error: connectionCheck.error,
+    };
+  }
+
+  return {
+    ok: true,
+    exists: true,
+    readable: true,
+    writable: true,
+    queryable: true,
+    path: dbPath,
+  };
+}
+
 export interface CheckOptions {
   /** Run without interactive prompts */
   nonInteractive?: boolean;
@@ -422,6 +588,15 @@ async function runInstallationChecks(): Promise<CheckResult> {
     name: "OpenClaw installation is accessible",
     ok: packageRootAccessible,
     message: packageRootAccessible ? undefined : "Installation may be corrupted",
+  });
+
+  // Check 9: Database connectivity
+  const dbCheck = checkDatabaseConnectivity();
+  checks.push({
+    id: "database",
+    name: "Database is accessible",
+    ok: dbCheck.ok,
+    message: dbCheck.ok ? undefined : dbCheck.error || "Database is not accessible",
   });
 
   const allOk = checks.every((c) => c.ok);

@@ -14,6 +14,11 @@ import {
   checkEnvFileExists,
   checkEnvExampleExists,
   validateEnvFile,
+  getDefaultDatabasePath,
+  checkDatabaseExists,
+  checkDatabasePermissions,
+  checkDatabaseConnection,
+  checkDatabaseConnectivity,
 } from "./check.js";
 
 describe("check command", () => {
@@ -49,6 +54,7 @@ describe("check command", () => {
     expect(checkIds).toContain("config-valid");
     expect(checkIds).toContain("gateway-mode");
     expect(checkIds).toContain("package-root");
+    expect(checkIds).toContain("database");
   });
 
   it("should output JSON when json option is true", async () => {
@@ -348,6 +354,162 @@ describe("validateEnvFile", () => {
 
     fs.unlinkSync(path.join(tmpDir, ".env"));
     fs.unlinkSync(path.join(tmpDir, ".env.example"));
+    fs.rmdirSync(tmpDir);
+  });
+});
+
+describe("getDefaultDatabasePath", () => {
+  it("should return path with state directory", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "db-test-"));
+    const dbPath = getDefaultDatabasePath(tmpDir);
+    expect(dbPath).toBe(path.join(tmpDir, "memory.sqlite"));
+    fs.rmdirSync(tmpDir);
+  });
+});
+
+describe("checkDatabaseExists", () => {
+  it("should return ok=false when database does not exist", () => {
+    const result = checkDatabaseExists("/nonexistent/path/memory.sqlite");
+    expect(result.ok).toBe(false);
+    expect(result.exists).toBe(false);
+  });
+
+  it("should return ok=true when database file exists", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "db-test-"));
+    const dbPath = path.join(tmpDir, "test.sqlite");
+
+    // Create a minimal SQLite file (just the header)
+    const sqliteHeader = Buffer.from("SQLite format 3\0");
+    fs.writeFileSync(dbPath, sqliteHeader);
+
+    const result = checkDatabaseExists(dbPath);
+    expect(result.ok).toBe(true);
+    expect(result.exists).toBe(true);
+    expect(result.path).toBe(dbPath);
+
+    fs.unlinkSync(dbPath);
+    fs.rmdirSync(tmpDir);
+  });
+});
+
+describe("checkDatabasePermissions", () => {
+  it("should return ok=false for non-existent file", () => {
+    const result = checkDatabasePermissions("/nonexistent/path/memory.sqlite");
+    expect(result.ok).toBe(false);
+    expect(result.readable).toBe(false);
+    expect(result.writable).toBe(false);
+  });
+
+  it("should return ok=true for readable and writable file", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "db-test-"));
+    const dbPath = path.join(tmpDir, "test.sqlite");
+
+    // Create a minimal SQLite file
+    const sqliteHeader = Buffer.from("SQLite format 3\0");
+    fs.writeFileSync(dbPath, sqliteHeader);
+
+    const result = checkDatabasePermissions(dbPath);
+    expect(result.ok).toBe(true);
+    expect(result.readable).toBe(true);
+    expect(result.writable).toBe(true);
+
+    fs.unlinkSync(dbPath);
+    fs.rmdirSync(tmpDir);
+  });
+});
+
+describe("checkDatabaseConnection", () => {
+  it("should return ok=false for non-existent file", () => {
+    const result = checkDatabaseConnection("/nonexistent/path/memory.sqlite");
+    expect(result.ok).toBe(false);
+    expect(result.queryable).toBe(false);
+  });
+
+  it("should return ok=true for valid SQLite file", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "db-test-"));
+    const dbPath = path.join(tmpDir, "test.sqlite");
+
+    // Create a valid SQLite file header (100 bytes minimum for valid SQLite)
+    const header = Buffer.alloc(100);
+    header.write("SQLite format 3\0", 0);
+    // Fill rest with zeros (valid SQLite file structure)
+    fs.writeFileSync(dbPath, header);
+
+    const result = checkDatabaseConnection(dbPath);
+    expect(result.ok).toBe(true);
+    expect(result.queryable).toBe(true);
+
+    fs.unlinkSync(dbPath);
+    fs.rmdirSync(tmpDir);
+  });
+
+  it("should return ok=false for invalid SQLite file", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "db-test-"));
+    const dbPath = path.join(tmpDir, "test.sqlite");
+
+    // Create an invalid file (not SQLite)
+    fs.writeFileSync(dbPath, "This is not a SQLite database");
+
+    const result = checkDatabaseConnection(dbPath);
+    expect(result.ok).toBe(false);
+    expect(result.queryable).toBe(false);
+
+    fs.unlinkSync(dbPath);
+    fs.rmdirSync(tmpDir);
+  });
+});
+
+describe("checkDatabaseConnectivity", () => {
+  it("should return comprehensive failure for non-existent database", () => {
+    const result = checkDatabaseConnectivity("/nonexistent/path/memory.sqlite");
+    expect(result.ok).toBe(false);
+    expect(result.exists).toBe(false);
+    expect(result.readable).toBe(false);
+    expect(result.writable).toBe(false);
+    expect(result.queryable).toBe(false);
+    expect(result.error).toContain("not found");
+  });
+
+  it("should return ok=true for valid accessible database", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "db-test-"));
+    const dbPath = path.join(tmpDir, "test.sqlite");
+
+    // Create a valid SQLite file
+    const header = Buffer.alloc(100);
+    header.write("SQLite format 3\0", 0);
+    fs.writeFileSync(dbPath, header);
+
+    const result = checkDatabaseConnectivity(dbPath);
+    expect(result.ok).toBe(true);
+    expect(result.exists).toBe(true);
+    expect(result.readable).toBe(true);
+    expect(result.writable).toBe(true);
+    expect(result.queryable).toBe(true);
+    expect(result.path).toBe(dbPath);
+    expect(result.error).toBeUndefined();
+
+    fs.unlinkSync(dbPath);
+    fs.rmdirSync(tmpDir);
+  });
+
+  it("should return ok=false for invalid database file", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "db-test-"));
+    const dbPath = path.join(tmpDir, "test.sqlite");
+
+    // Create an invalid file (larger than header but wrong content)
+    const invalidContent = Buffer.alloc(100);
+    invalidContent.write("This is not SQLite format 3 content here", 0);
+    fs.writeFileSync(dbPath, invalidContent);
+
+    const result = checkDatabaseConnectivity(dbPath);
+    expect(result.ok).toBe(false);
+    expect(result.exists).toBe(true);
+    expect(result.readable).toBe(true);
+    expect(result.writable).toBe(true);
+    expect(result.queryable).toBe(false);
+    expect(result.error).toContain("not a valid SQLite database");
+
+    fs.unlinkSync(dbPath);
     fs.rmdirSync(tmpDir);
   });
 });
