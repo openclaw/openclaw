@@ -538,18 +538,41 @@ Identical patterns, but with SQL examples instead of tool call examples:
 - NEVER modify `workspace_context.yaml` -- it is read-only context from Dench
 - Members list is authoritative for user-type field resolution
 
-### Section 11: Post-Mutation Pipeline (new)
+### Section 11: Post-Mutation Checklist (MANDATORY -- revised after agent testing)
 
-After any schema mutation (create/update/delete object, field, or document), run a 3-step pipeline:
+**Problem identified:** In testing, the agent correctly executed SQL (object + fields + entries) but skipped the filesystem projection (.object.yaml) and sometimes the PIVOT view. Root cause: the original skill mentioned these as afterthoughts ("Then project the filesystem...") with no concrete template or examples. The agent follows examples literally -- if examples only show SQL, it only does SQL.
 
-1. **Regenerate views**: `CREATE OR REPLACE VIEW v_{object}` for any affected objects
-2. **Project filesystem**: Sync the `knowledge/` directory structure from DuckDB (mkdir/rmdir for objects, write `.object.yaml` summaries, move `.md` files if nesting changed)
-3. **Sync to S3**: Run `dench/sync.sh` to persist workspace.duckdb + knowledge/ to S3
-4. **Regenerate WORKSPACE.md**: Human-readable summary of all objects, fields, entry counts, and views
+**Fix:** Every workflow example now uses an explicit 3-step structure. The post-mutation section is now a checklist, not a description.
+
+After creating/modifying an OBJECT or FIELDS:
+
+- `CREATE OR REPLACE VIEW v_{object_name}` -- regenerate PIVOT view
+- `mkdir -p dench/knowledge/{object_name}/` -- create directory
+- Write `.object.yaml` with id, name, description, icon, default_view, entry_count, and full field list
+- Update WORKSPACE.md
+
+After adding ENTRIES:
+
+- Update `entry_count` in `.object.yaml`
+- Verify: `SELECT * FROM v_{object} LIMIT 5`
+
+After deleting an OBJECT:
+
+- `DROP VIEW IF EXISTS v_{object_name}`
+- `rm -rf dench/knowledge/{object_name}/`
+
+The skill now includes:
+
+- A concrete `.object.yaml` template with example content (previously missing entirely)
+- Full bash commands for generating `.object.yaml` from DuckDB queries
+- "Step 1 / Step 2 / Step 3" structure in every workflow example (SQL, Filesystem, Verify)
+- Critical Reminders section leads with "NEVER SKIP FILESYSTEM PROJECTION" and "THREE STEPS, EVERY TIME"
 
 ### Section 12: Critical Reminders (adapted from `<critical_reminders>`)
 
-- Handle the ENTIRE CRM operation from analysis to SQL execution to summary
+- Handle the ENTIRE CRM operation from analysis to SQL execution **to filesystem projection** to summary
+- **NEVER SKIP FILESYSTEM PROJECTION**: After any object mutation, create/update `.object.yaml` AND the `v_{object}` view. If missing, the object is invisible in the sidebar.
+- **THREE STEPS, EVERY TIME**: (1) SQL transaction, (2) filesystem projection, (3) verify
 - Always check existing data before creating (SELECT before INSERT, or ON CONFLICT)
 - Search proactively to provide better UX (PIVOT with filters)
 - Never assume field names -- always verify with `SELECT * FROM fields WHERE object_id = ?`
@@ -561,6 +584,7 @@ After any schema mutation (create/update/delete object, field, or document), run
 - KANBAN BOARDS: `default_view = 'kanban'`, auto-create Status and Assigned To fields
 - PROTECTED OBJECTS: Never delete objects listed in `workspace_context.yaml` `protected_objects`
 - ONE EXEC CALL: Batch related SQL in a single transaction whenever possible -- this is the entire point of the filesystem-first approach
+- ENTRY COUNT: After adding entries, update `entry_count` in `.object.yaml`
 
 ---
 

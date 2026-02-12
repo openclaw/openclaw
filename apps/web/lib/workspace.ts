@@ -91,6 +91,49 @@ export function duckdbQuery<T = Record<string, unknown>>(
   }
 }
 
+/** Database file extensions that trigger the database viewer. */
+export const DB_EXTENSIONS = new Set([
+  "duckdb",
+  "sqlite",
+  "sqlite3",
+  "db",
+  "postgres",
+]);
+
+/** Check whether a filename has a database extension. */
+export function isDatabaseFile(filename: string): boolean {
+  const ext = filename.split(".").pop()?.toLowerCase();
+  return ext ? DB_EXTENSIONS.has(ext) : false;
+}
+
+/**
+ * Execute a DuckDB query against an arbitrary database file and return parsed JSON rows.
+ * This is used by the database viewer to introspect any .duckdb/.sqlite/.db file.
+ */
+export function duckdbQueryOnFile<T = Record<string, unknown>>(
+  dbFilePath: string,
+  sql: string,
+): T[] {
+  const bin = resolveDuckdbBin();
+  if (!bin) {return [];}
+
+  try {
+    const escapedSql = sql.replace(/'/g, "'\\''");
+    const result = execSync(`'${bin}' -json '${dbFilePath}' '${escapedSql}'`, {
+      encoding: "utf-8",
+      timeout: 15_000,
+      maxBuffer: 10 * 1024 * 1024,
+      shell: "/bin/sh",
+    });
+
+    const trimmed = result.trim();
+    if (!trimmed || trimmed === "[]") {return [];}
+    return JSON.parse(trimmed) as T[];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Validate and resolve a path within the dench workspace.
  * Prevents path traversal by ensuring the resolved path stays within root.

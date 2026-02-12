@@ -29,6 +29,74 @@ dench/
   WORKSPACE.md                  # Auto-generated schema summary
 ```
 
+## .object.yaml Format
+
+Every object directory MUST contain a `.object.yaml` file. This is a lightweight metadata projection that the sidebar reads. Generate it from DuckDB after creating or modifying any object.
+
+Template:
+
+```yaml
+id: "<object_id from DuckDB>"
+name: "<object_name>"
+description: "<object_description>"
+icon: "<lucide_icon_name>"
+default_view: "<table|kanban>"
+entry_count: <number>
+fields:
+  - name: "Full Name"
+    type: text
+    required: true
+  - name: "Email Address"
+    type: email
+    required: true
+  - name: "Status"
+    type: enum
+    values: ["New", "Contacted", "Qualified", "Converted"]
+  - name: "Assigned To"
+    type: user
+```
+
+Generate by querying DuckDB then writing the file:
+
+```bash
+# 1. Query object + fields from DuckDB
+duckdb dench/workspace.duckdb -json "
+  SELECT o.id, o.name, o.description, o.icon, o.default_view,
+         (SELECT COUNT(*) FROM entries WHERE object_id = o.id) as entry_count
+  FROM objects o WHERE o.name = 'lead'
+"
+duckdb dench/workspace.duckdb -json "
+  SELECT name, type, required, enum_values FROM fields
+  WHERE object_id = (SELECT id FROM objects WHERE name = 'lead')
+  ORDER BY sort_order
+"
+
+# 2. Write .object.yaml from the query results
+mkdir -p dench/knowledge/lead
+cat > dench/knowledge/lead/.object.yaml << 'YAML'
+id: "AbCdEfGh..."
+name: "lead"
+description: "Sales leads tracking"
+icon: "user-plus"
+default_view: "table"
+entry_count: 20
+fields:
+  - name: "Full Name"
+    type: text
+    required: true
+  - name: "Email Address"
+    type: email
+    required: true
+  - name: "Status"
+    type: enum
+    values: ["New", "Contacted", "Qualified", "Converted"]
+  - name: "Score"
+    type: number
+  - name: "Notes"
+    type: richtext
+YAML
+```
+
 ## Startup
 
 On every conversation:
@@ -268,17 +336,19 @@ COPY (SELECT * FROM v_leads) TO 'dench/exports/leads.csv' (HEADER true);
 
 ## Full Workflow: Create CRM Structure in One Shot
 
-Batch everything in a single exec call:
+EVERY object creation MUST complete ALL THREE steps below. Never stop after the SQL.
+
+**Step 1 — SQL: Create object + fields + view** (single exec call):
 
 ```sql
 BEGIN TRANSACTION;
 
--- 1. Create object
+-- 1a. Create object
 INSERT INTO objects (name, description, icon, default_view)
 VALUES ('lead', 'Sales leads tracking', 'user-plus', 'table')
 ON CONFLICT (name) DO NOTHING;
 
--- 2. Create all fields
+-- 1b. Create all fields
 INSERT INTO fields (object_id, name, type, required, sort_order) VALUES
   ((SELECT id FROM objects WHERE name = 'lead'), 'Full Name', 'text', true, 0),
   ((SELECT id FROM objects WHERE name = 'lead'), 'Email Address', 'email', true, 1),
@@ -295,7 +365,7 @@ INSERT INTO fields (object_id, name, type, enum_values, enum_colors, sort_order)
    '["Website","Referral","Cold Call","Social"]'::JSON, NULL, 5)
 ON CONFLICT (object_id, name) DO NOTHING;
 
--- 3. Auto-generate PIVOT view
+-- 1c. MANDATORY: auto-generate PIVOT view
 CREATE OR REPLACE VIEW v_lead AS
 PIVOT (
   SELECT e.id as entry_id, e.created_at, e.updated_at,
@@ -309,11 +379,58 @@ PIVOT (
 COMMIT;
 ```
 
-Then project the filesystem: `mkdir -p dench/knowledge/lead` and write `.object.yaml`.
+**Step 2 — Filesystem: Create object directory + .object.yaml** (exec call):
+
+```bash
+mkdir -p dench/knowledge/lead
+
+# Query the object metadata from DuckDB to build .object.yaml
+OBJ_ID=$(duckdb dench/workspace.duckdb -noheader -list "SELECT id FROM objects WHERE name = 'lead'")
+ENTRY_COUNT=$(duckdb dench/workspace.duckdb -noheader -list "SELECT COUNT(*) FROM entries WHERE object_id = '$OBJ_ID'")
+
+cat > dench/knowledge/lead/.object.yaml << 'YAML'
+id: "<use actual $OBJ_ID>"
+name: "lead"
+description: "Sales leads tracking"
+icon: "user-plus"
+default_view: "table"
+entry_count: <use actual $ENTRY_COUNT>
+fields:
+  - name: "Full Name"
+    type: text
+    required: true
+  - name: "Email Address"
+    type: email
+    required: true
+  - name: "Phone Number"
+    type: phone
+  - name: "Status"
+    type: enum
+    values: ["New", "Contacted", "Qualified", "Converted"]
+  - name: "Score"
+    type: number
+  - name: "Source"
+    type: enum
+    values: ["Website", "Referral", "Cold Call", "Social"]
+  - name: "Notes"
+    type: richtext
+YAML
+```
+
+**Step 3 — Verify**: Confirm both the view and filesystem exist:
+
+```bash
+# Verify view works
+duckdb dench/workspace.duckdb "SELECT COUNT(*) FROM v_lead"
+# Verify .object.yaml exists
+cat dench/knowledge/lead/.object.yaml
+```
 
 ## Kanban Boards
 
-When creating task/board objects, use `default_view = 'kanban'` and auto-create Status + Assigned To fields:
+When creating task/board objects, use `default_view = 'kanban'` and auto-create Status + Assigned To fields. Remember: ALL THREE STEPS are required.
+
+**Step 1 — SQL:**
 
 ```sql
 BEGIN TRANSACTION;
@@ -352,6 +469,28 @@ PIVOT (
 
 COMMIT;
 ```
+
+**Step 2 — Filesystem (MANDATORY):**
+
+```bash
+mkdir -p dench/knowledge/task
+cat > dench/knowledge/task/.object.yaml << 'YAML'
+id: "<query from DuckDB>"
+name: "task"
+description: "Task tracking board"
+icon: "check-square"
+default_view: "kanban"
+entry_count: 0
+fields:
+  - name: "Status"
+    type: enum
+    values: ["In Queue", "In Progress", "Done"]
+  - name: "Assigned To"
+    type: user
+YAML
+```
+
+**Step 3 — Verify:** `duckdb dench/workspace.duckdb "SELECT COUNT(*) FROM v_task"` and `cat dench/knowledge/task/.object.yaml`.
 
 ## Field Types Reference
 
@@ -444,17 +583,41 @@ VALUES ('Roadmap', 'map', 'projects/roadmap.md', '<parent_doc_id>', 0);
 - Field type change: warn user before changing type on field with existing data.
 - Missing required fields: validate before INSERT, report which fields are missing.
 
-## Post-Mutation Pipeline
+## Post-Mutation Checklist (MANDATORY)
 
-After any schema mutation (create/update/delete object, field, or document):
+You MUST complete ALL steps below after ANY schema mutation (create/update/delete object, field, or entry). Do NOT skip any step. Do NOT consider the operation complete until all steps are done.
 
-1. **Regenerate views**: `CREATE OR REPLACE VIEW v_{object}` for affected objects
-2. **Project filesystem**: Sync `dench/knowledge/` directory structure from DuckDB (mkdir/rmdir for objects, write `.object.yaml`, move `.md` files if nesting changed)
-3. **Regenerate WORKSPACE.md**: Human-readable summary of all objects, fields, entry counts
+### After creating or modifying an OBJECT or its FIELDS:
+
+- [ ] `CREATE OR REPLACE VIEW v_{object_name}` — regenerate the PIVOT view
+- [ ] `mkdir -p dench/knowledge/{object_name}/` — create the object directory
+- [ ] Write `dench/knowledge/{object_name}/.object.yaml` — metadata projection with id, name, description, icon, default_view, entry_count, and full field list
+- [ ] If object has a `parent_document_id`, place directory inside the parent document's directory
+- [ ] Update `WORKSPACE.md` if it exists
+
+### After adding or updating ENTRIES:
+
+- [ ] Update `entry_count` in the corresponding `.object.yaml`
+- [ ] Verify the view returns correct data: `SELECT * FROM v_{object} LIMIT 5`
+
+### After deleting an OBJECT:
+
+- [ ] `DROP VIEW IF EXISTS v_{object_name}` — remove the view
+- [ ] `rm -rf dench/knowledge/{object_name}/` — remove the directory (unless it contains nested documents that need relocating)
+- [ ] Update `WORKSPACE.md`
+
+### After creating or modifying a DOCUMENT:
+
+- [ ] Write the `.md` file to the correct path in `dench/knowledge/`
+- [ ] `INSERT INTO documents` — ensure metadata row exists with correct `file_path`, `parent_id`, or `parent_object_id`
+
+These steps ensure the filesystem always mirrors DuckDB. The sidebar depends on `.object.yaml` files — if they are missing, objects will not appear.
 
 ## Critical Reminders
 
-- Handle the ENTIRE CRM operation from analysis to SQL execution to summary
+- Handle the ENTIRE CRM operation from analysis to SQL execution to filesystem projection to summary
+- **NEVER SKIP FILESYSTEM PROJECTION**: After creating/modifying any object, you MUST create/update `dench/knowledge/{object}/.object.yaml` AND the `v_{object}` view. If you skip this, the object will be invisible in the sidebar. This is NOT optional.
+- **THREE STEPS, EVERY TIME**: (1) SQL transaction, (2) filesystem projection (.object.yaml + directory), (3) verify. An operation is NOT complete until all three are done.
 - Always check existing data before creating (`SELECT` before `INSERT`, or `ON CONFLICT`)
 - Use views (`v_{object}`) for all reads — never write raw PIVOT queries for search
 - Never assume field names — verify with `SELECT * FROM fields WHERE object_id = ?`
@@ -468,3 +631,4 @@ After any schema mutation (create/update/delete object, field, or document):
 - **ONE EXEC CALL**: Batch related SQL in a single transaction — this is the whole point
 - **workspace_context.yaml**: READ-ONLY. Never modify. Data flows from Dench UI only.
 - **Source of truth**: DuckDB for all structured data. Filesystem for document content and navigation tree. Never duplicate entry data to the filesystem.
+- **ENTRY COUNT**: After adding entries, update `entry_count` in `.object.yaml`.

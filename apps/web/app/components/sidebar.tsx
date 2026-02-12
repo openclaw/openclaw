@@ -27,7 +27,7 @@ type MemoryFile = {
 type TreeNode = {
   name: string;
   path: string;
-  type: "object" | "document" | "folder" | "file";
+  type: "object" | "document" | "folder" | "file" | "database";
   icon?: string;
   defaultView?: "table" | "kanban";
   children?: TreeNode[];
@@ -231,7 +231,9 @@ function WorkspaceTreeNode({
       ? "var(--color-accent)"
       : node.type === "document"
         ? "#60a5fa"
-        : "var(--color-text-muted)";
+        : node.type === "database"
+          ? "#c084fc"
+          : "var(--color-text-muted)";
 
   return (
     <div>
@@ -241,7 +243,7 @@ function WorkspaceTreeNode({
         onClick={() => {
           if (isExpandable) {onToggle(node.path);}
           // Navigate to workspace page for actionable items
-          if (node.type === "object" || node.type === "document" || node.type === "file") {
+          if (node.type === "object" || node.type === "document" || node.type === "file" || node.type === "database") {
             window.location.href = `/workspace?path=${encodeURIComponent(node.path)}`;
           }
         }}
@@ -278,6 +280,12 @@ function WorkspaceTreeNode({
           ) : node.type === "folder" ? (
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+            </svg>
+          ) : node.type === "database" ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <ellipse cx="12" cy="5" rx="9" ry="3" />
+              <path d="M3 5V19A9 3 0 0 0 21 19V5" />
+              <path d="M3 12A9 3 0 0 0 21 12" />
             </svg>
           ) : (
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

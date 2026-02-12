@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, existsSync, type Dirent } from "node:fs";
 import { join } from "node:path";
-import { resolveDenchRoot, parseSimpleYaml, duckdbQuery } from "@/lib/workspace";
+import { resolveDenchRoot, parseSimpleYaml, duckdbQuery, isDatabaseFile } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export type TreeNode = {
   name: string;
   path: string; // relative to dench/
-  type: "object" | "document" | "folder" | "file";
+  type: "object" | "document" | "folder" | "file" | "database";
   icon?: string;
   defaultView?: "table" | "kanban";
   children?: TreeNode[];
@@ -118,16 +118,25 @@ function buildTree(
     } else if (entry.isFile()) {
       const ext = entry.name.split(".").pop()?.toLowerCase();
       const isDocument = ext === "md" || ext === "mdx";
+      const isDatabase = isDatabaseFile(entry.name);
 
       nodes.push({
         name: entry.name,
         path: relPath,
-        type: isDocument ? "document" : "file",
+        type: isDatabase ? "database" : isDocument ? "document" : "file",
       });
     }
   }
 
   return nodes;
+}
+
+/** Classify a top-level file's type. */
+function classifyFileType(name: string): TreeNode["type"] {
+  if (isDatabaseFile(name)) {return "database";}
+  const ext = name.split(".").pop()?.toLowerCase();
+  if (ext === "md" || ext === "mdx") {return "document";}
+  return "file";
 }
 
 export async function GET() {
@@ -147,19 +156,17 @@ export async function GET() {
     tree.push(...buildTree(knowledgeDir, "knowledge", dbObjects));
   }
 
-  // Add top-level files (WORKSPACE.md, workspace_context.yaml, etc.)
+  // Add top-level files (WORKSPACE.md, workspace_context.yaml, workspace.duckdb, etc.)
   try {
     const topLevel = readdirSync(root, { withFileTypes: true });
     for (const entry of topLevel) {
       if (!entry.isFile()) {continue;}
       if (entry.name.startsWith(".")) {continue;}
-      const ext = entry.name.split(".").pop()?.toLowerCase();
-      const isDocument = ext === "md" || ext === "mdx";
 
       tree.push({
         name: entry.name,
         path: entry.name,
-        type: isDocument ? "document" : "file",
+        type: classifyFileType(entry.name),
       });
     }
   } catch {
