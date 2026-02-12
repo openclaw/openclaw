@@ -83,5 +83,3 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 local/
-/.idea/
-/.claude/settings.local.json
