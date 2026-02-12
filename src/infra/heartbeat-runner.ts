@@ -96,12 +96,23 @@ const EXEC_EVENT_PROMPT =
   "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
   "If it failed, explain what went wrong.";
 
-// Prompt used when a scheduled cron job has fired and injected a system event.
-// This overrides the standard heartbeat prompt so the model relays the scheduled
-// reminder instead of responding with "HEARTBEAT_OK".
-const CRON_EVENT_PROMPT =
-  "A scheduled reminder has been triggered. The reminder message is shown in the system messages above. " +
-  "Please relay this reminder to the user in a helpful and friendly way.";
+// Build a dynamic prompt for cron events by embedding the actual event content.
+// This ensures the model sees the reminder text directly instead of relying on
+// "shown in the system messages above" which may not be visible in context.
+function buildCronEventPrompt(pendingEvents: string[]): string {
+  const eventText = pendingEvents.join("\n").trim();
+  if (!eventText) {
+    return (
+      "A scheduled cron event was triggered, but no event content was found. " +
+      "Reply HEARTBEAT_OK."
+    );
+  }
+  return (
+    "A scheduled reminder has been triggered. The reminder content is:\n\n" +
+    eventText +
+    "\n\nPlease relay this reminder to the user in a helpful and friendly way."
+  );
+}
 
 type HeartbeatAgentState = {
   agentId: string;
@@ -504,7 +515,7 @@ export async function runHeartbeatOnce(opts: {
   const prompt = hasExecCompletion
     ? EXEC_EVENT_PROMPT
     : hasCronEvents
-      ? CRON_EVENT_PROMPT
+      ? buildCronEventPrompt(pendingEvents)
       : resolveHeartbeatPrompt(cfg, heartbeat);
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
