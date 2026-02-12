@@ -12,6 +12,7 @@ import {
   promptModelAllowlist,
 } from "./model-picker.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
+import { randomToken } from "./onboard-helpers.js";
 
 type GatewayAuthChoice = "token" | "password";
 
@@ -35,7 +36,9 @@ export function buildGatewayAuthConfig(params: {
   }
 
   if (params.mode === "token") {
-    return { ...base, mode: "token", token: params.token };
+    // Guard against undefined/empty token to prevent JSON.stringify from writing the string "undefined"
+    const safeToken = params.token?.trim() || randomToken();
+    return { ...base, mode: "token", token: safeToken };
   }
   return { ...base, mode: "password", password: params.password };
 }
