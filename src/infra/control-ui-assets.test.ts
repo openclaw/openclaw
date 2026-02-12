@@ -2,6 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  resolveControlUiDistIndexHealth,
+  resolveControlUiDistIndexPath,
+  resolveControlUiDistIndexPathForRoot,
+  resolveControlUiRepoRoot,
+  resolveControlUiRootOverrideSync,
+  resolveControlUiRootSync,
+} from "./control-ui-assets.js";
+import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 
 /** Try to create a symlink; returns false if the OS denies it (Windows CI without Developer Mode). */
 async function trySymlink(target: string, linkPath: string): Promise<boolean> {
@@ -20,15 +29,6 @@ async function canonicalPath(p: string): Promise<string> {
     return path.resolve(p);
   }
 }
-import {
-  resolveControlUiDistIndexHealth,
-  resolveControlUiDistIndexPath,
-  resolveControlUiDistIndexPathForRoot,
-  resolveControlUiRepoRoot,
-  resolveControlUiRootOverrideSync,
-  resolveControlUiRootSync,
-} from "./control-ui-assets.js";
-import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 
 describe("control UI assets helpers", () => {
   it("resolves repo root from src argv1", async () => {
