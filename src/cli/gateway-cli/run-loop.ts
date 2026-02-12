@@ -1,5 +1,6 @@
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { defaultRuntime } from "../../runtime.js";
+import { invalidateSessionWriteLocks } from "../../agents/session-write-lock.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
@@ -53,6 +54,7 @@ export async function runGatewayLoop(params: {
         clearTimeout(forceExitTimer);
         server = null;
         if (isRestart) {
+          invalidateSessionWriteLocks();
           shuttingDown = false;
           restartResolver?.();
         } else {

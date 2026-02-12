@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -5,6 +6,7 @@ import path from "node:path";
 type LockFilePayload = {
   pid: number;
   createdAt: string;
+  bootId?: string;
 };
 
 type HeldLock = {
@@ -17,6 +19,8 @@ const HELD_LOCKS = new Map<string, HeldLock>();
 const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
 type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
 const cleanupHandlers = new Map<CleanupSignal, () => void>();
+
+let currentBootId = randomUUID();
 
 function isAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) {
@@ -50,6 +54,16 @@ function releaseAllLocksSync(): void {
     }
     HELD_LOCKS.delete(sessionFile);
   }
+}
+
+/**
+ * Invalidate all session write locks from the current boot cycle and start a new one.
+ * Called during in-process restarts (e.g. SIGUSR1) so that stale locks from the
+ * previous cycle are detected as belonging to an old boot and reclaimed immediately.
+ */
+export function invalidateSessionWriteLocks(): void {
+  releaseAllLocksSync();
+  currentBootId = randomUUID();
 }
 
 let cleanupRegistered = false;
@@ -103,7 +117,8 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
     if (typeof parsed.createdAt !== "string") {
       return null;
     }
-    return { pid: parsed.pid, createdAt: parsed.createdAt };
+    const bootId = typeof parsed.bootId === "string" ? parsed.bootId : undefined;
+    return { pid: parsed.pid, createdAt: parsed.createdAt, bootId };
   } catch {
     return null;
   }
@@ -158,7 +173,11 @@ export async function acquireSessionWriteLock(params: {
     try {
       const handle = await fs.open(lockPath, "wx");
       await handle.writeFile(
-        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
+        JSON.stringify(
+          { pid: process.pid, createdAt: new Date().toISOString(), bootId: currentBootId },
+          null,
+          2,
+        ),
         "utf8",
       );
       HELD_LOCKS.set(normalizedSessionFile, { count: 1, handle, lockPath });
@@ -186,7 +205,8 @@ export async function acquireSessionWriteLock(params: {
       const createdAt = payload?.createdAt ? Date.parse(payload.createdAt) : NaN;
       const stale = !Number.isFinite(createdAt) || Date.now() - createdAt > staleMs;
       const alive = payload?.pid ? isAlive(payload.pid) : false;
-      if (stale || !alive) {
+      const bootMismatch = payload?.bootId !== undefined && payload.bootId !== currentBootId;
+      if (stale || !alive || bootMismatch) {
         await fs.rm(lockPath, { force: true });
         continue;
       }
@@ -205,4 +225,5 @@ export const __testing = {
   cleanupSignals: [...CLEANUP_SIGNALS],
   handleTerminationSignal,
   releaseAllLocksSync,
+  getCurrentBootId: () => currentBootId,
 };

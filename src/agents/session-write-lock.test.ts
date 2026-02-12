@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { __testing, acquireSessionWriteLock } from "./session-write-lock.js";
+import {
+  __testing,
+  acquireSessionWriteLock,
+  invalidateSessionWriteLocks,
+} from "./session-write-lock.js";
 
 describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
@@ -157,5 +161,91 @@ describe("acquireSessionWriteLock", () => {
 
     expect(process.listeners("SIGINT")).toContain(keepAlive);
     process.off("SIGINT", keepAlive);
+  });
+
+  it("reclaims lock from a previous boot cycle (same PID)", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-boot-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+
+      // Simulate a lock written by a previous boot cycle with the current PID
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          bootId: "old-boot-id",
+        }),
+        "utf8",
+      );
+
+      // Should reclaim the lock because bootId mismatches
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const raw = await fs.readFile(lockPath, "utf8");
+      const payload = JSON.parse(raw) as { pid: number; bootId: string };
+
+      expect(payload.pid).toBe(process.pid);
+      expect(payload.bootId).toBe(__testing.getCurrentBootId());
+      await lock.release();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("invalidateSessionWriteLocks releases held locks and changes bootId", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-invalidate-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+
+      await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const oldBootId = __testing.getCurrentBootId();
+
+      // Lock file should exist
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+
+      invalidateSessionWriteLocks();
+
+      const newBootId = __testing.getCurrentBootId();
+      expect(newBootId).not.toBe(oldBootId);
+
+      // Lock file should be cleaned up
+      await expect(fs.access(lockPath)).rejects.toThrow();
+
+      // Should be able to acquire a new lock
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const raw = await fs.readFile(lockPath, "utf8");
+      const payload = JSON.parse(raw) as { bootId: string };
+      expect(payload.bootId).toBe(newBootId);
+      await lock.release();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves locks without bootId field (backwards compatibility)", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-compat-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+
+      // Legacy lock without bootId — should NOT be treated as boot-mismatched
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+
+      // Lock is held by current PID and not stale — should timeout, not reclaim
+      await expect(acquireSessionWriteLock({ sessionFile, timeoutMs: 200 })).rejects.toThrow(
+        /locked/,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
