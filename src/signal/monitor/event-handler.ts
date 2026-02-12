@@ -47,7 +47,7 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-
+import { renderSignalMentions } from "./mentions.js";
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
 
@@ -354,20 +354,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : null;
 
     // Replace ￼ (object replacement character) with @uuid or @phone from mentions
-    let messageText = (dataMessage?.message ?? "").trim();
-    if (messageText && dataMessage?.mentions?.length) {
-      const mentions = dataMessage.mentions
-        .filter((m) => (m.uuid || m.number) && m.start != null && m.length != null)
-        .sort((a, b) => (b.start ?? 0) - (a.start ?? 0)); // Reverse order to avoid index shifting
-
-      for (const mention of mentions) {
-        const start = mention.start!;
-        const length = mention.length!;
-        const identifier = mention.uuid || mention.number || "";
-        const replacement = `@${identifier}`;
-        messageText = messageText.slice(0, start) + replacement + messageText.slice(start + length);
-      }
-    }
+    // Signal encodes mentions as the object replacement character; hydrate them from metadata first.
+    const rawMessage = dataMessage?.message ?? "";
+    const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
+    const messageText = normalizedMessage.trim();
 
     const quoteText = dataMessage?.quote?.text?.trim() ?? "";
     const hasBodyContent =
