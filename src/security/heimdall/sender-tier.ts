@@ -2,6 +2,7 @@
  * Heimdall Security Layer — SenderTier Resolution
  *
  * Resolves a sender's tier by checking (in order):
+ *   0. isTrustedInternal flag       -> SYSTEM (trusted runtime calls)
  *   1. heimdall.senderTiers.owners  -> OWNER
  *   2. heimdall.senderTiers.members -> MEMBER
  *   3. allowFrom (channel interop)  -> MEMBER
@@ -46,7 +47,13 @@ export function resolveSenderTier(
   senderUsername: string | undefined,
   config: Pick<HeimdallConfig, "senderTiers">,
   allowFrom?: Array<string | number>,
+  isTrustedInternal?: boolean,
 ): SenderTier {
+  // 0. Check isTrustedInternal FIRST (before all other checks)
+  if (isTrustedInternal === true) {
+    return SenderTierEnum.SYSTEM;
+  }
+
   const tiers = config.senderTiers;
 
   // 1. Check owners

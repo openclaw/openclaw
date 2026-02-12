@@ -122,4 +122,55 @@ describe("resolveSenderTier", () => {
     });
     expect(result).toBe(SenderTier.OWNER);
   });
+
+  // --- SYSTEM tier tests (isTrustedInternal flag) ---
+
+  it("resolves SYSTEM when isTrustedInternal=true", () => {
+    const result = resolveSenderTier(
+      "cron",
+      undefined,
+      { senderTiers: {} },
+      undefined,
+      true, // isTrustedInternal
+    );
+    expect(result).toBe(SenderTier.SYSTEM);
+  });
+
+  it("resolves SYSTEM even when sender is in owners list (isTrustedInternal takes precedence)", () => {
+    const result = resolveSenderTier(
+      281043,
+      "admin",
+      { senderTiers: { owners: [281043] } },
+      undefined,
+      true, // isTrustedInternal
+    );
+    expect(result).toBe(SenderTier.SYSTEM);
+  });
+
+  it("resolves normally when isTrustedInternal=false", () => {
+    const result = resolveSenderTier(
+      42,
+      undefined,
+      { senderTiers: { owners: [42] } },
+      undefined,
+      false, // isTrustedInternal
+    );
+    expect(result).toBe(SenderTier.OWNER);
+  });
+
+  it("resolves normally when isTrustedInternal=undefined (backward compatibility)", () => {
+    const result = resolveSenderTier(77, undefined, { senderTiers: { members: [77] } });
+    expect(result).toBe(SenderTier.MEMBER);
+  });
+
+  it("resolves GUEST when no match and isTrustedInternal=false", () => {
+    const result = resolveSenderTier(
+      999,
+      "stranger",
+      { senderTiers: {} },
+      undefined,
+      false, // isTrustedInternal
+    );
+    expect(result).toBe(SenderTier.GUEST);
+  });
 });
