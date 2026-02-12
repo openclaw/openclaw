@@ -106,7 +106,7 @@ describe("Issue #14658: Preserve missed runs on job update", () => {
     expect(runResult.ran).toBe(true);
   });
 
-  it("should preserve missed run time when updating schedule kind", async () => {
+  it("should recompute nextRunAtMs when schedule kind changes", async () => {
     // Create an 'at' job scheduled for 1 hour ago
     const oneHourAgo = nowMs - 60 * 60 * 1000;
     const jobCreate: CronJobCreate = {
@@ -136,9 +136,10 @@ describe("Issue #14658: Preserve missed runs on job update", () => {
 
     const updated = await service.update(job.id, patch);
 
-    // Since the job had a missed run, preserve it even though schedule changed
-    expect(updated.state.nextRunAtMs).toBe(oneHourAgo);
-    expect(updated.state.nextRunAtMs).toBeLessThan(nowMs);
+    // When schedule changes, nextRunAtMs is recomputed for the new schedule
+    // (old nextRunAtMs is invalid for new schedule)
+    expect(updated.state.nextRunAtMs).toBeDefined();
+    expect(updated.state.nextRunAtMs).toBeGreaterThanOrEqual(nowMs);
   });
 
   it("should recompute nextRunAtMs when no missed run exists", async () => {
