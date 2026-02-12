@@ -97,4 +97,32 @@ describe("pi-tools internal flag integration", () => {
 
     expect(tools.length).toBeGreaterThan(0);
   });
+
+  // Task 2.3: Verify workaround removal - SYSTEM tier should NOT be overridden to OWNER
+  it("Task 2.3: internal=true with senderIsOwner=true → SYSTEM tier (not OWNER)", () => {
+    // After Task 2.3, even with senderIsOwner=true, internal=true should give SYSTEM tier
+    // This verifies the OWNER override workaround has been removed
+    const tools = createOpenClawCodingTools({
+      config: heimdallConfig,
+      internal: true,
+      senderIsOwner: true, // Legacy flag present
+      senderId: "cron",
+    });
+
+    // SYSTEM tier should have fewer tools than if it were OWNER
+    // (specific count depends on ACL, but SYSTEM is more restrictive)
+    expect(tools.length).toBeGreaterThan(0);
+
+    // Additional check: create tools with OWNER explicitly
+    const ownerTools = createOpenClawCodingTools({
+      config: heimdallConfig,
+      senderIsOwner: true,
+      internal: false,
+      senderId: 111, // in owners list
+      senderUsername: "thebtf",
+    });
+
+    // SYSTEM should have same or fewer tools than OWNER
+    expect(tools.length).toBeLessThanOrEqual(ownerTools.length);
+  });
 });

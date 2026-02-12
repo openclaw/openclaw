@@ -481,11 +481,8 @@ export function createOpenClawCodingTools(options?: {
       undefined, // allowFrom (not applicable here)
       isTrustedInternal,
     );
-    // Override to OWNER if senderIsOwner is explicitly set (cron, CLI).
-    // TODO(Task 2.3): Remove this override after applyOwnerOnlyToolPolicy is deprecated
-    if (senderIsOwner && senderTier !== "owner") {
-      senderTier = "owner" as SenderTier;
-    }
+    // Task 2.3: OWNER override removed. Internal calls now use SYSTEM tier (least privilege).
+    // Legacy senderIsOwner still passed to applyOwnerOnlyToolPolicy for backward compat.
   }
 
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
