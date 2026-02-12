@@ -27,6 +27,7 @@ export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "uniqueItems",
   "minProperties",
   "maxProperties",
+  "propertyNames",
 ]);
 
 // Check if an anyOf/oneOf array contains only literal values that can be flattened.
