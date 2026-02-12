@@ -1522,7 +1522,11 @@ export async function maybeApplyTtsToPayload(params: {
     }
   }
 
-  textForAudio = stripMarkdown(textForAudio); // strip markdown for TTS (### → "hashtag" etc.)
+  textForAudio = stripMarkdown(textForAudio).trim(); // strip markdown for TTS (### → "hashtag" etc.)
+  if (textForAudio.length < 10) {
+    return nextPayload;
+  }
+
   const ttsStart = Date.now();
   const result = await textToSpeech({
     text: textForAudio,
