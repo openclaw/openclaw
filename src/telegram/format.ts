@@ -46,6 +46,7 @@ function renderTelegramHtml(ir: MarkdownIR): string {
       code: { open: "<code>", close: "</code>" },
       code_block: { open: "<pre><code>", close: "</code></pre>" },
       spoiler: { open: "<tg-spoiler>", close: "</tg-spoiler>" },
+      blockquote: { open: "<blockquote>", close: "</blockquote>" },
     },
     escapeText: escapeHtml,
     buildLink: buildTelegramLink,
