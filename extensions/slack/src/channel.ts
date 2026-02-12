@@ -472,7 +472,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       if (!input.useEnv && mode !== "http" && !input.appToken) {
         return (
           "Slack socket mode requires --app-token. " +
-          "For HTTP mode, set channels.slack.mode=\"http\" and channels.slack.signingSecret."
+          'For HTTP mode, set channels.slack.mode="http" and channels.slack.signingSecret.'
         );
       }
 
