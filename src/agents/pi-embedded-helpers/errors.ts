@@ -542,6 +542,14 @@ const ERROR_PATTERNS = {
     "plans & billing",
     "insufficient balance",
   ],
+  notFound: [
+    "does not exist or you do not have access",
+    "model not found",
+    "not_found_error",
+    /\b404\b.*(?:model|not found)/,
+    "no such model",
+    "the model.*does not exist",
+  ],
   auth: [
     /invalid[_ ]?api[_ ]?key/,
     "incorrect api key",
@@ -617,6 +625,10 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
     return false;
   }
   return isBillingErrorMessage(msg.errorMessage ?? "");
+}
+
+export function isNotFoundErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.notFound);
 }
 
 export function isAuthErrorMessage(raw: string): boolean {
@@ -718,6 +730,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
+  }
+  if (isNotFoundErrorMessage(raw)) {
+    return "not_found";
   }
   return null;
 }
