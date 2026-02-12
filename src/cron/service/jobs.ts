@@ -118,12 +118,21 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
       job.state.runningAtMs = undefined;
       changed = true;
     }
-    // Only recompute if nextRunAtMs is missing or already past-due.
-    // Preserving a still-future nextRunAtMs avoids accidentally advancing
-    // a job that hasn't fired yet (e.g. during restart recovery).
+    // Only recompute if nextRunAtMs is missing.
+    // If a job is past-due (now >= nextRunAtMs) but hasn't been executed for
+    // that time slot (lastRunAtMs < nextRunAtMs), do NOT advance it here.
+    // This preserves the past-due state so that runMissedJobs or findDueJobs
+    // can pick it up and execute it. (#12440)
     const nextRun = job.state.nextRunAtMs;
-    const isDueOrMissing = nextRun === undefined || now >= nextRun;
-    if (isDueOrMissing) {
+    const lastRun = job.state.lastRunAtMs;
+    const isPastDue = typeof nextRun === "number" && now >= nextRun;
+    const wasExecutedForSlot = typeof lastRun === "number" && typeof nextRun === "number" && lastRun >= nextRun;
+    
+    // Recompute only if:
+    // - nextRunAtMs is missing, OR
+    // - Job is past-due AND was already executed for this time slot
+    const shouldRecompute = nextRun === undefined || (isPastDue && wasExecutedForSlot);
+    if (shouldRecompute) {
       const newNext = computeJobNextRunAtMs(job, now);
       if (job.state.nextRunAtMs !== newNext) {
         job.state.nextRunAtMs = newNext;
