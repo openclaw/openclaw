@@ -304,6 +304,99 @@ describe("Cron issue regressions", () => {
     await store.cleanup();
   });
 
+  it("#13845: one-shot job with lastStatus=skipped does not re-fire on restart", async () => {
+    const store = await makeStorePath();
+    const pastAt = Date.parse("2026-02-06T09:00:00.000Z");
+    // Simulate a one-shot job that was previously skipped (e.g. main session busy).
+    // On the old code, runMissedJobs only checked lastStatus === "ok", so a
+    // skipped job would pass through and fire again on every restart.
+    const skippedJob: CronJob = {
+      id: "oneshot-skipped",
+      name: "reminder",
+      enabled: true,
+      deleteAfterRun: true,
+      createdAtMs: pastAt - 60_000,
+      updatedAtMs: pastAt,
+      schedule: { kind: "at", at: new Date(pastAt).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "⏰ Reminder" },
+      state: {
+        nextRunAtMs: pastAt,
+        lastStatus: "skipped",
+        lastRunAtMs: pastAt,
+      },
+    };
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({ version: 1, jobs: [skippedJob] }, null, 2),
+      "utf-8",
+    );
+
+    const enqueueSystemEvent = vi.fn();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
+    });
+
+    // start() calls runMissedJobs internally
+    await cron.start();
+
+    // The skipped one-shot job must NOT be re-enqueued
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("#13845: one-shot job with lastStatus=error does not re-fire on restart", async () => {
+    const store = await makeStorePath();
+    const pastAt = Date.parse("2026-02-06T09:00:00.000Z");
+    const errorJob: CronJob = {
+      id: "oneshot-errored",
+      name: "reminder",
+      enabled: true,
+      deleteAfterRun: true,
+      createdAtMs: pastAt - 60_000,
+      updatedAtMs: pastAt,
+      schedule: { kind: "at", at: new Date(pastAt).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "⏰ Reminder" },
+      state: {
+        nextRunAtMs: pastAt,
+        lastStatus: "error",
+        lastRunAtMs: pastAt,
+        lastError: "heartbeat failed",
+      },
+    };
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({ version: 1, jobs: [errorJob] }, null, 2),
+      "utf-8",
+    );
+
+    const enqueueSystemEvent = vi.fn();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
+    });
+
+    await cron.start();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("records per-job start time and duration for batched due jobs", async () => {
     const store = await makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
