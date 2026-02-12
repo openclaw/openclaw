@@ -106,6 +106,15 @@ export const CronJobStateSchema = Type.Object(
       Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped")]),
     ),
     lastError: Type.Optional(Type.String()),
+    lastErrorReason: Type.Optional(
+      Type.Union([
+        Type.Literal("billing"),
+        Type.Literal("rate_limit"),
+        Type.Literal("auth"),
+        Type.Literal("timeout"),
+        Type.Literal("format"),
+      ]),
+    ),
     lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
   },

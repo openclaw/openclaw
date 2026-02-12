@@ -52,12 +52,16 @@ export type CronPayloadPatch =
       bestEffortDeliver?: boolean;
     };
 
+import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
+
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
+  /** Classified reason for the last error (when available). */
+  lastErrorReason?: FailoverReason;
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
