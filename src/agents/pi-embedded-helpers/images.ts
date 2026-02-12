@@ -82,21 +82,34 @@ export async function sanitizeSessionMessagesImages(
         const nextContent = (await sanitizeContentBlocksImages(
           content as unknown as ContentBlock[],
           label,
-        )) as unknown as typeof userMsg.content;
+        )) as unknown as ContentBlock[];
+
+        if (!Array.isArray(nextContent)) {
+          out.push({ ...userMsg, content: nextContent });
+          continue;
+        }
 
         // NEW: Sanitize inbound metadata artifacts from text blocks
         const metadataRegex =
           /(?:Conversation info|Sender|Thread starter|Replied message|Forwarded message context|Chat history since last reply) \(untrusted(?: metadata|,\s+for\s+context)\):\n```json\n[\s\S]*?\n```\n*/g;
 
         const cleanedContent = nextContent
-          .map((block) => {
-            if (block.type !== "text" || typeof block.text !== "string") {
+          .map((block: ContentBlock) => {
+            if (
+              !block ||
+              typeof block !== "object" ||
+              (block as { type?: unknown }).type !== "text"
+            ) {
+              return block;
+            }
+            const rec = block as { text?: unknown };
+            if (typeof rec.text !== "string") {
               return block;
             }
             // Only strip if it matches the start of the block (it's a prefix)
             // or if it's clearly a metadata block insertion.
             // Using replaceAll to catch multiple blocks if they stacked up.
-            const cleanedText = block.text.replace(metadataRegex, "").trim();
+            const cleanedText = rec.text.replace(metadataRegex, "").trim();
             // If the text became empty after stripping (and it wasn't empty before),
             // it means it was PURE metadata. We might want to filter this block out entirely,
             // or keep it as empty text if that's safer.
@@ -104,9 +117,16 @@ export async function sanitizeSessionMessagesImages(
             // If cleanedText is empty, it means the user sent NO text (e.g. only image, or empty).
             return { ...block, text: cleanedText };
           })
-          .filter((block) => {
+          .filter((block: ContentBlock) => {
             // Filter out empty text blocks that resulted from stripping
-            if (block.type === "text" && (!block.text || block.text.trim() === "")) {
+            if (!block || typeof block !== "object") {
+              return true;
+            }
+            const rec = block as { type?: unknown; text?: unknown };
+            if (
+              rec.type === "text" &&
+              (!rec.text || (typeof rec.text === "string" && rec.text.trim() === ""))
+            ) {
               return false;
             }
             return true;

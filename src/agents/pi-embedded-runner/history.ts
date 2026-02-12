@@ -58,10 +58,12 @@ export function getDmHistoryLimitFromSessionKey(
   const kind = providerParts[1]?.toLowerCase();
   const userIdRaw = providerParts.slice(2).join(":");
   const userId = stripThreadSuffix(userIdRaw);
+
   // Accept both "direct" (new) and "dm" (legacy) for backward compat
-  if (kind !== "direct" && kind !== "dm") {
-    return undefined;
-  }
+  // MODIFIED: Allow all session types (including groups/channels) to use history limits
+  // if (kind !== "direct" && kind !== "dm") {
+  //   return undefined;
+  // }
 
   const getLimit = (
     providerConfig:
@@ -95,5 +97,7 @@ export function getDmHistoryLimitFromSessionKey(
     return entry as { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> };
   };
 
-  return getLimit(resolveProviderConfig(config, provider));
+  const limit = getLimit(resolveProviderConfig(config, provider));
+  // Default to 50 turns if not configured explicitly
+  return limit ?? 50;
 }

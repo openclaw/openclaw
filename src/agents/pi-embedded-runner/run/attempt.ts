@@ -902,6 +902,54 @@ export async function runEmbeddedAttempt(
         .toReversed()
         .find((m) => m.role === "assistant");
 
+      // --- ARCHIVE LOGIC START ---
+      try {
+        const sessionKeySafe = (params.sessionKey ?? params.sessionId).replace(/[:/]/g, "_");
+        const archiveDir = "archive/sessions";
+        await fs.mkdir(archiveDir, { recursive: true });
+        const archiveFile = `${archiveDir}/${sessionKeySafe}.md`;
+
+        const timestamp = new Date().toISOString();
+        let logEntry = "";
+
+        // Find the last user message to pair with this assistant response
+        const lastUserMsg = messagesSnapshot
+          .slice()
+          .toReversed()
+          .find((m) => m.role === "user");
+
+        if (lastUserMsg && typeof lastUserMsg.content === "string") {
+          logEntry += `\n## [${timestamp}] User\n${lastUserMsg.content}\n`;
+        } else if (lastUserMsg && Array.isArray(lastUserMsg.content)) {
+          const textParts = lastUserMsg.content
+            .filter((c): c is { type: "text"; text: string } => c.type === "text")
+            .map((c) => c.text)
+            .join("\n");
+          if (textParts) {
+            logEntry += `\n## [${timestamp}] User\n${textParts}\n`;
+          }
+        }
+
+        if (lastAssistant && typeof lastAssistant.content === "string") {
+          logEntry += `\n## [${timestamp}] Assistant\n${lastAssistant.content}\n`;
+        } else if (lastAssistant && Array.isArray(lastAssistant.content)) {
+          const textParts = lastAssistant.content
+            .filter((c): c is { type: "text"; text: string } => c.type === "text")
+            .map((c) => c.text)
+            .join("\n");
+          if (textParts) {
+            logEntry += `\n## [${timestamp}] Assistant\n${textParts}\n`;
+          }
+        }
+
+        if (logEntry) {
+          await fs.appendFile(archiveFile, logEntry);
+        }
+      } catch (archiveErr) {
+        log.warn(`Failed to archive session turn: ${archiveErr}`);
+      }
+      // --- ARCHIVE LOGIC END ---
+
       const toolMetasNormalized = toolMetas
         .filter(
           (entry): entry is { toolName: string; meta?: string } =>
