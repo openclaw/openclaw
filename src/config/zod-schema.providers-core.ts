@@ -762,6 +762,8 @@ export const IrcAccountSchemaBase = z
     mediaMaxMb: z.number().positive().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
+    tlsInsecure: z.boolean().optional(),
+    tlsFingerprints: z.array(z.string()).optional(),
   })
   .strict();
 

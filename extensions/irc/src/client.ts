@@ -31,6 +31,8 @@ export type IrcClientOptions = {
   channels?: string[];
   connectTimeoutMs?: number;
   messageChunkMaxChars?: number;
+  tlsInsecure?: boolean;
+  tlsFingerprints?: string[];
   abortSignal?: AbortSignal;
   onPrivmsg?: (event: IrcPrivmsgEvent) => void | Promise<void>;
   onNotice?: (text: string, target?: string) => void;
@@ -79,6 +81,15 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
         reject(error);
       });
   });
+}
+
+/**
+ * Normalize a TLS certificate fingerprint to uppercase colon-separated hex
+ * so that comparisons are consistent regardless of input format.
+ */
+function normalizeTlsFingerprint(fp: string): string {
+  const hex = fp.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+  return hex.replace(/(.{2})(?=.)/g, "$1:");
 }
 
 function buildFallbackNick(nick: string): string {
@@ -132,13 +143,31 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   let nickServRecoverAttempted = false;
   let fallbackNickAttempted = false;
 
+  const bypassTlsVerification = Boolean(options.tlsInsecure || options.tlsFingerprints?.length);
   const socket = options.tls
     ? tls.connect({
         host: options.host,
         port: options.port,
         servername: options.host,
+        rejectUnauthorized: !bypassTlsVerification,
       })
     : net.connect({ host: options.host, port: options.port });
+
+  if (options.tls && !options.tlsInsecure && options.tlsFingerprints?.length) {
+    const allowedFingerprints = new Set(options.tlsFingerprints.map(normalizeTlsFingerprint));
+    const tlsSocket = socket as tls.TLSSocket;
+    tlsSocket.once("secureConnect", () => {
+      const cert = tlsSocket.getPeerCertificate();
+      const peerFingerprint = normalizeTlsFingerprint(cert.fingerprint256 ?? "");
+      if (!peerFingerprint || !allowedFingerprints.has(peerFingerprint)) {
+        tlsSocket.destroy(
+          new Error(
+            `TLS certificate fingerprint mismatch: got ${peerFingerprint}, expected one of [${[...allowedFingerprints].join(", ")}]`,
+          ),
+        );
+      }
+    });
+  }
 
   socket.setEncoding("utf8");
 

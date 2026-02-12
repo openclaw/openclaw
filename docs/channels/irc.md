@@ -212,6 +212,51 @@ Optional one-time registration on connect:
 
 Disable `register` after the nick is registered to avoid repeated REGISTER attempts.
 
+## Self-signed TLS certificates
+
+When connecting to IRC servers with self-signed or untrusted TLS certificates, Node.js will reject the connection by default. Two options are available:
+
+### `tlsInsecure` — skip all certificate verification
+
+```json
+{
+  "channels": {
+    "irc": {
+      "tls": true,
+      "tlsInsecure": true
+    }
+  }
+}
+```
+
+This disables all certificate verification. The connection is encrypted but vulnerable to man-in-the-middle attacks. A security warning will appear in the status output.
+
+### `tlsFingerprints` — pin to specific certificate fingerprints
+
+```json
+{
+  "channels": {
+    "irc": {
+      "tls": true,
+      "tlsFingerprints": [
+        "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+      ]
+    }
+  }
+}
+```
+
+This bypasses CA verification but checks that the server's SHA-256 certificate fingerprint matches one of the provided values. This is strictly more secure than `tlsInsecure` because it pins to specific certificates.
+
+To find a server's certificate fingerprint:
+
+```bash
+openssl s_client -connect irc.example.com:6697 < /dev/null 2>/dev/null \
+  | openssl x509 -noout -fingerprint -sha256
+```
+
+If both `tlsInsecure` and `tlsFingerprints` are set, `tlsInsecure` takes precedence (fingerprints are not checked).
+
 ## Environment variables
 
 Default account supports:
@@ -219,6 +264,7 @@ Default account supports:
 - `IRC_HOST`
 - `IRC_PORT`
 - `IRC_TLS`
+- `IRC_TLS_INSECURE`
 - `IRC_NICK`
 - `IRC_USERNAME`
 - `IRC_REALNAME`
@@ -232,3 +278,4 @@ Default account supports:
 - If the bot connects but never replies in channels, verify `channels.irc.groups` **and** whether mention-gating is dropping messages (`missing-mention`). If you want it to reply without pings, set `requireMention:false` for the channel.
 - If login fails, verify nick availability and server password.
 - If TLS fails on a custom network, verify host/port and certificate setup.
+- If TLS fails with a self-signed certificate, use `tlsFingerprints` to pin the server's certificate (preferred) or `tlsInsecure: true` to skip verification entirely. See [Self-signed TLS certificates](#self-signed-tls-certificates) above.
