@@ -156,6 +156,11 @@ function extractGrokContent(data: GrokSearchResponse): {
       }
     }
   }
+  // Fallback: deprecated top-level output_text field
+  const outputText = (data as Record<string, unknown>).output_text;
+  if (typeof outputText === "string" && outputText) {
+    return { text: outputText, annotationCitations: [] };
+  }
   return { text: undefined, annotationCitations: [] };
 }
 
