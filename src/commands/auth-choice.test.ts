@@ -241,10 +241,10 @@ describe("applyAuthChoice", () => {
     });
 
     expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Select Z.AI endpoint", initialValue: "coding-global" }),
+      expect.objectContaining({ message: "Select Z.AI endpoint", initialValue: "global" }),
     );
     expect(result.config.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
-    expect(result.config.agents?.defaults?.model?.primary).toBe("zai/glm-4.7");
+    expect(result.config.agents?.defaults?.model?.primary).toBe("zai/glm-5");
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(authProfilePath, "utf8");

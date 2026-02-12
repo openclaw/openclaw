@@ -24,7 +24,7 @@ export const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 export const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 export const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
 export const ZAI_CN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
-export const ZAI_DEFAULT_MODEL_ID = "glm-4.7";
+export const ZAI_DEFAULT_MODEL_ID = "glm-5";
 
 export function resolveZaiBaseUrl(endpoint?: string): string {
   switch (endpoint) {
@@ -35,8 +35,9 @@ export function resolveZaiBaseUrl(endpoint?: string): string {
     case "cn":
       return ZAI_CN_BASE_URL;
     case "coding-global":
-    default:
       return ZAI_CODING_GLOBAL_BASE_URL;
+    default:
+      return ZAI_GLOBAL_BASE_URL;
   }
 }
 
