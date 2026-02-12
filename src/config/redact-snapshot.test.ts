@@ -367,3 +367,110 @@ describe("restoreRedactedValues", () => {
     expect(restored).toEqual(originalConfig);
   });
 });
+
+describe("talk.apiKey exemption (issue #14973)", () => {
+  it("does NOT redact talk.apiKey in the config object", () => {
+    const snapshot = makeSnapshot({
+      talk: { apiKey: "el-elevenlabs-api-key-value-1234" },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const talk = result.config.talk as Record<string, string>;
+    expect(talk.apiKey).toBe("el-elevenlabs-api-key-value-1234");
+  });
+
+  it("does NOT redact talk.apiKey in the parsed object", () => {
+    const snapshot = makeSnapshot({
+      talk: { apiKey: "el-elevenlabs-api-key-value-1234" },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const parsed = result.parsed as Record<string, Record<string, string>>;
+    expect(parsed.talk.apiKey).toBe("el-elevenlabs-api-key-value-1234");
+  });
+
+  it("does NOT redact talk.apiKey in the raw text", () => {
+    const config = {
+      talk: { apiKey: "el-elevenlabs-api-key-value-1234" },
+    };
+    const raw = '{ "talk": { "apiKey": "el-elevenlabs-api-key-value-1234" } }';
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.raw).toContain("el-elevenlabs-api-key-value-1234");
+    expect(result.raw).not.toContain(REDACTED_SENTINEL);
+  });
+
+  it("still redacts other apiKey fields while exempting talk.apiKey", () => {
+    const snapshot = makeSnapshot({
+      talk: { apiKey: "el-elevenlabs-api-key-value-1234" },
+      models: {
+        providers: {
+          openai: { apiKey: "sk-proj-openai-secret-key-value" },
+        },
+      },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const talk = result.config.talk as Record<string, string>;
+    const models = result.config.models as Record<string, Record<string, Record<string, string>>>;
+    expect(talk.apiKey).toBe("el-elevenlabs-api-key-value-1234");
+    expect(models.providers.openai.apiKey).toBe(REDACTED_SENTINEL);
+  });
+
+  it("still redacts other apiKey fields in raw text while preserving talk.apiKey", () => {
+    const config = {
+      talk: { apiKey: "el-elevenlabs-api-key-value-1234" },
+      models: {
+        providers: {
+          openai: { apiKey: "sk-proj-openai-secret-key-value" },
+        },
+      },
+    };
+    const raw = JSON.stringify(config);
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.raw).toContain("el-elevenlabs-api-key-value-1234");
+    expect(result.raw).not.toContain("sk-proj-openai-secret-key-value");
+  });
+
+  it("round-trips talk.apiKey through redact → restore unchanged", () => {
+    const originalConfig = {
+      talk: { apiKey: "el-elevenlabs-api-key-value-1234", voice: "Rachel" },
+      models: {
+        providers: {
+          openai: { apiKey: "sk-proj-openai-secret-key-value", baseUrl: "https://api.openai.com" },
+        },
+      },
+    };
+    const snapshot = makeSnapshot(originalConfig);
+    const redacted = redactConfigSnapshot(snapshot);
+
+    // talk.apiKey should survive redaction as-is
+    const talk = redacted.config.talk as Record<string, string>;
+    expect(talk.apiKey).toBe("el-elevenlabs-api-key-value-1234");
+
+    // restoring should still work for other fields
+    const restored = restoreRedactedValues(redacted.config, snapshot.config);
+    expect(restored).toEqual(originalConfig);
+  });
+
+  it("does NOT redact talk.apiKey in raw JSON5 (unquoted key)", () => {
+    const config = {
+      talk: { apiKey: "el-elevenlabs-api-key-value-1234" },
+    };
+    const raw = '{ talk: { apiKey: "el-elevenlabs-api-key-value-1234" } }';
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.raw).toContain("el-elevenlabs-api-key-value-1234");
+    expect(result.raw).not.toContain(REDACTED_SENTINEL);
+  });
+
+  it("redacts apiKey at non-exempt paths even when talk.apiKey exists", () => {
+    const snapshot = makeSnapshot({
+      talk: { apiKey: "el-elevenlabs-api-key-value-1234" },
+      env: { vars: { OPENAI_API_KEY: "sk-env-secret-key-placeholder" } },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const talk = result.config.talk as Record<string, string>;
+    const env = result.config.env as Record<string, Record<string, string>>;
+    expect(talk.apiKey).toBe("el-elevenlabs-api-key-value-1234");
+    expect(env.vars.OPENAI_API_KEY).toBe(REDACTED_SENTINEL);
+  });
+});
