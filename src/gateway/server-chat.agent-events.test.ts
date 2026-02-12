@@ -393,4 +393,61 @@ describe("agent event handler", () => {
     expect(payload.runId).toBe("run-tool-client");
     resetAgentRunContextForTest();
   });
+
+  it("final message includes blocks even without trailing delta after boundary", () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
+    chatRunState.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
+
+    // Only one assistant block — text never gets "finalized" into blockBases via
+    // the boundary detection in emitChatDelta.  emitChatFinal must still capture it.
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: now,
+      data: { text: "Only block" },
+    });
+
+    now = 2_000;
+
+    // Lifecycle end fires without any second assistant delta
+    handler({
+      runId: "run-1",
+      seq: 2,
+      stream: "lifecycle",
+      ts: now,
+      data: { phase: "end" },
+    });
+
+    const chatCalls = broadcast.mock.calls.filter(([event]) => event === "chat");
+    const finalCall = chatCalls.find((call) => {
+      const p = call[1] as { state?: string };
+      return p.state === "final";
+    });
+    expect(finalCall).toBeDefined();
+    const finalPayload = finalCall?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(finalPayload?.message?.content?.[0]?.text).toBe("Only block");
+    nowSpy.mockRestore();
+  });
 });
