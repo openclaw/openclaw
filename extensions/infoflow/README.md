@@ -21,8 +21,8 @@ openclaw plugins install @openclaw/infoflow
   channels: {
     infoflow: {
       enabled: true,
-      apiHost: "https://api.infoflow.baidu.com",
-      check_token: "your-check-token",
+      apiHost: "https://apiin.im.baidu.com",
+      checkToken: "your-check-token",
       encodingAESKey: "your-encoding-aes-key",
       appKey: "your-app-key",
       appSecret: "your-app-secret",
@@ -44,13 +44,13 @@ openclaw plugins install @openclaw/infoflow
       enabled: true,
       accounts: {
         work: {
-          check_token: "token-1",
+          checkToken: "token-1",
           encodingAESKey: "key-1",
           appKey: "app-key-1",
           appSecret: "secret-1",
         },
         personal: {
-          check_token: "token-2",
+          checkToken: "token-2",
           encodingAESKey: "key-2",
           appKey: "app-key-2",
           appSecret: "secret-2",

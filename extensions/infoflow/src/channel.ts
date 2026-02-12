@@ -9,192 +9,21 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk";
-import type { InfoflowAccountConfig, InfoflowAtOptions, ResolvedInfoflowAccount } from "./types.js";
+import type { InfoflowMessageContentItem, ResolvedInfoflowAccount } from "./types.js";
+import {
+  getChannelSection,
+  listInfoflowAccountIds,
+  resolveDefaultInfoflowAccountId,
+  resolveInfoflowAccount,
+} from "./accounts.js";
 import { startInfoflowMonitor } from "./monitor.js";
 import { getInfoflowRuntime } from "./runtime.js";
-import { sendInfoflowPrivateMessage, sendInfoflowGroupMessage } from "./send.js";
+import { sendInfoflowMessage } from "./send.js";
 import { normalizeInfoflowTarget, looksLikeInfoflowId } from "./targets.js";
 
-// Re-export types for external consumers
+// Re-export types and account functions for external consumers
 export type { InfoflowAccountConfig, ResolvedInfoflowAccount } from "./types.js";
-
-// ---------------------------------------------------------------------------
-// Shared send helper
-// ---------------------------------------------------------------------------
-
-/**
- * Unified helper for sending messages (text or media-as-text).
- * Handles target parsing (group vs private) and routes to appropriate API.
- */
-async function sendInfoflowMessage(params: {
-  cfg: OpenClawConfig;
-  to: string;
-  content: string;
-  accountId?: string;
-  verbose?: boolean;
-}): Promise<{ channel: string; messageId: string }> {
-  const { cfg, to, content, accountId, verbose } = params;
-  const account = resolveInfoflowAccount({ cfg, accountId });
-  const { apiHost, appKey, appSecret } = account.config;
-
-  if (!appKey || !appSecret) {
-    throw new Error("Infoflow appKey/appSecret not configured.");
-  }
-
-  const target = to.replace(/^infoflow:/i, "");
-
-  // Check if target is a group (format: group:123 or group:123?at=user1,user2 or group:123?atall=true)
-  const groupMatch = target.match(/^group:(\d+)/i);
-  if (groupMatch) {
-    const groupId = Number(groupMatch[1]);
-
-    // Parse AT options from query string
-    let atOptions: InfoflowAtOptions | undefined;
-    const atAllMatch = target.match(/[?&]atall=true/i);
-    const atMatch = target.match(/[?&]at=([^&]+)/);
-    if (atAllMatch) {
-      atOptions = { atAll: true };
-    } else if (atMatch) {
-      const atUserIds = atMatch[1]
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (atUserIds.length > 0) {
-        atOptions = { atUserIds };
-      }
-    }
-
-    const result = await sendInfoflowGroupMessage({
-      apiHost,
-      appKey,
-      appSecret,
-      groupId,
-      content,
-      atOptions,
-    });
-
-    if (verbose) {
-      console.log(`[infoflow:send] group result: ok=${result.ok}, messageId=${result.messageid}`);
-    }
-
-    return {
-      channel: "infoflow",
-      messageId: result.ok ? (result.messageid ?? "sent") : "failed",
-    };
-  }
-
-  // Private message (DM)
-  const result = await sendInfoflowPrivateMessage({
-    apiHost,
-    appKey,
-    appSecret,
-    touser: target,
-    content,
-  });
-
-  if (verbose) {
-    console.log(`[infoflow:send] private result: ok=${result.ok}, msgkey=${result.msgkey}`);
-  }
-
-  return {
-    channel: "infoflow",
-    messageId: result.ok ? (result.msgkey ?? "sent") : "failed",
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Account resolution helpers
-// ---------------------------------------------------------------------------
-
-function getChannelSection(cfg: OpenClawConfig): InfoflowAccountConfig | undefined {
-  return cfg.channels?.["infoflow"] as InfoflowAccountConfig | undefined;
-}
-
-function listInfoflowAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = getChannelSection(cfg)?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  const ids = Object.keys(accounts).filter(Boolean);
-  return ids.length === 0 ? [DEFAULT_ACCOUNT_ID] : ids.toSorted((a, b) => a.localeCompare(b));
-}
-
-function resolveDefaultInfoflowAccountId(cfg: OpenClawConfig): string {
-  const channel = getChannelSection(cfg);
-  if (channel?.defaultAccount?.trim()) {
-    return channel.defaultAccount.trim();
-  }
-  const ids = listInfoflowAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
-}
-
-function mergeInfoflowAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): {
-  apiHost: string;
-  check_token: string;
-  encodingAESKey: string;
-  appKey: string;
-  appSecret: string;
-  enabled?: boolean;
-  name?: string;
-  robotName?: string;
-  requireMention?: boolean;
-} {
-  const raw = getChannelSection(cfg) ?? {};
-  const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
-  const account = raw.accounts?.[accountId] ?? {};
-  return { ...base, ...account } as {
-    apiHost: string;
-    check_token: string;
-    encodingAESKey: string;
-    appKey: string;
-    appSecret: string;
-    enabled?: boolean;
-    name?: string;
-    robotName?: string;
-    requireMention?: boolean;
-  };
-}
-
-export function resolveInfoflowAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): ResolvedInfoflowAccount {
-  const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = getChannelSection(params.cfg)?.enabled !== false;
-  const merged = mergeInfoflowAccountConfig(params.cfg, accountId);
-  const accountEnabled = merged.enabled !== false;
-  const enabled = baseEnabled && accountEnabled;
-  const apiHost = merged.apiHost ?? "";
-  const check_token = merged.check_token ?? "";
-  const encodingAESKey = merged.encodingAESKey ?? "";
-  const appKey = merged.appKey ?? "";
-  const appSecret = merged.appSecret ?? "";
-  const configured = Boolean(check_token) && Boolean(appKey) && Boolean(appSecret);
-
-  return {
-    accountId,
-    name: merged.name?.trim() || undefined,
-    enabled,
-    configured,
-    config: {
-      enabled: merged.enabled,
-      name: merged.name,
-      apiHost,
-      check_token,
-      encodingAESKey,
-      appKey,
-      appSecret,
-      robotName: merged.robotName?.trim() || undefined,
-      requireMention: merged.requireMention,
-    },
-  };
-}
+export { resolveInfoflowAccount } from "./accounts.js";
 
 // ---------------------------------------------------------------------------
 // Channel plugin
@@ -232,7 +61,7 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
         cfg,
         sectionKey: "infoflow",
         accountId,
-        clearBaseFields: ["check_token", "encodingAESKey", "appKey", "appSecret", "name"],
+        clearBaseFields: ["checkToken", "encodingAESKey", "appKey", "appSecret", "name"],
       }),
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
@@ -308,7 +137,7 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
       }),
     validateInput: ({ input }) => {
       if (!input.token) {
-        return "Infoflow requires --token (check_token).";
+        return "Infoflow requires --token (checkToken).";
       }
       return null;
     },
@@ -326,7 +155,7 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
 
       const patch: Record<string, unknown> = {};
       if (input.token) {
-        patch.check_token = input.token;
+        patch.checkToken = input.token;
       }
 
       const existing = (next.channels?.["infoflow"] ?? {}) as Record<string, unknown>;
@@ -366,7 +195,7 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunkerMode: "text",
+    chunkerMode: "markdown",
     textChunkLimit: 4000,
     chunker: (text, limit) => getInfoflowRuntime().channel.text.chunkText(text, limit),
     sendText: async ({ cfg, to, text, accountId }) => {
@@ -374,22 +203,55 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
       if (verbose) {
         console.log(`[infoflow:sendText] to=${to}, accountId=${accountId}`);
       }
-      return sendInfoflowMessage({
+      // Use "markdown" type even though param is named `text`: LLM outputs are often markdown,
+      // and Infoflow's markdown type handles both plain text and markdown seamlessly.
+      const result = await sendInfoflowMessage({
         cfg,
         to,
-        content: text,
+        contents: [{ type: "markdown", content: text }],
         accountId: accountId ?? undefined,
-        verbose,
       });
+      return {
+        channel: "infoflow",
+        messageId: result.ok ? (result.messageId ?? "sent") : "failed",
+      };
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
       const verbose = getInfoflowRuntime().logging.shouldLogVerbose();
-      // Infoflow only supports text; send media URL as text link with optional caption
-      const content = text?.trim() ? `${text.trim()}\n\n📎 ${mediaUrl}` : `📎 ${mediaUrl}`;
       if (verbose) {
         console.log(`[infoflow:sendMedia] to=${to}, accountId=${accountId}, mediaUrl=${mediaUrl}`);
       }
-      return sendInfoflowMessage({ cfg, to, content, accountId: accountId ?? undefined, verbose });
+
+      // Build contents array: text (if provided) + link for media URL
+      const contents: InfoflowMessageContentItem[] = [];
+      const trimmedText = text?.trim();
+      if (trimmedText) {
+        // Use "markdown" type even though param is named `text`: LLM outputs are often markdown,
+        // and Infoflow's markdown type handles both plain text and markdown seamlessly.
+        contents.push({ type: "markdown", content: trimmedText });
+      }
+      if (mediaUrl) {
+        contents.push({ type: "link", content: mediaUrl });
+      }
+
+      // Fallback: if no valid content, return early
+      if (contents.length === 0) {
+        return {
+          channel: "infoflow",
+          messageId: "failed",
+        };
+      }
+
+      const result = await sendInfoflowMessage({
+        cfg,
+        to,
+        contents,
+        accountId: accountId ?? undefined,
+      });
+      return {
+        channel: "infoflow",
+        messageId: result.ok ? (result.messageId ?? "sent") : "failed",
+      };
     },
   },
   status: {

@@ -125,25 +125,3 @@ export function looksLikeInfoflowId(raw: string): boolean {
 
   return false;
 }
-
-// ---------------------------------------------------------------------------
-// Target Formatting
-// ---------------------------------------------------------------------------
-
-/**
- * Formats an Infoflow target for display.
- * Used in UI and logs to show human-readable target info.
- */
-export function formatInfoflowTarget(target: string): string {
-  const normalized = normalizeInfoflowTarget(target);
-  if (!normalized) {
-    return target;
-  }
-
-  if (normalized.startsWith(GROUP_PREFIX)) {
-    const groupId = normalized.slice(GROUP_PREFIX.length);
-    return `Group ${groupId}`;
-  }
-
-  return `User ${normalized}`;
-}

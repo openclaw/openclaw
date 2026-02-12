@@ -3,8 +3,14 @@
  * Supports both private (DM) and group chat messages.
  */
 
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { createHash } from "node:crypto";
-import type { InfoflowAtOptions, InfoflowGroupMessageBodyItem } from "./types.js";
+import type {
+  InfoflowGroupMessageBodyItem,
+  InfoflowMessageContentItem,
+  ResolvedInfoflowAccount,
+} from "./types.js";
+import { resolveInfoflowAccount } from "./accounts.js";
 import { recordSentMessageId } from "./infoflow-req-parse.js";
 import { getInfoflowRuntime } from "./runtime.js";
 
@@ -37,6 +43,23 @@ const tokenCacheMap = new Map<string, { token: string; expiresAt: number }>();
 // ---------------------------------------------------------------------------
 // Helper Functions
 // ---------------------------------------------------------------------------
+
+/**
+ * Parses link content format: "href" or "[label]href"
+ * Returns both href and label (label defaults to href if not specified)
+ */
+function parseLinkContent(content: string): { href: string; label: string } {
+  if (content.startsWith("[")) {
+    const closeBracket = content.indexOf("]");
+    if (closeBracket > 1) {
+      return {
+        label: content.slice(1, closeBracket),
+        href: content.slice(closeBracket + 1),
+      };
+    }
+  }
+  return { href: content, label: content };
+}
 
 /**
  * Extracts message ID from Infoflow API response data.
@@ -151,39 +174,26 @@ export async function getAppAccessToken(params: {
 
 /**
  * Sends a private (DM) message to a user.
- * @param touser - Recipient's uuapName (email prefix), multiple users separated by |
- * @param content - Message content
+ * @param account - Resolved Infoflow account with config
+ * @param toUser - Recipient's uuapName (email prefix), multiple users separated by |
+ * @param contents - Array of content items (text/markdown; "at" is ignored for private messages)
  */
 export async function sendInfoflowPrivateMessage(params: {
-  apiHost: string;
-  appKey: string;
-  appSecret: string;
-  touser: string;
-  content: string;
-  msgtype?: "text" | "markdown";
+  account: ResolvedInfoflowAccount;
+  toUser: string;
+  contents: InfoflowMessageContentItem[];
   timeoutMs?: number;
 }): Promise<{ ok: boolean; error?: string; invaliduser?: string; msgkey?: string }> {
-  const {
-    apiHost,
-    appKey,
-    appSecret,
-    touser,
-    content,
-    msgtype = "text",
-    timeoutMs = DEFAULT_TIMEOUT_MS,
-  } = params;
+  const { account, toUser, contents, timeoutMs = DEFAULT_TIMEOUT_MS } = params;
+  const { apiHost, appKey, appSecret } = account.config;
 
-  // Get verbose state once at start
-  let verbose = false;
-  try {
-    verbose = getInfoflowRuntime().logging.shouldLogVerbose();
-  } catch {
-    // runtime not available, keep verbose = false
+  // Validate account config
+  if (!appKey || !appSecret) {
+    return { ok: false, error: "Infoflow appKey/appSecret not configured." };
   }
 
-  if (verbose) {
-    console.log(`[infoflow:sendPrivate] touser=${touser}, msgtype=${msgtype}`);
-  }
+  // Check if contents contain link type
+  const hasLink = contents.some((item) => item.type.toLowerCase() === "link");
 
   // Get token first
   const tokenResult = await getAppAccessToken({ apiHost, appKey, appSecret, timeoutMs });
@@ -196,13 +206,64 @@ export async function sendInfoflowPrivateMessage(params: {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-    // Build payload based on message type
-    const apiMsgtype = msgtype === "markdown" ? "md" : "text";
-    const payload: Record<string, unknown> = { touser, msgtype: apiMsgtype };
-    if (apiMsgtype === "text") {
-      payload.text = { content };
-    } else if (apiMsgtype === "md") {
-      payload.md = { content };
+    let payload: Record<string, unknown>;
+
+    if (hasLink) {
+      // Build richtext format payload when link is present
+      const richtextContent: Array<{ type: string; text?: string; href?: string; label?: string }> =
+        [];
+
+      for (const item of contents) {
+        const type = item.type.toLowerCase();
+        if (type === "text") {
+          richtextContent.push({ type: "text", text: item.content });
+        } else if (type === "md" || type === "markdown") {
+          richtextContent.push({ type: "text", text: item.content });
+        } else if (type === "link") {
+          if (item.content) {
+            const { href, label } = parseLinkContent(item.content);
+            richtextContent.push({ type: "a", href, label });
+          }
+        }
+      }
+
+      if (richtextContent.length === 0) {
+        return { ok: false, error: "no valid content for private message" };
+      }
+
+      payload = {
+        touser: toUser,
+        msgtype: "richtext",
+        richtext: { content: richtextContent },
+      };
+    } else {
+      // Original logic: filter text/markdown contents and merge with '\n'
+      const textParts: string[] = [];
+      let hasMarkdown = false;
+
+      for (const item of contents) {
+        const type = item.type.toLowerCase();
+        if (type === "text") {
+          textParts.push(item.content);
+        } else if (type === "md" || type === "markdown") {
+          textParts.push(item.content);
+          hasMarkdown = true;
+        }
+      }
+
+      if (textParts.length === 0) {
+        return { ok: false, error: "no valid content for private message" };
+      }
+
+      const mergedContent = textParts.join("\n");
+      const msgtype: string = hasMarkdown ? "md" : "text";
+
+      payload = { touser: toUser, msgtype };
+      if (msgtype === "text") {
+        payload.text = { content: mergedContent };
+      } else {
+        payload.md = { content: mergedContent };
+      }
     }
 
     const headers = {
@@ -249,9 +310,6 @@ export async function sendInfoflowPrivateMessage(params: {
       recordSentMessageId(msgkey);
     }
 
-    if (verbose) {
-      console.log(`[infoflow:sendPrivate] ok, msgkey=${msgkey}`);
-    }
     return { ok: true, invaliduser: innerData?.invaliduser as string | undefined, msgkey };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -266,42 +324,62 @@ export async function sendInfoflowPrivateMessage(params: {
 
 /**
  * Sends a group chat message.
+ * @param account - Resolved Infoflow account with config
  * @param groupId - Target group ID (numeric)
- * @param content - Message content
- * @param msgtype - Message type: "text" or "markdown"
+ * @param contents - Array of content items (text/markdown/at)
  */
 export async function sendInfoflowGroupMessage(params: {
-  apiHost: string;
-  appKey: string;
-  appSecret: string;
+  account: ResolvedInfoflowAccount;
   groupId: number;
-  content: string;
-  msgtype?: "text" | "markdown";
-  atOptions?: InfoflowAtOptions;
+  contents: InfoflowMessageContentItem[];
   timeoutMs?: number;
 }): Promise<{ ok: boolean; error?: string; messageid?: string }> {
-  const {
-    apiHost,
-    appKey,
-    appSecret,
-    groupId,
-    content,
-    msgtype = "text",
-    atOptions,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
-  } = params;
+  const { account, groupId, contents, timeoutMs = DEFAULT_TIMEOUT_MS } = params;
+  const { apiHost, appKey, appSecret } = account.config;
 
-  // Get verbose state once at start
-  let verbose = false;
-  try {
-    verbose = getInfoflowRuntime().logging.shouldLogVerbose();
-  } catch {
-    // runtime not available, keep verbose = false
+  // Validate account config
+  if (!appKey || !appSecret) {
+    return { ok: false, error: "Infoflow appKey/appSecret not configured." };
   }
 
-  if (verbose) {
-    console.log(`[infoflow:sendGroup] groupId=${groupId}, msgtype=${msgtype}`);
+  // Validate contents
+  if (contents.length === 0) {
+    return { ok: false, error: "contents array is empty" };
   }
+
+  // Build group message body from contents
+  let hasMarkdown = false;
+  const body: InfoflowGroupMessageBodyItem[] = [];
+  for (const item of contents) {
+    const type = item.type.toLowerCase();
+    if (type === "text") {
+      body.push({ type: "TEXT", content: item.content });
+    } else if (type === "md" || type === "markdown") {
+      body.push({ type: "MD", content: item.content });
+      hasMarkdown = true;
+    } else if (item.type === "at") {
+      // Parse AT content: "all" means atall, otherwise comma-separated user IDs
+      if (item.content === "all") {
+        body.push({ type: "AT", atall: true, atuserids: [] });
+      } else {
+        const userIds = item.content
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (userIds.length > 0) {
+          body.push({ type: "AT", atuserids: userIds });
+        }
+      }
+    } else if (type === "link") {
+      // Group messages only use href (label is ignored)
+      if (item.content) {
+        const { href } = parseLinkContent(item.content);
+        body.push({ type: "LINK", href });
+      }
+    }
+  }
+
+  const headerMsgType = hasMarkdown ? "MD" : "TEXT";
 
   // Get token first
   const tokenResult = await getAppAccessToken({ apiHost, appKey, appSecret, timeoutMs });
@@ -314,25 +392,12 @@ export async function sendInfoflowGroupMessage(params: {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-    // Build group message body
-    const bodyType = msgtype === "markdown" ? "MD" : "TEXT";
-    const body: InfoflowGroupMessageBodyItem[] = [{ type: bodyType, content }];
-
-    // Add AT element if atOptions is provided
-    if (atOptions?.atAll || (atOptions?.atUserIds && atOptions.atUserIds.length > 0)) {
-      body.push({
-        type: "AT",
-        atuserids: atOptions.atUserIds ?? [],
-        ...(atOptions.atAll && { atall: true }),
-      });
-    }
-
     const payload = {
       message: {
         header: {
           toid: groupId,
           totype: "GROUP",
-          msgtype: bodyType,
+          msgtype: headerMsgType,
           clientmsgid: Date.now(),
           role: "robot",
         },
@@ -340,6 +405,9 @@ export async function sendInfoflowGroupMessage(params: {
       },
     };
 
+    // NOTE: Infoflow API requires "Bearer-<token>" format (with hyphen, not space).
+    // This is a non-standard format specific to Infoflow service. Do not modify
+    // unless the Infoflow API specification changes.
     const headers = {
       Authorization: `Bearer-${tokenResult.token}`,
       "Content-Type": "application/json",
@@ -380,15 +448,69 @@ export async function sendInfoflowGroupMessage(params: {
       recordSentMessageId(messageid);
     }
 
-    if (verbose) {
-      console.log(`[infoflow:sendGroup] ok, messageid=${messageid}`);
-    }
     return { ok: true, messageid };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[infoflow:sendGroup] exception: ${errMsg}`);
     return { ok: false, error: errMsg };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Unified Message Sending
+// ---------------------------------------------------------------------------
+
+/**
+ * Unified message sending entry point.
+ * Parses the `to` target and dispatches to group or private message sending.
+ * @param cfg - OpenClaw config
+ * @param to - Target: "username" for private, "group:123" for group
+ * @param contents - Array of content items (text/markdown/at)
+ * @param accountId - Optional account ID for multi-account support
+ */
+export async function sendInfoflowMessage(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  contents: InfoflowMessageContentItem[];
+  accountId?: string;
+}): Promise<{ ok: boolean; error?: string; messageId?: string }> {
+  const { cfg, to, contents, accountId } = params;
+
+  // Resolve account config
+  const account = resolveInfoflowAccount({ cfg, accountId });
+  const { appKey, appSecret } = account.config;
+
+  if (!appKey || !appSecret) {
+    return { ok: false, error: "Infoflow appKey/appSecret not configured." };
+  }
+
+  // Validate contents
+  if (contents.length === 0) {
+    return { ok: false, error: "contents array is empty" };
+  }
+
+  // Parse target: remove "infoflow:" prefix if present
+  const target = to.replace(/^infoflow:/i, "");
+
+  // Check if target is a group (format: group:123)
+  const groupMatch = target.match(/^group:(\d+)/i);
+  if (groupMatch) {
+    const groupId = Number(groupMatch[1]);
+    const result = await sendInfoflowGroupMessage({ account, groupId, contents });
+    return {
+      ok: result.ok,
+      error: result.error,
+      messageId: result.messageid,
+    };
+  }
+
+  // Private message (DM)
+  const result = await sendInfoflowPrivateMessage({ account, toUser: target, contents });
+  return {
+    ok: result.ok,
+    error: result.error,
+    messageId: result.msgkey,
+  };
 }
 
 // ---------------------------------------------------------------------------

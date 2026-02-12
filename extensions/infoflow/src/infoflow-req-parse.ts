@@ -185,12 +185,6 @@ export type WebhookTarget = {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
-export type ParsedInfoflowMessage = {
-  fromuser: string;
-  mes: string;
-  chatType: "direct" | "group";
-};
-
 export type ParseResult = { handled: true; statusCode: number; body: string } | { handled: false };
 
 // ---------------------------------------------------------------------------
@@ -248,6 +242,9 @@ export async function loadRawBody(
  * 4. Other Content-Type → 400
  *
  * Returns a ParseResult indicating whether the request was handled and the response to send.
+ *
+ * NOTE: Only echostr has signature verification; message webhooks use AES-ECB mode.
+ * This is an Infoflow API constraint. This mode will not be modified until the service is upgraded.
  */
 export async function parseAndDispatchInfoflowRequest(
   req: IncomingMessage,
@@ -274,7 +271,7 @@ export async function parseAndDispatchInfoflowRequest(
       const timestamp = form.get("timestamp") ?? "";
       const rn = form.get("rn") ?? "";
       for (const target of targets) {
-        const checkToken = target.account.config.check_token ?? "";
+        const checkToken = target.account.config.checkToken ?? "";
         if (!checkToken) continue;
         const expectedSig = createHash("md5")
           .update(`${rn}${timestamp}${checkToken}`)
@@ -320,12 +317,14 @@ type DecryptDispatchParams = {
   chatType: "direct" | "group";
   verbose: boolean;
   fallbackParser?: (content: string) => Record<string, unknown> | null;
-  dispatchFn: (target: WebhookTarget, msgData: Record<string, unknown>) => void;
+  /** Async handler to process the decrypted message. Errors are caught internally. */
+  dispatchFn: (target: WebhookTarget, msgData: Record<string, unknown>) => Promise<void>;
 };
 
 /**
  * Shared helper to decrypt message content and dispatch to handler.
  * Iterates through accounts, attempts decryption, parses content, checks for duplicates.
+ * Dispatches asynchronously (fire-and-forget) with centralized error logging.
  */
 function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
   const { encryptedContent, targets, chatType, verbose, fallbackParser, dispatchFn } = params;
@@ -374,7 +373,11 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
       }
 
       target.statusSink?.({ lastInboundAt: Date.now() });
-      dispatchFn(target, msgData);
+
+      // Fire-and-forget with centralized error handling
+      void dispatchFn(target, msgData).catch((err) => {
+        console.error(`[infoflow] ${chatType} handler error:`, err);
+      });
 
       if (verbose) {
         console.log(`[infoflow] ${chatType}: message dispatched successfully`);
@@ -421,14 +424,13 @@ function handlePrivateMessage(
     chatType: "direct",
     verbose,
     fallbackParser: parseXmlMessage,
-    dispatchFn: (target, msgData) => {
-      void handlePrivateChatMessage({
+    dispatchFn: (target, msgData) =>
+      handlePrivateChatMessage({
         cfg: target.config,
         msgData,
         accountId: target.account.accountId,
         statusSink: target.statusSink,
-      });
-    },
+      }),
   });
 }
 
@@ -451,14 +453,13 @@ function handleGroupMessage(
     targets,
     chatType: "group",
     verbose,
-    dispatchFn: (target, msgData) => {
-      void handleGroupChatMessage({
+    dispatchFn: (target, msgData) =>
+      handleGroupChatMessage({
         cfg: target.config,
         msgData,
         accountId: target.account.accountId,
         statusSink: target.statusSink,
-      });
-    },
+      }),
   });
 }
 

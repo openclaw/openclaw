@@ -1,16 +1,18 @@
-import { createReplyPrefixOptions, type OpenClawConfig } from "openclaw/plugin-sdk";
-import type { InfoflowAtOptions } from "./types.js";
-import { resolveInfoflowAccount } from "./channel.js";
+import {
+  createReplyPrefixOptions,
+  type OpenClawConfig,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk";
+import type { InfoflowAtOptions, InfoflowMessageContentItem } from "./types.js";
 import { getInfoflowRuntime } from "./runtime.js";
-import { sendInfoflowPrivateMessage, sendInfoflowGroupMessage } from "./send.js";
+import { sendInfoflowMessage } from "./send.js";
 
 export type CreateInfoflowReplyDispatcherParams = {
   cfg: OpenClawConfig;
   agentId: string;
   accountId: string;
-  fromuser: string;
-  chatType: "direct" | "group";
-  groupId?: number;
+  /** Target: "group:<id>" for group chat, username for private chat */
+  to: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   /** AT options for @mentioning members in group messages */
   atOptions?: InfoflowAtOptions;
@@ -21,10 +23,8 @@ export type CreateInfoflowReplyDispatcherParams = {
  * Encapsulates prefix options, chunked deliver (send via Infoflow API + statusSink), and onError.
  */
 export function createInfoflowReplyDispatcher(params: CreateInfoflowReplyDispatcherParams) {
-  const { cfg, agentId, accountId, fromuser, chatType, groupId, statusSink, atOptions } = params;
+  const { cfg, agentId, accountId, to, statusSink, atOptions } = params;
   const core = getInfoflowRuntime();
-  const verbose = core.logging.shouldLogVerbose();
-  const account = resolveInfoflowAccount({ cfg, accountId });
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -33,63 +33,39 @@ export function createInfoflowReplyDispatcher(params: CreateInfoflowReplyDispatc
     accountId,
   });
 
-  const deliver = async (payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] }) => {
-    const { apiHost, appKey, appSecret } = account.config;
+  // Check if target is a group (format: group:<id>)
+  const isGroup = /^group:\d+$/i.test(to);
 
-    if (!appKey || !appSecret) {
-      console.error(`[infoflow] Missing appKey or appSecret for account ${accountId}`);
+  const deliver = async (payload: ReplyPayload) => {
+    const text = payload.text ?? "";
+    if (!text.trim()) {
       return;
     }
 
-    if (payload.text) {
-      // Chunk text to 4000 chars max (Infoflow limit)
-      const chunks = core.channel.text.chunkText(payload.text, 4000);
+    // Chunk text to 4000 chars max (Infoflow limit)
+    const chunks = core.channel.text.chunkText(text, 4000);
+    // Only include @mentions in the first chunk (avoid duplicate @s)
+    let isFirstChunk = true;
 
-      for (const chunk of chunks) {
-        let result: { ok: boolean; error?: string; messageid?: string; msgkey?: string };
+    for (const chunk of chunks) {
+      const contents: InfoflowMessageContentItem[] = [{ type: "markdown", content: chunk }];
 
-        if (chatType === "group" && groupId) {
-          // Send to group
-          if (verbose) {
-            console.log(`[infoflow] Delivering group message to ${groupId}`);
-          }
-          result = await sendInfoflowGroupMessage({
-            apiHost,
-            appKey,
-            appSecret,
-            groupId,
-            content: chunk,
-            msgtype: "markdown",
-            atOptions,
-          });
-        } else {
-          // Send private message (DM)
-          if (verbose) {
-            console.log(`[infoflow] Delivering private message to ${fromuser}`);
-          }
-          result = await sendInfoflowPrivateMessage({
-            apiHost,
-            appKey,
-            appSecret,
-            touser: fromuser,
-            content: chunk,
-            msgtype: "markdown",
-          });
-        }
-
-        if (result.ok) {
-          statusSink?.({ lastOutboundAt: Date.now() });
-          // Dedup is handled in send.ts (recordSentMessageId called after successful send)
-        } else if (result.error) {
-          console.error(`[infoflow] Failed to send message: ${result.error}`);
+      // Add AT content for group messages (first chunk only)
+      if (isFirstChunk && isGroup && atOptions) {
+        if (atOptions.atAll) {
+          contents.push({ type: "at", content: "all" });
+        } else if (atOptions.atUserIds?.length) {
+          contents.push({ type: "at", content: atOptions.atUserIds.join(",") });
         }
       }
-    }
+      isFirstChunk = false;
 
-    // TODO: Handle media attachments if needed
-    if (payload.mediaUrl || payload.mediaUrls?.length) {
-      if (verbose) {
-        console.log(`[infoflow] Media attachments not yet supported`);
+      const result = await sendInfoflowMessage({ cfg, to, contents, accountId });
+
+      if (result.ok) {
+        statusSink?.({ lastOutboundAt: Date.now() });
+      } else if (result.error) {
+        console.error(`[infoflow] Failed to send message: ${result.error}`);
       }
     }
   };

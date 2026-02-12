@@ -26,7 +26,14 @@ export type InfoflowAtOptions = {
 export type InfoflowGroupMessageBodyItem =
   | { type: "TEXT"; content: string }
   | { type: "MD"; content: string }
-  | { type: "AT"; atall?: boolean; atuserids: string[] };
+  | { type: "AT"; atall?: boolean; atuserids: string[] }
+  | { type: "LINK"; href: string };
+
+/** Content item for sendInfoflowMessage */
+export type InfoflowMessageContentItem = {
+  type: "text" | "markdown" | "at" | "link";
+  content: string;
+};
 
 // ---------------------------------------------------------------------------
 // Account configuration
@@ -36,7 +43,7 @@ export type InfoflowAccountConfig = {
   enabled?: boolean;
   name?: string;
   apiHost?: string;
-  check_token?: string;
+  checkToken?: string;
   encodingAESKey?: string;
   appKey?: string;
   appSecret?: string;
@@ -60,7 +67,7 @@ export type ResolvedInfoflowAccount = {
     enabled?: boolean;
     name?: string;
     apiHost: string;
-    check_token: string;
+    checkToken: string;
     encodingAESKey: string;
     appKey: string;
     appSecret: string;
@@ -92,15 +99,6 @@ export type InfoflowMessageEvent = {
   timestamp?: number;
   /** Raw message text preserving @mentions (for RawBody) */
   rawMes?: string;
-};
-
-export type InfoflowSendResult = {
-  ok: boolean;
-  error?: string;
-  messageId?: string;
-  msgkey?: string;
-  messageid?: string;
-  invaliduser?: string;
 };
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@
       "apiHost": { "type": "string" },
       "enabled": { "type": "boolean" },
       "name": { "type": "string" },
-      "check_token": { "type": "string" },
+      "checkToken": { "type": "string" },
       "encodingAESKey": { "type": "string" },
       "appKey": { "type": "string" },
       "appSecret": { "type": "string" },
@@ -25,7 +25,7 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "name": { "type": "string" },
-            "check_token": { "type": "string" },
+            "checkToken": { "type": "string" },
             "encodingAESKey": { "type": "string" },
             "appKey": { "type": "string" },
             "appSecret": { "type": "string" },

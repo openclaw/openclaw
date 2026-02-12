@@ -12,8 +12,6 @@ import { getInfoflowRuntime } from "./runtime.js";
 // Types
 // ---------------------------------------------------------------------------
 
-type InfoflowCoreRuntime = ReturnType<typeof getInfoflowRuntime>;
-
 export type InfoflowMonitorOptions = {
   account: ResolvedInfoflowAccount;
   config: OpenClawConfig;
@@ -96,34 +94,22 @@ export async function handleInfoflowWebhookRequest(
   const requestPath = normalizeWebhookPath(url.pathname);
 
   if (verbose) {
-    console.log(`[infoflow] webhook request: method=${req.method}, path=${requestPath}`);
+    // 记录url全部内容
+    console.log(`[infoflow] request: url=${url}`);
   }
 
   // Check if path matches Infoflow webhook pattern
   if (!isInfoflowPath(requestPath)) {
-    if (verbose) {
-      console.log(`[infoflow] path not matched, skipping`);
-    }
     return false;
   }
 
   // Get registered targets for the actual request path
   const targets = webhookTargets.get(requestPath);
   if (!targets || targets.length === 0) {
-    if (verbose) {
-      console.log(`[infoflow] no targets registered for path=${requestPath}`);
-    }
     return false;
   }
 
-  if (verbose) {
-    console.log(`[infoflow] found ${targets.length} target(s) for path=${requestPath}`);
-  }
-
   if (req.method !== "POST") {
-    if (verbose) {
-      console.log(`[infoflow] rejected: method ${req.method} not allowed`);
-    }
     res.statusCode = 405;
     res.setHeader("Allow", "POST");
     res.end("Method Not Allowed");
@@ -131,9 +117,6 @@ export async function handleInfoflowWebhookRequest(
   }
 
   // Load raw body once
-  if (verbose) {
-    console.log(`[infoflow] reading request body...`);
-  }
   const bodyResult = await loadRawBody(req);
   if (!bodyResult.ok) {
     console.error(`[infoflow] failed to read body: ${bodyResult.error}`);
@@ -142,11 +125,15 @@ export async function handleInfoflowWebhookRequest(
     return true;
   }
 
-  if (verbose) {
-    console.log(`[infoflow] body read success, length=${bodyResult.raw.length}, dispatching...`);
+  let result;
+  try {
+    result = await parseAndDispatchInfoflowRequest(req, bodyResult.raw, targets);
+  } catch (err) {
+    console.error(`[infoflow] webhook handler error:`, err);
+    res.statusCode = 500;
+    res.end("internal error");
+    return true;
   }
-
-  const result = await parseAndDispatchInfoflowRequest(req, bodyResult.raw, targets);
 
   if (verbose) {
     console.log(
@@ -155,7 +142,8 @@ export async function handleInfoflowWebhookRequest(
   }
 
   if (result.handled) {
-    if (result.body.startsWith("{")) {
+    const looksLikeJson = result.body.startsWith("{");
+    if (looksLikeJson) {
       res.setHeader("Content-Type", "application/json");
     }
     res.statusCode = result.statusCode;

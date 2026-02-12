@@ -5,7 +5,7 @@ import type {
   HandlePrivateChatParams,
   HandleGroupChatParams,
 } from "./types.js";
-import { resolveInfoflowAccount } from "./channel.js";
+import { resolveInfoflowAccount } from "./accounts.js";
 import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
 import { getInfoflowRuntime } from "./runtime.js";
 
@@ -296,13 +296,14 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     }
   }
 
+  // Build unified target: "group:<id>" for group chat, username for private chat
+  const to = isGroup && groupId !== undefined ? `group:${groupId}` : fromuser;
+
   const { dispatcherOptions, replyOptions } = createInfoflowReplyDispatcher({
     cfg,
     agentId: route.agentId,
     accountId: account.accountId,
-    fromuser,
-    chatType,
-    groupId,
+    to,
     statusSink,
   });
 
