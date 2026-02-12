@@ -83,6 +83,79 @@ function parseIpv4FromMappedIpv6(mapped: string): number[] | null {
   return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
 }
 
+function parseIpv6Part(part: string): number[] | null {
+  if (!part) {
+    return [];
+  }
+  const segments = part.split(":");
+  const hextets: number[] = [];
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (!segment) {
+      return null;
+    }
+    if (segment.includes(".")) {
+      if (index !== segments.length - 1) {
+        return null;
+      }
+      const ipv4 = parseIpv4(segment);
+      if (!ipv4) {
+        return null;
+      }
+      hextets.push((ipv4[0] << 8) | ipv4[1], (ipv4[2] << 8) | ipv4[3]);
+      continue;
+    }
+    if (!/^[0-9a-f]{1,4}$/i.test(segment)) {
+      return null;
+    }
+    const value = Number.parseInt(segment, 16);
+    if (Number.isNaN(value) || value < 0 || value > 0xffff) {
+      return null;
+    }
+    hextets.push(value);
+  }
+  return hextets;
+}
+
+function parseIpv4FromCompatibleIpv6(address: string): number[] | null {
+  const normalized = address.split("%")[0];
+  const compressionIndex = normalized.indexOf("::");
+  if (compressionIndex !== normalized.lastIndexOf("::")) {
+    return null;
+  }
+
+  const hasCompression = compressionIndex !== -1;
+  const [headRaw, tailRaw] = hasCompression ? normalized.split("::") : [normalized, ""];
+  const head = parseIpv6Part(headRaw);
+  const tail = parseIpv6Part(tailRaw);
+  if (!head || !tail) {
+    return null;
+  }
+
+  const hextets = hasCompression
+    ? (() => {
+        const omitted = 8 - (head.length + tail.length);
+        if (omitted < 1) {
+          return null;
+        }
+        return [...head, ...Array.from({ length: omitted }, () => 0), ...tail];
+      })()
+    : head.length === 8
+      ? head
+      : null;
+
+  if (!hextets || hextets.length !== 8) {
+    return null;
+  }
+  if (!hextets.slice(0, 6).every((value) => value === 0)) {
+    return null;
+  }
+
+  const high = hextets[6];
+  const low = hextets[7];
+  return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
+}
+
 function isPrivateIpv4(parts: number[]): boolean {
   const [octet1, octet2] = parts;
   if (octet1 === 0) {
@@ -124,6 +197,10 @@ export function isPrivateIpAddress(address: string): boolean {
     if (ipv4) {
       return isPrivateIpv4(ipv4);
     }
+  }
+  const compatibleIpv4 = parseIpv4FromCompatibleIpv6(normalized);
+  if (compatibleIpv4) {
+    return isPrivateIpv4(compatibleIpv4);
   }
 
   if (normalized.includes(":")) {

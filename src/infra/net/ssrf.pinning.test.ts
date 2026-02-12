@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPinnedLookup, resolvePinnedHostname } from "./ssrf.js";
+import {
+  createPinnedLookup,
+  isPrivateIpAddress,
+  resolvePinnedHostname,
+  resolvePinnedHostnameWithPolicy,
+} from "./ssrf.js";
 
 describe("ssrf pinning", () => {
   it("pins resolved addresses for the target hostname", async () => {
@@ -42,6 +47,20 @@ describe("ssrf pinning", () => {
   it("rejects private DNS results", async () => {
     const lookup = vi.fn(async () => [{ address: "10.0.0.8", family: 4 }]);
     await expect(resolvePinnedHostname("example.com", lookup)).rejects.toThrow(/private|internal/i);
+  });
+
+  it("treats IPv4-compatible IPv6 addresses as private", () => {
+    expect(isPrivateIpAddress("::127.0.0.1")).toBe(true);
+    expect(isPrivateIpAddress("::7f00:1")).toBe(true);
+    expect(isPrivateIpAddress("0:0:0:0:0:0:7f00:1")).toBe(true);
+    expect(isPrivateIpAddress("0:0:0:0:0:0:127.0.0.1")).toBe(true);
+  });
+
+  it("rejects IPv4-compatible IPv6 DNS results", async () => {
+    const lookup = vi.fn(async () => [{ address: "0:0:0:0:0:0:7f00:1", family: 6 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("example.com", { lookupFn: lookup }),
+    ).rejects.toThrow(/private|internal/i);
   });
 
   it("falls back for non-matching hostnames", async () => {
