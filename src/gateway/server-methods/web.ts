@@ -13,10 +13,14 @@ import { formatForLog } from "../ws-log.js";
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.pairing.start", "web.login.wait"]);
 
 function coerceTimeoutMs(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
   if (typeof value === "string") {
     const n = Number(value);
-    if (Number.isFinite(n)) return n;
+    if (Number.isFinite(n)) {
+      return n;
+    }
   }
   return undefined;
 }
