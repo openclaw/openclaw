@@ -170,6 +170,24 @@ export function enableConsoleCapture(): void {
   }
   loggingState.consolePatched = true;
 
+  // Handle async EPIPE errors on stdout/stderr. The synchronous try/catch in
+  // the forward() wrapper below only covers errors thrown during write dispatch.
+  // When the receiving pipe closes (e.g. during shutdown), Node emits the error
+  // asynchronously on the stream. Without a listener this becomes an uncaught
+  // exception that crashes the gateway.
+  // Guard separately from consolePatched so test resets don't stack listeners.
+  if (!loggingState.streamErrorHandlersInstalled) {
+    loggingState.streamErrorHandlersInstalled = true;
+    for (const stream of [process.stdout, process.stderr]) {
+      stream.on("error", (err) => {
+        if (isEpipeError(err)) {
+          return;
+        }
+        throw err;
+      });
+    }
+  }
+
   let logger: ReturnType<typeof getLogger> | null = null;
   const getLoggerLazy = () => {
     if (!logger) {
