@@ -115,6 +115,7 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
 
 export function clearSessionStoreCacheForTest(): void {
   SESSION_STORE_CACHE.clear();
+  LOCK_QUEUES.clear();
 }
 
 /** Expose lock queue size for tests. */
@@ -594,8 +595,9 @@ const LOCK_QUEUES = new Map<string, Promise<unknown>>();
 async function withSessionStoreLock<T>(
   storePath: string,
   fn: () => Promise<T>,
-  _opts: SessionStoreLockOptions = {},
+  opts: SessionStoreLockOptions = {},
 ): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? 10_000;
   const prev = LOCK_QUEUES.get(storePath) ?? Promise.resolve();
   const next = prev.then(() => fn());
   // Store a caught version so unhandled-rejection is never triggered by the
@@ -608,6 +610,23 @@ async function withSessionStoreLock<T>(
       LOCK_QUEUES.delete(storePath);
     }
   });
+
+  // Prevent infinite waits when the queue is stuck (e.g. preceding task never
+  // resolves). This mirrors the old file-lock timeout behaviour.
+  if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`timeout waiting for session store lock: ${storePath}`));
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([next, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   return next;
 }
 
