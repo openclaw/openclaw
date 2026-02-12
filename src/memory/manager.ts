@@ -1878,9 +1878,12 @@ export class MemoryIndexManager implements MemorySearchManager {
     const mapping = new Map<string, { index: number; hash: string }>();
     for (const item of missing) {
       const chunk = item.chunk;
-      const customId = hashText(
+      const hash = hashText(
         `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${item.index}`,
       );
+      // Add "emb_" prefix to ensure custom_id starts with letters and is clearly valid
+      // for OpenAI's batch API pattern requirement: ^[a-zA-Z0-9_-]+$
+      const customId = `emb_${hash}`;
       mapping.set(customId, { index: item.index, hash: chunk.hash });
       requests.push({
         custom_id: customId,
@@ -1959,9 +1962,12 @@ export class MemoryIndexManager implements MemorySearchManager {
     const mapping = new Map<string, { index: number; hash: string }>();
     for (const item of missing) {
       const chunk = item.chunk;
-      const customId = hashText(
+      const hash = hashText(
         `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${item.index}`,
       );
+      // Add "emb_" prefix to ensure custom_id starts with letters and is clearly valid
+      // for batch API pattern requirements
+      const customId = `emb_${hash}`;
       mapping.set(customId, { index: item.index, hash: chunk.hash });
       requests.push({
         custom_id: customId,
