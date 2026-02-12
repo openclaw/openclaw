@@ -63,6 +63,7 @@ export type GatewayClientOptions = {
   onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  timeoutMs?: number; // Default 30s for RPC requests
 };
 
 export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
@@ -323,6 +324,10 @@ export class GatewayClient {
         if (pending.expectFinal && status === "accepted") {
           return;
         }
+        // Clear timeout if stored
+        if ((pending as any)._timeout) {
+          clearTimeout((pending as any)._timeout);
+        }
         this.pending.delete(parsed.id);
         if (parsed.ok) {
           pending.resolve(parsed.payload);
@@ -428,12 +433,25 @@ export class GatewayClient {
       );
     }
     const expectFinal = opts?.expectFinal === true;
+    const timeoutMs = this.opts.timeoutMs ?? 30_000;
     const p = new Promise<T>((resolve, reject) => {
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
         expectFinal,
       });
+
+      // Set timeout to clean up pending entry if no response
+      const timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Gateway request timeout for ${method} after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      // Store timeout reference so we can clear it on response
+      const existing = this.pending.get(id);
+      if (existing) {
+        (existing as any)._timeout = timeout;
+      }
     });
     this.ws.send(JSON.stringify(frame));
     return p;

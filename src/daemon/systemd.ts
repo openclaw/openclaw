@@ -11,6 +11,7 @@ import {
 } from "./constants.js";
 import { resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import { safeWrite, safeWriteLine } from "./safe-write.js";
 import {
   enableSystemdUserLinger,
   readSystemdUserLingerStatus,
@@ -263,8 +264,8 @@ export async function installSystemdService({
   }
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
-  stdout.write("\n");
-  stdout.write(`${formatLine("Installed systemd service", unitPath)}\n`);
+  safeWrite(stdout, "\n");
+  safeWriteLine(stdout, formatLine("Installed systemd service", unitPath));
   return { unitPath };
 }
 
@@ -283,9 +284,9 @@ export async function uninstallSystemdService({
   const unitPath = resolveSystemdUnitPath(env);
   try {
     await fs.unlink(unitPath);
-    stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
+    safeWriteLine(stdout, formatLine("Removed systemd service", unitPath));
   } catch {
-    stdout.write(`Systemd service not found at ${unitPath}\n`);
+    safeWriteLine(stdout, `Systemd service not found at ${unitPath}`);
   }
 }
 
@@ -303,7 +304,7 @@ export async function stopSystemdService({
   if (res.code !== 0) {
     throw new Error(`systemctl stop failed: ${res.stderr || res.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Stopped systemd service", unitName)}\n`);
+  safeWriteLine(stdout, formatLine("Stopped systemd service", unitName));
 }
 
 export async function restartSystemdService({
@@ -320,7 +321,7 @@ export async function restartSystemdService({
   if (res.code !== 0) {
     throw new Error(`systemctl restart failed: ${res.stderr || res.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Restarted systemd service", unitName)}\n`);
+  safeWriteLine(stdout, formatLine("Restarted systemd service", unitName));
 }
 
 export async function isSystemdServiceEnabled(args: {
@@ -434,14 +435,17 @@ export async function uninstallLegacySystemdUnits({
     if (systemctlAvailable) {
       await execSystemctl(["--user", "disable", "--now", `${unit.name}.service`]);
     } else {
-      stdout.write(`systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`);
+      safeWriteLine(
+        stdout,
+        `systemctl unavailable; removed legacy unit file only: ${unit.name}.service`,
+      );
     }
 
     try {
       await fs.unlink(unit.unitPath);
-      stdout.write(`${formatLine("Removed legacy systemd service", unit.unitPath)}\n`);
+      safeWriteLine(stdout, formatLine("Removed legacy systemd service", unit.unitPath));
     } catch {
-      stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
+      safeWriteLine(stdout, `Legacy systemd unit not found at ${unit.unitPath}`);
     }
   }
 
