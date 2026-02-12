@@ -221,6 +221,10 @@ function readBooleanParam(params: Record<string, unknown>, key: string): boolean
   return undefined;
 }
 
+function isSlackChannelHint(raw: string): boolean {
+  return /^[CUWGD][A-Z0-9]{8,}$/i.test(raw.trim());
+}
+
 function resolveSlackAutoThreadId(params: {
   to: string;
   toolContext?: ChannelThreadingToolContext;
@@ -1053,6 +1057,18 @@ export async function runMessageAction(
     }
   }
   const explicitChannel = typeof params.channel === "string" ? params.channel.trim() : "";
+  if (explicitChannel) {
+    const inferredContextChannel = normalizeMessageChannel(
+      input.toolContext?.currentChannelProvider,
+    );
+    const looksLikeSlackId = isSlackChannelHint(explicitChannel);
+    if (inferredContextChannel === "slack" && looksLikeSlackId) {
+      if (!actionHasTarget(action, params)) {
+        params.target = explicitChannel;
+      }
+      params.channel = "slack";
+    }
+  }
   if (!explicitChannel) {
     const inferredChannel = normalizeMessageChannel(input.toolContext?.currentChannelProvider);
     if (inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
