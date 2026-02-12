@@ -327,6 +327,45 @@ This is social engineering 101. Create distrust, encourage snooping.
 
 ## Configuration Hardening (examples)
 
+### Quick hardening: `--harden` flag
+
+For maximum security with minimal configuration, start the gateway with:
+
+```bash
+export OPENCLAW_GATEWAY_TOKEN="your-secure-token"
+openclaw gateway run --harden
+```
+
+This single flag automatically enforces:
+
+| Security Control          | What `--harden` Does                                                                                      |
+| ------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **Network binding**       | Forces loopback (127.0.0.1 only)                                                                          |
+| **Authentication**        | Requires token auth (`OPENCLAW_GATEWAY_TOKEN`)                                                            |
+| **TLS**                   | Forces enabled (auto-generates certs if needed)                                                           |
+| **Control UI**            | Disables `dangerouslyDisableDeviceAuth` and `allowInsecureAuth`                                           |
+| **Tool profile**          | Sets to `minimal`, clears `tools.allow` list                                                              |
+| **Dangerous tools**       | Blocks `exec`, `process`, `write`, `edit`, `apply_patch`, `gateway`, `cron`, `nodes`, `browser`, `canvas` |
+| **Elevated access**       | Disabled                                                                                                  |
+| **Agent-to-agent**        | Disabled                                                                                                  |
+| **Sandbox isolation**     | `network: "none"`, `readOnlyRoot: true`, `capDrop: ["ALL"]`                                               |
+| **Command blocking**      | Blocks dangerous patterns (`rm -rf`, `chmod 777`, pipe chains, etc.)                                      |
+| **Hot-reload protection** | Re-applies hardening when config file changes                                                             |
+
+**When to use:**
+
+- Running in untrusted environments
+- Exposing the gateway to external networks (even via Tailscale)
+- Multi-tenant or shared-host deployments
+- When you want defense-in-depth without manual config
+
+**Limitations:**
+
+- Command deny patterns use substring matching (defense-in-depth, not a complete sandbox)
+- Some legitimate workflows may be blocked; use manual config if you need granular control
+
+For granular control over individual settings, see the numbered sections below.
+
 ### 0) File permissions
 
 Keep config + state private on the gateway host:
@@ -564,7 +603,9 @@ We may add a single `readOnlyMode` flag later to simplify this configuration.
 
 ### 5) Secure baseline (copy/paste)
 
-One “safe default” config that keeps the Gateway private, requires DM pairing, and avoids always-on group bots:
+> **Tip:** For even stricter defaults with zero config, use `openclaw gateway run --harden` instead. See [Quick hardening](#quick-hardening---harden-flag) above.
+
+One "safe default" config that keeps the Gateway private, requires DM pairing, and avoids always-on group bots:
 
 ```json5
 {
