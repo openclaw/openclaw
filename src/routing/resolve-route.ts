@@ -255,7 +255,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   }
 
   if (guildId) {
-    const guildMatch = bindings.find((b) => matchesGuild(b.match, guildId));
+    const guildMatch = bindings.find(
+      (b) =>
+        matchesGuild(b.match, guildId) &&
+        (!Array.isArray(b.match?.roles) || b.match.roles.length === 0),
+    );
     if (guildMatch) {
       return choose(guildMatch.agentId, "binding.guild");
     }
