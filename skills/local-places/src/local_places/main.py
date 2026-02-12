@@ -17,7 +17,7 @@ from local_places.schemas import (
 
 app = FastAPI(
     title="My API",
-    servers=[{"url": os.getenv("OPENAPI_SERVER_URL", "http://maxims-macbook-air:8000")}],
+    servers=[{"url": os.getenv("OPENAPI_SERVER_URL", "http://localhost:8000")}],
 )
 logger = logging.getLogger("local_places.validation")
 
