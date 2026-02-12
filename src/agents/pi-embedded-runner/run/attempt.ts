@@ -1632,6 +1632,17 @@ export async function runEmbeddedAttempt(
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
         let effectivePrompt = params.prompt;
+        const hookTools =
+          tools.length > 0
+            ? tools.map((tool) => ({
+                name: tool.name || "tool",
+                description: tool.description ?? "",
+                parameters:
+                  tool.parameters && typeof tool.parameters === "object"
+                    ? (tool.parameters as Record<string, unknown>)
+                    : undefined,
+              }))
+            : undefined;
         const hookCtx = {
           agentId: hookAgentId,
           sessionKey: params.sessionKey,
@@ -1640,6 +1651,14 @@ export async function runEmbeddedAttempt(
           messageProvider: params.messageProvider ?? undefined,
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+          accountId: params.agentAccountId,
+          senderId: params.senderId ?? undefined,
+          senderName: params.senderName ?? undefined,
+          senderUsername: params.senderUsername ?? undefined,
+          senderE164: params.senderE164 ?? undefined,
+          runId: params.runId,
+          model: params.model,
+          modelRegistry: params.modelRegistry,
         };
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
