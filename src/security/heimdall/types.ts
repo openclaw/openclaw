@@ -2,6 +2,12 @@
  * Heimdall Security Layer — Type Definitions
  *
  * Deterministic security enforcement: GATE → SANITIZE → AUTHORIZE → FILTER
+ *
+ * Sender Tiers (from most to least privileged):
+ *   OWNER   - Account owner (full access by default)
+ *   SYSTEM  - Trusted internal runtime calls (cron, heartbeat)
+ *   MEMBER  - Team member (read + safe operations)
+ *   GUEST   - External user (minimal access, configurable)
  */
 
 // ---------------------------------------------------------------------------
@@ -12,6 +18,7 @@ export const SenderTier = {
   OWNER: "owner",
   MEMBER: "member",
   GUEST: "guest",
+  SYSTEM: "system",
 } as const;
 
 export type SenderTier = (typeof SenderTier)[keyof typeof SenderTier];
@@ -24,6 +31,14 @@ export interface SecurityContext {
   senderId: string | number;
   senderUsername?: string;
   senderTier: SenderTier;
+  /**
+   * Set to true for trusted internal runtime calls.
+   *
+   * Examples: cron jobs, scheduled heartbeats, maintenance tasks.
+   * These run without direct user interaction and should use SYSTEM tier
+   * to prevent privilege escalation if compromised.
+   */
+  isTrustedInternal?: boolean;
   channel: string;
   accountId?: string;
   groupId?: string;
