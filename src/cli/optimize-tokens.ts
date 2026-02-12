@@ -70,7 +70,31 @@ export async function optimizeTokens() {
 }
 
 function generateOptimizationConfig(currentConfig: OpenClawConfig) {
-  const defaults: Record<string, any> = {
+  const optimizedModels: Record<string, any> = {
+    "anthropic/claude-opus-4-5": {
+      params: {
+        cacheRetention: "long",
+      },
+    },
+  };
+
+  // Merge any other detected Anthropic models from current config
+  const existingModels = currentConfig.agents?.defaults?.models;
+  if (existingModels) {
+    for (const [key, model] of Object.entries(existingModels)) {
+      if (key.includes("anthropic") || (model as any)?.provider === "anthropic") {
+        if (!optimizedModels[key]) {
+          optimizedModels[key] = {
+            params: {
+              cacheRetention: "long",
+            },
+          };
+        }
+      }
+    }
+  }
+
+  return {
     agents: {
       defaults: {
         contextPruning: {
@@ -93,47 +117,11 @@ function generateOptimizationConfig(currentConfig: OpenClawConfig) {
             enabled: true,
           },
         },
+        heartbeat: {
+          every: "55m",
+        },
+        models: optimizedModels,
       },
     },
   };
-
-  // Check for Anthropic
-  const hasAnthropic = checkAnthropic(currentConfig);
-  if (hasAnthropic) {
-    defaults.agents.defaults.heartbeat = {
-      every: "55m",
-    };
-
-    // Apply cacheRetention: long to Anthropic models
-    const models = currentConfig.agents?.defaults?.models;
-    if (models) {
-      const optimizedModels: Record<string, any> = {};
-      for (const [key, model] of Object.entries(models)) {
-        if (key.includes("anthropic") || (model as any)?.provider === "anthropic") {
-          optimizedModels[key] = {
-            params: {
-              cacheRetention: "long",
-            },
-          };
-        }
-      }
-      if (Object.keys(optimizedModels).length > 0) {
-        defaults.agents.defaults.models = optimizedModels;
-      }
-    }
-  }
-
-  return defaults;
-}
-
-function checkAnthropic(config: OpenClawConfig): boolean {
-  const profiles = config.auth?.profiles ?? {};
-  if (Object.values(profiles).some((p) => p?.provider === "anthropic")) return true;
-  if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_OAUTH_TOKEN) return true;
-
-  // Also check models if they use anthropic
-  const models = config.agents?.defaults?.models ?? {};
-  if (Object.keys(models).some((k) => k.includes("anthropic"))) return true;
-
-  return false;
 }

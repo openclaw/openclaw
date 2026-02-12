@@ -52,7 +52,7 @@ describe("optimizeTokens", () => {
     expect(mockExit).toHaveBeenCalledWith(1);
   });
 
-  it("creates optimization.json and updates openclaw.json with include", async () => {
+  it("creates optimization.json with all settings", async () => {
     const mockConfigPath = "/home/user/.openclaw/openclaw.json";
     mockReadConfigFileSnapshot.mockResolvedValue({
       valid: true,
@@ -68,9 +68,21 @@ describe("optimizeTokens", () => {
     const writeCall1 = mockWriteFile.mock.calls[0];
     expect(writeCall1[0]).toBe(path.join("/home/user/.openclaw", "optimization.json"));
     const writtenConfig = JSON.parse(writeCall1[1]);
+
+    // Pruning
     expect(writtenConfig.agents.defaults.contextPruning.mode).toBe("cache-ttl");
+
+    // Compaction
     expect(writtenConfig.agents.defaults.compaction.mode).toBe("safeguard");
+
+    // Memory
     expect(writtenConfig.agents.defaults.memorySearch.provider).toBe("local");
+
+    // Heartbeat (always 55m)
+    expect(writtenConfig.agents.defaults.heartbeat.every).toBe("55m");
+
+    // Models (always includes default)
+    expect(writtenConfig.agents.defaults.models["anthropic/claude-opus-4-5"].params.cacheRetention).toBe("long");
 
     // Check openclaw.json update
     const writeCall2 = mockWriteFile.mock.calls[1];
@@ -95,13 +107,13 @@ describe("optimizeTokens", () => {
     expect(writtenMainConfig["$include"]).toEqual(["./base.json", "./optimization.json"]);
   });
 
-  it("detects Anthropic and adds specific settings", async () => {
+  it("merges existing Anthropic models from config", async () => {
     const mockConfigPath = "/home/user/.openclaw/openclaw.json";
     mockReadConfigFileSnapshot.mockResolvedValue({
       valid: true,
       path: mockConfigPath,
       config: {
-        auth: { profiles: { "anthropic:test": { provider: "anthropic" } } },
+        auth: { profiles: {} },
         agents: { defaults: { models: { "anthropic/claude-3": { provider: "anthropic" } } } },
       },
       parsed: {},
@@ -112,10 +124,13 @@ describe("optimizeTokens", () => {
     const writeCall1 = mockWriteFile.mock.calls[0];
     const writtenConfig = JSON.parse(writeCall1[1]);
 
-    // Check heartbeat
+    // Check heartbeat (always present)
     expect(writtenConfig.agents.defaults.heartbeat.every).toBe("55m");
 
-    // Check model params
+    // Check default model
+    expect(writtenConfig.agents.defaults.models["anthropic/claude-opus-4-5"].params.cacheRetention).toBe("long");
+
+    // Check merged model
     expect(writtenConfig.agents.defaults.models["anthropic/claude-3"].params.cacheRetention).toBe("long");
   });
 });
