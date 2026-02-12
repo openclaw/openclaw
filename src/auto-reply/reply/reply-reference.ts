@@ -29,14 +29,14 @@ export function createReplyReferencePlanner(options: {
     if (!allowReference) {
       return undefined;
     }
+    if (options.replyToMode === "off") {
+      return undefined;
+    }
     if (existingId) {
       hasReplied = true;
       return existingId;
     }
     if (!startId) {
-      return undefined;
-    }
-    if (options.replyToMode === "off") {
       return undefined;
     }
     if (options.replyToMode === "all") {
