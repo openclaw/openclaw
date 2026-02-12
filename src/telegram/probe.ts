@@ -35,7 +35,26 @@ export async function probeTelegram(
   };
 
   try {
-    const meRes = await fetchWithTimeout(`${base}/getMe`, {}, timeoutMs, fetcher);
+    let meRes: Response | null = null;
+    let fetchError: unknown = null;
+
+    // Retry loop for initial connection (handles network/DNS startup races)
+    for (let i = 0; i < 3; i++) {
+      try {
+        meRes = await fetchWithTimeout(`${base}/getMe`, {}, timeoutMs, fetcher);
+        break;
+      } catch (err) {
+        fetchError = err;
+        if (i < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+    }
+
+    if (!meRes) {
+      throw fetchError;
+    }
+
     const meJson = (await meRes.json()) as {
       ok?: boolean;
       description?: string;
