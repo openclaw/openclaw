@@ -1,6 +1,7 @@
 import {
   BedrockClient,
   ListFoundationModelsCommand,
+  ListInferenceProfilesCommand,
   type ListFoundationModelsCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
@@ -178,18 +179,46 @@ export async function discoverBedrockModels(params: {
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
-    const response = await client.send(new ListFoundationModelsCommand({}));
+    const [modelsResponse, profilesResponse] = await Promise.all([
+      client.send(new ListFoundationModelsCommand({})),
+      client.send(new ListInferenceProfilesCommand({})).catch(() => undefined),
+    ]);
+
+    // Build a map from foundation model ID to inference profile ID.
+    // Models that require inference profiles (e.g. Amazon Nova) need the
+    // profile ARN/ID instead of the raw model ID for invocation.
+    const profileByModel = new Map<string, string>();
+    for (const profile of profilesResponse?.inferenceProfileSummaries ?? []) {
+      const profileId = profile.inferenceProfileId;
+      if (!profileId) {
+        continue;
+      }
+      for (const model of profile.models ?? []) {
+        if (model.modelArn) {
+          // Extract model ID from ARN (last segment after /)
+          const modelId = model.modelArn.split("/").pop();
+          if (modelId && !profileByModel.has(modelId)) {
+            profileByModel.set(modelId, profileId);
+          }
+        }
+      }
+    }
+
     const discovered: ModelDefinitionConfig[] = [];
-    for (const summary of response.modelSummaries ?? []) {
+    for (const summary of modelsResponse.modelSummaries ?? []) {
       if (!shouldIncludeSummary(summary, providerFilter)) {
         continue;
       }
-      discovered.push(
-        toModelDefinition(summary, {
-          contextWindow: defaultContextWindow,
-          maxTokens: defaultMaxTokens,
-        }),
-      );
+      const def = toModelDefinition(summary, {
+        contextWindow: defaultContextWindow,
+        maxTokens: defaultMaxTokens,
+      });
+      // Use inference profile ID when available so the model can be invoked
+      const profileId = profileByModel.get(def.id);
+      if (profileId) {
+        def.id = profileId;
+      }
+      discovered.push(def);
     }
     return discovered.toSorted((a, b) => a.name.localeCompare(b.name));
   })();
