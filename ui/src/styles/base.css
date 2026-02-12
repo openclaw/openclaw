@@ -402,3 +402,54 @@ select {
   outline: none;
   box-shadow: var(--focus-ring);
 }
+
+@keyframes neon-flicker {
+
+  0%,
+  18%,
+  22%,
+  25%,
+  53%,
+  57%,
+  100% {
+    text-shadow: 0 0 4px var(--accent-glow), 0 0 10px var(--accent-glow);
+    box-shadow: 0 0 4px var(--accent-glow);
+    opacity: 1;
+  }
+
+  20%,
+  24%,
+  55% {
+    text-shadow: none;
+    box-shadow: none;
+    opacity: 0.7;
+  }
+}
+
+@keyframes scanline {
+  0% {
+    transform: translateY(-100%);
+  }
+
+  100% {
+    transform: translateY(100%);
+  }
+}
+
+.neon-flicker {
+  animation: neon-flicker 5s infinite step-end;
+}
+
+.glass-rykiri {
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  background: rgba(5, 5, 5, 0.75);
+  border: 1px solid rgba(234, 255, 0, 0.1);
+}
+
+/* Subtle glow for primary headings */
+h1 {
+  text-shadow: 0 0 8px var(--accent-glow);
+  letter-spacing: -0.05em;
+  font-weight: 700;
+}
