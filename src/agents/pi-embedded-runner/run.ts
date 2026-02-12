@@ -44,6 +44,8 @@ import {
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
+import { sanitizeToolCallId } from "../tool-call-id.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
@@ -870,7 +872,14 @@ export async function runEmbeddedPiAgent(
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {
-                      id: `call_${Date.now()}`,
+                      id: sanitizeToolCallId(
+                        `call_${Date.now()}`,
+                        resolveTranscriptPolicy({
+                          modelApi: model.api,
+                          provider: model.provider,
+                          modelId: model.id,
+                        }).toolCallIdMode ?? "strict",
+                      ),
                       name: attempt.clientToolCall.name,
                       arguments: JSON.stringify(attempt.clientToolCall.params),
                     },
