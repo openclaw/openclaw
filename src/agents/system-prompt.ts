@@ -551,7 +551,7 @@ export function buildAgentSystemPrompt(params: {
 
   const contextFiles = params.contextFiles ?? [];
   const validContextFiles = contextFiles.filter(
-    (file) => typeof file.path === "string" && file.path.trim(),
+    (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
   if (validContextFiles.length > 0) {
     const hasSoulFile = validContextFiles.some((file) => {
