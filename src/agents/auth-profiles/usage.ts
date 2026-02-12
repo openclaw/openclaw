@@ -190,6 +190,13 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
+  } else if (params.reason === "timeout") {
+    // Timeouts should not trigger provider-wide cooldown.
+    // A slow response is not evidence the provider is down or rate-limiting.
+    // Only bump the error count (already done above) for tracking,
+    // but do NOT set cooldownUntil. This prevents a single slow request
+    // from blocking all models on the provider.
+    // See: #10669, #11352, #13336
   } else {
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
     updatedStats.cooldownUntil = params.now + backoffMs;

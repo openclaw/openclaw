@@ -752,8 +752,13 @@ export async function runEmbeddedPiAgent(
             );
           }
 
-          // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          const shouldRotate = (!aborted && failoverFailure) || timedOut;
+          // Rotate on failover failures. For timeouts, only rotate for proxy
+          // providers (e.g., Antigravity) where a hang may indicate a silent
+          // rate limit. Direct provider timeouts (Anthropic, Google, etc.) are
+          // usually transient and should not poison the profile.
+          // See: #10669, #11352, #13336
+          const isProxyProvider = provider?.startsWith("google-antigravity") ?? false;
+          const shouldRotate = (!aborted && failoverFailure) || (timedOut && isProxyProvider);
 
           if (shouldRotate) {
             if (lastProfileId) {
