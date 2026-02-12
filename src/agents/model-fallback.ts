@@ -121,7 +121,9 @@ function resolveImageFallbackCandidates(params: {
   })();
 
   for (const raw of imageFallbacks) {
-    addRaw(raw, true);
+    // Same as text model fallbacks: image fallbacks are explicitly configured,
+    // so they bypass the models allowlist.
+    addRaw(raw, false);
   }
 
   return candidates;
@@ -196,7 +198,12 @@ function resolveFallbackCandidates(params: {
     if (!resolved) {
       continue;
     }
-    addCandidate(resolved.ref, true);
+    // Fallback models are explicitly configured by the user in model.fallbacks
+    // (or passed via fallbacksOverride). They should not be filtered by the
+    // models allowlist — the allowlist gates ad-hoc/alias resolution, not
+    // intentional fallback entries.  Filtering them here causes "All models
+    // failed (1)" when the primary provider is in cooldown (#5763).
+    addCandidate(resolved.ref, false);
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
