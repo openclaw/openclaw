@@ -3,8 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
 import type { Logger } from "./service/state.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
+import { isCronRunSessionKey, parseCronRunJobId } from "../sessions/session-key-utils.js";
+import {
+  sweepCronRunSessions,
+  resolveRetentionMs,
+  resolveMaxRunsPerJob,
+  resetReaperThrottle,
+} from "./session-reaper.js";
 
 function createTestLogger(): Logger {
   return {
@@ -39,6 +44,36 @@ describe("resolveRetentionMs", () => {
   });
 });
 
+describe("resolveMaxRunsPerJob", () => {
+  it("returns 50 default when no config", () => {
+    expect(resolveMaxRunsPerJob()).toBe(50);
+  });
+
+  it("returns 50 default when config is empty", () => {
+    expect(resolveMaxRunsPerJob({})).toBe(50);
+  });
+
+  it("accepts a positive integer", () => {
+    expect(resolveMaxRunsPerJob({ maxRunsPerJob: 10 })).toBe(10);
+    expect(resolveMaxRunsPerJob({ maxRunsPerJob: 1 })).toBe(1);
+    expect(resolveMaxRunsPerJob({ maxRunsPerJob: 100 })).toBe(100);
+  });
+
+  it("floors fractional values", () => {
+    expect(resolveMaxRunsPerJob({ maxRunsPerJob: 5.9 })).toBe(5);
+  });
+
+  it("falls back to default for zero or negative", () => {
+    expect(resolveMaxRunsPerJob({ maxRunsPerJob: 0 })).toBe(50);
+    expect(resolveMaxRunsPerJob({ maxRunsPerJob: -1 })).toBe(50);
+  });
+
+  it("falls back to default for non-finite values", () => {
+    expect(resolveMaxRunsPerJob({ maxRunsPerJob: Infinity })).toBe(50);
+    expect(resolveMaxRunsPerJob({ maxRunsPerJob: NaN })).toBe(50);
+  });
+});
+
 describe("isCronRunSessionKey", () => {
   it("matches cron run session keys", () => {
     expect(isCronRunSessionKey("agent:main:cron:abc-123:run:def-456")).toBe(true);
@@ -56,6 +91,26 @@ describe("isCronRunSessionKey", () => {
   it("does not match non-canonical cron-like keys", () => {
     expect(isCronRunSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
     expect(isCronRunSessionKey("cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("parseCronRunJobId", () => {
+  it("extracts job ID from valid cron run session key", () => {
+    expect(parseCronRunJobId("agent:main:cron:job1:run:abc")).toBe("job1");
+    expect(parseCronRunJobId("agent:debugger:cron:249ecf82:run:1102aabb")).toBe("249ecf82");
+  });
+
+  it("returns null for base cron session keys", () => {
+    expect(parseCronRunJobId("agent:main:cron:job1")).toBeNull();
+  });
+
+  it("returns null for regular session keys", () => {
+    expect(parseCronRunJobId("agent:main:telegram:dm:123")).toBeNull();
+  });
+
+  it("returns null for null/undefined", () => {
+    expect(parseCronRunJobId(null)).toBeNull();
+    expect(parseCronRunJobId(undefined)).toBeNull();
   });
 });
 
@@ -130,7 +185,7 @@ describe("sweepCronRunSessions", () => {
     expect(result.pruned).toBe(1);
   });
 
-  it("does nothing when pruning is disabled", async () => {
+  it("still runs per-job cap when TTL pruning is disabled", async () => {
     const now = Date.now();
     const store: Record<string, { sessionId: string; updatedAt: number }> = {
       "agent:main:cron:job1:run:run1": {
@@ -148,8 +203,120 @@ describe("sweepCronRunSessions", () => {
       force: true,
     });
 
-    expect(result.swept).toBe(false);
+    // Sweeps (per-job cap is active) but no entries pruned (only 1 run, under cap)
+    expect(result.swept).toBe(true);
     expect(result.pruned).toBe(0);
+  });
+
+  it("caps runs per job keeping only the most recent N", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+      "agent:main:cron:job1": {
+        sessionId: "base",
+        updatedAt: now,
+      },
+      "agent:main:cron:job1:run:r1": {
+        sessionId: "r1",
+        updatedAt: now - 1000,
+      },
+      "agent:main:cron:job1:run:r2": {
+        sessionId: "r2",
+        updatedAt: now - 2000,
+      },
+      "agent:main:cron:job1:run:r3": {
+        sessionId: "r3",
+        updatedAt: now - 3000,
+      },
+      "agent:main:cron:job1:run:r4": {
+        sessionId: "r4",
+        updatedAt: now - 4000,
+      },
+      "agent:main:cron:job1:run:r5": {
+        sessionId: "r5",
+        updatedAt: now - 5000,
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { sessionRetention: false, maxRunsPerJob: 3 },
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(true);
+    expect(result.pruned).toBe(2);
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    // Base session kept
+    expect(updated["agent:main:cron:job1"]).toBeDefined();
+    // 3 most recent runs kept
+    expect(updated["agent:main:cron:job1:run:r1"]).toBeDefined();
+    expect(updated["agent:main:cron:job1:run:r2"]).toBeDefined();
+    expect(updated["agent:main:cron:job1:run:r3"]).toBeDefined();
+    // 2 oldest runs removed
+    expect(updated["agent:main:cron:job1:run:r4"]).toBeUndefined();
+    expect(updated["agent:main:cron:job1:run:r5"]).toBeUndefined();
+  });
+
+  it("caps runs independently per job", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+      "agent:main:cron:jobA:run:a1": { sessionId: "a1", updatedAt: now - 1000 },
+      "agent:main:cron:jobA:run:a2": { sessionId: "a2", updatedAt: now - 2000 },
+      "agent:main:cron:jobA:run:a3": { sessionId: "a3", updatedAt: now - 3000 },
+      "agent:main:cron:jobB:run:b1": { sessionId: "b1", updatedAt: now - 1000 },
+      "agent:main:cron:jobB:run:b2": { sessionId: "b2", updatedAt: now - 2000 },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { sessionRetention: false, maxRunsPerJob: 2 },
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(1); // only jobA's oldest run removed
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:cron:jobA:run:a1"]).toBeDefined();
+    expect(updated["agent:main:cron:jobA:run:a2"]).toBeDefined();
+    expect(updated["agent:main:cron:jobA:run:a3"]).toBeUndefined();
+    expect(updated["agent:main:cron:jobB:run:b1"]).toBeDefined();
+    expect(updated["agent:main:cron:jobB:run:b2"]).toBeDefined();
+  });
+
+  it("applies both TTL and per-job cap together", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+      // r1 is expired by TTL; r2, r3, r4 are within TTL but r4 exceeds cap of 2
+      "agent:main:cron:job1:run:r1": { sessionId: "r1", updatedAt: now - 25 * 3_600_000 },
+      "agent:main:cron:job1:run:r2": { sessionId: "r2", updatedAt: now - 1000 },
+      "agent:main:cron:job1:run:r3": { sessionId: "r3", updatedAt: now - 2000 },
+      "agent:main:cron:job1:run:r4": { sessionId: "r4", updatedAt: now - 3000 },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { maxRunsPerJob: 2 },
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    // r1 removed by TTL, r4 removed by per-job cap
+    expect(result.pruned).toBe(2);
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:cron:job1:run:r1"]).toBeUndefined();
+    expect(updated["agent:main:cron:job1:run:r2"]).toBeDefined();
+    expect(updated["agent:main:cron:job1:run:r3"]).toBeDefined();
+    expect(updated["agent:main:cron:job1:run:r4"]).toBeUndefined();
   });
 
   it("throttles sweeps without force", async () => {

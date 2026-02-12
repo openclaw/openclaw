@@ -8,4 +8,12 @@ export type CronConfig = {
    * Default: "24h".
    */
   sessionRetention?: string | false;
+  /**
+   * Maximum number of completed run sessions to keep per cron job.
+   * When a job exceeds this cap the oldest runs are removed, even if they
+   * are still within the retention window. This prevents unbounded growth
+   * of sessions.json when jobs fire frequently.
+   * Default: 50.
+   */
+  maxRunsPerJob?: number;
 };

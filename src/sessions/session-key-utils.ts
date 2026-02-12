@@ -33,6 +33,21 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
   return /^cron:[^:]+:run:[^:]+$/.test(parsed.rest);
 }
 
+/**
+ * Extract the cron job ID from a cron run session key.
+ * Returns `null` if the key is not a valid cron run session key.
+ *
+ * Example: `"agent:main:cron:job1:run:abc"` returns `"job1"`
+ */
+export function parseCronRunJobId(sessionKey: string | undefined | null): string | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const match = /^cron:([^:]+):run:[^:]+$/.exec(parsed.rest);
+  return match?.[1] ?? null;
+}
+
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
