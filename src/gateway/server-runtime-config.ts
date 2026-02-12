@@ -42,7 +42,7 @@ export async function resolveGatewayRuntimeConfig(params: {
 }): Promise<GatewayRuntimeConfig> {
   const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
   const customBindHost = params.cfg.gateway?.customBindHost;
-  const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
+  let bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
   const openAiChatCompletionsEnabled =
@@ -91,8 +91,10 @@ export async function resolveGatewayRuntimeConfig(params: {
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
     );
   }
+  // Auto-correct bind to loopback when tailscale serve/funnel is active,
+  // matching the onboarding wizard behavior instead of crashing.
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
-    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
+    bindHost = "127.0.0.1";
   }
   if (!isLoopbackHost(bindHost) && !hasSharedSecret) {
     throw new Error(
