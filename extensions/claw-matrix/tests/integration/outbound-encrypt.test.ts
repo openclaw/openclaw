@@ -126,6 +126,7 @@ describe("Outbound Encryption Smoke Test", () => {
 
     it("calls ensureRoomKeysShared before encrypting", async () => {
       setRoomEncrypted("!keys-room:test");
+      server.setRoomMembers("!keys-room:test", ["@alice:test", "@bob:test"]);
       const { sendMatrixMessage } = await import("../../src/client/send.js");
 
       await sendMatrixMessage({ roomId: "!keys-room:test", text: "Test" });
@@ -137,6 +138,7 @@ describe("Outbound Encryption Smoke Test", () => {
 
     it("calls shareRoomKey before encrypting", async () => {
       setRoomEncrypted("!share-room:test");
+      server.setRoomMembers("!share-room:test", ["@alice:test", "@bob:test"]);
       const { sendMatrixMessage } = await import("../../src/client/send.js");
 
       await sendMatrixMessage({ roomId: "!share-room:test", text: "Test" });

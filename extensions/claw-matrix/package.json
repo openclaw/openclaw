@@ -18,6 +18,7 @@
     "openclaw": ">=2026.2.9"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.0"
   }
 }

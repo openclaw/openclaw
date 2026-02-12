@@ -44,9 +44,10 @@ export interface AgentToolResult {
 // ── Saved Media ───────────────────────────────────────────────────────
 
 export interface SavedMedia {
+  id?: string;
   path?: string;
-  url?: string;
-  filename?: string;
+  size?: number;
+  contentType?: string;
 }
 
 // ── Plugin Runtime ────────────────────────────────────────────────────
@@ -79,18 +80,33 @@ export interface PluginRuntime {
       }): Promise<void>;
     };
 
-    session?: {
-      recordInboundSession?(ctx: Record<string, unknown>, meta: {
-        channel: string;
-        accountId: string;
-      }): void;
+    session: {
+      resolveStorePath(store?: string, opts?: { agentId?: string }): string;
+      recordInboundSession(params: {
+        storePath: string;
+        sessionKey: string;
+        ctx: Record<string, unknown>;
+        groupResolution?: { key: string; channel?: string; id?: string; chatType?: string } | null;
+        createIfMissing?: boolean;
+        updateLastRoute?: {
+          sessionKey: string;
+          channel: string;
+          to: string;
+          accountId?: string;
+          threadId?: string | number;
+        };
+        onRecordError: (err: unknown) => void;
+      }): Promise<void>;
     };
 
     media?: {
-      saveMediaBuffer?(buffer: Buffer, opts: {
-        filename: string;
-        mimeType: string;
-      }): Promise<SavedMedia | null>;
+      saveMediaBuffer?(
+        buffer: Buffer,
+        contentType?: string,
+        subdir?: string,
+        maxBytes?: number,
+        originalFilename?: string,
+      ): Promise<SavedMedia>;
     };
   };
 }

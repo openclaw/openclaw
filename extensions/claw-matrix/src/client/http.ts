@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { MatrixError } from "../types.js";
 import { TokenBucket } from "../util/rate-limit.js";
 import { incrementCounter } from "../health.js";

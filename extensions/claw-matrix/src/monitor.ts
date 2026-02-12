@@ -277,7 +277,6 @@ export async function monitorMatrixProvider(
     // Detect media messages
     const isMedia = msgtype && !["m.text", "m.notice"].includes(msgtype);
     let mediaPath: string | undefined;
-    let mediaUrl: string | undefined;
     let mediaType: string | undefined;
 
     if (isMedia) {
@@ -294,12 +293,11 @@ export async function monitorMatrixProvider(
           );
           // Save via runtime media API if available
           if (core.channel.media?.saveMediaBuffer) {
-            const saved = await core.channel.media.saveMediaBuffer(buffer, {
-              filename: body || "attachment",
-              mimeType: mimeType ?? "application/octet-stream",
-            });
+            const saved = await core.channel.media.saveMediaBuffer(
+              buffer,
+              mimeType ?? "application/octet-stream",
+            );
             mediaPath = saved?.path;
-            mediaUrl = saved?.url;
           }
           mediaType = mimeType;
           incrementCounter("mediaReceived");
@@ -385,7 +383,6 @@ export async function monitorMatrixProvider(
       OriginatingTo: roomId,
       Timestamp: event.origin_server_ts,
       MediaPath: mediaPath,
-      MediaUrl: mediaUrl,
       MediaType: mediaType,
       CommandAuthorized: true,
     });

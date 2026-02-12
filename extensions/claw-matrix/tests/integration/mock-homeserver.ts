@@ -59,6 +59,9 @@ export class MockHomeserver {
   /** Joined rooms list */
   public joinedRooms: string[] = [];
 
+  /** Per-room joined members: roomId → { userId: {} } */
+  public roomMembers = new Map<string, Record<string, unknown>>();
+
   /** Key upload responses */
   public oneTimeKeyCounts: Record<string, number> = { signed_curve25519: 50 };
 
@@ -106,6 +109,7 @@ export class MockHomeserver {
     this.aliasMap.clear();
     this.mDirectData = {};
     this.joinedRooms = [];
+    this.roomMembers.clear();
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -202,9 +206,11 @@ export class MockHomeserver {
       }
 
       // Room joined members
-      const membersMatch = path.match(/\/_matrix\/client\/v3\/rooms\/[^/]+\/joined_members/);
+      const membersMatch = path.match(/\/_matrix\/client\/v3\/rooms\/([^/]+)\/joined_members/);
       if (membersMatch && method === "GET") {
-        this.json(res, 200, { joined: {} });
+        const membersRoomId = decodeURIComponent(membersMatch[1]);
+        const joined = this.roomMembers.get(membersRoomId) ?? {};
+        this.json(res, 200, { joined });
         return;
       }
 
