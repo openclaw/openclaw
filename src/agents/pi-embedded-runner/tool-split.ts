@@ -5,13 +5,17 @@ import { toToolDefinitions } from "../pi-tool-definition-adapter.js";
 // and extended toolset remain consistent across providers.
 type AnyAgentTool = AgentTool;
 
-export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: boolean }): {
+export function splitSdkTools(options: {
+  tools: AnyAgentTool[];
+  sandboxEnabled: boolean;
+  toolCallTimeoutSeconds?: number;
+}): {
   builtInTools: AnyAgentTool[];
   customTools: ReturnType<typeof toToolDefinitions>;
 } {
-  const { tools } = options;
+  const { tools, toolCallTimeoutSeconds } = options;
   return {
     builtInTools: [],
-    customTools: toToolDefinitions(tools),
+    customTools: toToolDefinitions(tools, { toolCallTimeoutSeconds }),
   };
 }
