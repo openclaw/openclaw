@@ -8,7 +8,7 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
+export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -164,6 +164,40 @@ export function createInternalHookEvent(
     timestamp: new Date(),
     messages: [],
   };
+}
+
+export type MessageSentHookContext = {
+  /** The channel the message was sent through (e.g., 'telegram', 'signal', 'discord') */
+  channel: string;
+  /** The recipient identifier */
+  to: string;
+  /** The message text that was sent */
+  text: string;
+  /** Any media URLs included in the message */
+  mediaUrls?: string[];
+  /** The account ID used for sending (if applicable) */
+  accountId?: string;
+  /** The agent ID that sent the message */
+  agentId?: string;
+  /** Number of message chunks/results delivered */
+  resultCount: number;
+};
+
+export type MessageSentHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "sent";
+  context: MessageSentHookContext;
+};
+
+export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
+  if (event.type !== "message" || event.action !== "sent") {
+    return false;
+  }
+  const context = event.context as Partial<MessageSentHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.channel === "string" && typeof context.to === "string";
 }
 
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {

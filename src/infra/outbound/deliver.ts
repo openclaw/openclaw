@@ -21,6 +21,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { throwIfAborted } from "./abort.js";
@@ -390,5 +391,25 @@ export async function deliverOutboundPayloads(params: {
       });
     }
   }
+
+  // Trigger message:sent hook after successful delivery
+  if (results.length > 0) {
+    const combinedText = normalizedPayloads.map((p) => p.text ?? "").join("\n");
+    const combinedMediaUrls = normalizedPayloads.flatMap(
+      (p) => p.mediaUrls ?? (p.mediaUrl ? [p.mediaUrl] : []),
+    );
+    await triggerInternalHook(
+      createInternalHookEvent("message", "sent", params.mirror?.sessionKey ?? "", {
+        channel,
+        to,
+        text: combinedText,
+        mediaUrls: combinedMediaUrls.length > 0 ? combinedMediaUrls : undefined,
+        accountId: accountId ?? undefined,
+        agentId: params.mirror?.agentId,
+        resultCount: results.length,
+      }),
+    );
+  }
+
   return results;
 }
