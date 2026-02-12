@@ -82,13 +82,11 @@ export function renderDebug(props: DebugProps) {
               ${
                 !props.callMethod
                   ? html`
-                      <option value="" disabled selected>Select a method…</option>
+                      <option value="" disabled>Select a method…</option>
                     `
                   : nothing
               }
-              ${props.methods.map(
-                (m) => html`<option value=${m} ?selected=${m === props.callMethod}>${m}</option>`,
-              )}
+              ${props.methods.map((m) => html`<option value=${m}>${m}</option>`)}
             </select>
           </label>
           <label class="field">
