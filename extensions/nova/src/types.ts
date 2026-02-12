@@ -4,6 +4,7 @@ export type NovaConfig = {
   baseUrl?: string;
   apiKey?: string;
   userId?: string;
+  deviceId?: string;
   dmPolicy?: string;
   allowFrom?: Array<string | number>;
   reconnectBaseDelayMs?: number;
@@ -15,6 +16,7 @@ export type NovaCredentials = {
   baseUrl: string;
   apiKey: string;
   userId: string;
+  deviceId: string;
 };
 
 /** Inbound message pushed to OpenClaw via WebSocket. */

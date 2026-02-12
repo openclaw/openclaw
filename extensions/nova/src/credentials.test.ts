@@ -9,15 +9,18 @@ describe("resolveNovaCredentials", () => {
     savedEnv.NOVA_BASE_URL = process.env.NOVA_BASE_URL;
     savedEnv.NOVA_API_KEY = process.env.NOVA_API_KEY;
     savedEnv.NOVA_USER_ID = process.env.NOVA_USER_ID;
+    savedEnv.NOVA_DEVICE_ID = process.env.NOVA_DEVICE_ID;
     delete process.env.NOVA_BASE_URL;
     delete process.env.NOVA_API_KEY;
     delete process.env.NOVA_USER_ID;
+    delete process.env.NOVA_DEVICE_ID;
   });
 
   afterEach(() => {
     process.env.NOVA_BASE_URL = savedEnv.NOVA_BASE_URL;
     process.env.NOVA_API_KEY = savedEnv.NOVA_API_KEY;
     process.env.NOVA_USER_ID = savedEnv.NOVA_USER_ID;
+    process.env.NOVA_DEVICE_ID = savedEnv.NOVA_DEVICE_ID;
   });
 
   it("resolves credentials from config", () => {
@@ -26,22 +29,28 @@ describe("resolveNovaCredentials", () => {
       apiKey: "key-123",
       userId: "user-001",
     };
-    expect(resolveNovaCredentials(cfg)).toEqual({
-      baseUrl: "wss://custom.example.com",
-      apiKey: "key-123",
-      userId: "user-001",
-    });
+    const result = resolveNovaCredentials(cfg);
+    expect(result).toEqual(
+      expect.objectContaining({
+        baseUrl: "wss://custom.example.com",
+        apiKey: "key-123",
+        userId: "user-001",
+      }),
+    );
+    expect(result?.deviceId).toBeDefined();
   });
 
   it("falls back to env vars when config is empty", () => {
     process.env.NOVA_BASE_URL = "wss://env.example.com";
     process.env.NOVA_API_KEY = "env-key";
     process.env.NOVA_USER_ID = "env-user";
-    expect(resolveNovaCredentials({})).toEqual({
-      baseUrl: "wss://env.example.com",
-      apiKey: "env-key",
-      userId: "env-user",
-    });
+    expect(resolveNovaCredentials({})).toEqual(
+      expect.objectContaining({
+        baseUrl: "wss://env.example.com",
+        apiKey: "env-key",
+        userId: "env-user",
+      }),
+    );
   });
 
   it("prefers config over env vars", () => {
@@ -53,11 +62,13 @@ describe("resolveNovaCredentials", () => {
       apiKey: "cfg-key",
       userId: "cfg-user",
     };
-    expect(resolveNovaCredentials(cfg)).toEqual({
-      baseUrl: "wss://config.example.com",
-      apiKey: "cfg-key",
-      userId: "cfg-user",
-    });
+    expect(resolveNovaCredentials(cfg)).toEqual(
+      expect.objectContaining({
+        baseUrl: "wss://config.example.com",
+        apiKey: "cfg-key",
+        userId: "cfg-user",
+      }),
+    );
   });
 
   it("uses default baseUrl when not specified", () => {
@@ -96,11 +107,13 @@ describe("resolveNovaCredentials", () => {
       apiKey: "  key  ",
       userId: "  user  ",
     };
-    expect(resolveNovaCredentials(cfg)).toEqual({
-      baseUrl: "wss://example.com",
-      apiKey: "key",
-      userId: "user",
-    });
+    expect(resolveNovaCredentials(cfg)).toEqual(
+      expect.objectContaining({
+        baseUrl: "wss://example.com",
+        apiKey: "key",
+        userId: "user",
+      }),
+    );
   });
 
   it("uses default baseUrl for whitespace-only baseUrl", () => {
@@ -111,5 +124,36 @@ describe("resolveNovaCredentials", () => {
     };
     const result = resolveNovaCredentials(cfg);
     expect(result?.baseUrl).toBe("wss://ws.nova-claw.agi.amazon.dev");
+  });
+
+  it("uses deviceId from config when provided", () => {
+    const cfg: NovaConfig = {
+      apiKey: "key",
+      userId: "user",
+      deviceId: "my-device-42",
+    };
+    const result = resolveNovaCredentials(cfg);
+    expect(result?.deviceId).toBe("my-device-42");
+  });
+
+  it("uses deviceId from env var when config is empty", () => {
+    process.env.NOVA_DEVICE_ID = "env-device-99";
+    const cfg: NovaConfig = {
+      apiKey: "key",
+      userId: "user",
+    };
+    const result = resolveNovaCredentials(cfg);
+    expect(result?.deviceId).toBe("env-device-99");
+  });
+
+  it("generates a stable deviceId across calls when not configured", () => {
+    const cfg: NovaConfig = {
+      apiKey: "key",
+      userId: "user",
+    };
+    const result1 = resolveNovaCredentials(cfg);
+    const result2 = resolveNovaCredentials(cfg);
+    expect(result1?.deviceId).toBeDefined();
+    expect(result1?.deviceId).toBe(result2?.deviceId);
   });
 });

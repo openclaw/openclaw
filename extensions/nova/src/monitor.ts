@@ -66,6 +66,11 @@ export async function monitorNovaProvider(opts: MonitorNovaOpts): Promise<void> 
 
     const onAbort = () => {
       logger.info("nova: abort signal received, closing connection");
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      clearHeartbeat();
       const ws = activeWs;
       activeWs = null;
       setActiveNovaConnection(null);
@@ -79,6 +84,7 @@ export async function monitorNovaProvider(opts: MonitorNovaOpts): Promise<void> 
 
     let activeWs: WebSocket | null = null;
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     function clearHeartbeat() {
       if (heartbeatTimer) {
@@ -101,11 +107,11 @@ export async function monitorNovaProvider(opts: MonitorNovaOpts): Promise<void> 
         resolveMonitor();
         return;
       }
+      attempt++;
       const jitter = Math.random() * 0.3 + 0.85; // 0.85..1.15
       const delay = Math.min(reconnectBaseMs * 2 ** attempt * jitter, MAX_RECONNECT_MS);
-      attempt++;
       logger.info(`nova: reconnecting in ${Math.round(delay)}ms (attempt ${attempt})`);
-      setTimeout(connect, delay);
+      reconnectTimer = setTimeout(connect, delay);
     }
 
     function connect() {
@@ -114,7 +120,7 @@ export async function monitorNovaProvider(opts: MonitorNovaOpts): Promise<void> 
         return;
       }
 
-      const url = `${creds.baseUrl}?userId=${encodeURIComponent(creds.userId)}`;
+      const url = `${creds.baseUrl}?userId=${encodeURIComponent(creds.userId)}&deviceId=${encodeURIComponent(creds.deviceId)}`;
       logger.info(`nova: connecting to ${creds.baseUrl}`);
 
       const ws = new WebSocket(url, {
@@ -166,8 +172,12 @@ export async function monitorNovaProvider(opts: MonitorNovaOpts): Promise<void> 
         String(entry).trim().toLowerCase(),
       );
 
-      // Enforce allowlist policy
-      if (dmPolicy === "allowlist" && allowFrom.length > 0 && !allowFrom.includes("*")) {
+      // Enforce allowlist policy — an empty allowlist blocks everyone
+      if (dmPolicy === "allowlist" && !allowFrom.includes("*")) {
+        if (allowFrom.length === 0) {
+          logger.info(`nova: message from ${msg.userId} dropped (allowlist is empty)`);
+          return;
+        }
         const senderId = msg.userId.trim().toLowerCase();
         if (!allowFrom.includes(senderId)) {
           logger.info(`nova: message from ${msg.userId} dropped (not in allowlist)`);
@@ -238,7 +248,7 @@ export async function monitorNovaProvider(opts: MonitorNovaOpts): Promise<void> 
             if (!fullText.trim()) {
               return;
             }
-            sendNovaMessage({
+            await sendNovaMessage({
               cfg: msgCfg,
               to: msg.userId,
               text: fullText,
