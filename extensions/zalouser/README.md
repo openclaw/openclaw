@@ -1,6 +1,6 @@
 # @openclaw/zalouser
 
-OpenClaw extension for Zalo Personal Account messaging via [zca-cli](https://zca-cli.dev).
+OpenClaw extension for Zalo Personal Account messaging via the `zca` CLI ([zca-cli](https://zca-cli.dev) or [OpenZCA](https://openzca.com)).
 
 > **Warning:** Using Zalo automation may result in account suspension or ban. Use at your own risk. This is an unofficial integration.
 
