@@ -274,4 +274,77 @@ describe("trigger handling", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
+  it("uses explicit heartbeatModelOverride passed from heartbeat runner", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = makeCfg(home);
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          heartbeat: { model: "ollama/llama3.2:3b" },
+        },
+      };
+
+      await getReplyFromConfig(
+        {
+          Body: "hello",
+          From: "+1002",
+          To: "+2000",
+        },
+        { isHeartbeat: true, heartbeatModelOverride: "ollama/llama3.2:3b" },
+        cfg,
+      );
+
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(call?.provider).toBe("ollama");
+      expect(call?.model).toBe("llama3.2:3b");
+    });
+  });
+  it("prefers heartbeatModelOverride over stored session model override", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = makeCfg(home);
+      await fs.writeFile(
+        join(home, "sessions.json"),
+        JSON.stringify({
+          [_MAIN_SESSION_KEY]: {
+            sessionId: "main",
+            updatedAt: Date.now(),
+            providerOverride: "openai",
+            modelOverride: "gpt-5.2",
+          },
+        }),
+        "utf-8",
+      );
+
+      await getReplyFromConfig(
+        {
+          Body: "hello",
+          From: "+1002",
+          To: "+2000",
+        },
+        { isHeartbeat: true, heartbeatModelOverride: "ollama/llama3.2:3b" },
+        cfg,
+      );
+
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(call?.provider).toBe("ollama");
+      expect(call?.model).toBe("llama3.2:3b");
+    });
+  });
 });

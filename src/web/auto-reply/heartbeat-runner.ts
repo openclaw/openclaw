@@ -158,6 +158,7 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
+    const heartbeatModelOverride = cfg.agents?.defaults?.heartbeat?.model?.trim() || undefined;
     const replyResult = await replyResolver(
       {
         Body: appendCronStyleCurrentTimeLine(
@@ -169,7 +170,9 @@ export async function runWebHeartbeatOnce(opts: {
         To: to,
         MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,
       },
-      { isHeartbeat: true },
+      heartbeatModelOverride
+        ? { isHeartbeat: true, heartbeatModelOverride }
+        : { isHeartbeat: true },
       cfg,
     );
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
