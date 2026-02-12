@@ -179,6 +179,7 @@ export class OpenClawApp extends LitElement {
   @state() configFormOriginal: Record<string, unknown> | null = null;
   @state() configFormDirty = false;
   @state() configFormMode: "form" | "raw" = "form";
+  @state() configRenderLimit = 6;
   @state() configSearchQuery = "";
   @state() configActiveSection: string | null = null;
   @state() configActiveSubsection: string | null = null;

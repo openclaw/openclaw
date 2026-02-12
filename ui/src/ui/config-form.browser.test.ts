@@ -210,6 +210,39 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).toContain("mixed");
   });
 
+  it("keeps unsupported unions editable via JSON5 fallback", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        mixed: {
+          anyOf: [{ type: "string" }, { type: "object", properties: { mode: { type: "string" } } }],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { mixed: { mode: "safe" } },
+        onPatch,
+      }),
+      container,
+    );
+
+    const fallback = container.querySelector<HTMLTextAreaElement>(".cfg-field--fallback textarea");
+    expect(fallback).not.toBeNull();
+    if (!fallback) {
+      return;
+    }
+    fallback.value = '"manual"';
+    fallback.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["mixed"], "manual");
+  });
+
   it("supports nullable types", () => {
     const schema = {
       type: "object",
@@ -243,7 +276,7 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).not.toContain("channels");
   });
 
-  it("flags additionalProperties true", () => {
+  it("supports additionalProperties true", () => {
     const schema = {
       type: "object",
       properties: {
@@ -254,6 +287,25 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).toContain("extra");
+    expect(analysis.unsupportedPaths).not.toContain("extra");
+  });
+
+  it("merges allOf object schemas", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        gateway: {
+          allOf: [
+            { type: "object", properties: { mode: { type: "string" } } },
+            { type: "object", properties: { port: { type: "number" } } },
+          ],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("gateway");
+    const gateway = analysis.schema?.properties?.gateway;
+    expect(gateway?.properties?.mode).toBeTruthy();
+    expect(gateway?.properties?.port).toBeTruthy();
   });
 });

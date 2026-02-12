@@ -10,11 +10,48 @@ export type ConfigFormProps = {
   value: Record<string, unknown> | null;
   disabled?: boolean;
   unsupportedPaths?: string[];
+  renderLimit?: number;
   searchQuery?: string;
   activeSection?: string | null;
   activeSubsection?: string | null;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 };
+
+let sortedRootEntriesCache: {
+  properties: Record<string, JsonSchema>;
+  uiHints: ConfigUiHints;
+  entries: Array<[string, JsonSchema]>;
+} | null = null;
+let sortedRootEntriesCache:
+  | {
+      properties: Record<string, JsonSchema>;
+      uiHints: ConfigUiHints;
+      entries: Array<[string, JsonSchema]>;
+    }
+  | null = null;
+
+function getSortedRootEntries(
+  properties: Record<string, JsonSchema>,
+  uiHints: ConfigUiHints,
+): Array<[string, JsonSchema]> {
+  if (
+    sortedRootEntriesCache &&
+    sortedRootEntriesCache.properties === properties &&
+    sortedRootEntriesCache.uiHints === uiHints
+  ) {
+    return sortedRootEntriesCache.entries;
+  }
+  const entries = Object.entries(properties).toSorted((a, b) => {
+    const orderA = hintForPath([a[0]], uiHints)?.order ?? 50;
+    const orderB = hintForPath([b[0]], uiHints)?.order ?? 50;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
+    return a[0].localeCompare(b[0]);
+  });
+  sortedRootEntriesCache = { properties, uiHints, entries };
+  return entries;
+}
 
 // SVG Icons for section cards (Lucide-style)
 const sectionIcons = {
@@ -242,43 +279,130 @@ export const SECTION_META: Record<string, { label: string; description: string }
     label: "Environment Variables",
     description: "Environment variables passed to the gateway process",
   },
-  update: { label: "Updates", description: "Auto-update settings and release channel" },
-  agents: { label: "Agents", description: "Agent configurations, models, and identities" },
-  auth: { label: "Authentication", description: "API keys and authentication profiles" },
+  update: {
+    label: "Updates",
+    description: "Auto-update settings and release channel",
+  },
+  agents: {
+    label: "Agents",
+    description: "Agent configurations, models, and identities",
+  },
+  auth: {
+    label: "Authentication",
+    description: "API keys and authentication profiles",
+  },
   channels: {
     label: "Channels",
     description: "Messaging channels (Telegram, Discord, Slack, etc.)",
   },
-  messages: { label: "Messages", description: "Message handling and routing settings" },
+  messages: {
+    label: "Messages",
+    description: "Message handling and routing settings",
+  },
   commands: { label: "Commands", description: "Custom slash commands" },
   hooks: { label: "Hooks", description: "Webhooks and event hooks" },
   skills: { label: "Skills", description: "Skill packs and capabilities" },
-  tools: { label: "Tools", description: "Tool configurations (browser, search, etc.)" },
-  gateway: { label: "Gateway", description: "Gateway server settings (port, auth, binding)" },
-  wizard: { label: "Setup Wizard", description: "Setup wizard state and history" },
+  tools: {
+    label: "Tools",
+    description: "Tool configurations (browser, search, etc.)",
+  },
+  gateway: {
+    label: "Gateway",
+    description: "Gateway server settings (port, auth, binding)",
+  },
+  wizard: {
+    label: "Setup Wizard",
+    description: "Setup wizard state and history",
+  },
   // Additional sections
-  meta: { label: "Metadata", description: "Gateway metadata and version information" },
-  logging: { label: "Logging", description: "Log levels and output configuration" },
+  meta: {
+    label: "Metadata",
+    description: "Gateway metadata and version information",
+  },
+  logging: {
+    label: "Logging",
+    description: "Log levels and output configuration",
+  },
   browser: { label: "Browser", description: "Browser automation settings" },
   ui: { label: "UI", description: "User interface preferences" },
-  models: { label: "Models", description: "AI model configurations and providers" },
+  models: {
+    label: "Models",
+    description: "AI model configurations and providers",
+  },
   bindings: { label: "Bindings", description: "Key bindings and shortcuts" },
-  broadcast: { label: "Broadcast", description: "Broadcast and notification settings" },
+  broadcast: {
+    label: "Broadcast",
+    description: "Broadcast and notification settings",
+  },
   audio: { label: "Audio", description: "Audio input/output settings" },
-  session: { label: "Session", description: "Session management and persistence" },
+  session: {
+    label: "Session",
+    description: "Session management and persistence",
+  },
   cron: { label: "Cron", description: "Scheduled tasks and automation" },
   web: { label: "Web", description: "Web server and API settings" },
-  discovery: { label: "Discovery", description: "Service discovery and networking" },
-  canvasHost: { label: "Canvas Host", description: "Canvas rendering and display" },
+  discovery: {
+    label: "Discovery",
+    description: "Service discovery and networking",
+  },
+  canvasHost: {
+    label: "Canvas Host",
+    description: "Canvas rendering and display",
+  },
   talk: { label: "Talk", description: "Voice and speech settings" },
-  plugins: { label: "Plugins", description: "Plugin management and extensions" },
+  plugins: {
+    label: "Plugins",
+    description: "Plugin management and extensions",
+  },
 };
 
 function getSectionIcon(key: string) {
-  return sectionIcons[key as keyof typeof sectionIcons] ?? sectionIcons.default;
+  const normalized = key
+    .trim()
+    .toLowerCase()
+    .replace(/[\s._-]+/g, "");
+
+  const canonical = (() => {
+    switch (normalized) {
+      case "canvashost":
+        return "canvasHost";
+      case "authentication":
+      case "credentials":
+        return "auth";
+      case "message":
+        return "messages";
+      case "command":
+        return "commands";
+      case "skill":
+        return "skills";
+      case "tool":
+        return "tools";
+      case "channel":
+        return "channels";
+      case "model":
+        return "models";
+      case "plugin":
+        return "plugins";
+      case "discover":
+        return "discovery";
+      case "voice":
+        return "talk";
+      case "onboarding":
+        return "wizard";
+      default:
+        return normalized;
+    }
+  })();
+
+  return sectionIcons[canonical as keyof typeof sectionIcons] ?? sectionIcons.default;
 }
 
-function matchesSearch(key: string, schema: JsonSchema, query: string): boolean {
+function matchesSearch(
+  key: string,
+  schema: JsonSchema,
+  query: string,
+  uiHints: ConfigUiHints,
+): boolean {
   if (!query) {
     return true;
   }
@@ -296,6 +420,22 @@ function matchesSearch(key: string, schema: JsonSchema, query: string): boolean 
       return true;
     }
     if (meta.description.toLowerCase().includes(q)) {
+      return true;
+    }
+  }
+
+  const hintPrefix = `${key}.`;
+  for (const [path, hint] of Object.entries(uiHints)) {
+    if (!path.startsWith(hintPrefix)) {
+      continue;
+    }
+    if (path.toLowerCase().includes(q)) {
+      return true;
+    }
+    if (hint.label?.toLowerCase().includes(q)) {
+      return true;
+    }
+    if (hint.help?.toLowerCase().includes(q)) {
       return true;
     }
   }
@@ -352,6 +492,49 @@ function schemaMatches(schema: JsonSchema, query: string): boolean {
   return false;
 }
 
+function scoreMatch(text: string, query: string): number {
+  const value = text.toLowerCase();
+  if (!value || !query) {
+    return 0;
+  }
+  if (value === query) {
+    return 120;
+  }
+  if (value.startsWith(query)) {
+    return 80;
+  }
+  if (value.includes(query)) {
+    return 40;
+  }
+  return 0;
+}
+
+function scoreSectionSearch(
+  key: string,
+  schema: JsonSchema,
+  query: string,
+  uiHints: ConfigUiHints,
+): number {
+  const q = query.toLowerCase();
+  let score = 0;
+  const meta = SECTION_META[key];
+  score += scoreMatch(key, q) * 2;
+  score += scoreMatch(meta?.label ?? "", q) * 2;
+  score += scoreMatch(meta?.description ?? "", q);
+  score += scoreMatch(schema.title ?? "", q) * 2;
+  score += scoreMatch(schema.description ?? "", q);
+  const hintPrefix = `${key}.`;
+  for (const [path, hint] of Object.entries(uiHints)) {
+    if (!path.startsWith(hintPrefix)) {
+      continue;
+    }
+    score += scoreMatch(path.slice(hintPrefix.length), q);
+    score += scoreMatch(hint.label ?? "", q);
+    score += scoreMatch(hint.help ?? "", q);
+  }
+  return score;
+}
+
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
     return html`
@@ -371,27 +554,33 @@ export function renderConfigForm(props: ConfigFormProps) {
   const activeSection = props.activeSection;
   const activeSubsection = props.activeSubsection ?? null;
 
-  const entries = Object.entries(properties).toSorted((a, b) => {
-    const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
-    const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
-    if (orderA !== orderB) {
-      return orderA - orderB;
-    }
-    return a[0].localeCompare(b[0]);
-  });
+  const entries = getSortedRootEntries(properties, props.uiHints);
 
-  const filteredEntries = entries.filter(([key, node]) => {
+  let filteredEntries = entries.filter(([key, node]) => {
     if (activeSection && key !== activeSection) {
       return false;
     }
-    if (searchQuery && !matchesSearch(key, node, searchQuery)) {
+    if (searchQuery && !matchesSearch(key, node, searchQuery, props.uiHints)) {
       return false;
     }
     return true;
   });
+  if (searchQuery) {
+    filteredEntries = filteredEntries.toSorted((a, b) => {
+      const scoreA = scoreSectionSearch(a[0], a[1], searchQuery, props.uiHints);
+      const scoreB = scoreSectionSearch(b[0], b[1], searchQuery, props.uiHints);
+      if (scoreA !== scoreB) {
+        return scoreB - scoreA;
+      }
+      return a[0].localeCompare(b[0]);
+    });
+  }
 
-  let subsectionContext: { sectionKey: string; subsectionKey: string; schema: JsonSchema } | null =
-    null;
+  let subsectionContext: {
+    sectionKey: string;
+    subsectionKey: string;
+    schema: JsonSchema;
+  } | null = null;
   if (activeSection && activeSubsection && filteredEntries.length === 1) {
     const sectionSchema = filteredEntries[0]?.[1];
     if (
@@ -419,6 +608,21 @@ export function renderConfigForm(props: ConfigFormProps) {
     `;
   }
 
+  const progressiveEnabled =
+    activeSection == null &&
+    !activeSubsection &&
+    searchQuery.trim().length === 0 &&
+    typeof props.renderLimit === "number";
+  const renderLimit = progressiveEnabled
+    ? Math.max(1, Math.floor(props.renderLimit ?? 0))
+    : filteredEntries.length;
+  const visibleEntries = progressiveEnabled
+    ? filteredEntries.slice(0, renderLimit)
+    : filteredEntries;
+  const renderLimit = progressiveEnabled ? Math.max(1, Math.floor(props.renderLimit ?? 0)) : filteredEntries.length;
+  const visibleEntries = progressiveEnabled ? filteredEntries.slice(0, renderLimit) : filteredEntries;
+  const remainingEntries = filteredEntries.length - visibleEntries.length;
+
   return html`
     <div class="config-form config-form--modern">
       ${
@@ -437,12 +641,16 @@ export function renderConfigForm(props: ConfigFormProps) {
               return html`
               <section class="config-section-card" id=${id}>
                 <div class="config-section-card__header">
-                  <span class="config-section-card__icon">${getSectionIcon(sectionKey)}</span>
+                  <span class="config-section-card__icon"
+                    >${getSectionIcon(sectionKey)}</span
+                  >
                   <div class="config-section-card__titles">
                     <h3 class="config-section-card__title">${label}</h3>
                     ${
                       description
-                        ? html`<p class="config-section-card__desc">${description}</p>`
+                        ? html`<p class="config-section-card__desc">
+                          ${description}
+                        </p>`
                         : nothing
                     }
                   </div>
@@ -462,7 +670,7 @@ export function renderConfigForm(props: ConfigFormProps) {
               </section>
             `;
             })()
-          : filteredEntries.map(([key, node]) => {
+          : visibleEntries.map(([key, node]) => {
               const meta = SECTION_META[key] ?? {
                 label: key.charAt(0).toUpperCase() + key.slice(1),
                 description: node.description ?? "",
@@ -471,12 +679,16 @@ export function renderConfigForm(props: ConfigFormProps) {
               return html`
               <section class="config-section-card" id="config-section-${key}">
                 <div class="config-section-card__header">
-                  <span class="config-section-card__icon">${getSectionIcon(key)}</span>
+                  <span class="config-section-card__icon"
+                    >${getSectionIcon(key)}</span
+                  >
                   <div class="config-section-card__titles">
                     <h3 class="config-section-card__title">${meta.label}</h3>
                     ${
                       meta.description
-                        ? html`<p class="config-section-card__desc">${meta.description}</p>`
+                        ? html`<p class="config-section-card__desc">
+                          ${meta.description}
+                        </p>`
                         : nothing
                     }
                   </div>
@@ -498,5 +710,19 @@ export function renderConfigForm(props: ConfigFormProps) {
             })
       }
     </div>
+    ${
+      remainingEntries > 0
+        ? html`
+          <div class="config-progressive-hint">
+            Loading ${remainingEntries} more
+            section${remainingEntries === 1 ? "" : "s"}...
+          </div>
+        `
+            <div class="config-progressive-hint">
+              Loading ${remainingEntries} more section${remainingEntries === 1 ? "" : "s"}...
+            </div>
+          `
+        : nothing
+    }
   `;
 }

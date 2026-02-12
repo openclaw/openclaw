@@ -42,6 +42,17 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
+
+  .topbar-meta--config {
+    max-width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  .topbar-meta--config::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* Mobile-specific styles */
@@ -78,6 +89,11 @@
     gap: 6px;
     width: auto;
     flex-wrap: nowrap;
+  }
+
+  .topbar-meta--config .pill {
+    font-size: 10px;
+    padding: 3px 8px;
   }
 
   .topbar-status .pill {

@@ -198,4 +198,51 @@ describe("config view", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
+
+  it("sorts sections by search relevance in nav", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        searchQuery: "channel",
+        schema: {
+          type: "object",
+          properties: {
+            gateway: { type: "object", description: "Gateway settings", properties: {} },
+            channels: { type: "object", description: "Messaging channels", properties: {} },
+          },
+        },
+      }),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".config-nav__label")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(labels[0]).toBe("All Settings");
+    expect(labels[1]).toBe("Channels");
+  });
+
+  it("blocks save/apply when raw JSON5 is invalid", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        formMode: "raw",
+        raw: "{ invalid: [ }",
+        originalRaw: "{\n}\n",
+      }),
+      container,
+    );
+
+    const saveButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Save",
+    );
+    const applyButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Apply",
+    );
+    expect(saveButton?.disabled).toBe(true);
+    expect(applyButton?.disabled).toBe(true);
+    expect(container.textContent).toContain("JSON5 validation failed");
+  });
 });

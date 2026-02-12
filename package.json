@@ -208,6 +208,9 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
+    ],
+    "ignoredBuiltDependencies": [
+      "core-js"
     ]
   }
 }

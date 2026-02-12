@@ -105,6 +105,7 @@ export type AppViewState = {
   configForm: Record<string, unknown> | null;
   configFormOriginal: Record<string, unknown> | null;
   configFormMode: "form" | "raw";
+  configRenderLimit: number;
   configSearchQuery: string;
   configActiveSection: string | null;
   configActiveSubsection: string | null;

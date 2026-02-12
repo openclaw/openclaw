@@ -12,6 +12,88 @@ function isAnySchema(schema: JsonSchema): boolean {
   return keys.length === 0;
 }
 
+function inferType(schema: JsonSchema): string | undefined {
+  return (
+    schemaType(schema) ??
+    (schema.properties || schema.additionalProperties ? "object" : undefined) ??
+    (schema.items ? "array" : undefined)
+  );
+}
+
+function mergeAllOfNodes(base: JsonSchema, patch: JsonSchema): JsonSchema | null {
+  const baseType = inferType(base);
+  const patchType = inferType(patch);
+  if (!baseType && !patchType) {
+    return { ...base, ...patch };
+  }
+  if ((baseType && baseType !== "object") || (patchType && patchType !== "object")) {
+    return null;
+  }
+  const baseRequired = Array.isArray(base.required) ? base.required : [];
+  const patchRequired = Array.isArray(patch.required) ? patch.required : [];
+  const required = Array.from(new Set([...baseRequired, ...patchRequired]));
+  const merged: JsonSchema = {
+    ...base,
+    ...patch,
+    type: "object",
+    properties: {
+      ...base.properties,
+      ...patch.properties,
+    },
+    additionalProperties: patch.additionalProperties ?? base.additionalProperties,
+    allOf: undefined,
+    anyOf: undefined,
+    oneOf: undefined,
+  };
+  if (required.length > 0) {
+    merged.required = required;
+  } else {
+    delete merged.required;
+  }
+  return merged;
+}
+
+function normalizeAllOf(
+  schema: JsonSchema,
+  path: Array<string | number>,
+): ConfigSchemaAnalysis | null {
+function normalizeAllOf(schema: JsonSchema, path: Array<string | number>): ConfigSchemaAnalysis | null {
+  const allOf = schema.allOf;
+  if (!allOf || allOf.length === 0) {
+    return null;
+  }
+  let merged: JsonSchema = {
+    ...schema,
+    allOf: undefined,
+  };
+  const unsupported = new Set<string>();
+  for (const entry of allOf) {
+    if (!entry || typeof entry !== "object") {
+      return null;
+    }
+    const normalized = normalizeSchemaNode(entry, path);
+    if (!normalized.schema) {
+      return null;
+    }
+    const nextMerged = mergeAllOfNodes(merged, normalized.schema);
+    if (!nextMerged) {
+      return null;
+    }
+    merged = nextMerged;
+    for (const unsupportedPath of normalized.unsupportedPaths) {
+      unsupported.add(unsupportedPath);
+    }
+  }
+  const normalizedMerged = normalizeSchemaNode(merged, path);
+  for (const unsupportedPath of normalizedMerged.unsupportedPaths) {
+    unsupported.add(unsupportedPath);
+  }
+  return {
+    schema: normalizedMerged.schema,
+    unsupportedPaths: Array.from(unsupported),
+  };
+}
+
 function normalizeEnum(values: unknown[]): { enumValues: unknown[]; nullable: boolean } {
   const filtered = values.filter((value) => value != null);
   const nullable = filtered.length !== values.length;
@@ -39,7 +121,15 @@ function normalizeSchemaNode(
   const normalized: JsonSchema = { ...schema };
   const pathLabel = pathKey(path) || "<root>";
 
-  if (schema.anyOf || schema.oneOf || schema.allOf) {
+  if (schema.allOf) {
+    const merged = normalizeAllOf(schema, path);
+    if (merged) {
+      return merged;
+    }
+    return { schema, unsupportedPaths: [pathLabel] };
+  }
+
+  if (schema.anyOf || schema.oneOf) {
     const union = normalizeUnion(schema, path);
     if (union) {
       return union;
@@ -48,8 +138,7 @@ function normalizeSchemaNode(
   }
 
   const nullable = Array.isArray(schema.type) && schema.type.includes("null");
-  const type =
-    schemaType(schema) ?? (schema.properties || schema.additionalProperties ? "object" : undefined);
+  const type = inferType(schema);
   normalized.type = type ?? schema.type;
   normalized.nullable = nullable || schema.nullable;
 
@@ -79,15 +168,17 @@ function normalizeSchemaNode(
     normalized.properties = normalizedProps;
 
     if (schema.additionalProperties === true) {
-      unsupported.add(pathLabel);
+      normalized.additionalProperties = {};
     } else if (schema.additionalProperties === false) {
       normalized.additionalProperties = false;
     } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-      if (!isAnySchema(schema.additionalProperties)) {
+      if (isAnySchema(schema.additionalProperties)) {
+        normalized.additionalProperties = {};
+      } else {
         const res = normalizeSchemaNode(schema.additionalProperties, [...path, "*"]);
         normalized.additionalProperties = res.schema ?? schema.additionalProperties;
-        if (res.unsupportedPaths.length > 0) {
-          unsupported.add(pathLabel);
+        for (const unsupportedPath of res.unsupportedPaths) {
+          unsupported.add(unsupportedPath);
         }
       }
     }
@@ -98,8 +189,8 @@ function normalizeSchemaNode(
     } else {
       const res = normalizeSchemaNode(itemsSchema, [...path, "*"]);
       normalized.items = res.schema ?? itemsSchema;
-      if (res.unsupportedPaths.length > 0) {
-        unsupported.add(pathLabel);
+      for (const unsupportedPath of res.unsupportedPaths) {
+        unsupported.add(unsupportedPath);
       }
     }
   } else if (

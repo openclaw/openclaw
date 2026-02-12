@@ -158,6 +158,19 @@
   gap: 8px;
 }
 
+.topbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.topbar-meta--config .pill {
+  height: 30px;
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
 .topbar-status .pill {
   padding: 6px 10px;
   gap: 6px;
@@ -441,6 +454,15 @@
   gap: 24px;
   overflow: hidden;
   padding-bottom: 0;
+}
+
+.content--config {
+  padding: 0;
+  overflow: hidden;
+}
+
+.content--config > * + * {
+  margin-top: 0;
 }
 
 .content--chat > * + * {
