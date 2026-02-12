@@ -296,10 +296,26 @@ export const registerTelegramNativeCommands = ({
       : null;
   const boundAgentIds =
     boundRoute && boundRoute.matchedBy.startsWith("binding.") ? [boundRoute.agentId] : null;
-  const skillCommands =
+  const skillCommandsRaw =
     nativeEnabled && nativeSkillsEnabled
       ? listSkillCommandsForAgents(boundAgentIds ? { cfg, agentIds: boundAgentIds } : { cfg })
       : [];
+  // Deduplicate skill commands by skillName for Telegram menu.
+  // When multiple agents load the same skill, listSkillCommandsForAgents
+  // appends _2/_3 suffixes. Only the first occurrence is registered to
+  // prevent suffix inflation that exceeds Telegram's 100-command limit
+  // (#5787, #10875).
+  const skillCommands = (() => {
+    const seen = new Set<string>();
+    return skillCommandsRaw.filter((cmd) => {
+      const key = cmd.skillName.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  })();
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, {
         skillCommands,
