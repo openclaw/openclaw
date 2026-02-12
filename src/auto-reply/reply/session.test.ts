@@ -473,3 +473,308 @@ describe("initSessionState channel reset overrides", () => {
     expect(result.sessionEntry.sessionId).toBe(sessionId);
   });
 });
+
+// Regression tests for https://github.com/openclaw/openclaw/issues/14722
+describe("initSessionState daily auto-reset preserves session settings", () => {
+  it("carries over per-session settings (model override, thinking level, etc.) across daily reset", async () => {
+    vi.useFakeTimers();
+    // Session last updated at 03:00, now is 05:00 → crosses 4 AM daily reset
+    vi.setSystemTime(new Date(2026, 1, 12, 5, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-settings-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: "old-session",
+          updatedAt: new Date(2026, 1, 12, 3, 0, 0).getTime(),
+          modelOverride: "gpt-4",
+          providerOverride: "openai",
+          thinkingLevel: "high",
+          verboseLevel: "debug",
+          reasoningLevel: "on",
+          ttsAuto: "on",
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "good morning",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      // Should be a new session (daily reset fired)
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe("old-session");
+      // But per-session settings should carry over
+      expect(result.sessionEntry.modelOverride).toBe("gpt-4");
+      expect(result.sessionEntry.providerOverride).toBe("openai");
+      expect(result.sessionEntry.thinkingLevel).toBe("high");
+      expect(result.sessionEntry.verboseLevel).toBe("debug");
+      expect(result.sessionEntry.reasoningLevel).toBe("on");
+      expect(result.sessionEntry.ttsAuto).toBe("on");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries over delivery context (lastChannel, lastTo) across daily reset", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 5, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-delivery-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: "old-session",
+          updatedAt: new Date(2026, 1, 12, 3, 0, 0).getTime(),
+          lastChannel: "telegram",
+          lastTo: "+1234567890",
+          lastAccountId: "bot-account-1",
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      // Simulate a system/cron message that lacks delivery context
+      const result = await initSessionState({
+        ctx: {
+          Body: "scheduled check-in",
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // Delivery context should be carried from the stale entry
+      expect(result.sessionEntry.lastChannel).toBe("telegram");
+      expect(result.sessionEntry.lastTo).toBe("+1234567890");
+      expect(result.sessionEntry.lastAccountId).toBe("bot-account-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries over send policy and queue settings across daily reset", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 5, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-queue-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: "old-session",
+          updatedAt: new Date(2026, 1, 12, 3, 0, 0).getTime(),
+          sendPolicy: "queue",
+          queueMode: "debounce",
+          queueDebounceMs: 5000,
+          queueCap: 10,
+          queueDrop: "oldest",
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          SessionKey: sessionKey,
+          Provider: "whatsapp",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sendPolicy).toBe("queue");
+      expect(result.sessionEntry.queueMode).toBe("debounce");
+      expect(result.sessionEntry.queueDebounceMs).toBe(5000);
+      expect(result.sessionEntry.queueCap).toBe(10);
+      expect(result.sessionEntry.queueDrop).toBe("oldest");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries over group metadata (displayName, chatType, channel) across daily reset", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 5, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-group-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:telegram:group:12345";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: "old-group-session",
+          updatedAt: new Date(2026, 1, 12, 3, 0, 0).getTime(),
+          chatType: "group",
+          channel: "telegram",
+          groupId: "12345",
+          displayName: "telegram:g-my-group",
+          subject: "My Group",
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "morning all",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          ChatType: "group",
+          From: "telegram:group:12345",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe("old-group-session");
+      // Group metadata should carry over
+      expect(result.sessionEntry.chatType).toBe("group");
+      expect(result.sessionEntry.channel).toBe("telegram");
+      expect(result.sessionEntry.groupId).toBe("12345");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("explicit /new does NOT carry over per-session settings", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 12, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-explicit-new-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: "existing-session",
+          updatedAt: Date.now(),
+          modelOverride: "gpt-4",
+          sendPolicy: "queue",
+          queueMode: "debounce",
+          thinkingLevel: "high",
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(true);
+      // Explicit reset should NOT carry over settings
+      expect(result.sessionEntry.modelOverride).toBeUndefined();
+      expect(result.sessionEntry.sendPolicy).toBeUndefined();
+      expect(result.sessionEntry.queueMode).toBeUndefined();
+      expect(result.sessionEntry.thinkingLevel).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("creates a new transcript file for auto-reset sessions (not reuse old)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 5, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-transcript-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const oldSessionFile = "/old/path/to/transcript.jsonl";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: "old-session",
+          sessionFile: oldSessionFile,
+          updatedAt: new Date(2026, 1, 12, 3, 0, 0).getTime(),
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // Session file should be NEW, not the old one
+      expect(result.sessionEntry.sessionFile).not.toBe(oldSessionFile);
+      expect(result.sessionEntry.sessionFile).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears token metrics on auto-reset", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 5, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-tokens-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: "old-session",
+          updatedAt: new Date(2026, 1, 12, 3, 0, 0).getTime(),
+          totalTokens: 50000,
+          inputTokens: 30000,
+          outputTokens: 20000,
+          contextTokens: 40000,
+          compactionCount: 3,
+          modelOverride: "gpt-4",
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // Token metrics should be cleared (new session starts fresh)
+      expect(result.sessionEntry.totalTokens).toBeUndefined();
+      expect(result.sessionEntry.inputTokens).toBeUndefined();
+      expect(result.sessionEntry.outputTokens).toBeUndefined();
+      expect(result.sessionEntry.contextTokens).toBeUndefined();
+      expect(result.sessionEntry.compactionCount).toBe(0);
+      // But model override should persist
+      expect(result.sessionEntry.modelOverride).toBe("gpt-4");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

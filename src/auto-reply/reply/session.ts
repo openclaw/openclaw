@@ -237,9 +237,28 @@ export async function initSessionState(params: {
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
+    // When the reset is automatic (daily/idle boundary, not explicit /new or
+    // /reset), carry over per-session user preferences so they survive the
+    // daily reset.  Without this the first morning message loses model
+    // overrides, thinking level, send policy, delivery context, etc., which
+    // can leave the session unroutable ("orphaned").
+    // See: https://github.com/openclaw/openclaw/issues/14722
+    if (!resetTriggered && entry) {
+      persistedThinking = entry.thinkingLevel;
+      persistedVerbose = entry.verboseLevel;
+      persistedReasoning = entry.reasoningLevel;
+      persistedTtsAuto = entry.ttsAuto;
+      persistedModelOverride = entry.modelOverride;
+      persistedProviderOverride = entry.providerOverride;
+    }
   }
 
-  const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  // For auto-resets (daily/idle boundary), use the stale entry as base so that
+  // delivery context, group metadata, and queue/send settings carry over to the
+  // new session.  Explicit /new and /reset intentionally start from a blank
+  // slate (baseEntry = undefined).
+  const isAutoReset = isNewSession && !resetTriggered && entry != null;
+  const baseEntry = !isNewSession && freshEntry ? entry : isAutoReset ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
@@ -305,6 +324,12 @@ export async function initSessionState(params: {
   const threadLabel = ctx.ThreadLabel?.trim();
   if (threadLabel) {
     sessionEntry.displayName = threadLabel;
+  }
+  // For new sessions (auto-reset or explicit /new), discard the previous
+  // session's transcript path so a fresh one is generated below.  The fork-
+  // from-parent logic may override this with a branched session file.
+  if (isNewSession) {
+    sessionEntry.sessionFile = undefined;
   }
   const parentSessionKey = ctx.ParentSessionKey?.trim();
   if (
