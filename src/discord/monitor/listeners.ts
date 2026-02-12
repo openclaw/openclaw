@@ -188,11 +188,14 @@ async function handleDiscordReactionEvent(params: {
     if (!user || user.bot) {
       return;
     }
-    const guildInfo = resolveDiscordGuildEntry({
-      guild: data.guild ?? undefined,
-      guildEntries,
-    });
-    if (guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
+    const isGuildMessage = Boolean(data.guild_id);
+    const guildInfo = isGuildMessage
+      ? resolveDiscordGuildEntry({
+          guild: data.guild ?? undefined,
+          guildEntries,
+        })
+      : null;
+    if (isGuildMessage && guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
       return;
     }
 
@@ -261,7 +264,9 @@ async function handleDiscordReactionEvent(params: {
     const actorLabel = formatDiscordUserTag(user);
     const guildSlug =
       guildInfo?.slug ||
-      (data.guild?.name ? normalizeDiscordSlug(data.guild.name) : (data.guild_id ?? "dm"));
+      (data.guild?.name
+        ? normalizeDiscordSlug(data.guild.name)
+        : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
     const channelLabel = channelSlug
       ? `#${channelSlug}`
       : channelName
