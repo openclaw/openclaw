@@ -40,6 +40,7 @@ import {
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   applyZaiConfig,
+  applyZaiProviderConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
@@ -619,7 +620,54 @@ export async function applyAuthChoiceApiProviders(
     return { config: nextConfig, agentModelOverride };
   }
 
-  if (authChoice === "zai-api-key") {
+  if (
+    authChoice === "zai-api-key" ||
+    authChoice === "zai-coding-global" ||
+    authChoice === "zai-coding-cn" ||
+    authChoice === "zai-global" ||
+    authChoice === "zai-cn"
+  ) {
+    // Determine endpoint from authChoice or prompt
+    let endpoint: string;
+    if (authChoice === "zai-coding-global") {
+      endpoint = "coding-global";
+    } else if (authChoice === "zai-coding-cn") {
+      endpoint = "coding-cn";
+    } else if (authChoice === "zai-global") {
+      endpoint = "global";
+    } else if (authChoice === "zai-cn") {
+      endpoint = "cn";
+    } else {
+      // zai-api-key: prompt for endpoint selection
+      endpoint = await params.prompter.select({
+        message: "Select Z.AI endpoint",
+        options: [
+          {
+            value: "coding-global",
+            label: "Coding-Plan-Global",
+            hint: "GLM Coding Plan Global (api.z.ai)",
+          },
+          {
+            value: "coding-cn",
+            label: "Coding-Plan-CN",
+            hint: "GLM Coding Plan CN (open.bigmodel.cn)",
+          },
+          {
+            value: "global",
+            label: "Global",
+            hint: "Z.AI Global (api.z.ai)",
+          },
+          {
+            value: "cn",
+            label: "CN",
+            hint: "Z.AI CN (open.bigmodel.cn)",
+          },
+        ],
+        initialValue: "coding-global",
+      });
+    }
+
+    // Input API key
     let hasCredential = false;
 
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "zai") {
@@ -655,23 +703,8 @@ export async function applyAuthChoiceApiProviders(
         config: nextConfig,
         setDefaultModel: params.setDefaultModel,
         defaultModel: ZAI_DEFAULT_MODEL_REF,
-        applyDefaultConfig: applyZaiConfig,
-        applyProviderConfig: (config) => ({
-          ...config,
-          agents: {
-            ...config.agents,
-            defaults: {
-              ...config.agents?.defaults,
-              models: {
-                ...config.agents?.defaults?.models,
-                [ZAI_DEFAULT_MODEL_REF]: {
-                  ...config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF],
-                  alias: config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF]?.alias ?? "GLM",
-                },
-              },
-            },
-          },
-        }),
+        applyDefaultConfig: (config) => applyZaiConfig(config, { endpoint }),
+        applyProviderConfig: (config) => applyZaiProviderConfig(config, { endpoint }),
         noteDefault: ZAI_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
