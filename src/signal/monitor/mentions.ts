@@ -3,10 +3,18 @@ import type { SignalMention } from "./event-handler.types.js";
 const OBJECT_REPLACEMENT = "\uFFFC";
 
 function isValidMention(mention: SignalMention | null | undefined): mention is SignalMention {
-  if (!mention) return false;
-  if (!(mention.uuid || mention.number)) return false;
-  if (typeof mention.start !== "number" || Number.isNaN(mention.start)) return false;
-  if (typeof mention.length !== "number" || Number.isNaN(mention.length)) return false;
+  if (!mention) {
+    return false;
+  }
+  if (!(mention.uuid || mention.number)) {
+    return false;
+  }
+  if (typeof mention.start !== "number" || Number.isNaN(mention.start)) {
+    return false;
+  }
+  if (typeof mention.length !== "number" || Number.isNaN(mention.length)) {
+    return false;
+  }
   return mention.length > 0;
 }
 
@@ -23,17 +31,23 @@ export function renderSignalMentions(message: string, mentions?: SignalMention[]
   }
 
   let normalized = message;
-  const candidates = mentions.filter(isValidMention).sort((a, b) => b.start! - a.start!);
+  const candidates = mentions.filter(isValidMention).toSorted((a, b) => b.start! - a.start!);
 
   for (const mention of candidates) {
     const identifier = mention.uuid ?? mention.number;
-    if (!identifier) continue;
+    if (!identifier) {
+      continue;
+    }
 
     const { start, end } = clampBounds(mention.start!, mention.length!, normalized.length);
-    if (start >= end) continue;
+    if (start >= end) {
+      continue;
+    }
     const slice = normalized.slice(start, end);
 
-    if (!slice.includes(OBJECT_REPLACEMENT)) continue;
+    if (!slice.includes(OBJECT_REPLACEMENT)) {
+      continue;
+    }
 
     normalized = normalized.slice(0, start) + `@${identifier}` + normalized.slice(end);
   }
