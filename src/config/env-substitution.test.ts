@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
+import {
+  MissingEnvVarError,
+  collectConfigEnvRefs,
+  resolveConfigEnvVars,
+  restoreConfigEnvVarRefs,
+} from "./env-substitution.js";
 
 describe("resolveConfigEnvVars", () => {
   describe("basic substitution", () => {
@@ -285,5 +290,99 @@ describe("resolveConfigEnvVars", () => {
         },
       });
     });
+  });
+});
+
+describe("collectConfigEnvRefs", () => {
+  it("collects env var references from flat object", () => {
+    const refs = collectConfigEnvRefs({ apiKey: "${API_KEY}", name: "plain" });
+    expect(refs.size).toBe(1);
+    expect(refs.get("apiKey")).toBe("${API_KEY}");
+  });
+
+  it("collects from nested objects", () => {
+    const refs = collectConfigEnvRefs({
+      models: { providers: { openai: { apiKey: "${OPENAI_KEY}" } } },
+    });
+    expect(refs.get("models.providers.openai.apiKey")).toBe("${OPENAI_KEY}");
+  });
+
+  it("collects from arrays", () => {
+    const refs = collectConfigEnvRefs({ items: ["${A}", "plain", "${B}"] });
+    expect(refs.get("items[0]")).toBe("${A}");
+    expect(refs.get("items[2]")).toBe("${B}");
+    expect(refs.has("items[1]")).toBe(false);
+  });
+
+  it("returns empty map when no refs exist", () => {
+    const refs = collectConfigEnvRefs({ key: "plain", num: 42 });
+    expect(refs.size).toBe(0);
+  });
+
+  it("collects inline env vars with surrounding text", () => {
+    const refs = collectConfigEnvRefs({ url: "https://${HOST}/v1" });
+    expect(refs.get("url")).toBe("https://${HOST}/v1");
+  });
+});
+
+describe("restoreConfigEnvVarRefs", () => {
+  it("restores ${VAR} when expanded value matches", () => {
+    const refs = new Map([["apiKey", "${API_KEY}"]]);
+    const env = { API_KEY: "secret123" };
+    const result = restoreConfigEnvVarRefs({ apiKey: "secret123" }, refs, env);
+    expect(result).toEqual({ apiKey: "${API_KEY}" });
+  });
+
+  it("preserves changed values (does not restore if value was modified)", () => {
+    const refs = new Map([["apiKey", "${API_KEY}"]]);
+    const env = { API_KEY: "secret123" };
+    const result = restoreConfigEnvVarRefs({ apiKey: "new-key-456" }, refs, env);
+    expect(result).toEqual({ apiKey: "new-key-456" });
+  });
+
+  it("restores nested paths", () => {
+    const refs = new Map([["models.providers.openai.apiKey", "${OPENAI_KEY}"]]);
+    const env = { OPENAI_KEY: "sk-xxx" };
+    const expanded = { models: { providers: { openai: { apiKey: "sk-xxx" } } } };
+    const result = restoreConfigEnvVarRefs(expanded, refs, env);
+    expect(result).toEqual({
+      models: { providers: { openai: { apiKey: "${OPENAI_KEY}" } } },
+    });
+  });
+
+  it("restores inline env var references", () => {
+    const refs = new Map([["url", "https://${HOST}/v1"]]);
+    const env = { HOST: "api.example.com" };
+    const result = restoreConfigEnvVarRefs({ url: "https://api.example.com/v1" }, refs, env);
+    expect(result).toEqual({ url: "https://${HOST}/v1" });
+  });
+
+  it("does nothing when refs map is empty", () => {
+    const result = restoreConfigEnvVarRefs({ key: "value" }, new Map(), {});
+    expect(result).toEqual({ key: "value" });
+  });
+
+  it("restores refs in arrays", () => {
+    const refs = new Map([["items[0]", "${TOKEN}"]]);
+    const env = { TOKEN: "abc" };
+    const result = restoreConfigEnvVarRefs({ items: ["abc", "plain"] }, refs, env);
+    expect(result).toEqual({ items: ["${TOKEN}", "plain"] });
+  });
+
+  it("roundtrips: collect → expand → restore", () => {
+    const original = {
+      models: {
+        providers: {
+          openai: { apiKey: "${OPENAI_KEY}" },
+          anthropic: { apiKey: "${ANTHROPIC_KEY}" },
+        },
+      },
+      gateway: { name: "my-gateway" },
+    };
+    const env = { OPENAI_KEY: "sk-xxx", ANTHROPIC_KEY: "sk-yyy" };
+    const refs = collectConfigEnvRefs(original);
+    const expanded = resolveConfigEnvVars(original, env);
+    const restored = restoreConfigEnvVarRefs(expanded, refs, env);
+    expect(restored).toEqual(original);
   });
 });

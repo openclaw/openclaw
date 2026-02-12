@@ -24,7 +24,12 @@ import {
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
-import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
+import {
+  MissingEnvVarError,
+  collectConfigEnvRefs,
+  resolveConfigEnvVars,
+  restoreConfigEnvVarRefs,
+} from "./env-substitution.js";
 import { collectConfigEnvVars } from "./env-vars.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
@@ -507,9 +512,43 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfg)), null, 2)
-      .trimEnd()
-      .concat("\n");
+
+    // Restore ${VAR} references from the original config so secrets are not
+    // persisted in expanded form on disk (#9813).
+    let configToWrite: OpenClawConfig = applyModelDefaults(stampConfigVersion(cfg));
+    try {
+      if (deps.fs.existsSync(configPath)) {
+        const rawOnDisk = deps.fs.readFileSync(configPath, "utf-8");
+        const parsedOnDisk = deps.json5.parse(rawOnDisk);
+        const resolvedIncludes = resolveConfigIncludes(parsedOnDisk, configPath, {
+          readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
+          parseJson: (raw) => deps.json5.parse(raw),
+        });
+        const envRefs = collectConfigEnvRefs(resolvedIncludes);
+        if (envRefs.size > 0) {
+          // Merge config.env vars into the env lookup so vars defined via
+          // config.env are restored correctly (mirrors the read path).
+          const mergedEnv: NodeJS.ProcessEnv = { ...deps.env };
+          const cfgEnvVars = collectConfigEnvVars(resolvedIncludes as OpenClawConfig);
+          for (const [k, v] of Object.entries(cfgEnvVars)) {
+            if (!mergedEnv[k]?.trim()) {
+              mergedEnv[k] = v;
+            }
+          }
+          configToWrite = restoreConfigEnvVarRefs(
+            configToWrite,
+            envRefs,
+            mergedEnv,
+          ) as OpenClawConfig;
+        }
+      }
+    } catch (err) {
+      // If the original config has env refs but restoration failed, log a
+      // warning rather than silently persisting expanded secrets.
+      deps.logger.warn(`Failed to restore env var references in config: ${String(err)}`);
+    }
+
+    const json = JSON.stringify(configToWrite, null, 2).trimEnd().concat("\n");
 
     const tmp = path.join(
       dir,
