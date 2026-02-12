@@ -79,16 +79,10 @@ export async function resolveDeliveryTarget(
       ? resolved.threadId
       : undefined;
 
-  if (!toCandidate) {
-    return {
-      channel,
-      to: undefined,
-      accountId: resolved.accountId,
-      threadId,
-      mode,
-    };
-  }
-
+  // Always run through resolveOutboundTarget — even when the session did not
+  // yield a `to` candidate.  Channel plugins with a `resolveTarget` hook (e.g.
+  // WhatsApp, Telegram) can fall back to `allowFrom[0]` in implicit mode,
+  // which covers the common case of cron delivery with an empty `to` field.
   const docked = resolveOutboundTarget({
     channel,
     to: toCandidate,

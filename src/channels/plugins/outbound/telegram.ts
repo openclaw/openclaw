@@ -1,4 +1,5 @@
 import type { ChannelOutboundAdapter } from "../types.js";
+import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import { sendMessageTelegram } from "../../../telegram/send.js";
 
@@ -30,6 +31,22 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   chunker: markdownToTelegramHtmlChunks,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  resolveTarget: ({ to, allowFrom, mode }) => {
+    const trimmed = to?.trim() ?? "";
+    const allowList = (allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+    if (trimmed) {
+      return { ok: true, to: trimmed };
+    }
+    // Fall back to the first allowFrom entry when no explicit target is given
+    // (e.g. cron delivery with channel="telegram" but empty to).
+    if (allowList.length > 0 && (mode === "implicit" || mode === "heartbeat")) {
+      return { ok: true, to: allowList[0] };
+    }
+    return {
+      ok: false,
+      error: missingTargetError("Telegram", "<chat_id> or channels.telegram.allowFrom[0]"),
+    };
+  },
   sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseReplyToMessageId(replyToId);

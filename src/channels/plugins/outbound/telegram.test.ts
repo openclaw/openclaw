@@ -78,3 +78,43 @@ describe("telegramOutbound.sendPayload", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "m2", chatId: "c1" });
   });
 });
+
+describe("telegramOutbound.resolveTarget", () => {
+  const resolve = telegramOutbound.resolveTarget!;
+
+  it("returns explicit to when provided", () => {
+    expect(resolve({ to: "12345", allowFrom: ["99999"], mode: "explicit" })).toEqual({
+      ok: true,
+      to: "12345",
+    });
+  });
+
+  it("falls back to allowFrom[0] in implicit mode when to is empty", () => {
+    expect(resolve({ to: "", allowFrom: ["12345"], mode: "implicit" })).toEqual({
+      ok: true,
+      to: "12345",
+    });
+  });
+
+  it("falls back to allowFrom[0] in heartbeat mode when to is empty", () => {
+    expect(resolve({ to: undefined, allowFrom: ["12345"], mode: "heartbeat" })).toEqual({
+      ok: true,
+      to: "12345",
+    });
+  });
+
+  it("does NOT fall back to allowFrom in explicit mode", () => {
+    const result = resolve({ to: "", allowFrom: ["12345"], mode: "explicit" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("returns error when to is empty and allowFrom is empty", () => {
+    const result = resolve({ to: "", allowFrom: [], mode: "implicit" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("returns error when to is empty and no allowFrom", () => {
+    const result = resolve({ to: undefined, mode: "implicit" });
+    expect(result.ok).toBe(false);
+  });
+});
