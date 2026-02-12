@@ -41,5 +41,6 @@ export type {
   XFollowResult,
   XDmResult,
   XLikeResult,
+  XRetweetResult,
   XUserInfo,
 } from "./types.js";

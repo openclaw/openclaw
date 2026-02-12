@@ -1,13 +1,13 @@
 ---
 name: x-actions
-description: Perform X (Twitter) actions like following users, liking tweets, replying to tweets, sending DMs, and querying tweets. Use when the user wants to interact with X/Twitter - follow/unfollow users, like/unlike tweets, reply/comment on tweets, send direct messages, search/view tweets or user timelines, or check X account info.
+description: Perform X (Twitter) actions like following users, liking tweets, reposting tweets, replying to tweets, sending DMs, and querying tweets. Use when the user wants to interact with X/Twitter - follow/unfollow users, like/unlike tweets, repost/unrepost tweets, reply/comment on tweets, send direct messages, search/view tweets or user timelines, or check X account info.
 ---
 
 # X (Twitter) Actions
 
 This skill enables X/Twitter interactions through two complementary tool sets:
 
-- **Write actions** (follow, like, reply, DM): use the `message` tool with X-specific actions.
+- **Write actions** (follow, like, repost, reply, DM): use the `message` tool with X-specific actions.
 - **Read/query actions** (search tweets, view user timeline, get tweet details): use `qveris_search` + `qveris_execute`.
 
 > **IMPORTANT**: For X/Twitter write actions, ALWAYS use the `message` tool with X-specific actions listed below. For searching/querying tweets and user timelines, use QVeris tools. Do NOT use the `browser` tool for X operations - the API-based tools are faster, more reliable, and work without browser automation.
@@ -20,6 +20,8 @@ This skill enables X/Twitter interactions through two complementary tool sets:
 | `x-unfollow` | Unfollow a user               | `message({ action: "x-unfollow", target: "@elonmusk" })`                                          |
 | `x-like`     | Like a tweet                  | `message({ action: "x-like", target: "https://x.com/user/status/123" })`                          |
 | `x-unlike`   | Unlike a tweet                | `message({ action: "x-unlike", target: "1234567890" })`                                           |
+| `x-repost`   | Repost (retweet) a tweet      | `message({ action: "x-repost", target: "https://x.com/user/status/123" })`                        |
+| `x-unrepost` | Undo repost (unretweet)       | `message({ action: "x-unrepost", target: "1234567890" })`                                         |
 | `x-reply`    | Reply to / comment on a tweet | `message({ action: "x-reply", target: "https://x.com/user/status/123", message: "Great post!" })` |
 | `x-dm`       | Send direct message           | `message({ action: "x-dm", target: "@user", message: "Hello!" })`                                 |
 
@@ -123,6 +125,27 @@ message({ action: "x-like", target: "https://twitter.com/user/status/1234567890"
 message({ action: "x-like", target: "1234567890" });
 ```
 
+### Repost (Retweet) a Tweet
+
+```typescript
+// By URL
+message({ action: "x-repost", target: "https://x.com/elonmusk/status/1234567890" });
+message({ action: "x-repost", target: "https://twitter.com/user/status/1234567890" });
+
+// By tweet ID
+message({ action: "x-repost", target: "1234567890" });
+```
+
+### Undo Repost (Unretweet)
+
+```typescript
+// By URL
+message({ action: "x-unrepost", target: "https://x.com/user/status/1234567890" });
+
+// By tweet ID
+message({ action: "x-unrepost", target: "1234567890" });
+```
+
 ### Reply to / Comment on a Tweet
 
 ```typescript
@@ -160,6 +183,8 @@ When users ask to interact with X/Twitter, map their requests:
 | 取消关注 / 取关 @xxx                       | message | `x-unfollow`            |
 | 点赞这条推文 / 给这条推点个赞              | message | `x-like`                |
 | 取消点赞                                   | message | `x-unlike`              |
+| 转推 / 转发这条推文                        | message | `x-repost`              |
+| 取消转推 / 取消转发                        | message | `x-unrepost`            |
 | 评论这条推 / 回复这条推文 / 根据内容做评论 | message | `x-reply`               |
 | 发私信给 @xxx / 私信 @xxx                  | message | `x-dm`                  |
 
@@ -172,6 +197,8 @@ When users ask to interact with X/Twitter, map their requests:
 | Unfollow @xxx                                         | message | `x-unfollow`            |
 | Like this tweet                                       | message | `x-like`                |
 | Unlike this tweet                                     | message | `x-unlike`              |
+| Repost this tweet / Retweet this                      | message | `x-repost`              |
+| Undo repost / Unretweet                               | message | `x-unrepost`            |
 | Reply to this tweet / Comment on this tweet           | message | `x-reply`               |
 | DM @xxx / Send a message to @xxx                      | message | `x-dm`                  |
 
@@ -198,6 +225,7 @@ const result = message({ action: "x-follow", target: "@user" });
 // result.error: string (if failed)
 // result.following: boolean (for follow/unfollow)
 // result.liked: boolean (for like/unlike)
+// result.retweeted: boolean (for repost/unrepost)
 ```
 
 ## Requirements
@@ -219,7 +247,7 @@ Two separate allowlists; do not reuse one for the other.
   - **X**: `channels.x.allowFrom` -- X user IDs who can mention the bot (mention -> reply). Server config only.
   - **Feishu**: `channels.feishu.allowFrom` -- who can send DMs/messages (controls mention/chat access). Server config only.
 
-- **Proactive X actions allowlist** -- who can trigger follow/like/reply/dm (auto-operations):
+- **Proactive X actions allowlist** -- who can trigger follow/like/repost/reply/dm (auto-operations):
   - **X**: `channels.x.actionsAllowFrom` -- X user IDs who can trigger x-follow, x-like, x-reply, x-dm when they mention the bot. Do not reuse `allowFrom`.
   - **Feishu**: `channels.feishu.xActionsAllowFrom` -- Feishu user IDs who can trigger X actions from Feishu. Do not reuse `allowFrom`.
 

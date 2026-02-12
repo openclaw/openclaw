@@ -14,6 +14,7 @@ import type {
   XFollowResult,
   XDmResult,
   XLikeResult,
+  XRetweetResult,
   XUserInfo,
   XTweet,
 } from "./types.js";
@@ -710,6 +711,94 @@ export class XClientManager {
   }
 
   /**
+   * Retweet (repost) a tweet
+   */
+  async retweetTweet(
+    account: XAccountConfig,
+    accountId: string,
+    tweetId: string,
+  ): Promise<XRetweetResult> {
+    const endpoint = `/2/users/:id/retweets`;
+    const method = "POST";
+
+    try {
+      const client = this.getClient(account, accountId);
+      const me = await this.getMe(account, accountId);
+
+      this.logger.info(`[X API] ${method} ${endpoint} - tweet: ${tweetId}, me: ${me.id}`);
+
+      const result = await client.v2.retweet(me.id, tweetId);
+
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (tweet: ${tweetId})`);
+      this.logger.info(`Retweeted tweet ${tweetId}`);
+      this.logRateLimitFromClient(client, `users/${me.id}/retweets`, `${method} ${endpoint}`);
+
+      return {
+        ok: true,
+        retweeted: result.data.retweeted,
+      };
+    } catch (error: unknown) {
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
+      const errorMsg = this.extractApiError(error);
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
+      this.logger.error(`Failed to retweet tweet ${tweetId}: ${errorMsg}`);
+      return {
+        ok: false,
+        error: errorMsg,
+      };
+    }
+  }
+
+  /**
+   * Undo a retweet (unrepost) a tweet
+   */
+  async unretweetTweet(
+    account: XAccountConfig,
+    accountId: string,
+    tweetId: string,
+  ): Promise<XRetweetResult> {
+    const endpoint = `/2/users/:id/retweets/:source_tweet_id`;
+    const method = "DELETE";
+
+    try {
+      const client = this.getClient(account, accountId);
+      const me = await this.getMe(account, accountId);
+
+      this.logger.info(`[X API] ${method} ${endpoint} - tweet: ${tweetId}, me: ${me.id}`);
+
+      const result = await client.v2.unretweet(me.id, tweetId);
+
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (tweet: ${tweetId})`);
+      this.logger.info(`Unretweeted tweet ${tweetId}`);
+      this.logRateLimitFromClient(client, `users/${me.id}/retweets`, `${method} ${endpoint}`);
+
+      return {
+        ok: true,
+        retweeted: result.data.retweeted,
+      };
+    } catch (error: unknown) {
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
+      const errorMsg = this.extractApiError(error);
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
+      this.logger.error(`Failed to unretweet tweet ${tweetId}: ${errorMsg}`);
+      return {
+        ok: false,
+        error: errorMsg,
+      };
+    }
+  }
+
+  /**
    * Log rate limit info from response (success or error). Always uses info level so it is always printed.
    * @param endpointLabel - e.g. "GET /2/users/me" to identify which API call the rate limit applies to.
    */
@@ -720,9 +809,15 @@ export class XClientManager {
   ): void {
     const parts: string[] = [];
     if (rateLimit) {
-      if (rateLimit.limit != null) parts.push(`limit=${rateLimit.limit}`);
-      if (rateLimit.remaining != null) parts.push(`remaining=${rateLimit.remaining}`);
-      if (rateLimit.reset != null) parts.push(`reset=${rateLimit.reset}`);
+      if (rateLimit.limit != null) {
+        parts.push(`limit=${rateLimit.limit}`);
+      }
+      if (rateLimit.remaining != null) {
+        parts.push(`remaining=${rateLimit.remaining}`);
+      }
+      if (rateLimit.reset != null) {
+        parts.push(`reset=${rateLimit.reset}`);
+      }
     }
     if (!parts.length && headers) {
       const get = (name: string) => {
@@ -732,9 +827,15 @@ export class XClientManager {
       const limit = get("x-rate-limit-limit");
       const remaining = get("x-rate-limit-remaining");
       const reset = get("x-rate-limit-reset");
-      if (limit != null) parts.push(`limit=${limit}`);
-      if (remaining != null) parts.push(`remaining=${remaining}`);
-      if (reset != null) parts.push(`reset=${reset}`);
+      if (limit != null) {
+        parts.push(`limit=${limit}`);
+      }
+      if (remaining != null) {
+        parts.push(`remaining=${remaining}`);
+      }
+      if (reset != null) {
+        parts.push(`reset=${reset}`);
+      }
     }
     if (parts.length) {
       this.logger.info(`[X API] Rate limit (${endpointLabel}): ${parts.join(", ")}`);

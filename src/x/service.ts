@@ -11,6 +11,7 @@ import type {
   XFollowResult,
   XDmResult,
   XLikeResult,
+  XRetweetResult,
   XUserInfo,
   XLogSink,
   XSendResult,
@@ -75,6 +76,18 @@ export interface XService {
    * @param tweetIdOrUrl - Tweet ID or URL
    */
   unlikeTweet(tweetIdOrUrl: string): Promise<XLikeResult>;
+
+  /**
+   * Retweet (repost) a tweet.
+   * @param tweetIdOrUrl - Tweet ID or URL
+   */
+  retweetTweet(tweetIdOrUrl: string): Promise<XRetweetResult>;
+
+  /**
+   * Undo a retweet (unrepost) a tweet.
+   * @param tweetIdOrUrl - Tweet ID or URL
+   */
+  unretweetTweet(tweetIdOrUrl: string): Promise<XRetweetResult>;
 
   /**
    * Send a standalone tweet (not a reply).
@@ -271,6 +284,16 @@ export function createXService(cfg: OpenClawConfig, options?: XServiceOptions): 
     async unlikeTweet(tweetIdOrUrl: string): Promise<XLikeResult> {
       const tweetId = parseTweetId(tweetIdOrUrl);
       return clientManager.unlikeTweet(account, accountId, tweetId);
+    },
+
+    async retweetTweet(tweetIdOrUrl: string): Promise<XRetweetResult> {
+      const tweetId = parseTweetId(tweetIdOrUrl);
+      return clientManager.retweetTweet(account, accountId, tweetId);
+    },
+
+    async unretweetTweet(tweetIdOrUrl: string): Promise<XRetweetResult> {
+      const tweetId = parseTweetId(tweetIdOrUrl);
+      return clientManager.unretweetTweet(account, accountId, tweetId);
     },
 
     async sendTweet(text: string): Promise<XSendResult> {

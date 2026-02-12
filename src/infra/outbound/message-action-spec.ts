@@ -58,6 +58,8 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "x-dm": "to",
     "x-like": "to",
     "x-unlike": "to",
+    "x-repost": "to",
+    "x-unrepost": "to",
     "x-reply": "to",
     "set-presence": "none",
   };

@@ -117,6 +117,16 @@ export interface XLikeResult {
 }
 
 /**
+ * Result from retweet/unretweet operations
+ */
+export interface XRetweetResult {
+  ok: boolean;
+  error?: string;
+  /** Whether the tweet is now retweeted */
+  retweeted?: boolean;
+}
+
+/**
  * X user info from lookup
  */
 export interface XUserInfo {

@@ -1,7 +1,7 @@
 /**
  * X (Twitter) action handlers for the message tool.
  *
- * Supports: x-follow, x-unfollow, x-dm, x-like, x-unlike, x-reply
+ * Supports: x-follow, x-unfollow, x-dm, x-like, x-unlike, x-repost, x-unrepost, x-reply
  *
  * These handlers delegate to the X service layer for actual API operations.
  */
@@ -12,7 +12,16 @@ import { resolveXAccount } from "../../x/accounts.js";
 import { createXService, DEFAULT_ACCOUNT_ID } from "../../x/index.js";
 import { jsonResult, readStringParam } from "./common.js";
 
-const X_ACTIONS = new Set(["x-follow", "x-unfollow", "x-dm", "x-like", "x-unlike", "x-reply"]);
+const X_ACTIONS = new Set([
+  "x-follow",
+  "x-unfollow",
+  "x-dm",
+  "x-like",
+  "x-unlike",
+  "x-reply",
+  "x-repost",
+  "x-unrepost",
+]);
 
 /**
  * Check if an action is an X-specific action
@@ -63,7 +72,7 @@ function checkXActionsAllowed(params: {
 
   if (!origChannel || !origSenderId) {
     throw new Error(
-      "Permission denied: X actions (follow, like, reply, dm) require an originating channel and sender; not allowed from CLI or unattended context.",
+      "Permission denied: X actions (follow, like, repost, reply, dm) require an originating channel and sender; not allowed from CLI or unattended context.",
     );
   }
 
@@ -78,7 +87,7 @@ function checkXActionsAllowed(params: {
     }
     if (!list.includes(origSenderId)) {
       throw new Error(
-        "Permission denied: your X user is not in the actions allowlist (channels.x.actionsAllowFrom); only listed users can trigger follow/like/reply/dm.",
+        "Permission denied: your X user is not in the actions allowlist (channels.x.actionsAllowFrom); only listed users can trigger follow/like/repost/reply/dm.",
       );
     }
     return;
@@ -94,7 +103,7 @@ function checkXActionsAllowed(params: {
     }
     if (!list.includes(origSenderId)) {
       throw new Error(
-        `Permission denied: your ${origChannel} user is not in the actions allowlist (channels.${origChannel}.xActionsAllowFrom); only listed users can trigger follow/like/reply/dm.`,
+        `Permission denied: your ${origChannel} user is not in the actions allowlist (channels.${origChannel}.xActionsAllowFrom); only listed users can trigger follow/like/repost/reply/dm.`,
       );
     }
     return;
@@ -260,6 +269,58 @@ async function handleUnlike(
   });
 }
 
+/**
+ * Handle x-repost action (retweet)
+ */
+async function handleRepost(
+  params: Record<string, unknown>,
+  cfg: OpenClawConfig,
+  accountId?: string,
+): Promise<AgentToolResult<unknown>> {
+  const target = readStringParam(params, "target", { required: true });
+  const xService = createXService(cfg, { accountId: accountId ?? DEFAULT_ACCOUNT_ID });
+  const tweetId = parseTweetId(target);
+
+  const result = await xService.retweetTweet(tweetId);
+
+  if (!result.ok) {
+    throw new Error(result.error ?? "Failed to retweet");
+  }
+
+  return jsonResult({
+    ok: true,
+    action: "x-repost",
+    tweetId,
+    retweeted: result.retweeted,
+  });
+}
+
+/**
+ * Handle x-unrepost action (undo retweet)
+ */
+async function handleUnrepost(
+  params: Record<string, unknown>,
+  cfg: OpenClawConfig,
+  accountId?: string,
+): Promise<AgentToolResult<unknown>> {
+  const target = readStringParam(params, "target", { required: true });
+  const xService = createXService(cfg, { accountId: accountId ?? DEFAULT_ACCOUNT_ID });
+  const tweetId = parseTweetId(target);
+
+  const result = await xService.unretweetTweet(tweetId);
+
+  if (!result.ok) {
+    throw new Error(result.error ?? "Failed to unretweet");
+  }
+
+  return jsonResult({
+    ok: true,
+    action: "x-unrepost",
+    tweetId,
+    retweeted: result.retweeted,
+  });
+}
+
 /** Optional context for permission checks (e.g. x-reply only to mentioner when from X). */
 export type XActionContext = {
   toolContext?: {
@@ -341,6 +402,10 @@ export async function handleXAction(
       return handleUnlike(params, cfg, accountId);
     case "x-reply":
       return handleReply(params, cfg, accountId, actionCtx);
+    case "x-repost":
+      return handleRepost(params, cfg, accountId);
+    case "x-unrepost":
+      return handleUnrepost(params, cfg, accountId);
     default:
       throw new Error(`Unknown X action: ${action}`);
   }
