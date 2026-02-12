@@ -29,6 +29,7 @@ import {
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -218,8 +219,18 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
+  // Webchat (internal-channel) sessions should not auto-reset by default.
+  // The user controls session lifecycle explicitly via /new and /reset.
+  // Applying daily/idle resets to webchat causes unexpected context loss when
+  // the browser tab is idle across a reset boundary (e.g. the 4 AM daily reset).
+  // Respect an explicit channel-specific reset config for webchat if provided.
+  // See: https://github.com/openclaw/openclaw/issues/14463
+  const isWebchatSession =
+    isInternalMessageChannel(ctx.Provider) || isInternalMessageChannel(ctx.Surface);
+  const skipAutoReset = isWebchatSession && !channelReset;
   const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+    ? skipAutoReset ||
+      evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
 
   if (!isNewSession && freshEntry) {

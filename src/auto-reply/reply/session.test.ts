@@ -473,3 +473,273 @@ describe("initSessionState channel reset overrides", () => {
     expect(result.sessionEntry.sessionId).toBe(sessionId);
   });
 });
+
+// Regression tests for https://github.com/openclaw/openclaw/issues/14463
+describe("initSessionState webchat session resume", () => {
+  it("does not auto-reset webchat session across the daily reset boundary", async () => {
+    vi.useFakeTimers();
+    // Simulate: now is 04:02, session was last updated at 03:35 → crosses 4 AM daily reset
+    vi.setSystemTime(new Date(2026, 1, 12, 4, 2, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-daily-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const existingSessionId = "webchat-session-keep";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 1, 12, 3, 35, 0).getTime(),
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          SessionKey: sessionKey,
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not auto-reset webchat session when idle timeout would fire", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 12, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-idle-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const existingSessionId = "webchat-idle-session";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          // Last updated 2 hours ago — well past default idle timeout
+          updatedAt: new Date(2026, 1, 12, 10, 0, 0).getTime(),
+        },
+      });
+
+      const cfg = {
+        session: {
+          store: storePath,
+          reset: { mode: "idle", idleMinutes: 60 },
+        },
+      } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "still here",
+          SessionKey: sessionKey,
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still allows explicit /new reset for webchat sessions", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 12, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-new-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const existingSessionId = "webchat-explicit-reset";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: Date.now(),
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          SessionKey: sessionKey,
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still allows explicit /reset for webchat sessions", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 12, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-reset-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const existingSessionId = "webchat-explicit-reset2";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: Date.now(),
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "/reset",
+          RawBody: "/reset",
+          CommandBody: "/reset",
+          SessionKey: sessionKey,
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("respects explicit webchat channel reset config when provided", async () => {
+    vi.useFakeTimers();
+    // Session updated at 03:35, now is 04:02 → crosses 4 AM daily reset
+    vi.setSystemTime(new Date(2026, 1, 12, 4, 2, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-explicit-cfg-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const existingSessionId = "webchat-configured-reset";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 1, 12, 3, 35, 0).getTime(),
+        },
+      });
+
+      // Operator explicitly configures a daily reset for webchat
+      const cfg = {
+        session: {
+          store: storePath,
+          resetByChannel: { webchat: { mode: "daily", atHour: 4 } },
+        },
+      } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          SessionKey: sessionKey,
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      // Should respect the explicit channel reset config
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("non-webchat sessions still auto-reset across the daily boundary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 4, 2, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-daily-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:telegram:dm:12345";
+      const existingSessionId = "telegram-session-should-reset";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 1, 12, 3, 35, 0).getTime(),
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      // Telegram sessions should still auto-reset at the daily boundary
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("webchat session identified by Surface alone is also protected", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 1, 12, 4, 2, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-surface-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const existingSessionId = "webchat-surface-only";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 1, 12, 3, 35, 0).getTime(),
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          SessionKey: sessionKey,
+          Surface: "webchat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
