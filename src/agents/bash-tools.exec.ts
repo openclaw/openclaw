@@ -107,13 +107,13 @@ function validateHostEnv(env: Record<string, string>): void {
 }
 const DEFAULT_MAX_OUTPUT = clampWithDefault(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
-  200_000,
+  80_000,
   1_000,
   200_000,
 );
 const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
   readEnvInt("OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS"),
-  200_000,
+  80_000,
   1_000,
   200_000,
 );

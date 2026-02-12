@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
+  capToolResultMessages,
   computeEffectiveSettings,
   default as contextPruningExtension,
   DEFAULT_CONTEXT_PRUNING_SETTINGS,
@@ -521,5 +522,136 @@ describe("context-pruning", () => {
     expect(text).toContain("abcdef");
     expect(text).toContain("efghij");
     expect(text).toContain("[Tool result trimmed:");
+  });
+});
+
+describe("capToolResultMessages", () => {
+  it("returns the original array when no results exceed the cap", () => {
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeToolResult({ toolCallId: "t1", toolName: "exec", text: "short" }),
+      makeAssistant("a1"),
+    ];
+    const result = capToolResultMessages(messages, 1000);
+    expect(result).toBe(messages); // same reference
+  });
+
+  it("truncates tool results that exceed the cap", () => {
+    const longText = "abcdefghij".repeat(1000); // 10,000 chars
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeToolResult({ toolCallId: "t1", toolName: "exec", text: longText }),
+      makeAssistant("a1"),
+    ];
+    const result = capToolResultMessages(messages, 100);
+    expect(result).not.toBe(messages);
+    const text = toolText(findToolResult(result, "t1"));
+    expect(text.length).toBeLessThan(longText.length);
+    expect(text).toContain("[Tool result truncated:");
+    // Head portion (60% of 100 = 60 chars)
+    expect(text).toContain("abcdefghij".slice(0, 10));
+    // Tail portion
+    expect(text).toContain("ghij");
+  });
+
+  it("does not truncate when maxChars is 0 (disabled)", () => {
+    const longText = "x".repeat(100_000);
+    const messages: AgentMessage[] = [
+      makeToolResult({ toolCallId: "t1", toolName: "exec", text: longText }),
+    ];
+    const result = capToolResultMessages(messages, 0);
+    expect(result).toBe(messages);
+  });
+
+  it("skips tool results that contain images", () => {
+    const messages: AgentMessage[] = [
+      makeImageToolResult({
+        toolCallId: "t1",
+        toolName: "browser",
+        text: "x".repeat(100_000),
+      }),
+    ];
+    const result = capToolResultMessages(messages, 100);
+    expect(result).toBe(messages);
+  });
+
+  it("truncates multiple oversized results in one pass", () => {
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeToolResult({ toolCallId: "t1", toolName: "exec", text: "A".repeat(10_000) }),
+      makeToolResult({ toolCallId: "t2", toolName: "exec", text: "B".repeat(10_000) }),
+      makeToolResult({ toolCallId: "t3", toolName: "exec", text: "short" }),
+    ];
+    const result = capToolResultMessages(messages, 200);
+    expect(toolText(findToolResult(result, "t1"))).toContain("[Tool result truncated:");
+    expect(toolText(findToolResult(result, "t2"))).toContain("[Tool result truncated:");
+    expect(toolText(findToolResult(result, "t3"))).toBe("short");
+  });
+
+  it("skips tool results when isToolPrunable returns false", () => {
+    const longText = "x".repeat(10_000);
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeToolResult({ toolCallId: "t1", toolName: "exec", text: longText }),
+      makeToolResult({ toolCallId: "t2", toolName: "browser", text: longText }),
+    ];
+    // Only allow pruning "exec", not "browser"
+    const isToolPrunable = (name: string) => name === "exec";
+    const result = capToolResultMessages(messages, 100, isToolPrunable);
+    expect(result).not.toBe(messages);
+    // exec should be truncated
+    expect(toolText(findToolResult(result, "t1"))).toContain("[Tool result truncated:");
+    // browser should remain unchanged
+    expect(toolText(findToolResult(result, "t2"))).toBe(longText);
+  });
+
+  it("extension applies per-result cap even when TTL has not expired", () => {
+    const sessionManager = {};
+
+    setContextPruningRuntime(sessionManager, {
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        maxToolResultChars: 100,
+      },
+      contextWindowTokens: 200_000,
+      isToolPrunable: () => true,
+      // TTL not expired - ratio-based pruning would be skipped
+      lastCacheTouchAt: Date.now(),
+    });
+
+    const longText = "x".repeat(10_000);
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistant("a1"),
+      makeToolResult({ toolCallId: "t1", toolName: "exec", text: longText }),
+    ];
+
+    let handler:
+      | ((
+          event: { messages: AgentMessage[] },
+          ctx: ExtensionContext,
+        ) => { messages: AgentMessage[] } | undefined)
+      | undefined;
+
+    const api = {
+      on: (name: string, fn: unknown) => {
+        if (name === "context") handler = fn as typeof handler;
+      },
+      appendEntry: (_type: string, _data?: unknown) => {},
+    } as unknown as ExtensionAPI;
+
+    contextPruningExtension(api);
+    if (!handler) throw new Error("missing context handler");
+
+    const result = handler({ messages }, {
+      model: undefined,
+      sessionManager,
+    } as unknown as ExtensionContext);
+
+    // Even though TTL hasn't expired, per-result cap should still apply
+    expect(result).toBeDefined();
+    const text = toolText(findToolResult(result!.messages, "t1"));
+    expect(text).toContain("[Tool result truncated:");
+    expect(text.length).toBeLessThan(longText.length);
   });
 });

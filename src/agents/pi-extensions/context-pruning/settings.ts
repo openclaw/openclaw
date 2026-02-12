@@ -14,6 +14,13 @@ export type ContextPruningConfig = {
   softTrimRatio?: number;
   hardClearRatio?: number;
   minPrunableToolChars?: number;
+  /**
+   * Hard cap on individual tool result text content (chars).
+   * Applied on every turn regardless of TTL.  Prevents a single oversized
+   * tool result from blowing out the context window before the ratio-based
+   * pruner gets a chance to act.  Set to 0 to disable.
+   */
+  maxToolResultChars?: number;
   tools?: ContextPruningToolMatch;
   softTrim?: {
     maxChars?: number;
@@ -33,6 +40,8 @@ export type EffectiveContextPruningSettings = {
   softTrimRatio: number;
   hardClearRatio: number;
   minPrunableToolChars: number;
+  /** Hard cap per tool result (chars). 0 = disabled. */
+  maxToolResultChars: number;
   tools: ContextPruningToolMatch;
   softTrim: {
     maxChars: number;
@@ -45,6 +54,14 @@ export type EffectiveContextPruningSettings = {
   };
 };
 
+/**
+ * Default per-tool-result hard cap.  50 000 chars ≈ 12 500 tokens.
+ * Matches pi-coding-agent's 50 KB default for bash output.
+ * Applied unconditionally (not TTL-gated) so a single oversized result
+ * can never blow out the context window.
+ */
+export const DEFAULT_MAX_TOOL_RESULT_CHARS = 50_000;
+
 export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings = {
   mode: "cache-ttl",
   ttlMs: 5 * 60 * 1000,
@@ -52,6 +69,7 @@ export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings =
   softTrimRatio: 0.3,
   hardClearRatio: 0.5,
   minPrunableToolChars: 50_000,
+  maxToolResultChars: DEFAULT_MAX_TOOL_RESULT_CHARS,
   tools: {},
   softTrim: {
     maxChars: 4_000,
@@ -95,6 +113,9 @@ export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningS
   }
   if (typeof cfg.minPrunableToolChars === "number" && Number.isFinite(cfg.minPrunableToolChars)) {
     s.minPrunableToolChars = Math.max(0, Math.floor(cfg.minPrunableToolChars));
+  }
+  if (typeof cfg.maxToolResultChars === "number" && Number.isFinite(cfg.maxToolResultChars)) {
+    s.maxToolResultChars = Math.max(0, Math.floor(cfg.maxToolResultChars));
   }
   if (cfg.tools) {
     s.tools = cfg.tools;

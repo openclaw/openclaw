@@ -222,6 +222,52 @@ ${tail}`;
   return { ...msg, content: [asText(trimmed + note)] };
 }
 
+/**
+ * Hard-cap individual tool result text content.  Runs on every turn
+ * (not TTL-gated) to prevent a single oversized result from blowing
+ * out the context window before the ratio-based pruner acts.
+ *
+ * Returns the original array if no changes were needed.
+ */
+export function capToolResultMessages(
+  messages: AgentMessage[],
+  maxChars: number,
+  isToolPrunable?: (toolName: string) => boolean,
+): AgentMessage[] {
+  if (maxChars <= 0) return messages;
+
+  let next: AgentMessage[] | null = null;
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg || msg.role !== "toolResult") continue;
+    if (isToolPrunable && !isToolPrunable(msg.toolName)) continue;
+    if (hasImageBlocks(msg.content)) continue;
+
+    const parts = collectTextSegments(msg.content);
+    const rawLen = estimateJoinedTextLength(parts);
+    if (rawLen <= maxChars) continue;
+
+    // Keep head and tail proportional to maxChars (60% head, 40% tail).
+    const headChars = Math.max(0, Math.floor(maxChars * 0.6));
+    const tailChars = Math.max(0, maxChars - headChars);
+
+    const head = takeHeadFromJoinedText(parts, headChars);
+    const tail = takeTailFromJoinedText(parts, tailChars);
+    const truncated = `${head}\n...\n${tail}`;
+    const note = `\n\n[Tool result truncated: kept first ${headChars} and last ${tailChars} chars of ${rawLen} total.]`;
+    const capped: ToolResultMessage = {
+      ...msg,
+      content: [asText(truncated + note)],
+    };
+
+    if (!next) next = messages.slice();
+    next[i] = capped as unknown as AgentMessage;
+  }
+
+  return next ?? messages;
+}
+
 export function pruneContextMessages(params: {
   messages: AgentMessage[];
   settings: EffectiveContextPruningSettings;
