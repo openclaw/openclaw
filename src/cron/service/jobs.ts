@@ -163,6 +163,58 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
   return changed;
 }
 
+/**
+ * Maintenance-only version of recomputeNextRuns that handles disabled jobs
+ * and stuck markers, but does NOT recompute nextRunAtMs for enabled jobs
+ * with existing values. Used during timer ticks when no due jobs were found
+ * to prevent silently advancing past-due nextRunAtMs values without execution
+ * (see #13992).
+ */
+export function recomputeNextRunsForMaintenance(state: CronServiceState): boolean {
+  if (!state.store) {
+    return false;
+  }
+  let changed = false;
+  const now = state.deps.nowMs();
+  for (const job of state.store.jobs) {
+    if (!job.state) {
+      job.state = {};
+      changed = true;
+    }
+    if (!job.enabled) {
+      if (job.state.nextRunAtMs !== undefined) {
+        job.state.nextRunAtMs = undefined;
+        changed = true;
+      }
+      if (job.state.runningAtMs !== undefined) {
+        job.state.runningAtMs = undefined;
+        changed = true;
+      }
+      continue;
+    }
+    const runningAt = job.state.runningAtMs;
+    if (typeof runningAt === "number" && now - runningAt > STUCK_RUN_MS) {
+      state.deps.log.warn(
+        { jobId: job.id, runningAtMs: runningAt },
+        "cron: clearing stuck running marker",
+      );
+      job.state.runningAtMs = undefined;
+      changed = true;
+    }
+    // Only compute missing nextRunAtMs, do NOT recompute existing ones.
+    // If a job was past-due but not found by findDueJobs, recomputing would
+    // cause it to be silently skipped.
+    if (job.state.nextRunAtMs === undefined) {
+      const newNext = computeJobNextRunAtMs(job, now);
+      if (newNext !== undefined) {
+        job.state.nextRunAtMs = newNext;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
   const enabled = jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number");
