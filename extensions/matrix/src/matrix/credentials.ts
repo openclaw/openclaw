@@ -103,3 +103,68 @@ export function credentialsMatchConfig(
   }
   return stored.homeserver === config.homeserver && stored.userId === config.userId;
 }
+
+// Multi-account support: account-specific credentials
+
+export function resolveMatrixCredentialsDirForAccount(
+  accountId: string,
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir?: string,
+): string {
+  const resolvedStateDir = stateDir ?? getMatrixRuntime().state.resolveStateDir(env, os.homedir);
+  return path.join(resolvedStateDir, "credentials", "matrix", accountId);
+}
+
+export function resolveMatrixCredentialsPathForAccount(
+  accountId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const dir = resolveMatrixCredentialsDirForAccount(accountId, env);
+  return path.join(dir, CREDENTIALS_FILENAME);
+}
+
+export function loadMatrixCredentialsForAccount(
+  accountId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): MatrixStoredCredentials | null {
+  const credPath = resolveMatrixCredentialsPathForAccount(accountId, env);
+  try {
+    if (!fs.existsSync(credPath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(credPath, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<MatrixStoredCredentials>;
+    if (
+      typeof parsed.homeserver !== "string" ||
+      typeof parsed.userId !== "string" ||
+      typeof parsed.accessToken !== "string"
+    ) {
+      return null;
+    }
+    return parsed as MatrixStoredCredentials;
+  } catch {
+    return null;
+  }
+}
+
+export function saveMatrixCredentialsForAccount(
+  accountId: string,
+  credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const dir = resolveMatrixCredentialsDirForAccount(accountId, env);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const credPath = resolveMatrixCredentialsPathForAccount(accountId, env);
+
+  const existing = loadMatrixCredentialsForAccount(accountId, env);
+  const now = new Date().toISOString();
+
+  const toSave: MatrixStoredCredentials = {
+    ...credentials,
+    createdAt: existing?.createdAt ?? now,
+    lastUsedAt: now,
+  };
+
+  fs.writeFileSync(credPath, JSON.stringify(toSave, null, 2), "utf-8");
+}

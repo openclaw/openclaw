@@ -39,6 +39,60 @@ export type MatrixActionConfig = {
   channelInfo?: boolean;
 };
 
+/** Configuration for a single Matrix account (for multi-account support). */
+export type MatrixAccountConfig = {
+  /** Optional display name for this account. */
+  name?: string;
+  /** If false, do not start this account. Default: true. */
+  enabled?: boolean;
+  /** Markdown config for this account. */
+  markdown?: unknown;
+  /** Matrix homeserver URL. */
+  homeserver?: string;
+  /** Matrix user id. */
+  userId?: string;
+  /** Matrix access token. */
+  accessToken?: string;
+  /** Matrix password. */
+  password?: string;
+  /** Device name. */
+  deviceName?: string;
+  /** Initial sync limit. */
+  initialSyncLimit?: number;
+  /** Enable E2EE. */
+  encryption?: boolean;
+  /** Enforce allowlists. */
+  allowlistOnly?: boolean;
+  /** Group message policy. */
+  groupPolicy?: GroupPolicy;
+  /** Group allowlist. */
+  groupAllowFrom?: Array<string | number>;
+  /** Reply threading mode. */
+  replyToMode?: ReplyToMode;
+  /** Thread replies handling. */
+  threadReplies?: "off" | "inbound" | "always";
+  /** Text chunk limit. */
+  textChunkLimit?: number;
+  /** Chunk mode. */
+  chunkMode?: "length" | "newline";
+  /** Response prefix. */
+  responsePrefix?: string;
+  /** Max media size. */
+  mediaMaxMb?: number;
+  /** Auto-join policy. */
+  autoJoin?: "always" | "allowlist" | "off";
+  /** Auto-join allowlist. */
+  autoJoinAllowlist?: Array<string | number>;
+  /** DM config. */
+  dm?: MatrixDmConfig;
+  /** Groups config. */
+  groups?: Record<string, MatrixRoomConfig>;
+  /** Rooms config (legacy). */
+  rooms?: Record<string, MatrixRoomConfig>;
+  /** Actions config. */
+  actions?: MatrixActionConfig;
+};
+
 export type MatrixConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -88,6 +142,8 @@ export type MatrixConfig = {
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
+  /** Multi-account support: map of accountId -> account config. */
+  accounts?: Record<string, MatrixAccountConfig>;
 };
 
 export type CoreConfig = {

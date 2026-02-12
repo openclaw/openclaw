@@ -1,11 +1,48 @@
 import { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { CoreConfig } from "../../types.js";
+import type { CoreConfig, MatrixAccountConfig } from "../../types.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 
 function clean(value?: string): string {
   return value?.trim() ?? "";
+}
+
+/**
+ * Resolve Matrix config for a specific account (multi-account support).
+ * Account-specific settings override top-level settings.
+ */
+export function resolveMatrixConfigForAccount(
+  baseConfig: MatrixAccountConfig,
+  accountConfig: MatrixAccountConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): MatrixResolvedConfig {
+  // Account-specific values take precedence, fall back to base/top-level
+  const homeserver = clean(accountConfig.homeserver) || clean(baseConfig.homeserver) || clean(env.MATRIX_HOMESERVER);
+  const userId = clean(accountConfig.userId) || clean(baseConfig.userId) || clean(env.MATRIX_USER_ID);
+  const accessToken =
+    clean(accountConfig.accessToken) || clean(baseConfig.accessToken) || clean(env.MATRIX_ACCESS_TOKEN) || undefined;
+  const password =
+    clean(accountConfig.password) || clean(baseConfig.password) || clean(env.MATRIX_PASSWORD) || undefined;
+  const deviceName =
+    clean(accountConfig.deviceName) || clean(baseConfig.deviceName) || clean(env.MATRIX_DEVICE_NAME) || undefined;
+  const initialSyncLimit =
+    typeof accountConfig.initialSyncLimit === "number"
+      ? Math.max(0, Math.floor(accountConfig.initialSyncLimit))
+      : typeof baseConfig.initialSyncLimit === "number"
+        ? Math.max(0, Math.floor(baseConfig.initialSyncLimit))
+        : undefined;
+  const encryption = accountConfig.encryption ?? baseConfig.encryption ?? false;
+  
+  return {
+    homeserver,
+    userId,
+    accessToken,
+    password,
+    deviceName,
+    initialSyncLimit,
+    encryption,
+  };
 }
 
 export function resolveMatrixConfig(
