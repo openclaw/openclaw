@@ -39,26 +39,21 @@ const statefulSSHPlugin = {
       },
     );
 
-    // Register cleanup handler
-    if (api.runtime) {
-      process.on("beforeExit", () => {
-        cleanupSSHSessions().catch((err) => {
-          console.error("Error cleaning up SSH sessions:", err);
-        });
-      });
-
-      process.on("SIGINT", () => {
-        cleanupSSHSessions().catch((err) => {
-          console.error("Error cleaning up SSH sessions:", err);
-        });
-      });
-
-      process.on("SIGTERM", () => {
-        cleanupSSHSessions().catch((err) => {
-          console.error("Error cleaning up SSH sessions:", err);
-        });
-      });
-    }
+    // Register as service for lifecycle management
+    api.registerService({
+      id: "stateful-ssh-cleanup",
+      start: async () => {
+        api.logger.debug("Stateful SSH service started");
+      },
+      stop: async () => {
+        api.logger.debug("Cleaning up SSH sessions...");
+        try {
+          await cleanupSSHSessions();
+        } catch (err) {
+          api.logger.error(`Error cleaning up SSH sessions: ${err}`);
+        }
+      },
+    });
   },
 };
 
