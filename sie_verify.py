@@ -8,17 +8,17 @@ from sie_lib import verify_envelope
 
 def load_trusted_issuers(path: Path) -> dict:
     if not path.exists():
-        raise SystemExit(f"Trusted issuer file not found: {path}")
+        raise ValueError(f"Trusted issuer file not found: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        raise SystemExit("Trusted issuer file must be a JSON object: {issuer: pubkey_b64}")
+        raise ValueError("Trusted issuer file must be a JSON object: {issuer: pubkey_b64}")
     return data
 
 
 def resolve_issuer(env: dict) -> str:
     issuer = env.get("issuer") or env.get("payload", {}).get("issuer")
     if not issuer:
-        raise SystemExit("Envelope missing issuer field")
+        raise ValueError("Envelope missing issuer field")
     return issuer
 
 
@@ -56,7 +56,7 @@ def main() -> int:
 
     f = Path(args.file)
     if not f.exists():
-        raise SystemExit(f"File not found: {f}")
+        raise ValueError(f"File not found: {f}")
 
     try:
         env = json.loads(f.read_text(encoding="utf-8"))
@@ -72,7 +72,7 @@ def main() -> int:
         if args.check_file:
             cf = Path(args.check_file)
             if not cf.exists():
-                raise SystemExit(f"Check file not found: {cf}")
+                raise ValueError(f"Check file not found: {cf}")
 
             # Hash text content with UTF-8 to stay consistent with signing flow
             # across platforms/checkouts (e.g., Windows CRLF conversions).
@@ -95,5 +95,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+    if __name__ == "__main__":
+        raise SystemExit(main())
