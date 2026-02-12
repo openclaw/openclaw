@@ -572,6 +572,65 @@ describe("handleCommands subagents", () => {
     expect(result.reply).toBeUndefined();
   });
 
+  it("sends follow-up messages to finished subagents", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: { runId?: string } };
+      if (request.method === "agent") {
+        return { runId: "run-followup-1" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "done" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:abc",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      cleanup: "keep",
+      createdAt: now - 20_000,
+      startedAt: now - 20_000,
+      endedAt: now - 1_000,
+      outcome: { status: "ok" },
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/subagents send 1 continue with follow-up details", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("✅ Sent to");
+
+    const agentCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string }).method === "agent",
+    );
+    expect(agentCall?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        lane: "subagent",
+        sessionKey: "agent:main:subagent:abc",
+        timeout: 0,
+      },
+    });
+
+    const waitCall = callGatewayMock.mock.calls.find(
+      (call) =>
+        (call[0] as { method?: string; params?: { runId?: string } }).method === "agent.wait" &&
+        (call[0] as { method?: string; params?: { runId?: string } }).params?.runId ===
+          "run-followup-1",
+    );
+    expect(waitCall).toBeDefined();
+  });
+
   it("steers subagents via /steer alias", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();

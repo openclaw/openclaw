@@ -454,9 +454,13 @@ describe("subagent announce formatting", () => {
     });
 
     expect(didAnnounce).toBe(true);
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: Record<string, unknown>;
+      expectFinal?: boolean;
+    };
     expect(call?.params?.channel).toBe("whatsapp");
     expect(call?.params?.accountId).toBe("acct-123");
+    expect(call?.expectFinal).toBe(true);
   });
 
   it("injects direct announce into requester subagent session instead of chat channel", async () => {
@@ -549,7 +553,7 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("If they are unrelated, respond normally using only the result above.");
   });
 
-  it("suppresses announce while the finished run still has active descendants", async () => {
+  it("defers announce while the finished run still has active descendants", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:main:subagent:parent" ? 1 : 0,
@@ -569,7 +573,7 @@ describe("subagent announce formatting", () => {
       outcome: { status: "ok" },
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe(false);
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
@@ -602,6 +606,33 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("whatsapp");
     expect(call?.params?.to).toBe("+1555");
     expect(call?.params?.accountId).toBe("acct-main");
+  });
+
+  it("keeps announce retryable when ended requester subagent has no fallback requester", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
+    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue(null);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:leaf",
+      childRunId: "run-leaf-missing-fallback",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterDisplayKey: "agent:main:subagent:orchestrator",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(subagentRegistryMock.resolveRequesterForChildSession).toHaveBeenCalledWith(
+      "agent:main:subagent:orchestrator",
+    );
+    expect(agentSpy).not.toHaveBeenCalled();
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
   it("defers announce when child run is still active after wait timeout", async () => {

@@ -453,8 +453,7 @@ export async function runSubagentAnnounceFlow(params: {
       // The finished run still has active descendant subagents. Defer announcing
       // this run until descendants settle so we avoid posting in-progress updates.
       shouldDeleteChildSession = false;
-      didAnnounce = true;
-      return true;
+      return false;
     }
 
     // Build status label
@@ -513,8 +512,11 @@ export async function runSubagentAnnounceFlow(params: {
       if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
         const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
         if (!fallback?.requesterSessionKey) {
-          didAnnounce = true;
-          return true;
+          // Without a requester fallback we cannot safely deliver this nested
+          // completion. Keep cleanup retryable so a later registry restore can
+          // recover and re-announce instead of silently dropping the result.
+          shouldDeleteChildSession = false;
+          return false;
         }
         targetRequesterSessionKey = fallback.requesterSessionKey;
         targetRequesterOrigin =
@@ -561,6 +563,7 @@ export async function runSubagentAnnounceFlow(params: {
             : undefined,
         idempotencyKey: crypto.randomUUID(),
       },
+      expectFinal: true,
       timeoutMs: 15_000,
     });
 

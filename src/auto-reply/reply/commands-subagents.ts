@@ -636,7 +636,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         reply: { text: `⚠️ ${resolved.error ?? "Unknown subagent."}` },
       };
     }
-    if (resolved.entry.endedAt) {
+    if (steerRequested && resolved.entry.endedAt) {
       return {
         shouldContinue: false,
         reply: { text: `${formatRunLabel(resolved.entry)} is already finished.` },
