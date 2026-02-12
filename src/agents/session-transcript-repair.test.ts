@@ -4,6 +4,7 @@ import {
   sanitizeToolCallInputs,
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
+  repairToolCallInputs,
 } from "./session-transcript-repair.js";
 
 describe("sanitizeToolUseResultPairing", () => {
@@ -241,5 +242,97 @@ describe("sanitizeToolCallInputs", () => {
       ? assistant.content.map((block) => (block as { type?: unknown }).type)
       : [];
     expect(types).toEqual(["text", "toolUse"]);
+  });
+
+  it("preserves assistant messages with empty content arrays (write-time guard must not drop them)", () => {
+    // repairToolCallInputs is called at write time (guardedAppend) so it must NOT
+    // drop empty-content assistant messages — that would prevent error messages from
+    // being persisted to the session file. The read-time repair
+    // (repairToolUseResultPairing) handles stripping them before API calls instead.
+    const input: AgentMessage[] = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage:
+          '400 {"type":"error","error":{"type":"api_error","message":"Improperly formed request."}}',
+      } as AgentMessage,
+      { role: "user", content: "retry" },
+    ];
+
+    const result = repairToolCallInputs(input);
+    expect(result.droppedAssistantMessages).toBe(0);
+    expect(result.messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+  });
+});
+
+describe("repairToolUseResultPairing – empty assistant content", () => {
+  it("drops errored assistant messages with empty content arrays", () => {
+    // Reproduces the death spiral: API error leaves content: [] in transcript,
+    // which causes every subsequent request to fail with HTTP 400.
+    const input = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage:
+          '400 {"type":"error","error":{"type":"api_error","message":"Improperly formed request."}}',
+      },
+      { role: "user", content: "retry" },
+    ] as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+    expect(result.messages.map((m) => m.role)).toEqual(["user", "user"]);
+    // No synthetic tool results should be added
+    expect(result.added).toHaveLength(0);
+  });
+
+  it("drops aborted assistant messages with empty content arrays", () => {
+    const input = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "aborted",
+      },
+      { role: "user", content: "retry" },
+    ] as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+    expect(result.messages.map((m) => m.role)).toEqual(["user", "user"]);
+  });
+
+  it("keeps errored assistant messages that have non-empty content", () => {
+    const input = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial response before error" }],
+        stopReason: "error",
+      },
+      { role: "user", content: "retry" },
+    ] as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+    expect(result.messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+  });
+
+  it("handles multiple consecutive empty errored assistant messages", () => {
+    // This is the exact death spiral scenario: each retry produces another empty error
+    const input = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: [], stopReason: "error" },
+      { role: "user", content: "retry 1" },
+      { role: "assistant", content: [], stopReason: "error" },
+      { role: "user", content: "retry 2" },
+      { role: "assistant", content: [], stopReason: "error" },
+      { role: "user", content: "retry 3" },
+    ] as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+    expect(result.messages.map((m) => m.role)).toEqual(["user", "user", "user", "user"]);
+    expect(result.added).toHaveLength(0);
   });
 });

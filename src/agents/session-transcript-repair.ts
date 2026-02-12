@@ -222,6 +222,16 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     // See: https://github.com/openclaw/openclaw/issues/4597
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
+      // Drop assistant messages with empty content arrays entirely.
+      // These are left behind when an API request fails before producing any output.
+      // Keeping them poisons the session: the Anthropic Messages API rejects
+      // assistant messages with empty content, causing every subsequent request
+      // to fail with HTTP 400 in a permanent loop.
+      // See: https://github.com/openclaw/openclaw/issues/11963
+      if (Array.isArray(assistant.content) && assistant.content.length === 0) {
+        changed = true;
+        continue;
+      }
       out.push(msg);
       continue;
     }
