@@ -779,9 +779,9 @@ export async function runEmbeddedAttempt(
               typeof msg.content === "string"
                 ? msg.content
                 : Array.isArray(msg.content)
-                  ? msg.content.map((block: any) => {
+                  ? msg.content.map((block: unknown) => {
                       if (typeof block === "object" && block !== null) {
-                        return { type: block.type, ...block };
+                        return { type: (block as Record<string, unknown>).type, ...block };
                       }
                       return block;
                     })
