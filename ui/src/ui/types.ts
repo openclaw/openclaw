@@ -56,33 +56,6 @@ export type ChannelAccountSnapshot = {
   application?: unknown;
 };
 
-export type WhatsAppSelf = {
-  e164?: string | null;
-  jid?: string | null;
-};
-
-export type WhatsAppDisconnect = {
-  at: number;
-  status?: number | null;
-  error?: string | null;
-  loggedOut?: boolean | null;
-};
-
-export type WhatsAppStatus = {
-  configured: boolean;
-  linked: boolean;
-  authAgeMs?: number | null;
-  self?: WhatsAppSelf | null;
-  running: boolean;
-  connected: boolean;
-  lastConnectedAt?: number | null;
-  lastDisconnect?: WhatsAppDisconnect | null;
-  reconnectAttempts: number;
-  lastMessageAt?: number | null;
-  lastEventAt?: number | null;
-  lastError?: string | null;
-};
-
 export type TelegramBot = {
   id?: number | null;
   username?: string | null;
@@ -114,52 +87,6 @@ export type TelegramStatus = {
   lastProbeAt?: number | null;
 };
 
-export type DiscordBot = {
-  id?: string | null;
-  username?: string | null;
-};
-
-export type DiscordProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-  bot?: DiscordBot | null;
-};
-
-export type DiscordStatus = {
-  configured: boolean;
-  tokenSource?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: DiscordProbe | null;
-  lastProbeAt?: number | null;
-};
-
-export type GoogleChatProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-};
-
-export type GoogleChatStatus = {
-  configured: boolean;
-  credentialSource?: string | null;
-  audienceType?: string | null;
-  audience?: string | null;
-  webhookPath?: string | null;
-  webhookUrl?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: GoogleChatProbe | null;
-  lastProbeAt?: number | null;
-};
-
 export type SlackBot = {
   id?: string | null;
   name?: string | null;
@@ -188,80 +115,6 @@ export type SlackStatus = {
   lastStopAt?: number | null;
   lastError?: string | null;
   probe?: SlackProbe | null;
-  lastProbeAt?: number | null;
-};
-
-export type SignalProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-  version?: string | null;
-};
-
-export type SignalStatus = {
-  configured: boolean;
-  baseUrl: string;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: SignalProbe | null;
-  lastProbeAt?: number | null;
-};
-
-export type IMessageProbe = {
-  ok: boolean;
-  error?: string | null;
-};
-
-export type IMessageStatus = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  cliPath?: string | null;
-  dbPath?: string | null;
-  probe?: IMessageProbe | null;
-  lastProbeAt?: number | null;
-};
-
-export type NostrProfile = {
-  name?: string | null;
-  displayName?: string | null;
-  about?: string | null;
-  picture?: string | null;
-  banner?: string | null;
-  website?: string | null;
-  nip05?: string | null;
-  lud16?: string | null;
-};
-
-export type NostrStatus = {
-  configured: boolean;
-  publicKey?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  profile?: NostrProfile | null;
-};
-
-export type MSTeamsProbe = {
-  ok: boolean;
-  error?: string | null;
-  appId?: string | null;
-};
-
-export type MSTeamsStatus = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  port?: number | null;
-  probe?: MSTeamsProbe | null;
   lastProbeAt?: number | null;
 };
 
