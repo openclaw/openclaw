@@ -41,7 +41,7 @@ export async function deliverWebReply(params: {
       ? [replyResult.mediaUrl]
       : [];
 
-  const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
+  const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 5) => {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -54,7 +54,7 @@ export async function deliverWebReply(params: {
         if (!shouldRetry || isLast) {
           throw err;
         }
-        const backoffMs = 500 * attempt;
+        const backoffMs = 1000 * attempt;
         logVerbose(
           `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts - 1}) in ${backoffMs}ms: ${errText}`,
         );
