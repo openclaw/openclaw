@@ -11,12 +11,15 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
  */
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { buildRecalledContextBlock } from "../../../extensions/memory-context/src/core/recall-format.js";
-import { getMemoryContextRuntime } from "../../../extensions/memory-context/src/core/runtime.js";
-import { computeHardCap } from "../../../extensions/memory-context/src/core/runtime.js";
+import {
+  getMemoryContextRuntime,
+  computeHardCap,
+} from "../../../extensions/memory-context/src/core/runtime.js";
 import {
   smartTrim,
   type MessageLike,
 } from "../../../extensions/memory-context/src/core/smart-trim.js";
+import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
 /** Marker to identify injected recalled-context messages. */
 const RECALLED_CONTEXT_MARKER = '<recalled-context source="memory-context">';
@@ -84,14 +87,24 @@ export default function memoryContextRecallExtension(api: ExtensionAPI): void {
 
     // ========== Step 3: Smart Trim (if near overflow) ==========
     const hardCap = computeHardCap(runtime);
-    const reserveTokens = 4000; // Reserve for system prompt + output
+    // Read reserveTokens from compaction-safeguard-runtime (dynamic, not hardcoded)
+    const safeguardRuntime = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const reserveTokens =
+      typeof safeguardRuntime?.reserveTokens === "number" ? safeguardRuntime.reserveTokens : 4000;
     const safeLimit = runtime.contextWindowTokens - reserveTokens - hardCap;
 
-    const trimResult = smartTrim(messages as MessageLike[], query || "context", {
-      protectedRecent: 6,
-      safeLimit,
-      estimateTokens: estimateMessageTokens,
-    });
+    // Only do smart trim if we have a meaningful query.
+    // If query is too short (e.g. "y", "ok"), skip trimming to avoid
+    // destructive trimming without recall compensation.
+    const hasUsableQuery = query.length >= 3;
+
+    const trimResult = hasUsableQuery
+      ? smartTrim(messages as MessageLike[], query, {
+          protectedRecent: 6,
+          safeLimit,
+          estimateTokens: estimateMessageTokens,
+        })
+      : { kept: messages, trimmed: [] as MessageLike[], didTrim: false };
 
     if (trimResult.didTrim) {
       messages = trimResult.kept as AgentMessage[];
@@ -139,7 +152,7 @@ export default function memoryContextRecallExtension(api: ExtensionAPI): void {
     }
 
     // ========== Step 4: Recall injection ==========
-    if (!query || query.length < 3) {
+    if (!hasUsableQuery) {
       return messages !== event.messages ? { messages } : undefined;
     }
 
@@ -153,9 +166,11 @@ export default function memoryContextRecallExtension(api: ExtensionAPI): void {
         timeDecay: 0.995,
       };
 
+      // Dynamic search limit based on hardcap budget
+      const searchLimit = Math.max(8, Math.ceil(hardCap / 500));
       const rawResults = await runtime.rawStore.hybridSearch(
         query,
-        8,
+        searchLimit,
         runtime.config.autoRecallMinScore,
         searchConfig,
       );
