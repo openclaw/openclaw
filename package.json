@@ -24,7 +24,10 @@
   "main": "dist/index.js",
   "exports": {
     ".": "./dist/index.js",
-    "./plugin-sdk": "./dist/plugin-sdk/index.js",
+    "./plugin-sdk": {
+      "types": "./dist/plugin-sdk/index.d.ts",
+      "default": "./dist/plugin-sdk/index.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
