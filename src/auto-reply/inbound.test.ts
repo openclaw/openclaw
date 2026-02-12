@@ -93,7 +93,7 @@ describe("finalizeInboundContext", () => {
   it("preserves literal backslash-n in Windows paths", () => {
     const ctx: MsgContext = {
       Body: "C:\\Work\\nxxx\\README.md",
-      RawBody: "raw",
+      RawBody: "C:\\Work\\nxxx\\README.md",
       ChatType: "direct",
       From: "web:user",
     };
