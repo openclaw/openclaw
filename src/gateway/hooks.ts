@@ -108,52 +108,104 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
   return undefined;
 }
 
-export async function readJsonBody(
+export async function readBody(
   req: IncomingMessage,
   maxBytes: number,
-): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
+): Promise<{ ok: true; value: string } | { ok: false; error: string }> {
+  const cl = req.headers["content-length"];
+  if (cl) {
+    const length = Number(cl);
+    if (Number.isFinite(length) && length > maxBytes) {
+      try {
+        req.destroy();
+      } catch {}
+      return { ok: false, error: "payload too large" };
+    }
+  }
+
   return await new Promise((resolve) => {
     let done = false;
     let total = 0;
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => {
+
+    const finish = (result: { ok: true; value: string } | { ok: false; error: string }) => {
       if (done) {
         return;
       }
+      done = true;
+      resolve(result);
+    };
+
+    req.on("data", (chunk: Buffer) => {
       total += chunk.length;
       if (total > maxBytes) {
-        done = true;
-        resolve({ ok: false, error: "payload too large" });
+        finish({ ok: false, error: "payload too large" });
         req.destroy();
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
-      if (done) {
-        return;
-      }
-      done = true;
-      const raw = Buffer.concat(chunks).toString("utf-8").trim();
-      if (!raw) {
-        resolve({ ok: true, value: {} });
-        return;
-      }
-      try {
-        const parsed = JSON.parse(raw) as unknown;
-        resolve({ ok: true, value: parsed });
-      } catch (err) {
-        resolve({ ok: false, error: String(err) });
-      }
+      const raw = Buffer.concat(chunks).toString("utf-8");
+      finish({ ok: true, value: raw });
     });
-    req.on("error", (err) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      resolve({ ok: false, error: String(err) });
-    });
+    req.on("error", (err) => finish({ ok: false, error: String(err) }));
+    req.on("aborted", () => finish({ ok: false, error: "request aborted" }));
   });
+}
+
+export async function readJsonBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
+  const body = await readBody(req, maxBytes);
+  if (!body.ok) {
+    return body;
+  }
+  const trimmed = body.value.trim();
+  if (!trimmed) {
+    return { ok: true, value: {} };
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return { ok: true, value: parsed };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+export async function readFormUrlEncodedBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
+  const body = await readBody(req, maxBytes);
+  if (!body.ok) {
+    return body;
+  }
+  if (!body.value) {
+    return { ok: true, value: {} };
+  }
+  try {
+    const params = new URLSearchParams(body.value);
+    const result: Record<string, unknown> = {};
+
+    for (const [key, value] of params) {
+      if (key in result) {
+        const existing = result[key];
+        if (Array.isArray(existing)) {
+          existing.push(value);
+        } else {
+          result[key] = [existing, value];
+        }
+      } else {
+        result[key] = value;
+      }
+    }
+
+    return { ok: true, value: result };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 }
 
 export function normalizeHookHeaders(req: IncomingMessage) {
