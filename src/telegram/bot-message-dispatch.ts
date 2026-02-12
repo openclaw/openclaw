@@ -804,7 +804,7 @@ export const dispatchTelegramMessage = async ({
     sentFallback = result.delivered;
   }
 
-  const hasFinalResponse = queuedFinal || sentFallback;
+  const hasFinalResponse = queuedFinal || sentFallback || deliveryState.delivered;
 
   if (statusReactionController && !hasFinalResponse) {
     void statusReactionController.setError().catch((err) => {
