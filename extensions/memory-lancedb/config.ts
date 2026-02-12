@@ -7,6 +7,8 @@ export type MemoryConfig = {
     provider: "openai";
     model?: string;
     apiKey: string;
+    baseURL?: string;
+    dimensions?: number;
   };
   dbPath?: string;
   autoCapture?: boolean;
@@ -59,10 +61,15 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
   throw new Error(`${label} has unknown keys: ${unknown.join(", ")}`);
 }
 
-export function vectorDimsForModel(model: string): number {
+export function vectorDimsForModel(model: string, configuredDims?: number): number {
+  if (configuredDims && configuredDims > 0) {
+    return configuredDims;
+  }
   const dims = EMBEDDING_DIMENSIONS[model];
   if (!dims) {
-    throw new Error(`Unsupported embedding model: ${model}`);
+    throw new Error(
+      `Unknown embedding dimensions for model: ${model}. Set embedding.dimensions explicitly.`,
+    );
   }
   return dims;
 }
@@ -79,7 +86,11 @@ function resolveEnvVars(value: string): string {
 
 function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
   const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
-  vectorDimsForModel(model);
+  const dims =
+    typeof embedding.dimensions === "number" && embedding.dimensions > 0
+      ? embedding.dimensions
+      : undefined;
+  vectorDimsForModel(model, dims);
   return model;
 }
 
@@ -95,15 +106,22 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
+    assertAllowedKeys(embedding, ["apiKey", "model", "baseURL", "dimensions"], "embedding config");
 
     const model = resolveEmbeddingModel(embedding);
+    const baseURL = typeof embedding.baseURL === "string" ? embedding.baseURL : undefined;
+    const dimensions =
+      typeof embedding.dimensions === "number" && embedding.dimensions > 0
+        ? embedding.dimensions
+        : undefined;
 
     return {
       embedding: {
         provider: "openai",
         model,
         apiKey: resolveEnvVars(embedding.apiKey),
+        baseURL,
+        dimensions,
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture !== false,
@@ -121,6 +139,17 @@ export const memoryConfigSchema = {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
       help: "OpenAI embedding model to use",
+    },
+    "embedding.baseURL": {
+      label: "Embedding API Base URL",
+      placeholder: "https://api.openai.com/v1",
+      help: "Custom base URL for OpenAI-compatible embedding providers (e.g. NVIDIA, Azure)",
+      advanced: true,
+    },
+    "embedding.dimensions": {
+      label: "Vector Dimensions",
+      help: "Override vector dimensions for custom models (auto-detected for OpenAI models)",
+      advanced: true,
     },
     dbPath: {
       label: "Database Path",
