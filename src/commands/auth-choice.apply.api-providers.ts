@@ -1025,7 +1025,7 @@ export async function applyAuthChoiceApiProviders(
   if (authChoice === "qianfan-api-key") {
     let hasCredential = false;
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "qianfan") {
-      setQianfanApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      await setQianfanApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
       hasCredential = true;
     }
 
@@ -1045,7 +1045,7 @@ export async function applyAuthChoiceApiProviders(
         initialValue: true,
       });
       if (useExisting) {
-        setQianfanApiKey(envKey.apiKey, params.agentDir);
+        await setQianfanApiKey(envKey.apiKey, params.agentDir);
         hasCredential = true;
       }
     }
@@ -1054,7 +1054,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter QIANFAN API key",
         validate: validateApiKeyInput,
       });
-      setQianfanApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setQianfanApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "qianfan:default",
