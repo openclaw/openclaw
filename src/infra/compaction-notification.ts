@@ -10,19 +10,15 @@ type CompactionNotificationParams = {
   entry: SessionEntry;
 };
 
-/** Tracks sessions that have already been notified during the current compaction cycle. */
-const notifiedSessions = new Set<string>();
-
 /**
  * Sends a brief notification to the user's active channel when context
- * compaction occurs.  This is core UX — the user deserves to know their
+ * compaction begins.  This is core UX — the user deserves to know their
  * conversation history is being summarised, just as typing indicators tell
  * them a reply is in progress.
  *
- * Dedupes per session key: only the first call per compaction cycle sends
- * a notification.  Call {@link clearCompactionNotification} when the cycle
- * ends (phase === "end" with willRetry === false) to re-arm for the next
- * compaction.
+ * This function is **stateless** — all dedupe/cycle-tracking logic lives in
+ * the caller ({@link agent-runner-execution.ts}).  Each call will attempt
+ * delivery exactly once.
  *
  * Follows the same delivery pattern as session-maintenance-warning.ts.
  */
@@ -33,12 +29,6 @@ export async function deliverCompactionNotification(
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return;
   }
-
-  // Dedupe: only notify once per compaction cycle per session.
-  if (notifiedSessions.has(params.sessionKey)) {
-    return;
-  }
-  notifiedSessions.add(params.sessionKey);
 
   const text = "🧹 Compacting conversation context…";
 
@@ -74,20 +64,4 @@ export async function deliverCompactionNotification(
     // Best-effort — fall back to system event.
     enqueueSystemEvent(text, { sessionKey: params.sessionKey });
   }
-}
-
-/**
- * Clear the dedupe guard for a session so the next compaction cycle can
- * notify again.  Call when compaction ends (phase === "end", willRetry === false).
- */
-export function clearCompactionNotification(sessionKey: string): void {
-  notifiedSessions.delete(sessionKey);
-}
-
-/**
- * Reset all compaction notification state.  Test-only — prevents dedupe
- * leaking between test cases that share the same process.
- */
-export function resetCompactionNotificationForTest(): void {
-  notifiedSessions.clear();
 }

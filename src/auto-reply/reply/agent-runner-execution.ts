@@ -83,6 +83,7 @@ export async function runAgentTurnWithFallback(params: {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
+  let compactionNotificationSent = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
@@ -354,9 +355,10 @@ export async function runAgentTurnWithFallback(params: {
               if (evt.stream === "compaction") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 const willRetry = Boolean(evt.data.willRetry);
-                if (phase === "start") {
+                if (phase === "start" && !compactionNotificationSent) {
                   // Best-effort notification — mirrors typing indicators as core UX.
-                  // Deduped inside deliverCompactionNotification (once per cycle).
+                  // Deduped per run via compactionNotificationSent (local to this call).
+                  compactionNotificationSent = true;
                   const entry = params.getActiveSessionEntry();
                   if (entry && params.sessionKey) {
                     import("../../infra/compaction-notification.js")
@@ -372,12 +374,8 @@ export async function runAgentTurnWithFallback(params: {
                 }
                 if (phase === "end" && !willRetry) {
                   autoCompactionCompleted = true;
-                  // Re-arm the notification dedupe for the next compaction cycle.
-                  if (params.sessionKey) {
-                    import("../../infra/compaction-notification.js")
-                      .then((m) => m.clearCompactionNotification(params.sessionKey!))
-                      .catch(() => {});
-                  }
+                  // Re-arm so a future compaction cycle in this run can notify again.
+                  compactionNotificationSent = false;
                 }
               }
             },
