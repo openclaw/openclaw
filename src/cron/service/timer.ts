@@ -8,6 +8,7 @@ import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
   recomputeNextRuns,
+  recomputeNextRunsForMaintenance,
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
@@ -69,7 +70,7 @@ function applyJobResult(
   }
 
   const shouldDelete =
-    job.schedule.kind === "at" && result.status === "ok" && job.deleteAfterRun === true;
+    job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
@@ -158,6 +159,26 @@ export function armTimer(state: CronServiceState) {
 
 export async function onTimer(state: CronServiceState) {
   if (state.running) {
+    // Re-arm the timer so the scheduler keeps ticking even when a job is
+    // still executing.  Without this, a long-running job (e.g. an agentTurn
+    // exceeding MAX_TIMER_DELAY_MS) causes the clamped 60 s timer to fire
+    // while `running` is true.  The early return then leaves no timer set,
+    // silently killing the scheduler until the next gateway restart.
+    //
+    // We use MAX_TIMER_DELAY_MS as a fixed re-check interval to avoid a
+    // zero-delay hot-loop when past-due jobs are waiting for the current
+    // execution to finish.
+    // See: https://github.com/openclaw/openclaw/issues/12025
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+    state.timer = setTimeout(async () => {
+      try {
+        await onTimer(state);
+      } catch (err) {
+        state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+      }
+    }, MAX_TIMER_DELAY_MS);
     return;
   }
   state.running = true;
@@ -167,7 +188,10 @@ export async function onTimer(state: CronServiceState) {
       const due = findDueJobs(state);
 
       if (due.length === 0) {
-        const changed = recomputeNextRuns(state);
+        // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
+        // values without execution. This prevents jobs from being silently skipped
+        // when the timer wakes up but findDueJobs returns empty (see #13992).
+        const changed = recomputeNextRunsForMaintenance(state);
         if (changed) {
           await persist(state);
         }
@@ -349,7 +373,10 @@ export async function runMissedJobs(state: CronServiceState) {
       return false;
     }
     const next = j.state.nextRunAtMs;
-    if (j.schedule.kind === "at" && j.state.lastStatus === "ok") {
+    if (j.schedule.kind === "at" && j.state.lastStatus) {
+      // Any terminal status (ok, error, skipped) means the job already
+      // ran at least once.  Don't re-fire it on restart — applyJobResult
+      // disables one-shot jobs, but guard here defensively (#13845).
       return false;
     }
     return typeof next === "number" && now >= next;
@@ -420,7 +447,7 @@ async function executeJobCore(
 
       let heartbeatResult: HeartbeatRunResult;
       for (;;) {
-        heartbeatResult = await state.deps.runHeartbeatOnce({ reason });
+        heartbeatResult = await state.deps.runHeartbeatOnce({ reason, agentId: job.agentId });
         if (
           heartbeatResult.status !== "skipped" ||
           heartbeatResult.reason !== "requests-in-flight"

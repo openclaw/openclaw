@@ -28,13 +28,16 @@ import {
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
+  getHookAgentPolicyError,
   getHookChannelError,
   type HookMessageChannel,
   type HooksConfigResolved,
+  isHookAgentAllowed,
   normalizeAgentPayload,
   normalizeHookHeaders,
   normalizeWakePayload,
   readJsonBody,
+  resolveHookTargetAgentId,
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
@@ -52,6 +55,7 @@ type HookDispatchers = {
   dispatchAgentHook: (value: {
     message: string;
     name: string;
+    agentId?: string;
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
@@ -207,7 +211,14 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
       }
-      const runId = dispatchAgentHook(normalized.value);
+      if (!isHookAgentAllowed(hooksConfig, normalized.value.agentId)) {
+        sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+        return true;
+      }
+      const runId = dispatchAgentHook({
+        ...normalized.value,
+        agentId: resolveHookTargetAgentId(hooksConfig, normalized.value.agentId),
+      });
       sendJson(res, 202, { ok: true, runId });
       return true;
     }
@@ -243,9 +254,14 @@ export function createHooksRequestHandler(
             sendJson(res, 400, { ok: false, error: getHookChannelError() });
             return true;
           }
+          if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
+            sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+            return true;
+          }
           const runId = dispatchAgentHook({
             message: mapped.action.message,
             name: mapped.action.name ?? "Hook",
+            agentId: resolveHookTargetAgentId(hooksConfig, mapped.action.agentId),
             wakeMode: mapped.action.wakeMode,
             sessionKey: mapped.action.sessionKey ?? "",
             deliver: resolveHookDeliver(mapped.action.deliver),
@@ -317,6 +333,7 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
       if (await handleHooksRequest(req, res)) {
         return;
       }
@@ -331,8 +348,26 @@ export function createGatewayHttpServer(opts: {
       if (await handleSlackHttpRequest(req, res)) {
         return;
       }
-      if (handlePluginRequest && (await handlePluginRequest(req, res))) {
-        return;
+      if (handlePluginRequest) {
+        // Channel HTTP endpoints are gateway-auth protected by default.
+        // Non-channel plugin routes remain plugin-owned and must enforce
+        // their own auth when exposing sensitive functionality.
+        if (requestPath.startsWith("/api/channels/")) {
+          const token = getBearerToken(req);
+          const authResult = await authorizeGatewayConnect({
+            auth: resolvedAuth,
+            connectAuth: token ? { token, password: token } : null,
+            req,
+            trustedProxies,
+          });
+          if (!authResult.ok) {
+            sendUnauthorized(res);
+            return;
+          }
+        }
+        if (await handlePluginRequest(req, res)) {
+          return;
+        }
       }
       if (openResponsesEnabled) {
         if (
@@ -356,8 +391,7 @@ export function createGatewayHttpServer(opts: {
         }
       }
       if (canvasHost) {
-        const url = new URL(req.url ?? "/", "http://localhost");
-        if (isCanvasPath(url.pathname)) {
+        if (isCanvasPath(requestPath)) {
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,

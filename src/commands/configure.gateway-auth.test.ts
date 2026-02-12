@@ -43,4 +43,43 @@ describe("buildGatewayAuthConfig", () => {
 
     expect(result).toEqual({ mode: "password", password: "secret" });
   });
+
+  it("generates random token when token param is undefined", () => {
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: undefined,
+    });
+
+    expect(result?.mode).toBe("token");
+    expect(result?.token).toBeDefined();
+    expect(result?.token).not.toBe("undefined");
+    expect(typeof result?.token).toBe("string");
+    expect(result?.token?.length).toBeGreaterThan(0);
+  });
+
+  it("generates random token when token param is empty string", () => {
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: "",
+    });
+
+    expect(result?.mode).toBe("token");
+    expect(result?.token).toBeDefined();
+    expect(result?.token).not.toBe("undefined");
+    expect(typeof result?.token).toBe("string");
+    expect(result?.token?.length).toBeGreaterThan(0);
+  });
+
+  it("generates random token when token param is whitespace only", () => {
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: "   ",
+    });
+
+    expect(result?.mode).toBe("token");
+    expect(result?.token).toBeDefined();
+    expect(result?.token).not.toBe("undefined");
+    expect(typeof result?.token).toBe("string");
+    expect(result?.token?.length).toBeGreaterThan(0);
+  });
 });

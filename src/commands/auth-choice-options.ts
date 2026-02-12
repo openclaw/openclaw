@@ -13,6 +13,7 @@ export type AuthChoiceGroupId =
   | "google"
   | "copilot"
   | "openrouter"
+  | "litellm"
   | "ai-gateway"
   | "cloudflare-ai-gateway"
   | "moonshot"
@@ -91,9 +92,9 @@ const AUTH_CHOICE_GROUP_DEFS: {
   },
   {
     value: "zai",
-    label: "Z.AI (GLM 4.7)",
-    hint: "API key",
-    choices: ["zai-api-key"],
+    label: "Z.AI",
+    hint: "GLM Coding Plan / Global / CN",
+    choices: ["zai-coding-global", "zai-coding-cn", "zai-global", "zai-cn"],
   },
   {
     value: "qianfan",
@@ -144,6 +145,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["venice-api-key"],
   },
   {
+    value: "litellm",
+    label: "LiteLLM",
+    hint: "Unified LLM gateway (100+ providers)",
+    choices: ["litellm-api-key"],
+  },
+  {
     value: "cloudflare-ai-gateway",
     label: "Cloudflare AI Gateway",
     hint: "Account ID + Gateway ID + API key",
@@ -182,6 +189,11 @@ export function buildAuthChoiceOptions(params: {
     label: "Qianfan API key",
   });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
+  options.push({
+    value: "litellm-api-key",
+    label: "LiteLLM API key",
+    hint: "Unified gateway for 100+ LLM providers",
+  });
   options.push({
     value: "ai-gateway-api-key",
     label: "Vercel AI Gateway API key",
@@ -230,7 +242,27 @@ export function buildAuthChoiceOptions(params: {
     label: "Google Gemini CLI OAuth",
     hint: "Uses the bundled Gemini CLI auth plugin",
   });
-  options.push({ value: "zai-api-key", label: "Z.AI (GLM 4.7) API key" });
+  options.push({ value: "zai-api-key", label: "Z.AI API key" });
+  options.push({
+    value: "zai-coding-global",
+    label: "Coding-Plan-Global",
+    hint: "GLM Coding Plan Global (api.z.ai)",
+  });
+  options.push({
+    value: "zai-coding-cn",
+    label: "Coding-Plan-CN",
+    hint: "GLM Coding Plan CN (open.bigmodel.cn)",
+  });
+  options.push({
+    value: "zai-global",
+    label: "Global",
+    hint: "Z.AI Global (api.z.ai)",
+  });
+  options.push({
+    value: "zai-cn",
+    label: "CN",
+    hint: "Z.AI CN (open.bigmodel.cn)",
+  });
   options.push({
     value: "xiaomi-api-key",
     label: "Xiaomi API key",
