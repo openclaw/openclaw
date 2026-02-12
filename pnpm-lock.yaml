@@ -3146,8 +3146,8 @@ packages:
       link-preview-js:
         optional: true
 
-  '@whiskeysockets/libsignal-node@git+https://github.com/whiskeysockets/libsignal-node.git#1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
-    resolution: {commit: 1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67, repo: https://github.com/whiskeysockets/libsignal-node.git, type: git}
+  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
+    resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
     version: 2.0.1
 
   abort-controller@3.0.0:
@@ -3299,6 +3299,9 @@ packages:
 
   aws4@1.13.2:
     resolution: {integrity: sha512-lHe62zvbTB5eEABUVi/AwVh0ZKY9rMMDhmm+eeyuuUQbQ3+J+fONVQOZyj+DdrvD4BY33uYniyRJ4UJIaSKAfw==}
+
+  axios@1.13.4:
+    resolution: {integrity: sha512-1wVkUaAO6WyaYtCkcYCOx12ZgpGf9Zif+qXa4n+oYzK558YryKqiL6UWwd5DqiH3VRW0GYhTZQ/vlgJrCoNQlg==}
 
   axios@1.13.5:
     resolution: {integrity: sha512-cz4ur7Vb0xS4/KUN0tPWe44eqxrIu31me+fbang3ijiNscE129POzipJJA6zniq2C/Z6sJCjMimjS8Lc/GAs8Q==}
@@ -8686,7 +8689,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@whiskeysockets/libsignal-node@git+https://github.com/whiskeysockets/libsignal-node.git#1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
+  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
     dependencies:
       curve25519-js: 0.0.4
       protobufjs: 6.8.8
@@ -8835,6 +8838,14 @@ snapshots:
   aws-sign2@0.7.0: {}
 
   aws4@1.13.2: {}
+
+  axios@1.13.4(debug@4.4.3):
+    dependencies:
+      follow-redirects: 1.15.11(debug@4.4.3)
+      form-data: 2.5.4
+      proxy-from-env: 1.1.0
+    transitivePeerDependencies:
+      - debug
 
   axios@1.13.5(debug@4.4.3):
     dependencies:
