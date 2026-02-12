@@ -279,6 +279,7 @@ export class SSHSessionManager {
 
           // Wait for initial prompt
           const promptTimeout = setTimeout(() => {
+            clearInterval(checkPrompt);
             client.end();
             reject(new Error("Timeout waiting for shell prompt"));
           }, 5000);
@@ -303,6 +304,20 @@ export class SSHSessionManager {
               resolve(sessionId);
             }
           }, 100);
+
+          // Cleanup timers if stream fails before prompt is detected
+          stream.once("error", (err: Error) => {
+            clearInterval(checkPrompt);
+            clearTimeout(promptTimeout);
+            client.end();
+            reject(new Error(`Shell stream error: ${err.message}`));
+          });
+
+          stream.once("close", () => {
+            clearInterval(checkPrompt);
+            clearTimeout(promptTimeout);
+            reject(new Error("Shell stream closed unexpectedly"));
+          });
         });
       });
 
