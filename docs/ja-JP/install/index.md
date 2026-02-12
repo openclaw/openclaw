@@ -1,5 +1,5 @@
 ---
-summary: "OpenClawのインストール — インストーラスクリプト、npm/pnpm、ソースビルド、Docker など"
+summary: "OpenClawのインストール — インストーラースクリプト、npm/pnpm、ソースビルド、Docker など"
 read_when:
   - You need an install method other than the Getting Started quickstart
   - You want to deploy to a cloud platform
@@ -13,7 +13,7 @@ title: "インストール"
 
 ## システム要件
 
-- **[Node 22+](/install/node)**（[インストーラスクリプト](#install-methods)が未インストールの場合は自動でインストールします）
+- **[Node 22+](/install/node)**（[インストーラースクリプト](#install-methods)が未インストールの場合は自動でインストールします）
 - macOS、Linux、または Windows
 - ソースからビルドする場合のみ `pnpm` が必要
 
@@ -24,11 +24,11 @@ Windowsでは、[WSL2](https://learn.microsoft.com/en-us/windows/wsl/install)上
 ## インストール方法
 
 <Tip>
-**インストーラスクリプト**がOpenClawの推奨インストール方法です。Nodeの検出、インストール、オンボーディングをワンステップで処理します。
+**インストーラースクリプト**がOpenClawの推奨インストール方法です。Nodeの検出、インストール、オンボーディングをワンステップで処理します。
 </Tip>
 
 <AccordionGroup>
-  <Accordion title="インストーラスクリプト" icon="rocket" defaultOpen>
+  <Accordion title="インストーラースクリプト" icon="rocket" defaultOpen>
     CLIをダウンロードし、npm経由でグローバルインストールし、オンボーディングウィザードを起動します。
 
     <Tabs>
