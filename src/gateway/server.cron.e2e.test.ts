@@ -68,6 +68,7 @@ describe("gateway server cron", () => {
       const addRes = await rpcReq(ws, "cron.add", {
         name: "daily",
         enabled: true,
+        notify: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
@@ -84,6 +85,9 @@ describe("gateway server cron", () => {
       expect(Array.isArray(jobs)).toBe(true);
       expect((jobs as unknown[]).length).toBe(1);
       expect(((jobs as Array<{ name?: unknown }>)[0]?.name as string) ?? "").toBe("daily");
+      expect(
+        ((jobs as Array<{ notify?: unknown }>)[0]?.notify as boolean | undefined) ?? false,
+      ).toBe(true);
 
       const routeAtMs = Date.now() - 1;
       const routeRes = await rpcReq(ws, "cron.add", {

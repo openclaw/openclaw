@@ -94,7 +94,8 @@ export function buildGatewayCronService(params: {
       params.broadcast("cron", evt, { dropIfSlow: true });
       if (evt.action === "finished") {
         const webhookUrl = params.cfg.cron?.webhook;
-        if (webhookUrl && evt.summary) {
+        const job = cron.getJob(evt.jobId);
+        if (webhookUrl && evt.summary && job?.notify === true) {
           void fetch(webhookUrl, {
             method: "POST",
             headers: {
