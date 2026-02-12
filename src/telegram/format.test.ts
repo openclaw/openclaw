@@ -56,6 +56,18 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toContain("</blockquote>");
   });
 
+  it("renders multiline blockquotes as a single Telegram blockquote", () => {
+    const res = markdownToTelegramHtml("> first\n> second");
+    expect(res).toBe("<blockquote>first\nsecond</blockquote>");
+  });
+
+  it("renders separated quoted paragraphs as distinct blockquotes", () => {
+    const res = markdownToTelegramHtml("> first\n\n> second");
+    expect(res).toContain("<blockquote>first");
+    expect(res).toContain("<blockquote>second</blockquote>");
+    expect(res.match(/<blockquote>/g)).toHaveLength(2);
+  });
+
   it("renders fenced code blocks", () => {
     const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
     expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
