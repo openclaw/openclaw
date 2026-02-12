@@ -54,4 +54,67 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("continues scheduling after runOnce throws an unhandled error", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        // First call throws (simulates crash during session compaction)
+        throw new Error("session compaction error");
+      }
+      return { status: "ran", durationMs: 1 };
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // First heartbeat fires and throws
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Second heartbeat should still fire (scheduler must not be dead)
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
+  it("reschedules timer when runOnce returns requests-in-flight", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return { status: "skipped", reason: "requests-in-flight" };
+      }
+      return { status: "ran", durationMs: 1 };
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // First heartbeat returns requests-in-flight
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Timer should be rescheduled; next heartbeat should still fire
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
 });
