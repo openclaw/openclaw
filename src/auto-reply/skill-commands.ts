@@ -62,8 +62,13 @@ export function listSkillCommandsForAgents(params: {
       reservedNames: used,
     });
     for (const command of commands) {
-      used.add(command.name.toLowerCase());
-      entries.push(command);
+      const key = command.name.toLowerCase();
+      // Skip duplicate commands from bundled skills loaded by different agents
+      // rather than appending _2 suffixes (#14721).
+      if (!used.has(key)) {
+        used.add(key);
+        entries.push(command);
+      }
     }
   }
   return entries;
