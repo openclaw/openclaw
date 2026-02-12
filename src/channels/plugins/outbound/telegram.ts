@@ -1,6 +1,8 @@
 import type { ChannelOutboundAdapter } from "../types.js";
+import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import { sendMessageTelegram } from "../../../telegram/send.js";
+import { normalizeTelegramMessagingTarget } from "../normalize/telegram.js";
 
 function parseReplyToMessageId(replyToId?: string | null) {
   if (!replyToId) {
@@ -30,6 +32,37 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   chunker: markdownToTelegramHtmlChunks,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  resolveTarget: ({ to, allowFrom, mode }) => {
+    const trimmed = to?.trim();
+    if (!trimmed) {
+      // For implicit/heartbeat modes, fall back to the first allowFrom entry
+      // so cron jobs and heartbeats can deliver even when no explicit `to` is set.
+      if (mode === "implicit" || mode === "heartbeat") {
+        const fallback = (allowFrom ?? []).map((e) => String(e).trim()).filter(Boolean)[0];
+        if (fallback) {
+          const normalized = normalizeTelegramMessagingTarget(fallback);
+          if (normalized) {
+            return { ok: true, to: normalized };
+          }
+          // allowFrom entries may be bare numeric IDs; accept as-is
+          return { ok: true, to: fallback };
+        }
+      }
+      return {
+        ok: false,
+        error: missingTargetError("Telegram", "<chatId|@username>"),
+      };
+    }
+    // Normalize targets through the standard Telegram target normalizer.
+    // This handles telegram: prefixes, t.me links, @usernames, and bare IDs.
+    const normalized = normalizeTelegramMessagingTarget(trimmed);
+    if (normalized) {
+      return { ok: true, to: normalized };
+    }
+    // If normalization fails, pass through as-is — sendMessageTelegram has its
+    // own normalizeChatId that handles edge cases (t.me links, @usernames, etc.)
+    return { ok: true, to: trimmed };
+  },
   sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseReplyToMessageId(replyToId);

@@ -240,7 +240,7 @@ describe("runCronIsolatedAgentTurn", () => {
         | { requesterOrigin?: { threadId?: string | number; channel?: string; to?: string } }
         | undefined;
       expect(announceArgs?.requesterOrigin?.channel).toBe("telegram");
-      expect(announceArgs?.requesterOrigin?.to).toBe("123");
+      expect(announceArgs?.requesterOrigin?.to).toBe("telegram:123");
       expect(announceArgs?.requesterOrigin?.threadId).toBe(42);
     });
   });

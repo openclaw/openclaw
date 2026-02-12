@@ -65,6 +65,11 @@ import {
 } from "./helpers.js";
 import { resolveCronSession } from "./session.js";
 
+function stripChannelPrefix(to: string, channel: string): string {
+  const prefix = `${channel}:`;
+  return to.startsWith(prefix) ? to.slice(prefix.length) : to;
+}
+
 function matchesMessagingToolDeliveryTarget(
   target: MessagingToolSend,
   delivery: { channel: string; to?: string; accountId?: string },
@@ -80,7 +85,14 @@ function matchesMessagingToolDeliveryTarget(
   if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
-  return target.to === delivery.to;
+  if (target.to === delivery.to) {
+    return true;
+  }
+  // Compare with channel prefix stripped — resolveTarget may normalize
+  // "123" → "telegram:123" while the messaging tool records the raw target.
+  const strippedTarget = stripChannelPrefix(target.to, channel);
+  const strippedDelivery = stripChannelPrefix(delivery.to, channel);
+  return strippedTarget === strippedDelivery;
 }
 
 function resolveCronDeliveryBestEffort(job: CronJob): boolean {
