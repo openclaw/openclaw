@@ -85,6 +85,18 @@ function packToArchive({
   return dest;
 }
 
+function runNpmLikeCommand(argv: string[], cwd?: string) {
+  const npmCli = resolveNpmCliJs();
+  const cmd = npmCli ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
+  const args = npmCli ? [npmCli, ...argv.slice(1)] : argv.slice(1);
+  return spawnSync(cmd, args, {
+    cwd,
+    encoding: "utf-8",
+    env: process.env,
+    windowsHide: true,
+  });
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     try {
@@ -270,6 +282,102 @@ describe("installPluginFromArchive", () => {
       fs.readFileSync(path.join(second.targetDir, "package.json"), "utf-8"),
     ) as { version?: string };
     expect(manifest.version).toBe("0.0.2");
+  });
+
+  it("does not execute dependency postinstall scripts during archive installs", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    const depDir = path.join(pkgDir, "deps", "local-postinstall");
+    const markerPath = path.join(workDir, "postinstall-ran.txt");
+
+    fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+    fs.mkdirSync(depDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(depDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/local-postinstall",
+        version: "1.0.0",
+        scripts: {
+          postinstall: "node postinstall.js",
+        },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(depDir, "postinstall.js"),
+      [
+        "const fs = require('node:fs');",
+        "const marker = process.env.OPENCLAW_TEST_POSTINSTALL_MARKER;",
+        "if (marker) fs.writeFileSync(marker, 'ran', 'utf-8');",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(depDir, "index.js"), "module.exports = {};\n", "utf-8");
+
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/no-script-plugin",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: { "@openclaw/local-postinstall": "file:./deps/local-postinstall" },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
+
+    const previousMarker = process.env.OPENCLAW_TEST_POSTINSTALL_MARKER;
+    process.env.OPENCLAW_TEST_POSTINSTALL_MARKER = markerPath;
+    try {
+      const { runCommandWithTimeout } = await import("../process/exec.js");
+      const run = vi.mocked(runCommandWithTimeout);
+      run.mockReset();
+      run.mockImplementation(async (argv, options) => {
+        if (!Array.isArray(argv) || argv.length === 0) {
+          throw new Error("expected argv");
+        }
+        const res =
+          argv[0] === "npm"
+            ? runNpmLikeCommand(argv, options?.cwd)
+            : spawnSync(argv[0], argv.slice(1), {
+                cwd: options?.cwd,
+                encoding: "utf-8",
+                env: process.env,
+                windowsHide: true,
+              });
+        return {
+          code: res.status ?? 1,
+          stdout: res.stdout ?? "",
+          stderr: res.stderr ?? "",
+        };
+      });
+
+      const archivePath = packToArchive({
+        pkgDir,
+        outDir: workDir,
+        outName: "plugin-no-scripts.tgz",
+      });
+
+      const extensionsDir = path.join(stateDir, "extensions");
+      const { installPluginFromArchive } = await import("./install.js");
+      const result = await installPluginFromArchive({
+        archivePath,
+        extensionsDir,
+      });
+
+      expect(result.ok, result.ok ? undefined : result.error).toBe(true);
+      expect(fs.existsSync(markerPath)).toBe(false);
+    } finally {
+      const { runCommandWithTimeout } = await import("../process/exec.js");
+      vi.mocked(runCommandWithTimeout).mockReset();
+      if (previousMarker === undefined) {
+        delete process.env.OPENCLAW_TEST_POSTINSTALL_MARKER;
+      } else {
+        process.env.OPENCLAW_TEST_POSTINSTALL_MARKER = previousMarker;
+      }
+    }
   });
 
   it("rejects traversal-like plugin names", async () => {
@@ -518,6 +626,7 @@ describe("installPluginFromDir", () => {
 
     const { runCommandWithTimeout } = await import("../process/exec.js");
     const run = vi.mocked(runCommandWithTimeout);
+    run.mockReset();
     run.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
 
     const { installPluginFromDir } = await import("./install.js");
