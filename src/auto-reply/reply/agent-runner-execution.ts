@@ -83,6 +83,7 @@ export async function runAgentTurnWithFallback(params: {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
+  let compactionNotificationSent = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
@@ -354,8 +355,27 @@ export async function runAgentTurnWithFallback(params: {
               if (evt.stream === "compaction") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 const willRetry = Boolean(evt.data.willRetry);
+                if (phase === "start" && !compactionNotificationSent) {
+                  // Best-effort notification — mirrors typing indicators as core UX.
+                  // Deduped per run via compactionNotificationSent (local to this call).
+                  compactionNotificationSent = true;
+                  const entry = params.getActiveSessionEntry();
+                  if (entry && params.sessionKey) {
+                    import("../../infra/compaction-notification.js")
+                      .then((m) =>
+                        m.deliverCompactionNotification({
+                          cfg: params.followupRun.run.config,
+                          sessionKey: params.sessionKey!,
+                          entry,
+                        }),
+                      )
+                      .catch(() => {});
+                  }
+                }
                 if (phase === "end" && !willRetry) {
                   autoCompactionCompleted = true;
+                  // Re-arm so a future compaction cycle in this run can notify again.
+                  compactionNotificationSent = false;
                 }
               }
             },
