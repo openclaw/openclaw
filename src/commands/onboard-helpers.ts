@@ -299,12 +299,22 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
   } catch {
     return;
   }
-  try {
-    await runCommandWithTimeout(["trash", pathname], { timeoutMs: 5000 });
-    runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
-  } catch {
-    runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
+  // Try multiple trash commands — trash-cli may not be installed on minimal Linux.
+  const commands: string[][] = [
+    ["trash", pathname],
+    ["gio", "trash", pathname],
+    ["trash-put", pathname],
+  ];
+  for (const cmd of commands) {
+    try {
+      await runCommandWithTimeout(cmd, { timeoutMs: 5000 });
+      runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
+      return;
+    } catch {
+      // Try next command.
+    }
   }
+  runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
 }
 
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
