@@ -82,6 +82,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val manualToken by viewModel.manualToken.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
@@ -402,6 +403,14 @@ fun SettingsSheet(viewModel: MainViewModel) {
             label = { Text("Port") },
             modifier = Modifier.fillMaxWidth(),
             enabled = manualEnabled,
+          )
+          OutlinedTextField(
+            value = manualToken,
+            onValueChange = viewModel::setManualToken,
+            label = { Text("Token") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = manualEnabled,
+            singleLine = true,
           )
           ListItem(
             headlineContent = { Text("Require TLS") },

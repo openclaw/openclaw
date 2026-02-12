@@ -1,5 +1,6 @@
 package ai.openclaw.android.gateway
 
+import ai.openclaw.android.BuildConfig
 import android.util.Log
 import java.util.Locale
 import java.util.UUID
@@ -241,12 +242,18 @@ class GatewaySession(
 
     private fun buildClient(): OkHttpClient {
       val builder = OkHttpClient.Builder()
-      val tlsConfig = buildGatewayTlsConfig(tls) { fingerprint ->
-        onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
-      }
-      if (tlsConfig != null) {
-        builder.sslSocketFactory(tlsConfig.sslSocketFactory, tlsConfig.trustManager)
-        builder.hostnameVerifier(tlsConfig.hostnameVerifier)
+      try {
+        val tlsConfig = buildGatewayTlsConfig(tls) { fingerprint ->
+          onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
+        }
+        if (BuildConfig.DEBUG) Log.d(loggerTag, "TLS config: ${if (tlsConfig != null) "custom" else "default"}")
+        if (tlsConfig != null) {
+          builder.sslSocketFactory(tlsConfig.sslSocketFactory, tlsConfig.trustManager)
+          builder.hostnameVerifier(tlsConfig.hostnameVerifier)
+        }
+      } catch (err: Throwable) {
+        Log.e(loggerTag, "Failed to build TLS config: ${err.message}", err)
+        throw err
       }
       return builder.build()
     }
@@ -255,9 +262,13 @@ class GatewaySession(
       override fun onOpen(webSocket: WebSocket, response: Response) {
         scope.launch {
           try {
+            if (BuildConfig.DEBUG) Log.d(loggerTag, "WebSocket opened, awaiting connect nonce...")
             val nonce = awaitConnectNonce()
+            if (BuildConfig.DEBUG) Log.d(loggerTag, "Got nonce: ${nonce?.take(8)}..., sending connect...")
             sendConnect(nonce)
+            if (BuildConfig.DEBUG) Log.d(loggerTag, "Connect sent successfully")
           } catch (err: Throwable) {
+            Log.e(loggerTag, "Connect failed: ${err.message}", err)
             connectDeferred.completeExceptionally(err)
             closeQuietly()
           }
@@ -292,13 +303,19 @@ class GatewaySession(
     }
 
     private suspend fun sendConnect(connectNonce: String?) {
+      if (BuildConfig.DEBUG) Log.d(loggerTag, "Loading identity...")
       val identity = identityStore.loadOrCreate()
+      if (BuildConfig.DEBUG) Log.d(loggerTag, "Identity loaded: ${identity.deviceId.take(8)}...")
       val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
       val trimmedToken = token?.trim().orEmpty()
       val authToken = if (storedToken.isNullOrBlank()) trimmedToken else storedToken
+      if (BuildConfig.DEBUG) Log.d(loggerTag, "Auth token present: ${authToken.isNotEmpty()}")
       val canFallbackToShared = !storedToken.isNullOrBlank() && trimmedToken.isNotBlank()
+      if (BuildConfig.DEBUG) Log.d(loggerTag, "Building connect params...")
       val payload = buildConnectParams(identity, connectNonce, authToken, password?.trim())
+      if (BuildConfig.DEBUG) Log.d(loggerTag, "Sending connect request...")
       val res = request("connect", payload, timeoutMs = 8_000)
+      if (BuildConfig.DEBUG) Log.d(loggerTag, "Connect response: ok=${res.ok}")
       if (!res.ok) {
         val msg = res.error?.message ?: "connect failed"
         if (canFallbackToShared) {
@@ -619,19 +636,54 @@ class GatewaySession(
     val port = parsed?.port ?: -1
     val scheme = parsed?.scheme?.trim().orEmpty().ifBlank { "http" }
 
+    if (BuildConfig.DEBUG) Log.d("OpenClawCanvas", "normalizeCanvasHostUrl: raw=$raw host=$host isLoopback=${isLoopbackHost(host)} endpoint.host=${endpoint.host}")
+
+    // Handle schemeless .ts.net hostnames (URI treats them as paths, leaving host empty)
+    if (host.isBlank() && trimmed.contains(".ts.net", ignoreCase = true)) {
+      val hostPart = trimmed.substringBefore(":").substringBefore("/")
+      if (hostPart.endsWith(".ts.net", ignoreCase = true)) {
+        val result = "https://$hostPart"
+        if (BuildConfig.DEBUG) Log.d("OpenClawCanvas", "normalizeCanvasHostUrl: schemeless .ts.net detected, using=$result")
+        return result
+      }
+    }
+
+    // If it's a Tailscale hostname, use HTTPS on port 443 (strip any other port)
+    if (host.endsWith(".ts.net", ignoreCase = true)) {
+      val result = "https://$host"
+      if (BuildConfig.DEBUG) Log.d("OpenClawCanvas", "normalizeCanvasHostUrl: detected .ts.net in raw URL, using=$result")
+      return result
+    }
+
     if (trimmed.isNotBlank() && !isLoopbackHost(host)) {
+      if (BuildConfig.DEBUG) Log.d("OpenClawCanvas", "normalizeCanvasHostUrl: returning trimmed=$trimmed")
       return trimmed
     }
 
+    // Prefer tailnet DNS (uses HTTPS on port 443 via Tailscale serve)
+    val tailnetHost = endpoint.tailnetDns?.trim().takeIf { !it.isNullOrEmpty() }
+    if (tailnetHost != null) {
+      if (BuildConfig.DEBUG) Log.d("OpenClawCanvas", "normalizeCanvasHostUrl: using tailnetDns=$tailnetHost")
+      return "https://$tailnetHost"
+    }
+
+    // Check if the endpoint host is a Tailscale DNS name (uses port 443)
+    val endpointHost = endpoint.host.trim()
+    if (endpointHost.endsWith(".ts.net", ignoreCase = true)) {
+      if (BuildConfig.DEBUG) Log.d("OpenClawCanvas", "normalizeCanvasHostUrl: detected .ts.net host=$endpointHost")
+      return "https://$endpointHost"
+    }
+
     val fallbackHost =
-      endpoint.tailnetDns?.trim().takeIf { !it.isNullOrEmpty() }
-        ?: endpoint.lanHost?.trim().takeIf { !it.isNullOrEmpty() }
-        ?: endpoint.host.trim()
+      endpoint.lanHost?.trim().takeIf { !it.isNullOrEmpty() }
+        ?: endpointHost
     if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
 
     val fallbackPort = endpoint.canvasPort ?: if (port > 0) port else 18793
     val formattedHost = if (fallbackHost.contains(":")) "[${fallbackHost}]" else fallbackHost
-    return "$scheme://$formattedHost:$fallbackPort"
+    val result = "$scheme://$formattedHost:$fallbackPort"
+    if (BuildConfig.DEBUG) Log.d("OpenClawCanvas", "normalizeCanvasHostUrl: fallback result=$result")
+    return result
   }
 
   private fun isLoopbackHost(raw: String?): Boolean {

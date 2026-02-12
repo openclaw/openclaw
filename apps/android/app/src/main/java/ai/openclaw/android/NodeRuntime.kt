@@ -284,6 +284,7 @@ class NodeRuntime(context: Context) {
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
+  val manualToken: StateFlow<String> = prefs.manualToken
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
 
@@ -428,6 +429,10 @@ class NodeRuntime(context: Context) {
     prefs.setManualTls(value)
   }
 
+  fun setManualToken(value: String) {
+    prefs.setManualToken(value)
+  }
+
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
@@ -529,7 +534,7 @@ class NodeRuntime(context: Context) {
       caps = buildCapabilities(),
       commands = buildInvokeCommands(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
+      client = buildClientInfo(clientId = "clawdbot-android", clientMode = "node"),
       userAgent = buildUserAgent(),
     )
   }
@@ -541,14 +546,14 @@ class NodeRuntime(context: Context) {
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-control-ui", clientMode = "ui"),
+      client = buildClientInfo(clientId = "clawdbot-control-ui", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
   }
 
   fun refreshGatewayConnection() {
     val endpoint = connectedEndpoint ?: return
-    val token = prefs.loadGatewayToken()
+    val token = prefs.manualToken.value.ifBlank { prefs.loadGatewayToken() }
     val password = prefs.loadGatewayPassword()
     val tls = resolveTlsParams(endpoint)
     operatorSession.connect(endpoint, token, password, buildOperatorConnectOptions(), tls)
@@ -562,7 +567,7 @@ class NodeRuntime(context: Context) {
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
-    val token = prefs.loadGatewayToken()
+    val token = prefs.manualToken.value.ifBlank { prefs.loadGatewayToken() }
     val password = prefs.loadGatewayPassword()
     val tls = resolveTlsParams(endpoint)
     operatorSession.connect(endpoint, token, password, buildOperatorConnectOptions(), tls)
@@ -1113,9 +1118,12 @@ class NodeRuntime(context: Context) {
     val nodeRaw = nodeSession.currentCanvasHostUrl()?.trim().orEmpty()
     val operatorRaw = operatorSession.currentCanvasHostUrl()?.trim().orEmpty()
     val raw = if (nodeRaw.isNotBlank()) nodeRaw else operatorRaw
+    if (BuildConfig.DEBUG) android.util.Log.d("OpenClawCanvas", "resolveA2uiHostUrl: nodeRaw=$nodeRaw operatorRaw=$operatorRaw raw=$raw")
     if (raw.isBlank()) return null
     val base = raw.trimEnd('/')
-    return "${base}/__openclaw__/a2ui/?platform=android"
+    val result = "${base}/__clawdbot__/a2ui/?platform=android"
+    if (BuildConfig.DEBUG) android.util.Log.d("OpenClawCanvas", "resolveA2uiHostUrl: result=$result")
+    return result
   }
 
   private suspend fun ensureA2uiReady(a2uiUrl: String): Boolean {
