@@ -115,14 +115,17 @@ function applyJobResult(
 }
 
 export function armTimer(state: CronServiceState) {
+  // Clear any existing timer
   if (state.timer) {
     clearTimeout(state.timer);
+    state.timer = null;
   }
-  state.timer = null;
+
   if (!state.deps.cronEnabled) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler disabled");
     return;
   }
+
   const nextAt = nextWakeAtMs(state);
   if (!nextAt) {
     const jobCount = state.store?.jobs.length ?? 0;
@@ -136,18 +139,23 @@ export function armTimer(state: CronServiceState) {
     );
     return;
   }
+
   const now = state.deps.nowMs();
   const delay = Math.max(nextAt - now, 0);
   // Wake at least once a minute to avoid schedule drift and recover quickly
   // when the process was paused or wall-clock time jumps.
   const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS);
+
   state.timer = setTimeout(async () => {
     try {
       await onTimer(state);
     } catch (err) {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+      // Ensure timer is re-armed even after errors
+      armTimer(state);
     }
   }, clampedDelay);
+
   state.deps.log.debug(
     { nextAt, delayMs: clampedDelay, clamped: delay > MAX_TIMER_DELAY_MS },
     "cron: timer armed",
@@ -156,13 +164,24 @@ export function armTimer(state: CronServiceState) {
 
 export async function onTimer(state: CronServiceState) {
   if (state.running) {
+    state.deps.log.debug("cron: onTimer skipped - already running");
     return;
   }
   state.running = true;
+  state.deps.log.debug("cron: onTimer started");
+
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       const due = findDueJobs(state);
+
+      state.deps.log.debug(
+        {
+          dueCount: due.length,
+          jobs: due.map((j) => ({ id: j.id, name: j.name, sessionTarget: j.sessionTarget })),
+        },
+        "cron: found due jobs",
+      );
 
       if (due.length === 0) {
         const changed = recomputeNextRuns(state);
@@ -275,6 +294,7 @@ export async function onTimer(state: CronServiceState) {
     }
   } finally {
     state.running = false;
+    state.deps.log.debug("cron: onTimer finished, re-arming timer");
     armTimer(state);
   }
 }
