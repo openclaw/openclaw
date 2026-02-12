@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
-import { promptCustomApiConfig } from "./onboard-custom.js";
+import {
+  applyCustomApiConfig,
+  parseNonInteractiveCustomApiFlags,
+  promptCustomApiConfig,
+} from "./onboard-custom.js";
 
 // Mock dependencies
 vi.mock("./model-picker.js", () => ({
@@ -266,5 +270,77 @@ describe("promptCustomApiConfig", () => {
     await promise;
 
     expect(prompter.text).toHaveBeenCalledTimes(6);
+  });
+});
+
+describe("applyCustomApiConfig", () => {
+  it("rejects invalid compatibility values at runtime", () => {
+    expect(() =>
+      applyCustomApiConfig({
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "invalid" as unknown as "openai",
+      }),
+    ).toThrow('Custom provider compatibility must be "openai" or "anthropic".');
+  });
+
+  it("rejects explicit provider ids that normalize to empty", () => {
+    expect(() =>
+      applyCustomApiConfig({
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai",
+        providerId: "!!!",
+      }),
+    ).toThrow("Custom provider ID must include letters, numbers, or hyphens.");
+  });
+});
+
+describe("parseNonInteractiveCustomApiFlags", () => {
+  it("parses required flags and defaults compatibility to openai", () => {
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: " https://llm.example.com/v1 ",
+      modelId: " foo-large ",
+      apiKey: " custom-test-key ",
+      providerId: " my-custom ",
+    });
+
+    expect(result).toEqual({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      apiKey: "custom-test-key",
+      providerId: "my-custom",
+    });
+  });
+
+  it("rejects missing required flags", () => {
+    expect(() =>
+      parseNonInteractiveCustomApiFlags({
+        baseUrl: "https://llm.example.com/v1",
+      }),
+    ).toThrow('Auth choice "custom-api-key" requires a base URL and model ID.');
+  });
+
+  it("rejects invalid compatibility values", () => {
+    expect(() =>
+      parseNonInteractiveCustomApiFlags({
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "xmlrpc",
+      }),
+    ).toThrow('Invalid --custom-compatibility (use "openai" or "anthropic").');
+  });
+
+  it("rejects invalid explicit provider ids", () => {
+    expect(() =>
+      parseNonInteractiveCustomApiFlags({
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        providerId: "!!!",
+      }),
+    ).toThrow("Custom provider ID must include letters, numbers, or hyphens.");
   });
 });

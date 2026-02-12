@@ -26,6 +26,19 @@ openclaw onboard --flow manual
 openclaw onboard --mode remote --remote-url ws://gateway-host:18789
 ```
 
+Non-interactive custom provider:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice custom-api-key \
+  --custom-base-url "https://llm.example.com/v1" \
+  --custom-model-id "foo-large" \
+  --custom-api-key "$CUSTOM_API_KEY" \
+  --custom-compatibility openai
+```
+
+`--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
+
 Flow notes:
 
 - `quickstart`: minimal prompts, auto-generates a gateway token.
