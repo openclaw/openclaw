@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proxy-system"
+version = "0.1.0"
+description = "Proxy Management and Scraping System for Bank Enrichment"
+authors = [{ name = "NPN CRM" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.31.0",
+  "beautifulsoup4>=4.12.0",
+  "PyYAML>=6.0.1",
+]
+
+[project.optional-dependencies]
+ dev = [
+  "pytest>=8.0.0",
+  "mypy>=1.10.0",
+ ]
+
+[project.urls]
+Homepage = "https://example.com/npn-crm"
+
+[tool.setuptools]
+packages = ["proxy_system"]
