@@ -23,6 +23,10 @@ type AuthChoiceFlagOptions = Pick<
   | "minimaxApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
+  | "litellmApiKey"
+  | "customBaseUrl"
+  | "customModelId"
+  | "customApiKey"
 >;
 
 const AUTH_CHOICE_FLAG_MAP = [
@@ -45,6 +49,7 @@ const AUTH_CHOICE_FLAG_MAP = [
   { flag: "xaiApiKey", authChoice: "xai-api-key", label: "--xai-api-key" },
   { flag: "minimaxApiKey", authChoice: "minimax-api", label: "--minimax-api-key" },
   { flag: "opencodeZenApiKey", authChoice: "opencode-zen", label: "--opencode-zen-api-key" },
+  { flag: "litellmApiKey", authChoice: "litellm-api-key", label: "--litellm-api-key" },
 ] satisfies ReadonlyArray<AuthChoiceFlag>;
 
 export type AuthChoiceInference = {
@@ -52,15 +57,27 @@ export type AuthChoiceInference = {
   matches: AuthChoiceFlag[];
 };
 
+function hasStringValue(value: unknown): boolean {
+  return typeof value === "string" ? value.trim().length > 0 : Boolean(value);
+}
+
 // Infer auth choice from explicit provider API key flags.
 export function inferAuthChoiceFromFlags(opts: OnboardOptions): AuthChoiceInference {
-  const matches = AUTH_CHOICE_FLAG_MAP.filter(({ flag }) => {
-    const value = opts[flag];
-    if (typeof value === "string") {
-      return value.trim().length > 0;
-    }
-    return Boolean(value);
-  });
+  const matches: AuthChoiceFlag[] = AUTH_CHOICE_FLAG_MAP.filter(({ flag }) =>
+    hasStringValue(opts[flag]),
+  );
+
+  if (
+    hasStringValue(opts.customBaseUrl) ||
+    hasStringValue(opts.customModelId) ||
+    hasStringValue(opts.customApiKey)
+  ) {
+    matches.push({
+      flag: "customBaseUrl",
+      authChoice: "custom-api-key",
+      label: "--custom-base-url/--custom-model-id/--custom-api-key",
+    });
+  }
 
   return {
     choice: matches[0]?.authChoice,

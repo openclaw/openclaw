@@ -236,6 +236,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
 
   const ctxPayload = finalizeInboundContext({
     Body: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: fromAddress,
@@ -392,6 +393,7 @@ export async function buildLinePostbackContext(params: {
 
   const ctxPayload = finalizeInboundContext({
     Body: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: fromAddress,

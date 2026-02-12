@@ -22,7 +22,9 @@ const runtime = {
   }),
 };
 
-vi.mock("./plugin-registry.js", () => ({ ensurePluginRegistryLoaded: () => undefined }));
+vi.mock("./plugin-registry.js", () => ({
+  ensurePluginRegistryLoaded: () => undefined,
+}));
 
 vi.mock("../commands/message.js", () => ({ messageCommand }));
 vi.mock("../commands/status.js", () => ({ statusCommand }));
@@ -42,7 +44,9 @@ vi.mock("../commands/configure.js", () => ({
 }));
 vi.mock("../commands/setup.js", () => ({ setupCommand }));
 vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
-vi.mock("../commands/doctor-config-flow.js", () => ({ loadAndMaybeMigrateDoctorConfig }));
+vi.mock("../commands/doctor-config-flow.js", () => ({
+  loadAndMaybeMigrateDoctorConfig,
+}));
 vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
 vi.mock("./channel-auth.js", () => ({ runChannelLogin, runChannelLogout }));
 vi.mock("../tui/tui.js", () => ({ runTui }));
@@ -175,6 +179,12 @@ describe("cli program (smoke)", () => {
         field: "moonshotApiKey",
       },
       {
+        authChoice: "together-api-key",
+        flag: "--together-api-key",
+        key: "sk-together-test",
+        field: "togetherApiKey",
+      },
+      {
         authChoice: "moonshot-api-key-cn",
         flag: "--moonshot-api-key",
         key: "sk-moonshot-cn-test",
@@ -216,6 +226,42 @@ describe("cli program (smoke)", () => {
       );
       onboardCommand.mockClear();
     }
+  });
+
+  it("passes custom provider flags to onboard", async () => {
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "onboard",
+        "--non-interactive",
+        "--auth-choice",
+        "custom-api-key",
+        "--custom-base-url",
+        "https://llm.example.com/v1",
+        "--custom-api-key",
+        "sk-custom-test",
+        "--custom-model-id",
+        "foo-large",
+        "--custom-provider-id",
+        "my-custom",
+        "--custom-compatibility",
+        "anthropic",
+      ],
+      { from: "user" },
+    );
+
+    expect(onboardCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nonInteractive: true,
+        authChoice: "custom-api-key",
+        customBaseUrl: "https://llm.example.com/v1",
+        customApiKey: "sk-custom-test",
+        customModelId: "foo-large",
+        customProviderId: "my-custom",
+        customCompatibility: "anthropic",
+      }),
+      runtime,
+    );
   });
 
   it("runs channels login", async () => {

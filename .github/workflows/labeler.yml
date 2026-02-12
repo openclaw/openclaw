@@ -30,14 +30,26 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const association = context.payload.pull_request?.author_association;
-            if (!association) {
+            const login = context.payload.pull_request?.user?.login;
+            if (!login) {
               return;
             }
-            if (![
-              "MEMBER",
-              "OWNER",
-            ].includes(association)) {
+
+            let isMaintainer = false;
+            try {
+              const membership = await github.rest.teams.getMembershipForUserInOrg({
+                org: context.repo.owner,
+                team_slug: "maintainer",
+                username: login,
+              });
+              isMaintainer = membership?.data?.state === "active";
+            } catch (error) {
+              if (error?.status !== 404) {
+                throw error;
+              }
+            }
+
+            if (!isMaintainer) {
               return;
             }
 
@@ -62,14 +74,26 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const association = context.payload.issue?.author_association;
-            if (!association) {
+            const login = context.payload.issue?.user?.login;
+            if (!login) {
               return;
             }
-            if (![
-              "MEMBER",
-              "OWNER",
-            ].includes(association)) {
+
+            let isMaintainer = false;
+            try {
+              const membership = await github.rest.teams.getMembershipForUserInOrg({
+                org: context.repo.owner,
+                team_slug: "maintainer",
+                username: login,
+              });
+              isMaintainer = membership?.data?.state === "active";
+            } catch (error) {
+              if (error?.status !== 404) {
+                throw error;
+              }
+            }
+
+            if (!isMaintainer) {
               return;
             }
 

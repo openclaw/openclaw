@@ -18,6 +18,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
+export type { AnyAgentTool } from "../agents/tools/common.js";
 
 export type PluginLogger = {
   debug?: (message: string) => void;

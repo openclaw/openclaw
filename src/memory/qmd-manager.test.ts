@@ -285,6 +285,113 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("uses configured qmd search mode command", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit("data", "[]");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    const maxResults = resolved.qmd?.limits.maxResults;
+    if (!maxResults) {
+      throw new Error("qmd maxResults missing");
+    }
+
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+
+    const searchCall = spawnMock.mock.calls.find((call) => call[1]?.[0] === "search");
+    expect(searchCall?.[1]).toEqual(["search", "test", "--json"]);
+    expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === "query")).toBe(false);
+    expect(maxResults).toBeGreaterThan(0);
+    await manager.close();
+  });
+
+  it("retries search with qmd query when configured mode rejects flags", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stderr.emit("data", "unknown flag: --json");
+          child.closeWith(2);
+        }, 0);
+        return child;
+      }
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit("data", "[]");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    const maxResults = resolved.qmd?.limits.maxResults;
+    if (!maxResults) {
+      throw new Error("qmd maxResults missing");
+    }
+
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+
+    const searchAndQueryCalls = spawnMock.mock.calls
+      .map((call) => call[1])
+      .filter(
+        (args): args is string[] => Array.isArray(args) && ["search", "query"].includes(args[0]),
+      );
+    expect(searchAndQueryCalls).toEqual([
+      ["search", "test", "--json"],
+      ["query", "test", "--json", "-n", String(maxResults)],
+    ]);
+    await manager.close();
+  });
+
   it("queues a forced sync behind an in-flight update", async () => {
     cfg = {
       ...cfg,
@@ -409,6 +516,87 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("scopes qmd queries to managed collections", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit("data", "[]");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    const maxResults = resolved.qmd?.limits.maxResults;
+    if (!maxResults) {
+      throw new Error("qmd maxResults missing");
+    }
+
+    await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+    const queryCall = spawnMock.mock.calls.find((call) => call[1]?.[0] === "query");
+    expect(queryCall?.[1]).toEqual([
+      "query",
+      "test",
+      "--json",
+      "-n",
+      String(maxResults),
+      "-c",
+      "workspace",
+      "-c",
+      "notes",
+    ]);
+    await manager.close();
+  });
+
+  it("fails closed when no managed collections are configured", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+    expect(results).toEqual([]);
+    expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === "query")).toBe(false);
+    await manager.close();
+  });
+
   it("logs and continues when qmd embed times out", async () => {
     vi.useFakeTimers();
     cfg = {
@@ -475,6 +663,9 @@ describe("QmdMemoryManager", () => {
     const isAllowed = (key?: string) =>
       (manager as unknown as { isScopeAllowed: (key?: string) => boolean }).isScopeAllowed(key);
     expect(isAllowed("agent:main:slack:channel:c123")).toBe(true);
+    expect(isAllowed("agent:main:slack:direct:u123")).toBe(true);
+    expect(isAllowed("agent:main:slack:dm:u123")).toBe(true);
+    expect(isAllowed("agent:main:discord:direct:u123")).toBe(false);
     expect(isAllowed("agent:main:discord:channel:c123")).toBe(false);
 
     await manager.close();
@@ -514,6 +705,50 @@ describe("QmdMemoryManager", () => {
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("chatType=channel"));
 
     await manager.close();
+  });
+
+  it("symlinks shared qmd models into the agent cache", async () => {
+    const defaultCacheHome = path.join(tmpRoot, "default-cache");
+    const sharedModelsDir = path.join(defaultCacheHome, "qmd", "models");
+    await fs.mkdir(sharedModelsDir, { recursive: true });
+    const previousXdgCacheHome = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = defaultCacheHome;
+    const symlinkSpy = vi.spyOn(fs, "symlink");
+
+    try {
+      const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+      const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+      expect(manager).toBeTruthy();
+      if (!manager) {
+        throw new Error("manager missing");
+      }
+
+      const targetModelsDir = path.join(
+        stateDir,
+        "agents",
+        agentId,
+        "qmd",
+        "xdg-cache",
+        "qmd",
+        "models",
+      );
+      const modelsStat = await fs.lstat(targetModelsDir);
+      expect(modelsStat.isSymbolicLink() || modelsStat.isDirectory()).toBe(true);
+      expect(
+        symlinkSpy.mock.calls.some(
+          (call) => call[0] === sharedModelsDir && call[1] === targetModelsDir,
+        ),
+      ).toBe(true);
+
+      await manager.close();
+    } finally {
+      symlinkSpy.mockRestore();
+      if (previousXdgCacheHome === undefined) {
+        delete process.env.XDG_CACHE_HOME;
+      } else {
+        process.env.XDG_CACHE_HOME = previousXdgCacheHome;
+      }
+    }
   });
 
   it("blocks non-markdown or symlink reads for qmd paths", async () => {
@@ -603,6 +838,193 @@ describe("QmdMemoryManager", () => {
       manager.search("busy lookup", { sessionKey: "agent:main:slack:dm:u123" }),
     ).rejects.toThrow("qmd index busy while reading results");
     await manager.close();
+  });
+
+  it("treats plain-text no-results stdout as an empty result set", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit("data", "No results found.");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    await expect(
+      manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+    await manager.close();
+  });
+
+  it("treats plain-text no-results stdout without punctuation as empty", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit("data", "No results found\n\n");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    await expect(
+      manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+    await manager.close();
+  });
+
+  it("treats plain-text no-results stderr as an empty result set", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stderr.emit("data", "No results found.\n");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    await expect(
+      manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+    await manager.close();
+  });
+
+  it("throws when stdout is empty without the no-results marker", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit("data", "   \n");
+          child.stderr.emit("data", "unexpected parser error");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    await expect(
+      manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/qmd query returned invalid JSON/);
+    await manager.close();
+  });
+  describe("model cache symlink", () => {
+    let defaultModelsDir: string;
+    let customModelsDir: string;
+    let savedXdgCacheHome: string | undefined;
+
+    beforeEach(async () => {
+      // Redirect XDG_CACHE_HOME so symlinkSharedModels finds our fake models
+      // directory instead of the real ~/.cache.
+      savedXdgCacheHome = process.env.XDG_CACHE_HOME;
+      const fakeCacheHome = path.join(tmpRoot, "fake-cache");
+      process.env.XDG_CACHE_HOME = fakeCacheHome;
+
+      defaultModelsDir = path.join(fakeCacheHome, "qmd", "models");
+      await fs.mkdir(defaultModelsDir, { recursive: true });
+      await fs.writeFile(path.join(defaultModelsDir, "model.bin"), "fake-model");
+
+      customModelsDir = path.join(stateDir, "agents", agentId, "qmd", "xdg-cache", "qmd", "models");
+    });
+
+    afterEach(() => {
+      if (savedXdgCacheHome === undefined) {
+        delete process.env.XDG_CACHE_HOME;
+      } else {
+        process.env.XDG_CACHE_HOME = savedXdgCacheHome;
+      }
+    });
+
+    it("symlinks default model cache into custom XDG_CACHE_HOME on first run", async () => {
+      const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+      const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+      expect(manager).toBeTruthy();
+
+      const stat = await fs.lstat(customModelsDir);
+      expect(stat.isSymbolicLink()).toBe(true);
+      const target = await fs.readlink(customModelsDir);
+      expect(target).toBe(defaultModelsDir);
+
+      // Models are accessible through the symlink.
+      const content = await fs.readFile(path.join(customModelsDir, "model.bin"), "utf-8");
+      expect(content).toBe("fake-model");
+
+      await manager!.close();
+    });
+
+    it("does not overwrite existing models directory", async () => {
+      // Pre-create the custom models dir with different content.
+      await fs.mkdir(customModelsDir, { recursive: true });
+      await fs.writeFile(path.join(customModelsDir, "custom-model.bin"), "custom");
+
+      const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+      const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+      expect(manager).toBeTruthy();
+
+      // Should still be a real directory, not a symlink.
+      const stat = await fs.lstat(customModelsDir);
+      expect(stat.isSymbolicLink()).toBe(false);
+      expect(stat.isDirectory()).toBe(true);
+
+      // Custom content should be preserved.
+      const content = await fs.readFile(path.join(customModelsDir, "custom-model.bin"), "utf-8");
+      expect(content).toBe("custom");
+
+      await manager!.close();
+    });
+
+    it("skips symlink when no default models exist", async () => {
+      // Remove the default models dir.
+      await fs.rm(defaultModelsDir, { recursive: true, force: true });
+
+      const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+      const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+      expect(manager).toBeTruthy();
+
+      // Custom models dir should not exist (no symlink created).
+      await expect(fs.lstat(customModelsDir)).rejects.toThrow();
+      expect(logWarnMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("failed to symlink qmd models directory"),
+      );
+
+      await manager!.close();
+    });
   });
 });
 
