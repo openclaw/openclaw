@@ -13,7 +13,7 @@ import {
 } from "../pi-embedded-helpers.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
-  sanitizeToolCallInputs,
+  repairToolCallInputs,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
@@ -368,8 +368,14 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
-  const repairedTools = policy.repairToolUseResultPairing
+  const toolCallRepair = repairToolCallInputs(sanitizedThinking);
+  const sanitizedToolCalls = toolCallRepair.messages;
+  // Always repair tool_use/tool_result pairing when tool calls were
+  // stripped — even if the provider policy does not normally require it —
+  // to prevent orphaned tool_result blocks from corrupting the session.
+  const needsPairingRepair =
+    policy.repairToolUseResultPairing || toolCallRepair.droppedToolCalls > 0;
+  const repairedTools = needsPairingRepair
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);

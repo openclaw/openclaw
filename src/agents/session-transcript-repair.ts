@@ -101,16 +101,21 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
   let droppedToolCalls = 0;
   let droppedAssistantMessages = 0;
   let changed = false;
-  const out: AgentMessage[] = [];
+  const intermediate: AgentMessage[] = [];
+  // Track tool_use IDs that were stripped so we can also remove their
+  // orphaned tool_result messages.  Without this, the next API call will
+  // be rejected because tool_result references a tool_use_id that no
+  // longer exists in the transcript.
+  const strippedToolCallIds = new Set<string>();
 
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") {
-      out.push(msg);
+      intermediate.push(msg);
       continue;
     }
 
     if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
-      out.push(msg);
+      intermediate.push(msg);
       continue;
     }
 
@@ -122,6 +127,10 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
         droppedToolCalls += 1;
         droppedInMessage += 1;
         changed = true;
+        const toolBlock = block as ToolCallBlock;
+        if (typeof toolBlock.id === "string" && toolBlock.id) {
+          strippedToolCallIds.add(toolBlock.id);
+        }
         continue;
       }
       nextContent.push(block);
@@ -133,11 +142,29 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
         changed = true;
         continue;
       }
-      out.push({ ...msg, content: nextContent });
+      intermediate.push({ ...msg, content: nextContent });
       continue;
     }
 
-    out.push(msg);
+    intermediate.push(msg);
+  }
+
+  // Second pass: remove tool_result messages whose tool_use was stripped.
+  let out: AgentMessage[];
+  if (strippedToolCallIds.size > 0) {
+    out = [];
+    for (const msg of intermediate) {
+      if (msg && typeof msg === "object" && msg.role === "toolResult") {
+        const id = extractToolResultId(msg);
+        if (id && strippedToolCallIds.has(id)) {
+          changed = true;
+          continue;
+        }
+      }
+      out.push(msg);
+    }
+  } else {
+    out = intermediate;
   }
 
   return {

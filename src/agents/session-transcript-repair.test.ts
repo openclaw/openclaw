@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  repairToolCallInputs,
   sanitizeToolCallInputs,
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
@@ -241,5 +242,77 @@ describe("sanitizeToolCallInputs", () => {
       ? assistant.content.map((block) => (block as { type?: unknown }).type)
       : [];
     expect(types).toEqual(["text", "toolUse"]);
+  });
+
+  it("removes orphaned tool_result messages when their tool_use is stripped", () => {
+    // Reproduces the bug from #12392: when tool_use blocks without input
+    // are stripped but the corresponding tool_result messages survive, the
+    // API rejects with "unexpected tool_use_id" on every subsequent request,
+    // permanently corrupting the session.
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me try" },
+          { type: "toolCall", id: "call_valid", name: "exec", arguments: { cmd: "ls" } },
+          { type: "toolCall", id: "call_broken", name: "exec" }, // no input
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_valid",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_broken",
+        toolName: "exec",
+        content: [{ type: "text", text: "error" }],
+        isError: true,
+      },
+      { role: "user", content: "what happened?" },
+    ];
+
+    const report = repairToolCallInputs(input);
+    // The tool_use "call_broken" (no input) should be stripped, AND its
+    // tool_result should also be removed to maintain the pairing invariant.
+    expect(report.droppedToolCalls).toBe(1);
+    const roles = report.messages.map((m) => m.role);
+    expect(roles).toEqual(["assistant", "toolResult", "user"]);
+    // The surviving tool_result must belong to the valid tool call.
+    expect((report.messages[1] as { toolCallId?: string }).toolCallId).toBe("call_valid");
+  });
+
+  it("drops all tool_results when the entire assistant message is removed", () => {
+    const input: AgentMessage[] = [
+      { role: "user", content: "run it" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_a", name: "exec" }, // no input
+          { type: "toolCall", id: "call_b", name: "exec" }, // no input
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_a",
+        toolName: "exec",
+        content: [{ type: "text", text: "failed" }],
+        isError: true,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_b",
+        toolName: "exec",
+        content: [{ type: "text", text: "failed" }],
+        isError: true,
+      },
+      { role: "user", content: "what happened?" },
+    ];
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out.map((m) => m.role)).toEqual(["user", "user"]);
   });
 });
