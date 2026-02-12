@@ -187,7 +187,13 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyGoogleGeminiModelDefault(nextConfig).next;
   }
 
-  if (authChoice === "zai-api-key") {
+  if (
+    authChoice === "zai-api-key" ||
+    authChoice === "zai-coding-global" ||
+    authChoice === "zai-coding-cn" ||
+    authChoice === "zai-global" ||
+    authChoice === "zai-cn"
+  ) {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "zai",
       cfg: baseConfig,
@@ -207,7 +213,21 @@ export async function applyNonInteractiveAuthChoice(params: {
       provider: "zai",
       mode: "api_key",
     });
-    return applyZaiConfig(nextConfig);
+
+    // Determine endpoint from authChoice or opts
+    let endpoint: "global" | "cn" | "coding-global" | "coding-cn" | undefined;
+    if (authChoice === "zai-coding-global") {
+      endpoint = "coding-global";
+    } else if (authChoice === "zai-coding-cn") {
+      endpoint = "coding-cn";
+    } else if (authChoice === "zai-global") {
+      endpoint = "global";
+    } else if (authChoice === "zai-cn") {
+      endpoint = "cn";
+    } else {
+      endpoint = "coding-global";
+    }
+    return applyZaiConfig(nextConfig, { endpoint });
   }
 
   if (authChoice === "xiaomi-api-key") {
