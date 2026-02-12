@@ -122,8 +122,15 @@ const saveSessionToMemory: HookHandler = async (event) => {
         messageCount,
       });
 
-      // Avoid calling the model provider in unit tests, keep hooks fast and deterministic.
-      if (sessionContent && cfg && !process.env.VITEST && process.env.NODE_ENV !== "test") {
+      // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
+      const isTestEnv =
+        process.env.OPENCLAW_TEST_FAST === "1" ||
+        process.env.VITEST === "true" ||
+        process.env.VITEST === "1" ||
+        process.env.NODE_ENV === "test";
+      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug !== false;
+
+      if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
         slug = await generateSlugViaLLM({ sessionContent, cfg });
