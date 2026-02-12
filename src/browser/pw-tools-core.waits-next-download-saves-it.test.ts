@@ -29,6 +29,10 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./pw-session.js", () => sessionMocks);
+const tmpDirMocks = vi.hoisted(() => ({
+  resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
+}));
+vi.mock("../infra/tmp-openclaw-dir.js", () => tmpDirMocks);
 
 async function importModule() {
   return await import("./pw-tools-core.js");
@@ -47,6 +51,10 @@ describe("pw-tools-core", () => {
     for (const fn of Object.values(sessionMocks)) {
       fn.mockClear();
     }
+    for (const fn of Object.values(tmpDirMocks)) {
+      fn.mockClear();
+    }
+    tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
   });
 
   it("waits for the next download and saves it", async () => {
@@ -124,6 +132,43 @@ describe("pw-tools-core", () => {
     const res = await p;
     expect(saveAs).toHaveBeenCalledWith(targetPath);
     expect(res.path).toBe(targetPath);
+  });
+  it("uses preferred tmp dir when waiting for download without explicit path", async () => {
+    let downloadHandler: ((download: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
+      if (event === "download") {
+        downloadHandler = handler;
+      }
+    });
+    const off = vi.fn();
+
+    const saveAs = vi.fn(async () => {});
+    const download = {
+      url: () => "https://example.com/file.bin",
+      suggestedFilename: () => "file.bin",
+      saveAs,
+    };
+
+    tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
+    currentPage = { on, off };
+
+    const mod = await importModule();
+    const p = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    downloadHandler?.(download);
+
+    const res = await p;
+    const outPath = vi.mocked(saveAs).mock.calls[0]?.[0];
+    expect(typeof outPath).toBe("string");
+    expect(String(outPath)).toContain("/tmp/openclaw-preferred/downloads/");
+    expect(String(outPath)).toContain("-file.bin");
+    expect(res.path).toContain("/tmp/openclaw-preferred/downloads/");
+    expect(tmpDirMocks.resolvePreferredOpenClawTmpDir).toHaveBeenCalled();
   });
   it("waits for a matching response and returns its body", async () => {
     let responseHandler: ((resp: unknown) => void) | undefined;
