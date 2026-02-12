@@ -3,74 +3,12 @@ import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
 export type AuthChoice =
-  // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
-  | "oauth"
-  | "setup-token"
-  | "claude-cli"
-  | "token"
-  | "chutes"
-  | "vllm"
-  | "openai-codex"
-  | "openai-api-key"
-  | "openrouter-api-key"
-  | "litellm-api-key"
-  | "ai-gateway-api-key"
-  | "cloudflare-ai-gateway-api-key"
-  | "moonshot-api-key"
-  | "moonshot-api-key-cn"
-  | "kimi-code-api-key"
-  | "synthetic-api-key"
-  | "venice-api-key"
-  | "together-api-key"
-  | "huggingface-api-key"
-  | "codex-cli"
-  | "apiKey"
   | "gemini-api-key"
   | "google-antigravity"
   | "google-gemini-cli"
-  | "zai-api-key"
-  | "zai-coding-global"
-  | "zai-coding-cn"
-  | "zai-global"
-  | "zai-cn"
-  | "xiaomi-api-key"
-  | "minimax-cloud"
-  | "minimax"
-  | "minimax-api"
-  | "minimax-api-key-cn"
-  | "minimax-api-lightning"
-  | "minimax-portal"
-  | "opencode-zen"
-  | "github-copilot"
-  | "copilot-proxy"
-  | "qwen-portal"
-  | "xai-api-key"
-  | "qianfan-api-key"
-  | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
-  | "openai"
-  | "anthropic"
-  | "chutes"
-  | "vllm"
   | "google"
-  | "copilot"
-  | "openrouter"
-  | "litellm"
-  | "ai-gateway"
-  | "cloudflare-ai-gateway"
-  | "moonshot"
-  | "zai"
-  | "xiaomi"
-  | "opencode-zen"
-  | "minimax"
-  | "synthetic"
-  | "venice"
-  | "qwen"
-  | "together"
-  | "huggingface"
-  | "qianfan"
-  | "xai"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
@@ -116,7 +54,6 @@ export type OnboardOptions = {
   syntheticApiKey?: string;
   veniceApiKey?: string;
   togetherApiKey?: string;
-  huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;

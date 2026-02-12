@@ -1,6 +1,6 @@
 // Defaults for agent metadata when upstream does not supply them.
-// Model id uses pi-ai's built-in Anthropic catalog.
-export const DEFAULT_PROVIDER = "anthropic";
-export const DEFAULT_MODEL = "claude-opus-4-6";
+// Model id uses Google Gemini.
+export const DEFAULT_PROVIDER = "google";
+export const DEFAULT_MODEL = "gemini-2.0-flash";
 // Conservative fallback used when model metadata is unavailable.
-export const DEFAULT_CONTEXT_TOKENS = 200_000;
+export const DEFAULT_CONTEXT_TOKENS = 1_000_000;
