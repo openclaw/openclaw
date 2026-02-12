@@ -21,8 +21,8 @@ android {
     applicationId = "ai.openclaw.android"
     minSdk = 31
     targetSdk = 36
-    versionCode = 202602030
-    versionName = "2026.2.10"
+    versionCode = 202602120
+    versionName = "2026.2.12"
   }
 
   buildTypes {
