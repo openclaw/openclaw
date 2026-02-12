@@ -71,6 +71,35 @@ describe("buildInlineKeyboard", () => {
     });
   });
 
+  it("builds inline keyboards with URL buttons", () => {
+    const result = buildInlineKeyboard([
+      [{ text: "Visit Site", url: "https://example.com" }],
+      [
+        { text: "Callback", callback_data: "cmd:a" },
+        { text: "Link", url: "https://docs.example.com" },
+      ],
+    ]);
+    expect(result).toEqual({
+      inline_keyboard: [
+        [{ text: "Visit Site", url: "https://example.com" }],
+        [
+          { text: "Callback", callback_data: "cmd:a" },
+          { text: "Link", url: "https://docs.example.com" },
+        ],
+      ],
+    });
+  });
+
+  it("filters URL buttons with missing text", () => {
+    const result = buildInlineKeyboard([
+      [{ text: "", url: "https://example.com" }],
+      [{ text: "Valid", url: "https://example.com" }],
+    ]);
+    expect(result).toEqual({
+      inline_keyboard: [[{ text: "Valid", url: "https://example.com" }]],
+    });
+  });
+
   it("filters invalid buttons and empty rows", () => {
     const result = buildInlineKeyboard([
       [
