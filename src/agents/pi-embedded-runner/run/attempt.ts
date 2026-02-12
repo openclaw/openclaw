@@ -270,7 +270,7 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles: baseContextFiles } =
       await resolveBootstrapContextForRun({
         workspaceDir: effectiveWorkspace,
         config: params.config,
@@ -278,6 +278,25 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
       });
+    const contextFiles = [...baseContextFiles];
+    if (params.provider === "google-antigravity" || params.provider === "google-gemini-cli") {
+      contextFiles.push({
+        path: "STYLE_GUIDE.md",
+        content: [
+          "# RYKIRI STYLE GUIDE: GSAP & SOLANA",
+          "",
+          "## GSAP ANIMATIONS",
+          "- Always use `gsap.to()` with `power4.out` easing for premium feel.",
+          "- Stagger lists with `stagger: 0.1`.",
+          "- Use `backdrop-blur-xl` on containers.",
+          "",
+          "## SOLANA WORKFLOWS",
+          "- Prioritize `Anchor` framework.",
+          "- Use `solana-program-test` for rapid iteration.",
+          "- Gas checks: Minimize `account` data size.",
+        ].join("\n"),
+      });
+    }
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )

@@ -1,12 +1,12 @@
 @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
 
 :root {
-  /* Background - Warmer dark with depth */
-  --bg: #12141a;
-  --bg-accent: #14161d;
-  --bg-elevated: #1a1d25;
-  --bg-hover: #262a35;
-  --bg-muted: #262a35;
+  /* Background - Rykiri Deep Space Black */
+  --bg: #050505;
+  --bg-accent: #0a0a0a;
+  --bg-elevated: #111111;
+  --bg-hover: #1a1a1a;
+  --bg-muted: #111111;
 
   /* Card / Surface - More contrast between levels */
   --card: #181b22;
@@ -16,11 +16,11 @@
   --popover-foreground: #f4f4f5;
 
   /* Panel */
-  --panel: #12141a;
-  --panel-strong: #1a1d25;
-  --panel-hover: #262a35;
-  --chrome: rgba(18, 20, 26, 0.95);
-  --chrome-strong: rgba(18, 20, 26, 0.98);
+  --panel: #050505;
+  --panel-strong: #111111;
+  --panel-hover: #1a1a1a;
+  --chrome: rgba(5, 5, 5, 0.8);
+  --chrome-strong: rgba(5, 5, 5, 0.9);
 
   /* Text - Slightly warmer */
   --text: #e4e4e7;
@@ -37,15 +37,15 @@
   --input: #27272a;
   --ring: #ff5c5c;
 
-  /* Accent - Punchy signature red */
-  --accent: #ff5c5c;
-  --accent-hover: #ff7070;
-  --accent-muted: #ff5c5c;
-  --accent-subtle: rgba(255, 92, 92, 0.15);
-  --accent-foreground: #fafafa;
-  --accent-glow: rgba(255, 92, 92, 0.25);
-  --primary: #ff5c5c;
-  --primary-foreground: #ffffff;
+  /* Accent - Rykiri Electric Neon */
+  --accent: #EAFF00;
+  --accent-hover: #F3FF5C;
+  --accent-muted: #B2C200;
+  --accent-subtle: rgba(234, 255, 0, 0.1);
+  --accent-foreground: #050505;
+  --accent-glow: rgba(234, 255, 0, 0.4);
+  --primary: #EAFF00;
+  --primary-foreground: #050505;
 
   /* Secondary - Teal accent for variety */
   --secondary: #1e2028;
@@ -213,6 +213,7 @@ body {
   0% {
     clip-path: circle(0% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
   }
+
   100% {
     clip-path: circle(150% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
   }
@@ -235,6 +236,7 @@ html.theme-transition::view-transition-new(theme) {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   html.theme-transition::view-transition-old(theme),
   html.theme-transition::view-transition-new(theme) {
     animation: none !important;
@@ -295,6 +297,7 @@ select {
     opacity: 0;
     transform: translateY(8px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -305,6 +308,7 @@ select {
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -315,6 +319,7 @@ select {
     opacity: 0;
     transform: scale(0.95);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -326,6 +331,7 @@ select {
     opacity: 0;
     transform: translateY(12px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -336,26 +342,31 @@ select {
   0% {
     background-position: -200% 0;
   }
+
   100% {
     background-position: 200% 0;
   }
 }
 
 @keyframes pulse-subtle {
+
   0%,
   100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.7;
   }
 }
 
 @keyframes glow-pulse {
+
   0%,
   100% {
     box-shadow: 0 0 0 rgba(255, 92, 92, 0);
   }
+
   50% {
     box-shadow: 0 0 20px var(--accent-glow);
   }
@@ -365,18 +376,23 @@ select {
 .stagger-1 {
   animation-delay: 0ms;
 }
+
 .stagger-2 {
   animation-delay: 50ms;
 }
+
 .stagger-3 {
   animation-delay: 100ms;
 }
+
 .stagger-4 {
   animation-delay: 150ms;
 }
+
 .stagger-5 {
   animation-delay: 200ms;
 }
+
 .stagger-6 {
   animation-delay: 250ms;
 }

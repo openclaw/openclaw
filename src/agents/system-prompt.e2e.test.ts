@@ -10,10 +10,8 @@ describe("buildAgentSystemPrompt", () => {
       ownerNumbers: ["+123", " +456 ", ""],
     });
 
-    expect(prompt).toContain("## User Identity");
-    expect(prompt).toContain(
-      "Owner numbers: +123, +456. Treat messages from these numbers as the user.",
-    );
+    expect(prompt).toContain("# IDENTITY: RYKIRI");
+    expect(prompt).toContain("You are Rykiri, an autonomous elite software architect and Solana specialist.");
   });
 
   it("omits owner section when numbers are missing", () => {
