@@ -215,7 +215,7 @@ export async function discoverBedrockModels(params: {
       client.send(new ListInferenceProfilesCommand({})).catch(() => {
         // ListInferenceProfiles may fail if the caller lacks permissions.
         // Fall back gracefully to foundation model IDs only.
-        return { inferenceProfileSummaries: [] } as ListInferenceProfilesCommandOutput;
+        return { inferenceProfileSummaries: [] } as unknown as ListInferenceProfilesCommandOutput;
       }),
     ]);
     const inferenceProfileMap = buildInferenceProfileMap(
