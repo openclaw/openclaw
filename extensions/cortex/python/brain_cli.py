@@ -434,6 +434,24 @@ def cmd_migrate_sidecars(args):
     print(f"✅ Migrated: {result['working_memory']} working memory pins, {result['categories']} categories")
 
 
+def cmd_consolidate(args):
+    b = _brain()
+    print(f"🧠 Memory Consolidation (threshold={args.threshold}, min={args.min_cluster})")
+    if args.dry_run:
+        print("   DRY RUN — no changes will be made")
+    result = b.consolidate(
+        threshold=args.threshold,
+        min_cluster_size=args.min_cluster,
+        dry_run=args.dry_run,
+    )
+    print(f"\nClusters: {result['clusters_found']}")
+    print(f"Entries consolidated: {result['entries_consolidated']}")
+    print(f"New memories: {result['new_memories']}")
+    for i, cl in enumerate(result.get("clusters", [])):
+        status = "✅" if cl.get("consolidated_id") else "📋"
+        print(f"  {status} Cluster {i+1}: {cl['size']} entries → {cl.get('consolidated_id', 'N/A')}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified Brain CLI (SYNAPSE + Cortex)")
     sub = parser.add_subparsers(dest="command")
@@ -543,6 +561,12 @@ def main():
     # --- Migration ---
     sub.add_parser("migrate-sidecars", help="Migrate JSON sidecars into brain.db")
 
+    # --- Consolidation ---
+    p = sub.add_parser("consolidate", help="Consolidate similar STM entries")
+    p.add_argument("--threshold", type=float, default=0.85, help="Cosine similarity threshold")
+    p.add_argument("--min-cluster", type=int, default=3, help="Minimum cluster size")
+    p.add_argument("--dry-run", action="store_true", help="Preview without writing")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -571,6 +595,7 @@ def main():
         "wm-unpin": cmd_wm_unpin,
         "categories": cmd_categories,
         "migrate-sidecars": cmd_migrate_sidecars,
+        "consolidate": cmd_consolidate,
     }
 
     func = cmd_map.get(args.command)

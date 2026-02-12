@@ -1878,6 +1878,32 @@ class UnifiedBrain:
         return {"working_memory": wm_count, "categories": cat_count}
 
     # ===================================================================
+    # MEMORY CONSOLIDATION
+    # ===================================================================
+
+    def consolidate(
+        self,
+        threshold: float = 0.85,
+        min_cluster_size: int = 3,
+        dry_run: bool = False,
+        ollama_url: str = "http://localhost:11434",
+        ollama_model: str = "phi3:mini",
+    ) -> dict:
+        """Run memory consolidation on STM entries.
+
+        Delegates to memory_consolidator module.
+        """
+        from memory_consolidator import consolidate as _consolidate
+        return _consolidate(
+            db_path=str(self.db_path),
+            threshold=threshold,
+            min_cluster_size=min_cluster_size,
+            dry_run=dry_run,
+            ollama_url=ollama_url,
+            ollama_model=ollama_model,
+        )
+
+    # ===================================================================
     # EXPORT (backward compat)
     # ===================================================================
 
