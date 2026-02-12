@@ -67,7 +67,7 @@ describe("createSubagentProgressTool", () => {
       });
 
       // Mock the gateway call to avoid actual network calls in tests
-      const originalCallGateway = (await import("../../gateway/call.js")).callGateway;
+      const _originalCallGateway = (await import("../../gateway/call.js")).callGateway;
       const mockCallGateway = vi.fn().mockResolvedValue({});
       vi.doMock("../../gateway/call.js", () => ({ callGateway: mockCallGateway }));
 
