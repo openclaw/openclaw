@@ -29,4 +29,26 @@ describeLive("zai live", () => {
       .join(" ");
     expect(text.length).toBeGreaterThan(0);
   }, 20000);
+
+  it("glm-4.7-flashx returns assistant text", async () => {
+    const model = getModel("zai", "glm-4.7-flashx" as "glm-4.7");
+    const res = await completeSimple(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: "Reply with the word ok.",
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      { apiKey: ZAI_KEY, maxTokens: 64 },
+    );
+    const text = res.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text.trim())
+      .join(" ");
+    expect(text.length).toBeGreaterThan(0);
+  }, 20000);
 });
