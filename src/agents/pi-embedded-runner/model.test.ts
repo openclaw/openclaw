@@ -391,4 +391,61 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");
   });
+
+  it("resolves explicit OpenRouter model IDs without provider config", () => {
+    // When users configure "openrouter/qwen/qwen3-14b", the model should resolve
+    // using well-known OpenRouter defaults even without explicit provider configuration.
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn(() => null),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openrouter", "qwen/qwen3-14b", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "qwen/qwen3-14b",
+      api: "openai-responses",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+  });
+
+  it("resolves explicit OpenCode model IDs without provider config", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn(() => null),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("opencode", "claude-sonnet-4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "opencode",
+      id: "claude-sonnet-4",
+      api: "openai-responses",
+      baseUrl: "https://opencode.dev/v1",
+    });
+  });
+
+  it("explicit provider config overrides well-known defaults", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://custom-openrouter.example.com/v1",
+            api: "anthropic-messages",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn(() => null),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openrouter", "qwen/qwen3-14b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.baseUrl).toBe("https://custom-openrouter.example.com/v1");
+    expect(result.model?.api).toBe("anthropic-messages");
+  });
 });
