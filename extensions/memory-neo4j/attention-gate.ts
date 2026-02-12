@@ -51,6 +51,22 @@ const NOISE_PATTERNS = [
   // --- Conversation metadata that survived stripping ---
   /^Conversation info\s*\(/i,
   /^\[Queued messages/i,
+
+  // --- Cron delivery outputs & scheduled reminders ---
+  // Scheduled reminder injection text (appears mid-message)
+  /A scheduled reminder has been triggered/i,
+  // Cron delivery instruction to agent (summarize for user)
+  /Summarize this naturally for the user/i,
+  // Relay instruction from cron announcements
+  /Please relay this reminder to the user/i,
+  // Subagent completion announcements (date-stamped)
+  /^\[.*\d{4}-\d{2}-\d{2}.*\]\s*A sub-?agent task/i,
+  // Formatted urgency/priority reports (email summaries, briefings)
+  /(\*\*)?🔴\s*(URGENT|Priority)/i,
+  // Subagent findings header
+  /^Findings:\s*$/im,
+  // "Stats:" lines from subagent completions
+  /^Stats:\s*runtime\s/im,
 ];
 
 /** Maximum message length — code dumps, logs, etc. are not memories. */
@@ -171,6 +187,22 @@ const ASSISTANT_NARRATION_PATTERNS = [
   /^All (good|set|done)[!.]/i,
   // "Here's what changed" / "Summary of changes" (session-specific)
   /^(here'?s\s+(what|the|a)\s+(changed?|summary|breakdown|recap))/i,
+
+  // --- Open proposals / action items (cause rogue actions when recalled) ---
+  // These are dangerous in memory: when auto-recalled, other sessions interpret
+  // them as active instructions and attempt to carry them out.
+  // "Want me to...?" / "Should I...?" / "Shall I...?" / "Would you like me to...?"
+  /want me to\s.+\?/i,
+  /should I\s.+\?/i,
+  /shall I\s.+\?/i,
+  /would you like me to\s.+\?/i,
+  // "Do you want me to...?"
+  /do you want me to\s.+\?/i,
+  // "Can I...?" / "May I...?" assistant proposals
+  /^(can|may) I\s.+\?/i,
+  // "Ready to...?" / "Proceed with...?"
+  /ready to\s.+\?/i,
+  /proceed with\s.+\?/i,
 ];
 
 export function passesAssistantAttentionGate(text: string): boolean {

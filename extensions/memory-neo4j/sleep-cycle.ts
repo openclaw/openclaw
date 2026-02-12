@@ -657,6 +657,63 @@ export async function runSleepCycle(
     }
   }
 
+  // --------------------------------------------------------------------------
+  // Phase 7: Noise Pattern Cleanup
+  // Removes memories matching dangerous patterns that should never have been
+  // stored (open proposals, action items that trigger rogue sessions).
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted) {
+    logger.info("memory-neo4j: [sleep] Phase 7: Noise Pattern Cleanup");
+
+    try {
+      const noisePatterns = [
+        "(?i)want me to\\s.+\\?",
+        "(?i)should I\\s.+\\?",
+        "(?i)shall I\\s.+\\?",
+        "(?i)would you like me to\\s.+\\?",
+        "(?i)do you want me to\\s.+\\?",
+        "(?i)ready to\\s.+\\?",
+        "(?i)proceed with\\s.+\\?",
+      ];
+
+      let noiseRemoved = 0;
+      const noiseSession = (db as any).driver!.session();
+      try {
+        for (const pattern of noisePatterns) {
+          if (abortSignal?.aborted) {
+            break;
+          }
+
+          const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+          const result = await noiseSession.run(
+            `MATCH (m:Memory)
+             WHERE m.text =~ $pattern
+               AND coalesce(m.userPinned, false) = false
+               AND m.category <> 'core'
+               ${agentFilter}
+             WITH m LIMIT 100
+             DETACH DELETE m
+             RETURN count(*) AS removed`,
+            { pattern: `.*${pattern}.*`, agentId },
+          );
+          noiseRemoved += (result.records[0]?.get("removed") as number) ?? 0;
+        }
+      } finally {
+        await noiseSession.close();
+      }
+
+      if (noiseRemoved > 0) {
+        onProgress?.("cleanup", `Removed ${noiseRemoved} noise-pattern memories`);
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 7 complete — ${noiseRemoved} noise memories removed`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 7 error: ${String(err)}`);
+    }
+  }
+
   result.durationMs = Date.now() - startTime;
   result.aborted = abortSignal?.aborted ?? false;
 
