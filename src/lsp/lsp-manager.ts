@@ -447,9 +447,13 @@ class LspManagerImpl {
         resolve(this.formatDiagnostics(filePath, diags));
       };
 
-      // Listen for diagnostics notification
-      const onNotification = (method: string) => {
+      // Listen for diagnostics notification for the target URI
+      const onNotification = (method: string, params?: unknown) => {
         if (method === "textDocument/publishDiagnostics") {
+          const notifParams = params as { uri?: string } | undefined;
+          if (notifParams?.uri !== uri) {
+            return; // Not for our file — keep waiting
+          }
           // Give a small window for batched diagnostics
           setTimeout(() => {
             instance.client.removeListener("notification", onNotification);
@@ -499,7 +503,12 @@ class LspManagerImpl {
   private findInstanceForFile(filePath: string): LspInstance | undefined {
     const resolvedPath = path.resolve(filePath);
     for (const instance of this.instances.values()) {
-      if (resolvedPath.startsWith(instance.projectRoot)) {
+      // Add trailing separator to avoid false prefix matches
+      // e.g. /repo/pkg must not match /repo/pkg2
+      const rootWithSep = instance.projectRoot.endsWith(path.sep)
+        ? instance.projectRoot
+        : instance.projectRoot + path.sep;
+      if (resolvedPath.startsWith(rootWithSep) || resolvedPath === instance.projectRoot) {
         return instance;
       }
     }

@@ -106,7 +106,7 @@ describe("project-root", () => {
   describe("buildLspInstanceKey", () => {
     it("combines project root and server command", () => {
       const key = buildLspInstanceKey("/home/user/project", "typescript-language-server");
-      expect(key).toContain("/home/user/project");
+      expect(key).toContain(path.resolve("/home/user/project"));
       expect(key).toContain("typescript-language-server");
       expect(key).toContain("::");
     });

@@ -83,7 +83,7 @@ export class LspClient extends EventEmitter {
   private process: ChildProcess;
   private nextId = 1;
   private pendingRequests = new Map<
-    number,
+    number | string,
     {
       resolve: (value: unknown) => void;
       reject: (err: Error) => void;
@@ -248,9 +248,9 @@ export class LspClient extends EventEmitter {
   private handleMessage(message: LspMessage): void {
     // Response to a request
     if (message.id !== undefined && (message.result !== undefined || message.error !== undefined)) {
-      const pending = this.pendingRequests.get(message.id as number);
+      const pending = this.pendingRequests.get(message.id);
       if (pending) {
-        this.pendingRequests.delete(message.id as number);
+        this.pendingRequests.delete(message.id);
         clearTimeout(pending.timer);
         if (message.error) {
           pending.reject(new Error(`LSP error (${message.error.code}): ${message.error.message}`));
