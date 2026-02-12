@@ -185,5 +185,20 @@ describe("LINE bot-message-context routing uses fresh config", () => {
       expect(callArg.cfg).toBe(freshCfg);
       expect(callArg.cfg).not.toBe(staleCfg);
     });
+
+    it("passes channel and accountId to resolveAgentRoute", async () => {
+      const { buildLinePostbackContext } = await import("./bot-message-context.js");
+
+      const result = await buildLinePostbackContext({
+        event: makePostbackEvent(),
+        cfg: makeStaleConfig(),
+        account: makeAccount("my-line-acct"),
+      });
+
+      expect(result).not.toBeNull();
+      const callArg = mocks.resolveAgentRoute.mock.calls[0][0];
+      expect(callArg.channel).toBe("line");
+      expect(callArg.accountId).toBe("my-line-acct");
+    });
   });
 });
