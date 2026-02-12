@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,26 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
+
+// ---------------------------------------------------------------------------
+// H0-4: Content-hash caching for workspace bootstrap files.
+// On the first turn of a session every file is injected in full. On subsequent
+// turns only files whose SHA-256 hash has changed are re-injected; unchanged
+// files receive a short marker instead, saving ~5 000 tokens/turn.
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-session cache of SHA-256 hashes for workspace bootstrap file contents.
+ * Key = absolute file path, Value = hex-encoded SHA-256 of the last-injected content.
+ */
+const _bootstrapHashCache = new Map<string, string>();
+
+/** Sentinel returned in `content` when a file has not changed since last turn. */
+export const WORKSPACE_FILE_UNCHANGED_MARKER = "(unchanged since last injection — hash identical)";
+
+function _sha256(content: string): string {
+  return createHash("sha256").update(content, "utf-8").digest("hex");
+}
 
 export function resolveDefaultAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -277,17 +298,40 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   for (const entry of entries) {
     try {
       const content = await fs.readFile(entry.filePath, "utf-8");
-      result.push({
-        name: entry.name,
-        path: entry.filePath,
-        content,
-        missing: false,
-      });
+      const hash = _sha256(content);
+      const cachedHash = _bootstrapHashCache.get(entry.filePath);
+
+      if (cachedHash && cachedHash === hash) {
+        // Content unchanged since last injection — use short marker.
+        result.push({
+          name: entry.name,
+          path: entry.filePath,
+          content: WORKSPACE_FILE_UNCHANGED_MARKER,
+          missing: false,
+        });
+      } else {
+        // First turn or content changed — inject full content & update cache.
+        _bootstrapHashCache.set(entry.filePath, hash);
+        result.push({
+          name: entry.name,
+          path: entry.filePath,
+          content,
+          missing: false,
+        });
+      }
     } catch {
       result.push({ name: entry.name, path: entry.filePath, missing: true });
     }
   }
   return result;
+}
+
+/**
+ * Reset the bootstrap hash cache.  Useful for tests or forcing a full
+ * re-injection at the start of a new session.
+ */
+export function resetBootstrapHashCache(): void {
+  _bootstrapHashCache.clear();
 }
 
 const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
