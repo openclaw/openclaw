@@ -288,10 +288,10 @@ describe("sessions", () => {
 
     await Promise.all([
       updateSessionStore(storePath, (store) => {
-        store["agent:main:one"] = { sessionId: "sess-1", updatedAt: 1 };
+        store["agent:main:one"] = { sessionId: "sess-1", updatedAt: Date.now() };
       }),
       updateSessionStore(storePath, (store) => {
-        store["agent:main:two"] = { sessionId: "sess-2", updatedAt: 2 };
+        store["agent:main:two"] = { sessionId: "sess-2", updatedAt: Date.now() };
       }),
     ]);
 
@@ -306,7 +306,7 @@ describe("sessions", () => {
     await fs.writeFile(storePath, "[]", "utf-8");
 
     await updateSessionStore(storePath, (store) => {
-      store["agent:main:main"] = { sessionId: "sess-1", updatedAt: 1 };
+      store["agent:main:main"] = { sessionId: "sess-1", updatedAt: Date.now() };
     });
 
     const store = loadSessionStore(storePath);
@@ -324,7 +324,7 @@ describe("sessions", () => {
     await updateSessionStore(storePath, (store) => {
       store["agent:main:main"] = {
         sessionId: "sess-normalized",
-        updatedAt: 1,
+        updatedAt: Date.now(),
         lastChannel: " WhatsApp ",
         lastTo: " +1555 ",
         lastAccountId: " acct-1 ",
@@ -349,8 +349,8 @@ describe("sessions", () => {
       storePath,
       JSON.stringify(
         {
-          "agent:main:old": { sessionId: "sess-old", updatedAt: 1 },
-          "agent:main:keep": { sessionId: "sess-keep", updatedAt: 2 },
+          "agent:main:old": { sessionId: "sess-old", updatedAt: Date.now() },
+          "agent:main:keep": { sessionId: "sess-keep", updatedAt: Date.now() },
         },
         null,
         2,
@@ -363,7 +363,7 @@ describe("sessions", () => {
         delete store["agent:main:old"];
       }),
       updateSessionStore(storePath, (store) => {
-        store["agent:main:new"] = { sessionId: "sess-new", updatedAt: 3 };
+        store["agent:main:new"] = { sessionId: "sess-new", updatedAt: Date.now() };
       }),
     ]);
 

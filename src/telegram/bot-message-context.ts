@@ -25,11 +25,11 @@ import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -281,16 +281,11 @@ export const buildTelegramMessageContext = async ({
                 fn: () =>
                   bot.api.sendMessage(
                     chatId,
-                    [
-                      "OpenClaw: access not configured.",
-                      "",
-                      `Your Telegram user id: ${telegramUserId}`,
-                      "",
-                      `Pairing code: ${code}`,
-                      "",
-                      "Ask the bot owner to approve with:",
-                      formatCliCommand("openclaw pairing approve telegram <code>"),
-                    ].join("\n"),
+                    buildPairingReply({
+                      channel: "telegram",
+                      idLine: `Your Telegram user id: ${telegramUserId}`,
+                      code,
+                    }),
                   ),
               });
             }
@@ -571,8 +566,19 @@ export const buildTelegramMessageContext = async ({
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
+  const inboundHistory =
+    isGroup && historyKey && historyLimit > 0
+      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
+          sender: entry.sender,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }))
+      : undefined;
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
+    // Agent prompt should be the raw user text only; metadata/context is provided via system prompt.
+    BodyForAgent: bodyText,
+    InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: commandBody,
     From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,

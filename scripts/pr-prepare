@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+  echo "Usage: scripts/pr-prepare <init|validate-commit|gates|push|run> <PR>"
+  exit 2
+fi
+
+mode="$1"
+pr="$2"
+base="$(cd "$(dirname "$0")" && pwd)/pr"
+
+case "$mode" in
+  init)
+    exec "$base" prepare-init "$pr"
+    ;;
+  validate-commit)
+    exec "$base" prepare-validate-commit "$pr"
+    ;;
+  gates)
+    exec "$base" prepare-gates "$pr"
+    ;;
+  push)
+    exec "$base" prepare-push "$pr"
+    ;;
+  run)
+    exec "$base" prepare-run "$pr"
+    ;;
+  *)
+    echo "Usage: scripts/pr-prepare <init|validate-commit|gates|push|run> <PR>"
+    exit 2
+    ;;
+esac
