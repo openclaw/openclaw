@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -131,7 +132,7 @@ export function registerBrowserAgentDebugRoutes(
         return;
       }
       const id = crypto.randomUUID();
-      const dir = "/tmp/openclaw";
+      const dir = path.join(os.tmpdir(), "openclaw");
       await fs.mkdir(dir, { recursive: true });
       const tracePath = out.trim() || path.join(dir, `browser-trace-${id}.zip`);
       await pw.traceStopViaPlaywright({
