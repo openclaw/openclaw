@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Cron: isolate scheduler errors so one bad job does not break all jobs. (#14385) Thanks @MarvinDontPanic.
 - Cron: prevent one-shot `at` jobs from re-firing on restart after skipped/errored runs. (#13878) Thanks @lailoo.
 - Heartbeat: prevent scheduler stalls on unexpected run errors and avoid immediate rerun loops after `requests-in-flight` skips. (#14901) Thanks @joeykrug.
+- Logging/Browser: fall back to `os.tmpdir()/openclaw` for default log, browser trace, and browser download temp paths when `/tmp/openclaw` is unavailable.
 - WhatsApp: convert Markdown bold/strikethrough to WhatsApp formatting. (#14285) Thanks @Raikan10.
 - WhatsApp: allow media-only sends and normalize leading blank payloads. (#14408) Thanks @karimnaguib.
 - WhatsApp: default MIME type for voice messages when Baileys omits it. (#14444) Thanks @mcaxtr.
