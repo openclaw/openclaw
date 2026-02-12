@@ -770,7 +770,28 @@ export async function runEmbeddedAttempt(
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
+          // Re-sanitize the rebuilt messages to ensure tool_use/tool_result pairing is valid.
+          // Without this, Anthropic API rejects the request with "unexpected tool_use_id" errors.
+          const rebuiltSanitized = await sanitizeSessionHistory({
+            messages: sessionContext.messages,
+            modelApi: params.model.api,
+            modelId: params.modelId,
+            provider: params.provider,
+            sessionManager,
+            sessionId: params.sessionId,
+            policy: transcriptPolicy,
+          });
+          const rebuiltValidatedGemini = transcriptPolicy.validateGeminiTurns
+            ? validateGeminiTurns(rebuiltSanitized)
+            : rebuiltSanitized;
+          const rebuiltValidated = transcriptPolicy.validateAnthropicTurns
+            ? validateAnthropicTurns(rebuiltValidatedGemini)
+            : rebuiltValidatedGemini;
+          const rebuiltLimited = limitHistoryTurns(
+            rebuiltValidated,
+            getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+          );
+          activeSession.agent.replaceMessages(rebuiltLimited);
           log.warn(
             `Removed orphaned user message to prevent consecutive user turns. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,
