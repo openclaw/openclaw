@@ -31,8 +31,7 @@ Details: [Plugins](/plugin)
 
 ## Setup
 
-1. Sign in to the DingTalk Open Platform:
-   https://open.dingtalk.com/
+1. Sign in to the [DingTalk Open Platform](https://open.dingtalk.com/).
 2. Create an internal application for your organization.
 3. Enable the robot capability and Stream mode (message subscription).
 4. Copy the **Client ID** and **Client Secret**.

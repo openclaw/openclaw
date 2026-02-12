@@ -57,7 +57,7 @@ export async function uploadMedia(opts: {
     // Create FormData for file upload
     const formData = new FormData();
     formData.append("robotCode", account.clientId);
-    formData.append("file", new Blob([file]), fileName);
+    formData.append("file", new Blob([Uint8Array.from(file)]), fileName);
 
     const resp = await fetch(url, {
       method: "POST",

@@ -365,6 +365,14 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       }
 
       const tokenManager = getOrCreateTokenManager(account);
+      if (!mediaUrl) {
+        return {
+          channel: "dingtalk",
+          ok: false,
+          error: new Error("mediaUrl is required for sendMedia"),
+          messageId: "",
+        };
+      }
 
       // Check if mediaUrl is a local path or remote URL that needs special handling
       if (isLocalPath(mediaUrl)) {
@@ -508,7 +516,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
     targetResolver: {
       hint: 'Use DingTalk senderStaffId (e.g., "manager9140") or full senderId.',
       // DingTalk user IDs: senderStaffId like "manager9140" or senderId like "$:LWCP_v1:$..."
-      looksLikeId: (raw: string, _normalized: string) => {
+      looksLikeId: (raw: string, _normalized?: string) => {
         const trimmed = raw.trim();
         if (!trimmed) {
           return false;

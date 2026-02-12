@@ -190,7 +190,7 @@ export async function uploadMediaToOAPI(opts: {
   try {
     // Create FormData for file upload
     const formData = new FormData();
-    const blob = new Blob([media], { type: "application/octet-stream" });
+    const blob = new Blob([Uint8Array.from(media)], { type: "application/octet-stream" });
     formData.append("media", blob, fileName);
 
     logger?.debug?.({ fileName, mediaType, size: media.length }, "Uploading media to OAPI");
