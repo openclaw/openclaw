@@ -440,7 +440,7 @@ async function executeJobCore(
 
       let heartbeatResult: HeartbeatRunResult;
       for (;;) {
-        heartbeatResult = await state.deps.runHeartbeatOnce({ reason });
+        heartbeatResult = await state.deps.runHeartbeatOnce({ reason, agentId: job.agentId });
         if (
           heartbeatResult.status !== "skipped" ||
           heartbeatResult.reason !== "requests-in-flight"
