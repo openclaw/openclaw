@@ -34,8 +34,8 @@ class TestValidatePlaceId:
             # Should not raise exception
             try:
                 _validate_place_id(place_id)
-            except HTTPException:
-                pytest.fail(f"Valid place_id '{place_id}' was incorrectly rejected")
+            except HTTPException as e:
+                pytest.fail(f"Valid place_id '{place_id}' was incorrectly rejected: {e.detail}")
     
     def test_path_traversal_attempts(self):
         """Test that path traversal attempts are rejected."""
@@ -57,17 +57,37 @@ class TestValidatePlaceId:
     def test_url_encoded_traversal(self):
         """Test that URL-encoded path traversal attempts are rejected."""
         encoded_attacks = [
-            "%2e%2e%2f%2e%2e%2ffile",  # Lowercase URL-encoded ../
-            "%2E%2E%2Ffile",           # Uppercase URL-encoded ../
-            "%2e%2e/file",             # Mixed encoding
-            "place%2f%2fshare",        # URL-encoded //
-            "%2E%2E%5C%2E%2E%5Cfile",  # URL-encoded ..\..\file
+            "%2e%2e%2f%2e%2e%2ffile",  # Lowercase URL-encoded ../../file
+            "%2E%2E%2Ffile",           # Uppercase URL-encoded ../file
+            "%2e%2e/file",             # Mixed encoding ../file
+            "place%2f%2fshare",        # URL-encoded place//share
+            "%2E%2E%5C%2E%2E%5Cfile",  # Uppercase URL-encoded ..\..\ file
+            "%5c%5c",                  # Lowercase URL-encoded \\
+            "%5C%5C",                  # Uppercase URL-encoded \\
+            "place%5cshare",           # URL-encoded place\share
         ]
         
         for place_id in encoded_attacks:
             with pytest.raises(HTTPException) as exc_info:
                 _validate_place_id(place_id)
-            assert exc_info.value.status_code == 400
+            assert exc_info.value.status_code == 400, \
+                f"URL-encoded attack '{place_id}' was not rejected"
+    
+    def test_backslash_patterns(self):
+        """Test that backslash-based traversal patterns are rejected."""
+        backslash_attacks = [
+            "..\\",
+            "..\\..\\",
+            "place\\..\\other",
+            ".\\file",
+            "\\\\network\\share",
+        ]
+        
+        for place_id in backslash_attacks:
+            with pytest.raises(HTTPException) as exc_info:
+                _validate_place_id(place_id)
+            assert exc_info.value.status_code == 400, \
+                f"Backslash attack '{place_id}' was not rejected"
     
     def test_forward_slash_rejected(self):
         """Test that forward slashes are rejected (not in real Google Place IDs)."""
@@ -156,8 +176,8 @@ class TestValidatePlaceId:
         for place_id in valid_ids:
             try:
                 _validate_place_id(place_id)
-            except HTTPException:
-                pytest.fail(f"Valid mixed-case place_id '{place_id}' was incorrectly rejected")
+            except HTTPException as e:
+                pytest.fail(f"Valid mixed-case place_id '{place_id}' was incorrectly rejected: {e.detail}")
     
     def test_allowed_special_characters(self):
         """Test that allowed special characters (+ = _ -) are accepted."""
@@ -172,8 +192,8 @@ class TestValidatePlaceId:
         for place_id in valid_ids:
             try:
                 _validate_place_id(place_id)
-            except HTTPException:
-                pytest.fail(f"Valid place_id '{place_id}' with allowed special chars was incorrectly rejected")
+            except HTTPException as e:
+                pytest.fail(f"Valid place_id '{place_id}' with allowed special chars was incorrectly rejected: {e.detail}")
     
     def test_double_dot_variations(self):
         """Test that various double-dot patterns are caught."""
@@ -200,6 +220,20 @@ class TestValidatePlaceId:
             "//place",
             "place//",
             "place///id",
+        ]
+        
+        for pattern in patterns:
+            with pytest.raises(HTTPException) as exc_info:
+                _validate_place_id(pattern)
+            assert exc_info.value.status_code == 400
+    
+    def test_double_backslash_variations(self):
+        """Test that double backslashes are rejected."""
+        patterns = [
+            "\\\\",
+            "place\\\\id",
+            "\\\\place",
+            "place\\\\",
         ]
         
         for pattern in patterns:
@@ -240,12 +274,29 @@ class TestGetPlaceDetailsValidation:
         with pytest.raises(HTTPException) as exc_info:
             get_place_details("%2E%2E%2Ffile")
         assert exc_info.value.status_code == 400
+        
+        # Backslash encoding (lowercase)
+        with pytest.raises(HTTPException) as exc_info:
+            get_place_details("%5c%5c")
+        assert exc_info.value.status_code == 400
+        
+        # Backslash encoding (uppercase)
+        with pytest.raises(HTTPException) as exc_info:
+            get_place_details("%5C%5C")
+        assert exc_info.value.status_code == 400
     
     def test_get_place_details_rejects_forward_slash(self, monkeypatch):
         """Test that get_place_details rejects place IDs with forward slashes."""
         
         with pytest.raises(HTTPException) as exc_info:
             get_place_details("place/with/slash")
+        assert exc_info.value.status_code == 400
+    
+    def test_get_place_details_rejects_backslash(self, monkeypatch):
+        """Test that get_place_details rejects place IDs with backslashes."""
+        
+        with pytest.raises(HTTPException) as exc_info:
+            get_place_details("place\\with\\backslash")
         assert exc_info.value.status_code == 400
     
     def test_get_place_details_accepts_valid_id(self, monkeypatch):
