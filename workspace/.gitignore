@@ -1,0 +1,4 @@
+# Track workspace config files, ignore cloned repos
+AutifyME/
+**/node_modules/
+tally_helper.ps1

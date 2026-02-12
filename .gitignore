@@ -84,6 +84,5 @@ USER.md
 !.agent/workflows/
 local/
 
-workspace/
 start-gateway.ps1
 update.ps1
