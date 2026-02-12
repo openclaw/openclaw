@@ -407,6 +407,11 @@ export function registerVaultCli(program: Command) {
           if (!apiKey || apiKey === VAULT_PROXY_PLACEHOLDER_KEY) {
             continue;
           }
+          // Skip providers without a vault proxy mapping (e.g. ollama, autorouter).
+          // Their keys must stay in config — there is no vault proxy to inject them.
+          if (!providerProxyUrl(providerName, opts.proxyHost)) {
+            continue;
+          }
           const secretName =
             providerSecretName(providerName) ??
             `${providerName.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;

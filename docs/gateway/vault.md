@@ -176,7 +176,8 @@ AGE_SECRET_KEY=<key> openclaw vault migrate
 
 The `migrate` command:
 
-1. Scans providers for plaintext `apiKey` values
+1. Scans providers for plaintext `apiKey` values (only providers with a known
+   vault proxy mapping — local services like `ollama` or `autorouter` are skipped)
 2. Initializes the vault if needed (prints the secret key)
 3. Encrypts each key into `vault.age`
 4. Removes plaintext keys from config

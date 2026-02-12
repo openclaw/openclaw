@@ -1075,6 +1075,56 @@ describe("vault migrate edge cases", () => {
     expect(writtenConfig?.vault?.proxies?.groq).toBe("http://vault:8086");
     expect(writtenConfig?.vault?.proxies?.brave).toBe("http://vault:8089");
   });
+
+  it("skips local providers without vault proxy mapping", async () => {
+    const keypair = await generateKeypair();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            name: "openai",
+            apiKey: "sk-real-key",
+          } as ProviderEntry,
+          ollama: {
+            name: "ollama",
+            apiKey: "ollama-local",
+          } as ProviderEntry,
+          autorouter: {
+            name: "autorouter",
+            apiKey: "sk-autorouter-local",
+          } as ProviderEntry,
+        },
+      },
+    };
+    await setupMocks(cfg, keypair);
+    writeConfig(cfg);
+
+    const vaultOps = await import("../vault/operations.js");
+    vi.spyOn(vaultOps, "generateKeypair").mockResolvedValue(keypair);
+
+    const program = await createVaultProgram();
+
+    await program.parseAsync(["node", "test", "vault", "migrate"]);
+
+    // openai should be migrated (known vault proxy mapping)
+    const secrets = await decryptVault(vaultPath, keypair.identity);
+    expect(secrets.get("OPENAI_API_KEY")).toBe("sk-real-key");
+
+    // ollama and autorouter should NOT be in the vault
+    expect(secrets.has("OLLAMA_API_KEY")).toBe(false);
+    expect(secrets.has("AUTOROUTER_API_KEY")).toBe(false);
+
+    // Config should retain ollama/autorouter apiKeys unchanged
+    const { writeConfigFile } = await import("../config/config.js");
+    const writtenConfig = vi.mocked(writeConfigFile).mock.calls[0]?.[0];
+    const providers = writtenConfig?.models?.providers as
+      | Record<string, { apiKey?: string }>
+      | undefined;
+    expect(providers?.openai?.apiKey).toBeUndefined();
+    expect(providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(providers?.autorouter?.apiKey).toBe("sk-autorouter-local");
+  });
 });
 
 describe("vault add proxy edge cases", () => {
