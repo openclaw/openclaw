@@ -293,10 +293,44 @@ export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
-      const result = await base.execute(toolCallId, normalized ?? params, signal);
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
-      const normalizedResult = await normalizeReadImageResult(result, filePath);
-      return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
+
+      try {
+        const result = await base.execute(toolCallId, normalized ?? params, signal);
+        const normalizedResult = await normalizeReadImageResult(result, filePath);
+        return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
+      } catch (err: unknown) {
+        const code =
+          err && typeof err === "object" && "code" in err ? (err as { code: string }).code : "";
+        const message = err instanceof Error ? err.message : String(err);
+
+        // EISDIR: the path is a directory, not a file.
+        if (code === "EISDIR" || message.includes("EISDIR")) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: "${filePath}" is a directory, not a file. Use the exec tool with "ls" to list its contents, then read specific files.`,
+              },
+            ],
+          } as AgentToolResult<unknown>;
+        }
+
+        // ENOENT: file not found — include the cwd so the agent can orient itself.
+        if (code === "ENOENT" || message.includes("ENOENT")) {
+          const cwd = process.cwd();
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: File not found: "${filePath}". Your current working directory is "${cwd}". Use the exec tool with "ls" or "find" to discover available files.`,
+              },
+            ],
+          } as AgentToolResult<unknown>;
+        }
+
+        throw err;
+      }
     },
   };
 }

@@ -7,7 +7,16 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
-import { resetProviderBreakers, runWithModelFallback } from "./model-fallback.js";
+import {
+  __recordModelFailureForTest,
+  getModelCooldownSnapshot,
+  isModelCoolingDown,
+  parseRetryAfterMs,
+  resetModelCooldowns,
+  resetProviderBreakers,
+  runWithCodingModelFallback,
+  runWithModelFallback,
+} from "./model-fallback.js";
 
 function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
   return {
@@ -26,6 +35,7 @@ function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
 describe("runWithModelFallback", () => {
   beforeEach(() => {
     resetProviderBreakers();
+    resetModelCooldowns();
   });
 
   it("does not fall back on non-auth errors", async () => {
@@ -41,6 +51,127 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toThrow("bad request");
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps thinking model pinned when auto-pick is disabled", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
+            fallbacks: ["openai-codex/gpt-5.1-codex-mini"],
+          },
+          modelByComplexity: {
+            autoPickFromPool: false,
+          },
+        },
+      },
+    });
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("429 too many requests"), { status: 429 }));
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openrouter",
+        model: "qwen/qwen3-next-80b-a3b-instruct:free",
+        run,
+      }),
+    ).rejects.toThrow("429 too many requests");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("openrouter");
+  });
+
+  it("forces configured thinking model even when runtime requests another provider", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.2-codex",
+            fallbacks: ["github-copilot/gpt-5.1-codex-mini"],
+          },
+          modelByComplexity: {
+            autoPickFromPool: false,
+          },
+        },
+      },
+    });
+
+    const run = vi.fn().mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "github-copilot",
+      model: "gpt-5.1-codex-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]).toEqual(["openai-codex", "gpt-5.2-codex"]);
+  });
+
+  it("treats unknown-model errors as failover and continues to next candidate", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.1-codex",
+            fallbacks: ["openai-codex/gpt-5.1-codex-mini"],
+          },
+        },
+      },
+    });
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Unknown model: openai-codex/gpt-5.1-codex"))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai-codex",
+      model: "gpt-5.1-codex",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-5.1-codex-mini");
+  });
+
+  it("keeps coding model pinned when coding selector is explicitly set", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
+          },
+          codingModel: {
+            primary: "openrouter/qwen/qwen3-coder:free",
+            fallbacks: ["openai-codex/gpt-5.1-codex-mini"],
+          },
+        },
+      },
+    });
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("429 too many requests"), { status: 429 }));
+
+    await expect(
+      runWithCodingModelFallback({
+        cfg,
+        run,
+      }),
+    ).rejects.toThrow("429 too many requests");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("openrouter");
+    expect(run.mock.calls[0]?.[1]).toBe("qwen/qwen3-coder:free");
   });
 
   it("falls back on auth errors", async () => {
@@ -63,6 +194,125 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
+  it("skips a model in cooldown across runs and re-enables after cooldown expires", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+
+    // First run: primary hits rate limit, fallback succeeds.
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("429 too many requests"), { status: 429 }))
+      .mockResolvedValueOnce("ok");
+
+    const first = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+    expect(first.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]?.[0]).toBe("openai");
+    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
+
+    // Second run inside cooldown: should skip openai/gpt-4.1-mini and go straight to fallback.
+    run.mockClear();
+    now.mockReturnValue(2_000);
+    run.mockResolvedValueOnce("ok2");
+
+    const second = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+    expect(second.result).toBe("ok2");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("anthropic");
+    expect(run.mock.calls[0]?.[1]).toBe("claude-haiku-3-5");
+
+    // After cooldown: primary should be attempted again.
+    run.mockClear();
+    now.mockReturnValue(1_000 + 61_000);
+    run.mockResolvedValueOnce("ok3");
+
+    const third = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+    expect(third.result).toBe("ok3");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("openai");
+    expect(run.mock.calls[0]?.[1]).toBe("gpt-4.1-mini");
+  });
+
+  it("does not put auth-failing models in cooldown", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "github-copilot/gpt-5.2-codex",
+            fallbacks: ["openai/gpt-5.1"],
+          },
+        },
+      },
+    });
+
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(10_000);
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Copilot token exchange failed"), { status: 403 }),
+      )
+      .mockResolvedValueOnce("ok-fallback");
+
+    const first = await runWithModelFallback({
+      cfg,
+      provider: "github-copilot",
+      model: "gpt-5.2-codex",
+      run,
+    });
+    expect(first.result).toBe("ok-fallback");
+    expect(run).toHaveBeenCalledTimes(2);
+
+    run.mockClear();
+    now.mockReturnValue(20_000);
+    run
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Copilot token exchange failed"), { status: 403 }),
+      )
+      .mockResolvedValueOnce("ok-still-fallback");
+
+    const second = await runWithModelFallback({
+      cfg,
+      provider: "github-copilot",
+      model: "gpt-5.2-codex",
+      run,
+    });
+    expect(second.result).toBe("ok-still-fallback");
+    // Primary is retried on each run (auth should not quarantine the model).
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]).toEqual(["github-copilot", "gpt-5.2-codex"]);
+    expect(run.mock.calls[1]).toEqual(["openai", "gpt-5.1"]);
+
+    now.mockRestore();
+  });
+
   it("falls back on 402 payment required", async () => {
     const cfg = makeCfg();
     const run = vi
@@ -81,6 +331,46 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[1]?.[0]).toBe("anthropic");
     expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  });
+
+  it("forces a probe on the last candidate when provider breaker is open", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [],
+          },
+        },
+      },
+    });
+
+    const runFail = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("upstream unavailable"), { status: 500 }));
+
+    // Trip provider breaker (threshold: 5).
+    for (let i = 0; i < 5; i += 1) {
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          run: runFail,
+        }),
+      ).rejects.toThrow();
+    }
+
+    const runSuccess = vi.fn().mockResolvedValue("ok-after-forced-probe");
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run: runSuccess,
+    });
+
+    expect(result.result).toBe("ok-after-forced-probe");
+    expect(runSuccess).toHaveBeenCalledTimes(1);
   });
 
   it("falls back on billing errors", async () => {
@@ -765,5 +1055,103 @@ describe("runWithModelFallback", () => {
 
     // Only the primary (and configured primary appended, which is same = deduplicated)
     expect(calls).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
+  });
+});
+
+describe("parseRetryAfterMs", () => {
+  it("parses 'quota will reset after Xh Ym Zs' format", () => {
+    const msg =
+      "Cloud Code Assist API error (429): You have exhausted your capacity on this model. Your quota will reset after 4h37m20s.";
+    expect(parseRetryAfterMs(msg)).toBe((4 * 3600 + 37 * 60 + 20) * 1000);
+  });
+
+  it("parses hours + minutes without seconds", () => {
+    expect(parseRetryAfterMs("quota will reset after 2h15m")).toBe((2 * 3600 + 15 * 60) * 1000);
+  });
+
+  it("parses minutes + seconds without hours", () => {
+    expect(parseRetryAfterMs("retry after 5m30s")).toBe((5 * 60 + 30) * 1000);
+  });
+
+  it("parses seconds only", () => {
+    expect(parseRetryAfterMs("retry after 120s")).toBe(120_000);
+  });
+
+  it("parses plain Retry-After header style", () => {
+    expect(parseRetryAfterMs("Retry-After: 3600")).toBe(3_600_000);
+  });
+
+  it("returns 0 for messages without retry hint", () => {
+    expect(parseRetryAfterMs("some random error")).toBe(0);
+  });
+
+  it("returns 0 for empty string", () => {
+    expect(parseRetryAfterMs("")).toBe(0);
+  });
+});
+
+describe("recordModelFailure with retry-after hint", () => {
+  beforeEach(() => {
+    resetProviderBreakers();
+    resetModelCooldowns();
+  });
+
+  it("uses upstream retry-after duration when present", () => {
+    __recordModelFailureForTest({
+      provider: "google-antigravity",
+      model: "claude-opus-4-6-thinking",
+      reason: "rate_limit",
+      errorMessage: "Your quota will reset after 4h37m20s.",
+    });
+
+    const snapshot = getModelCooldownSnapshot();
+    expect(snapshot).toHaveLength(1);
+    const entry = snapshot[0];
+    // Should use the parsed 4h37m20s = 16640s = 16640000ms (not the default 60s)
+    expect(entry.remainingMs).toBeGreaterThan(60_000);
+    expect(entry.remainingMs).toBeLessThanOrEqual(4 * 3600 * 1000 + 38 * 60 * 1000);
+  });
+
+  it("falls back to default exponential backoff when no retry hint", () => {
+    __recordModelFailureForTest({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      reason: "rate_limit",
+    });
+
+    const snapshot = getModelCooldownSnapshot();
+    expect(snapshot).toHaveLength(1);
+    // Default: 60s base for first failure
+    expect(snapshot[0].remainingMs).toBeLessThanOrEqual(61_000);
+  });
+
+  it("caps retry-after at 6 hours", () => {
+    __recordModelFailureForTest({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      reason: "rate_limit",
+      errorMessage: "Your quota will reset after 24h0m0s.",
+    });
+
+    const snapshot = getModelCooldownSnapshot();
+    expect(snapshot).toHaveLength(1);
+    // Should be capped at 6 hours = 21600000ms
+    expect(snapshot[0].remainingMs).toBeLessThanOrEqual(6 * 3600 * 1000 + 1000);
+  });
+
+  it("model enters cooldown and is detected", () => {
+    __recordModelFailureForTest({
+      provider: "google-antigravity",
+      model: "gpt-oss-120b-medium",
+      reason: "rate_limit",
+      errorMessage: "retry after 300s",
+    });
+
+    expect(
+      isModelCoolingDown({ provider: "google-antigravity", model: "gpt-oss-120b-medium" }),
+    ).toBe(true);
+    expect(isModelCoolingDown({ provider: "google-antigravity", model: "other-model" })).toBe(
+      false,
+    );
   });
 });

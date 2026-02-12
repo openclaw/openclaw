@@ -30,9 +30,57 @@ import {
 // Per-provider circuit breakers for instant fail-fast on repeated upstream failures.
 const providerBreakers = new Map<string, CircuitBreaker>();
 
+type ModelCooldownState = {
+  until: number;
+  failures: number;
+  lastReason: FailoverReason;
+};
+
+// Per-model cooldown state for transient limits (rate limiting, upstream overload, etc).
+const modelCooldowns = new Map<string, ModelCooldownState>();
+
+export type ModelCooldownSnapshotEntry = {
+  key: string;
+  provider: string;
+  model: string;
+  untilMs: number;
+  remainingMs: number;
+  failures: number;
+  reason: FailoverReason;
+};
+
 /** Reset all provider circuit breakers. Exported for test isolation. */
 export function resetProviderBreakers(): void {
   providerBreakers.clear();
+}
+
+/** Reset all model cooldown state. Exported for test isolation. */
+export function resetModelCooldowns(): void {
+  modelCooldowns.clear();
+}
+
+export function getModelCooldownSnapshot(now = Date.now()): ModelCooldownSnapshotEntry[] {
+  const out: ModelCooldownSnapshotEntry[] = [];
+  for (const [key, state] of modelCooldowns.entries()) {
+    const remainingMs = state.until - now;
+    if (remainingMs <= 0) {
+      modelCooldowns.delete(key);
+      continue;
+    }
+    const slash = key.indexOf("/");
+    const provider = slash === -1 ? "" : key.slice(0, slash);
+    const model = slash === -1 ? key : key.slice(slash + 1);
+    out.push({
+      key,
+      provider,
+      model,
+      untilMs: state.until,
+      remainingMs,
+      failures: state.failures,
+      reason: state.lastReason,
+    });
+  }
+  return out.toSorted((a, b) => a.remainingMs - b.remainingMs);
 }
 
 function getProviderBreaker(provider: string): CircuitBreaker {
@@ -56,10 +104,173 @@ function getProviderBreaker(provider: string): CircuitBreaker {
   return breaker;
 }
 
+function getModelCooldownRemainingMs(key: string, now: number): number {
+  const state = modelCooldowns.get(key);
+  if (!state) {
+    return 0;
+  }
+  const remaining = state.until - now;
+  if (remaining <= 0) {
+    modelCooldowns.delete(key);
+    return 0;
+  }
+  return remaining;
+}
+
+export function isModelCoolingDown(
+  ref: { provider?: string | null; model?: string | null },
+  now = Date.now(),
+): boolean {
+  const provider = ref.provider?.trim();
+  const model = ref.model?.trim();
+  if (!provider || !model) {
+    return false;
+  }
+  return getModelCooldownRemainingMs(modelKey(provider, model), now) > 0;
+}
+
+function shouldModelEnterCooldown(reason?: FailoverReason): boolean {
+  // Auth failures are often recoverable quickly (token refresh / provider-side hiccup).
+  // Do not quarantine the model for long windows; let auth-profile health handle rotation.
+  return reason === "rate_limit" || reason === "timeout";
+}
+
+/**
+ * Parse a "retry after" duration hint from an error message.
+ * Supports patterns like "quota will reset after 4h37m20s", "retry after 120s",
+ * "Retry-After: 3600", and structured "Xh Ym Zs" durations.
+ * Returns milliseconds, or 0 if no hint found.
+ */
+const RETRY_AFTER_DURATION_RE =
+  /(?:reset|retry)[- ]?after[:\s]+(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?/i;
+const RETRY_AFTER_SECONDS_RE = /retry[- ]?after[:\s]+(\d+)\s*(?:seconds?)?$/im;
+
+export function parseRetryAfterMs(errorMessage: string): number {
+  if (!errorMessage) {
+    return 0;
+  }
+  // Match "Xh Ym Zs" duration pattern (e.g., "quota will reset after 4h37m20s")
+  const durationMatch = errorMessage.match(RETRY_AFTER_DURATION_RE);
+  if (durationMatch) {
+    const hours = Number(durationMatch[1] || 0);
+    const minutes = Number(durationMatch[2] || 0);
+    const seconds = Number(durationMatch[3] || 0);
+    const totalMs = (hours * 3600 + minutes * 60 + seconds) * 1000;
+    if (totalMs > 0) {
+      return totalMs;
+    }
+  }
+  // Match plain seconds (e.g., "Retry-After: 3600")
+  const secondsMatch = errorMessage.match(RETRY_AFTER_SECONDS_RE);
+  if (secondsMatch) {
+    const seconds = Number(secondsMatch[1]);
+    if (seconds > 0) {
+      return seconds * 1000;
+    }
+  }
+  return 0;
+}
+
+function computeModelCooldownMs(params: {
+  reason: FailoverReason;
+  failures: number;
+  /** Parsed retry-after hint from the error, in ms. Overrides default backoff when present. */
+  retryAfterHintMs?: number;
+}): number {
+  // Hard cap: never cooldown longer than 6 hours.
+  const ABSOLUTE_MAX_COOLDOWN_MS = 6 * 60 * 60_000;
+  const DEFAULT_MAX_COOLDOWN_MS = 10 * 60_000;
+
+  // When the upstream tells us exactly how long to wait, respect it (capped).
+  if (params.retryAfterHintMs && params.retryAfterHintMs > 0) {
+    return Math.min(ABSOLUTE_MAX_COOLDOWN_MS, params.retryAfterHintMs);
+  }
+
+  const base = params.reason === "timeout" ? 20_000 : 60_000;
+  const factor = Math.min(8, Math.max(1, 2 ** Math.max(0, params.failures - 1)));
+  return Math.min(DEFAULT_MAX_COOLDOWN_MS, base * factor);
+}
+
+export function __recordModelFailureForTest(params: {
+  provider: string;
+  model: string;
+  reason: FailoverReason;
+  errorMessage?: string;
+}): void {
+  recordModelFailure(params);
+}
+
+function recordModelFailure(params: {
+  provider: string;
+  model: string;
+  reason: FailoverReason;
+  errorMessage?: string;
+}): {
+  cooldownMs: number;
+  remainingMs: number;
+} {
+  const key = modelKey(params.provider, params.model);
+  const now = Date.now();
+  const existing = modelCooldowns.get(key);
+  const failures = (existing?.failures ?? 0) + 1;
+  const retryAfterHintMs = params.errorMessage ? parseRetryAfterMs(params.errorMessage) : 0;
+  const cooldownMs = computeModelCooldownMs({ reason: params.reason, failures, retryAfterHintMs });
+  const until = Math.max(existing?.until ?? 0, now + cooldownMs);
+  modelCooldowns.set(key, { until, failures, lastReason: params.reason });
+
+  if (retryAfterHintMs > 0) {
+    console.warn(
+      `\x1b[33m[model-fallback]\x1b[0m \x1b[33mModel ${params.provider}/${params.model} rate limited. ` +
+        `Upstream retry-after: ${formatCooldownDuration(retryAfterHintMs)}. ` +
+        `Cooldown set to ${formatCooldownDuration(cooldownMs)}.\x1b[0m`,
+    );
+  }
+
+  return { cooldownMs, remainingMs: until - now };
+}
+
+function recordModelSuccess(provider: string, model: string): void {
+  modelCooldowns.delete(modelKey(provider, model));
+}
+
 type ModelCandidate = {
   provider: string;
   model: string;
 };
+
+function resolvePinnedThinkingModel(params: { cfg: OpenClawConfig | undefined }): string | null {
+  const autoPickFromPool = params.cfg?.agents?.defaults?.modelByComplexity?.autoPickFromPool;
+  if (autoPickFromPool !== false) {
+    return null;
+  }
+  const modelCfg = params.cfg?.agents?.defaults?.model as { primary?: string } | string | undefined;
+  if (typeof modelCfg === "string") {
+    const trimmed = modelCfg.trim();
+    return trimmed || null;
+  }
+  const trimmed = modelCfg?.primary?.trim() ?? "";
+  return trimmed || null;
+}
+
+function resolvePinnedCodingModel(params: {
+  cfg: OpenClawConfig | undefined;
+  modelOverride?: string;
+}): string | null {
+  const modelOverride = params.modelOverride?.trim();
+  if (modelOverride) {
+    return modelOverride;
+  }
+  const codingCfg = params.cfg?.agents?.defaults?.codingModel as
+    | { primary?: string }
+    | string
+    | undefined;
+  if (typeof codingCfg === "string") {
+    const trimmed = codingCfg.trim();
+    return trimmed || null;
+  }
+  const trimmed = codingCfg?.primary?.trim() ?? "";
+  return trimmed || null;
+}
 
 type FallbackAttempt = {
   provider: string;
@@ -227,8 +438,13 @@ function resolveCodingFallbackCandidates(params: {
     addCandidate(resolved.ref, enforceAllowlist);
   };
 
-  if (params.modelOverride?.trim()) {
-    addRaw(params.modelOverride, false);
+  const pinnedCodingModel = resolvePinnedCodingModel({
+    cfg: params.cfg,
+    modelOverride: params.modelOverride,
+  });
+
+  if (pinnedCodingModel) {
+    addRaw(pinnedCodingModel, false);
   } else {
     const codingModel = params.cfg?.agents?.defaults?.codingModel as
       | { primary?: string }
@@ -238,6 +454,11 @@ function resolveCodingFallbackCandidates(params: {
     if (primary?.trim()) {
       addRaw(primary, false);
     }
+  }
+
+  // When coding selector is explicitly set (non-auto), do not route to other models.
+  if (pinnedCodingModel) {
+    return candidates;
   }
 
   const codingFallbacks = (() => {
@@ -367,6 +588,21 @@ function resolveFallbackCandidates(params: {
     cfg: params.cfg ?? {},
     defaultProvider,
   });
+
+  const pinnedThinkingModel = resolvePinnedThinkingModel({ cfg: params.cfg });
+  // When thinking selector is explicitly set (non-auto), force that configured model globally.
+  // This prevents stale session/runtime hints from routing to a different provider/model.
+  if (params.fallbacksOverride === undefined && pinnedThinkingModel) {
+    const resolvedPinned = resolveModelRefFromString({
+      raw: pinnedThinkingModel,
+      defaultProvider,
+      aliasIndex,
+    });
+    if (resolvedPinned) {
+      return [resolvedPinned.ref];
+    }
+  }
+
   const allowlist = buildAllowedModelKeys(params.cfg, defaultProvider);
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
@@ -436,13 +672,10 @@ function resolveFallbackCandidates(params: {
   return candidates;
 }
 
-export async function runWithModelFallback<T>(params: {
+async function runWithCandidates<T>(params: {
   cfg: OpenClawConfig | undefined;
-  provider: string;
-  model: string;
   agentDir?: string;
-  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
-  fallbacksOverride?: string[];
+  candidates: ModelCandidate[];
   run: (provider: string, model: string) => Promise<T>;
   onError?: (attempt: {
     provider: string;
@@ -457,12 +690,7 @@ export async function runWithModelFallback<T>(params: {
   model: string;
   attempts: FallbackAttempt[];
 }> {
-  let candidates = resolveFallbackCandidates({
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    fallbacksOverride: params.fallbacksOverride,
-  });
+  let candidates = params.candidates;
   const authStore = params.cfg
     ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
     : null;
@@ -513,6 +741,37 @@ export async function runWithModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    const key = modelKey(candidate.provider, candidate.model);
+    const now = Date.now();
+    const remainingMs = getModelCooldownRemainingMs(key, now);
+    if (remainingMs > 0) {
+      const nextCandidate = candidates[i + 1];
+      if (nextCandidate) {
+        logCooldownSwitch({
+          fromProvider: candidate.provider,
+          fromModel: candidate.model,
+          toProvider: nextCandidate.provider,
+          toModel: nextCandidate.model,
+          reason: "cooldown",
+          cooldownRemainingMs: remainingMs,
+        });
+      } else {
+        logCooldownNoFallback({
+          provider: candidate.provider,
+          model: candidate.model,
+          cooldownRemainingMs: remainingMs,
+        });
+      }
+
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: `Model ${candidate.provider}/${candidate.model} is in cooldown`,
+        reason: "rate_limit",
+      });
+      continue;
+    }
+
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -583,27 +842,42 @@ export async function runWithModelFallback<T>(params: {
         }
       }
     }
-    // Circuit-breaker: skip provider entirely if breaker is open
+
+    // Circuit-breaker: skip provider when open, but if this is the final
+    // candidate, force one probe attempt to avoid a hard lock on stale state.
     const breaker = getProviderBreaker(candidate.provider);
+    let forceProbeOnLastCandidate = false;
     if (breaker.state() === "open") {
       try {
         // Probe will throw CircuitBreakerOpenError if timeout hasn't elapsed
         await breaker.execute(() => Promise.resolve());
       } catch (err) {
         if (err instanceof CircuitBreakerOpenError) {
-          attempts.push({
-            provider: candidate.provider,
-            model: candidate.model,
-            error: `Provider ${candidate.provider} circuit breaker open`,
-            reason: "rate_limit",
-          });
-          continue;
+          if (i === candidates.length - 1) {
+            breaker.reset();
+            forceProbeOnLastCandidate = true;
+          } else {
+            attempts.push({
+              provider: candidate.provider,
+              model: candidate.model,
+              error: `Provider ${candidate.provider} circuit breaker open`,
+              reason: "rate_limit",
+            });
+            continue;
+          }
         }
       }
     }
 
+    if (forceProbeOnLastCandidate) {
+      console.warn(
+        `\x1b[33m[model-fallback]\x1b[0m \x1b[33mProvider ${candidate.provider} breaker was open on last candidate. Forcing probe attempt with ${candidate.provider}/${candidate.model}.\x1b[0m`,
+      );
+    }
+
     try {
       const result = await breaker.execute(() => params.run(candidate.provider, candidate.model));
+      recordModelSuccess(candidate.provider, candidate.model);
       return {
         result,
         provider: candidate.provider,
@@ -634,6 +908,14 @@ export async function runWithModelFallback<T>(params: {
 
       lastError = normalized;
       const described = describeFailoverError(normalized);
+      if (described.reason && shouldModelEnterCooldown(described.reason)) {
+        recordModelFailure({
+          provider: candidate.provider,
+          model: candidate.model,
+          reason: described.reason,
+          errorMessage: described.message,
+        });
+      }
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
@@ -687,6 +969,42 @@ export async function runWithModelFallback<T>(params: {
   });
 }
 
+export async function runWithModelFallback<T>(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  model: string;
+  agentDir?: string;
+  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+  fallbacksOverride?: string[];
+  run: (provider: string, model: string) => Promise<T>;
+  onError?: (attempt: {
+    provider: string;
+    model: string;
+    error: unknown;
+    attempt: number;
+    total: number;
+  }) => void | Promise<void>;
+}): Promise<{
+  result: T;
+  provider: string;
+  model: string;
+  attempts: FallbackAttempt[];
+}> {
+  const candidates = resolveFallbackCandidates({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    fallbacksOverride: params.fallbacksOverride,
+  });
+  return runWithCandidates({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    candidates,
+    run: params.run,
+    onError: params.onError,
+  });
+}
+
 export async function runWithImageModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   modelOverride?: string;
@@ -714,51 +1032,11 @@ export async function runWithImageModelFallback<T>(params: {
       "No image model configured. Set agents.defaults.imageModel.primary or agents.defaults.imageModel.fallbacks.",
     );
   }
-
-  const attempts: FallbackAttempt[] = [];
-  let lastError: unknown;
-
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
-    try {
-      const result = await params.run(candidate.provider, candidate.model);
-      return {
-        result,
-        provider: candidate.provider,
-        model: candidate.model,
-        attempts,
-      };
-    } catch (err) {
-      if (shouldRethrowAbort(err)) {
-        throw err;
-      }
-      lastError = err;
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      await params.onError?.({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: err,
-        attempt: i + 1,
-        total: candidates.length,
-      });
-    }
-  }
-
-  if (attempts.length <= 1 && lastError) {
-    throw lastError;
-  }
-  const summary =
-    attempts.length > 0
-      ? attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
-  throw new Error(`All image models failed (${attempts.length || candidates.length}): ${summary}`, {
-    cause: lastError instanceof Error ? lastError : undefined,
+  return runWithCandidates({
+    cfg: params.cfg,
+    candidates,
+    run: params.run,
+    onError: params.onError,
   });
 }
 
@@ -803,53 +1081,10 @@ export async function runWithCodingModelFallback<T>(params: {
       onError: params.onError,
     });
   }
-
-  const attempts: FallbackAttempt[] = [];
-  let lastError: unknown;
-
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
-    try {
-      const result = await params.run(candidate.provider, candidate.model);
-      return {
-        result,
-        provider: candidate.provider,
-        model: candidate.model,
-        attempts,
-      };
-    } catch (err) {
-      if (shouldRethrowAbort(err)) {
-        throw err;
-      }
-      lastError = err;
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      await params.onError?.({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: err,
-        attempt: i + 1,
-        total: candidates.length,
-      });
-    }
-  }
-
-  if (attempts.length <= 1 && lastError) {
-    throw lastError;
-  }
-  const summary =
-    attempts.length > 0
-      ? attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
-  throw new Error(
-    `All coding models failed (${attempts.length || candidates.length}): ${summary}`,
-    {
-      cause: lastError instanceof Error ? lastError : undefined,
-    },
-  );
+  return runWithCandidates({
+    cfg: params.cfg,
+    candidates,
+    run: params.run,
+    onError: params.onError,
+  });
 }
