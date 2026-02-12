@@ -73,9 +73,9 @@ def _validate_place_id(place_id: str) -> None:
     Validate Google Places API place_id format to prevent path traversal.
     
     Google Place IDs are base64-like alphanumeric strings that may contain
-    specific special characters (+, =, _, -). This validation prevents path
-    traversal attacks (e.g., ../../../etc/passwd) while allowing all
-    legitimate place_id formats.
+    specific special characters (+, =, _, -). This validation uses an allowlist
+    approach: only explicitly permitted characters are allowed, which prevents
+    all path traversal attacks by design.
     
     Args:
         place_id: The place ID string to validate
@@ -87,6 +87,11 @@ def _validate_place_id(place_id: str) -> None:
         This addresses SonarCloud pythonsecurity:S7044. While the URL scheme and host
         are fixed (https://places.googleapis.com), validating the place_id prevents
         any potential path manipulation and satisfies security analysis requirements.
+        
+        The allowlist approach (only permitting [A-Za-z0-9+=_-]) inherently blocks:
+        - Path traversal: ../, ..\, //, \\
+        - Special characters: /, \, %, ., #, @, etc.
+        - URL-encoded attacks: %2e, %2f, %5c, etc.
     """
     if not place_id or not isinstance(place_id, str):
         raise HTTPException(
@@ -101,45 +106,12 @@ def _validate_place_id(place_id: str) -> None:
             detail=f"Invalid place_id length: {len(place_id)}. Expected 10-300 characters.",
         )
     
-    # Normalize percent-encoded sequences (both lowercase and uppercase)
-    # This catches attempts to bypass validation with URL encoding
-    # Use regular strings (not raw) so we get actual single characters
-    normalized = place_id.lower()
-    normalized = normalized.replace('%2e', '.')   # Becomes a single dot
-    normalized = normalized.replace('%2f', '/')   # Becomes a single forward slash
-    normalized = normalized.replace('%5c', '\\')  # Becomes a single backslash
-    
-    # Check for path traversal patterns in the normalized string
-    # After normalization:
-    # - %2e%2e becomes .. (two dots)
-    # - %2f%2f becomes // (two forward slashes)
-    # - %5c%5c becomes \\ (two backslashes)
-    traversal_patterns = [
-        r'\.\.',           # Double dots (.. or %2e%2e after normalization)
-        r'//',             # Double slashes (// or %2f%2f after normalization)
-        r'\\\\',           # Double backslashes (\\ or %5c%5c after normalization)
-        r'\.\/',           # Dot-slash (./)
-        r'\.',             # Dot-backslash (.\)
-    ]
-    
-    for pattern in traversal_patterns:
-        if re.search(pattern, normalized, re.IGNORECASE):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid place_id format: contains path traversal pattern.",
-            )
-    
-    # Block dangerous special characters that could be used for injection
-    # Properly escaped single quote
-    if re.search(r"[\s?#<>|*%$&\'`;]", place_id):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid place_id format: contains disallowed special characters.",
-        )
-    
-    # Only allow alphanumeric characters and specific Google Place ID characters: + = _ -
-    # Note: Forward slash (/) is NOT included as Google Place IDs don't contain slashes
-    # Real examples: ChIJN1t_tDeuEmsRUsoyG83frY4, Ei1Tb21lIFBsYWNlIE5hbWU
+    # Allowlist validation: Only permit characters found in legitimate Google Place IDs
+    # This blocks ALL path traversal attempts by design (no /, \, ., %, etc.)
+    # Allowed characters:
+    #   - Alphanumeric: A-Z, a-z, 0-9
+    #   - Base64-like chars: +, =
+    #   - Word separators: _, -
     if not re.match(r'^[A-Za-z0-9+=_-]+$', place_id):
         raise HTTPException(
             status_code=400,
