@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -116,7 +116,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
         // Fire-and-forget: read old session messages and run hook
         void (async () => {
           try {
-            const content = await fs.promises.readFile(sessionFile, "utf-8");
+            const content = await fs.readFile(sessionFile, "utf-8");
             const messages: unknown[] = [];
             for (const line of content.split("\n")) {
               if (!line.trim()) {

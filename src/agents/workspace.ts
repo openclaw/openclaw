@@ -333,7 +333,11 @@ export async function loadExtraBootstrapFiles(
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const relPath of resolvedPaths) {
-    const filePath = path.join(resolvedDir, relPath);
+    const filePath = path.resolve(resolvedDir, relPath);
+    // Guard against path traversal — resolved path must stay within workspace
+    if (!filePath.startsWith(resolvedDir + path.sep) && filePath !== resolvedDir) {
+      continue;
+    }
     try {
       const content = await fs.readFile(filePath, "utf-8");
       result.push({
