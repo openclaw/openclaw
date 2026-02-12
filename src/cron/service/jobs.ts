@@ -87,10 +87,14 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   return computeNextRunAtMs(job.schedule, nowMs);
 }
 
-export function recomputeNextRuns(state: CronServiceState): boolean {
+export function recomputeNextRuns(
+  state: CronServiceState,
+  opts?: { preserveDue?: boolean },
+): boolean {
   if (!state.store) {
     return false;
   }
+  const preserveDue = opts?.preserveDue === true;
   let changed = false;
   const now = state.deps.nowMs();
   for (const job of state.store.jobs) {
@@ -122,8 +126,17 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     // Preserving a still-future nextRunAtMs avoids accidentally advancing
     // a job that hasn't fired yet (e.g. during restart recovery).
     const nextRun = job.state.nextRunAtMs;
-    const isDueOrMissing = nextRun === undefined || now >= nextRun;
-    if (isDueOrMissing) {
+    const isDue = typeof nextRun === "number" && now >= nextRun;
+    const isMissing = nextRun === undefined;
+
+    // When preserveDue is set, skip past-due jobs so read-only callers
+    // (list, status) don't accidentally advance nextRunAtMs before the
+    // timer has a chance to fire the job.
+    if (isDue && preserveDue) {
+      continue;
+    }
+
+    if (isDue || isMissing) {
       const newNext = computeJobNextRunAtMs(job, now);
       if (job.state.nextRunAtMs !== newNext) {
         job.state.nextRunAtMs = newNext;

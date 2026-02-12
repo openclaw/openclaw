@@ -53,7 +53,7 @@ export async function status(state: CronServiceState) {
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (state.store) {
-      const changed = recomputeNextRuns(state);
+      const changed = recomputeNextRuns(state, { preserveDue: true });
       if (changed) {
         await persist(state);
       }
@@ -71,7 +71,7 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (state.store) {
-      const changed = recomputeNextRuns(state);
+      const changed = recomputeNextRuns(state, { preserveDue: true });
       if (changed) {
         await persist(state);
       }
