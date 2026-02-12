@@ -30,6 +30,8 @@ export type BrowserConfig = {
   headless?: boolean;
   /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
   noSandbox?: boolean;
+  /** Extra Chrome launch arguments (e.g. ["--enable-gpu", "--use-gl=egl"]). */
+  args?: string[];
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
   /** Default profile to use when profile param is omitted. Default: "chrome" */

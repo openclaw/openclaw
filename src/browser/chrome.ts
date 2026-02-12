@@ -214,6 +214,11 @@ export async function launchOpenClawChrome(
       args.push("--disable-dev-shm-usage");
     }
 
+    // Append user-configured extra args (e.g. --enable-gpu, --use-gl=egl).
+    if (resolved.args.length > 0) {
+      args.push(...resolved.args);
+    }
+
     // Always open a blank tab to ensure a target exists.
     args.push("about:blank");
 
