@@ -299,6 +299,15 @@ export function createAgentEventHandler({
     jobState: "done" | "error",
     error?: unknown,
   ) => {
+    // Finalize any in-progress block into the buffer so the final payload
+    // contains all blocks even when lifecycle "end" fires without a trailing
+    // assistant delta after the last block boundary.
+    const lastBlock = chatRunState.lastBlockTexts.get(clientRunId);
+    if (lastBlock !== undefined) {
+      const base = chatRunState.blockBases.get(clientRunId) ?? "";
+      const fullText = base ? base + "\n\n" + lastBlock : lastBlock;
+      chatRunState.buffers.set(clientRunId, fullText);
+    }
     const text = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
     const shouldSuppressSilent = isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.deleteRunBufferState(clientRunId);
