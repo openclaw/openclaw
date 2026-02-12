@@ -374,7 +374,20 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-compdef _${rootCmd}_root_completion ${rootCmd}
+# Guard: ensure compinit has been run before calling compdef.
+# Prevents "command not found: compdef" when sourced before compinit in .zshrc.
+# See: https://github.com/openclaw/openclaw/issues/14289
+if (( $+functions[compdef] )); then
+  compdef _${rootCmd}_root_completion ${rootCmd}
+else
+  # Queue the compdef for after compinit runs
+  autoload -Uz compinit
+  _${rootCmd}_deferred_compdef() {
+    compdef _${rootCmd}_root_completion ${rootCmd}
+    unfunction _${rootCmd}_deferred_compdef 2>/dev/null
+  }
+  precmd_functions+=(_${rootCmd}_deferred_compdef)
+fi
 `;
   return script;
 }
