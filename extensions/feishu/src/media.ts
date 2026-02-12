@@ -210,15 +210,16 @@ export async function uploadImageFeishu(params: {
 
   const client = createFeishuClient(account);
 
-  // SDK expects a Readable stream, not a Buffer
-  // Use type assertion since SDK actually accepts any Readable at runtime
-  const imageStream = typeof image === "string" ? fs.createReadStream(image) : Readable.from(image);
+  // SDK accepts Buffer directly or fs.ReadStream for file paths
+  // Using Readable.from(buffer) causes issues with form-data library
+  // See: https://github.com/larksuite/node-sdk/issues/121
+  const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
 
   const response = await client.im.image.create({
     data: {
       image_type: imageType,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK stream type
-      image: imageStream as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
+      image: imageData as any,
     },
   });
 
@@ -258,16 +259,17 @@ export async function uploadFileFeishu(params: {
 
   const client = createFeishuClient(account);
 
-  // SDK expects a Readable stream, not a Buffer
-  // Use type assertion since SDK actually accepts any Readable at runtime
-  const fileStream = typeof file === "string" ? fs.createReadStream(file) : Readable.from(file);
+  // SDK accepts Buffer directly or fs.ReadStream for file paths
+  // Using Readable.from(buffer) causes issues with form-data library
+  // See: https://github.com/larksuite/node-sdk/issues/121
+  const fileData = typeof file === "string" ? fs.createReadStream(file) : file;
 
   const response = await client.im.file.create({
     data: {
       file_type: fileType,
       file_name: fileName,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK stream type
-      file: fileStream as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
+      file: fileData as any,
       ...(duration !== undefined && { duration }),
     },
   });

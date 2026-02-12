@@ -23,10 +23,10 @@ jobs:
         uses: actions/stale@v9
         with:
           repo-token: ${{ steps.app-token.outputs.token }}
-          days-before-issue-stale: 30
-          days-before-issue-close: 14
-          days-before-pr-stale: 14
-          days-before-pr-close: 7
+          days-before-issue-stale: 7
+          days-before-issue-close: 5
+          days-before-pr-stale: 5
+          days-before-pr-close: 3
           stale-issue-label: stale
           stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale

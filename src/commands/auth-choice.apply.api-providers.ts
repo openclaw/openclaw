@@ -19,6 +19,8 @@ import {
   applyQianfanProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
+  applyLitellmConfig,
+  applyLitellmProviderConfig,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
@@ -38,7 +40,9 @@ import {
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   applyZaiConfig,
+  applyZaiProviderConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  LITELLM_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
@@ -51,6 +55,7 @@ import {
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
+  setLitellmApiKey,
   setKimiCodingApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
@@ -89,6 +94,8 @@ export async function applyAuthChoiceApiProviders(
   ) {
     if (params.opts.tokenProvider === "openrouter") {
       authChoice = "openrouter-api-key";
+    } else if (params.opts.tokenProvider === "litellm") {
+      authChoice = "litellm-api-key";
     } else if (params.opts.tokenProvider === "vercel-ai-gateway") {
       authChoice = "ai-gateway-api-key";
     } else if (params.opts.tokenProvider === "cloudflare-ai-gateway") {
@@ -194,6 +201,69 @@ export async function applyAuthChoiceApiProviders(
       nextConfig = applied.config;
       agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
     }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "litellm-api-key") {
+    const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+    const profileOrder = resolveAuthProfileOrder({ cfg: nextConfig, store, provider: "litellm" });
+    const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
+    const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
+    let profileId = "litellm:default";
+    let hasCredential = false;
+
+    if (existingProfileId && existingCred?.type === "api_key") {
+      profileId = existingProfileId;
+      hasCredential = true;
+    }
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "litellm") {
+      await setLitellmApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+    if (!hasCredential) {
+      await params.prompter.note(
+        "LiteLLM provides a unified API to 100+ LLM providers.\nGet your API key from your LiteLLM proxy or https://litellm.ai\nDefault proxy runs on http://localhost:4000",
+        "LiteLLM",
+      );
+      const envKey = resolveEnvApiKey("litellm");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing LITELLM_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setLitellmApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
+      }
+      if (!hasCredential) {
+        const key = await params.prompter.text({
+          message: "Enter LiteLLM API key",
+          validate: validateApiKeyInput,
+        });
+        await setLitellmApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (hasCredential) {
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId,
+        provider: "litellm",
+        mode: "api_key",
+      });
+    }
+    const applied = await applyDefaultModelChoice({
+      config: nextConfig,
+      setDefaultModel: params.setDefaultModel,
+      defaultModel: LITELLM_DEFAULT_MODEL_REF,
+      applyDefaultConfig: applyLitellmConfig,
+      applyProviderConfig: applyLitellmProviderConfig,
+      noteDefault: LITELLM_DEFAULT_MODEL_REF,
+      noteAgentModel,
+      prompter: params.prompter,
+    });
+    nextConfig = applied.config;
+    agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
     return { config: nextConfig, agentModelOverride };
   }
 
@@ -550,7 +620,54 @@ export async function applyAuthChoiceApiProviders(
     return { config: nextConfig, agentModelOverride };
   }
 
-  if (authChoice === "zai-api-key") {
+  if (
+    authChoice === "zai-api-key" ||
+    authChoice === "zai-coding-global" ||
+    authChoice === "zai-coding-cn" ||
+    authChoice === "zai-global" ||
+    authChoice === "zai-cn"
+  ) {
+    // Determine endpoint from authChoice or prompt
+    let endpoint: string;
+    if (authChoice === "zai-coding-global") {
+      endpoint = "coding-global";
+    } else if (authChoice === "zai-coding-cn") {
+      endpoint = "coding-cn";
+    } else if (authChoice === "zai-global") {
+      endpoint = "global";
+    } else if (authChoice === "zai-cn") {
+      endpoint = "cn";
+    } else {
+      // zai-api-key: prompt for endpoint selection
+      endpoint = await params.prompter.select({
+        message: "Select Z.AI endpoint",
+        options: [
+          {
+            value: "coding-global",
+            label: "Coding-Plan-Global",
+            hint: "GLM Coding Plan Global (api.z.ai)",
+          },
+          {
+            value: "coding-cn",
+            label: "Coding-Plan-CN",
+            hint: "GLM Coding Plan CN (open.bigmodel.cn)",
+          },
+          {
+            value: "global",
+            label: "Global",
+            hint: "Z.AI Global (api.z.ai)",
+          },
+          {
+            value: "cn",
+            label: "CN",
+            hint: "Z.AI CN (open.bigmodel.cn)",
+          },
+        ],
+        initialValue: "coding-global",
+      });
+    }
+
+    // Input API key
     let hasCredential = false;
 
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "zai") {
@@ -586,23 +703,8 @@ export async function applyAuthChoiceApiProviders(
         config: nextConfig,
         setDefaultModel: params.setDefaultModel,
         defaultModel: ZAI_DEFAULT_MODEL_REF,
-        applyDefaultConfig: applyZaiConfig,
-        applyProviderConfig: (config) => ({
-          ...config,
-          agents: {
-            ...config.agents,
-            defaults: {
-              ...config.agents?.defaults,
-              models: {
-                ...config.agents?.defaults?.models,
-                [ZAI_DEFAULT_MODEL_REF]: {
-                  ...config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF],
-                  alias: config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF]?.alias ?? "GLM",
-                },
-              },
-            },
-          },
-        }),
+        applyDefaultConfig: (config) => applyZaiConfig(config, { endpoint }),
+        applyProviderConfig: (config) => applyZaiProviderConfig(config, { endpoint }),
         noteDefault: ZAI_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
