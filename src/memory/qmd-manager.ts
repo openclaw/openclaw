@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -626,7 +627,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       const target = path.join(exportDir, `${path.basename(sessionFile, ".jsonl")}.md`);
-      const tmpTarget = `${target}.tmp`;
+      const tmpTarget = `${target}.${crypto.randomUUID()}.tmp`;
       await fs.writeFile(tmpTarget, this.renderSessionMarkdown(entry), "utf-8");
       await fs.rename(tmpTarget, target);
       keep.add(target);

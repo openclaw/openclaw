@@ -10,6 +10,7 @@ import { resolveMemoryBackendConfig } from "./backend-config.js";
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+const QMD_INFLIGHT = new Map<string, Promise<MemorySearchManagerResult>>();
 
 export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
@@ -27,33 +28,60 @@ export async function getMemorySearchManager(params: {
     if (cached) {
       return { manager: cached };
     }
+    // Singleflight: reuse in-flight creation promise to prevent duplicate instances.
+    const inflight = QMD_INFLIGHT.get(cacheKey);
+    if (inflight) {
+      return inflight;
+    }
+    const creation = createQmdManager(params, resolved, cacheKey);
+    QMD_INFLIGHT.set(cacheKey, creation);
     try {
-      const { QmdMemoryManager } = await import("./qmd-manager.js");
-      const primary = await QmdMemoryManager.create({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        resolved,
-      });
-      if (primary) {
-        const wrapper = new FallbackMemoryManager(
-          {
-            primary,
-            fallbackFactory: async () => {
-              const { MemoryIndexManager } = await import("./manager.js");
-              return await MemoryIndexManager.get(params);
-            },
-          },
-          () => QMD_MANAGER_CACHE.delete(cacheKey),
-        );
-        QMD_MANAGER_CACHE.set(cacheKey, wrapper);
-        return { manager: wrapper };
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+      return await creation;
+    } finally {
+      QMD_INFLIGHT.delete(cacheKey);
     }
   }
 
+  try {
+    const { MemoryIndexManager } = await import("./manager.js");
+    const manager = await MemoryIndexManager.get(params);
+    return { manager };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { manager: null, error: message };
+  }
+}
+
+async function createQmdManager(
+  params: { cfg: OpenClawConfig; agentId: string },
+  resolved: ReturnType<typeof resolveMemoryBackendConfig>,
+  cacheKey: string,
+): Promise<MemorySearchManagerResult> {
+  try {
+    const { QmdMemoryManager } = await import("./qmd-manager.js");
+    const primary = await QmdMemoryManager.create({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      resolved,
+    });
+    if (primary) {
+      const wrapper = new FallbackMemoryManager(
+        {
+          primary,
+          fallbackFactory: async () => {
+            const { MemoryIndexManager } = await import("./manager.js");
+            return await MemoryIndexManager.get(params);
+          },
+        },
+        () => QMD_MANAGER_CACHE.delete(cacheKey),
+      );
+      QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+      return { manager: wrapper };
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+  }
   try {
     const { MemoryIndexManager } = await import("./manager.js");
     const manager = await MemoryIndexManager.get(params);
