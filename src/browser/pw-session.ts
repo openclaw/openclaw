@@ -423,6 +423,10 @@ async function closeTargetsViaCdp(browserWsUrl: string, targetIds: string[]): Pr
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   if (cached?.cdpUrl === normalized) {
+    // Even with a cached connection, evict stuck pages whose renderer is
+    // unresponsive.  Playwright Page objects for closed targets get cleaned
+    // up automatically via Target.targetDestroyed events.
+    await evictStuckPagesViaCdp(normalized).catch(() => {});
     return cached;
   }
   if (connecting) {
