@@ -120,6 +120,7 @@ export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const DEEPSEEK_DEFAULT_MODEL_REF = "deepseek/deepseek-chat";
+export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 
 export async function setZaiApiKey(key: string, agentDir?: string) {
@@ -178,6 +179,18 @@ export async function setCloudflareAiGatewayConfig(
         accountId: normalizedAccountId,
         gatewayId: normalizedGatewayId,
       },
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setLitellmApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "litellm:default",
+    credential: {
+      type: "api_key",
+      provider: "litellm",
+      key,
     },
     agentDir: resolveAuthAgentDir(agentDir),
   });

@@ -443,7 +443,8 @@ async function hydrateSetGroupIconParams(params: {
       channel: params.channel,
       accountId: params.accountId,
     });
-    const media = await loadWebMedia(mediaSource, maxBytes);
+    // localRoots: "any" — media paths are already validated by normalizeSandboxMediaList above.
+    const media = await loadWebMedia(mediaSource, maxBytes, { localRoots: "any" });
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;
@@ -507,7 +508,8 @@ async function hydrateSendAttachmentParams(params: {
       channel: params.channel,
       accountId: params.accountId,
     });
-    const media = await loadWebMedia(mediaSource, maxBytes);
+    // localRoots: "any" — media paths are already validated by normalizeSandboxMediaList above.
+    const media = await loadWebMedia(mediaSource, maxBytes, { localRoots: "any" });
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;

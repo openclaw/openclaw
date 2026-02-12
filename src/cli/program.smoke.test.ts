@@ -234,6 +234,42 @@ describe("cli program (smoke)", () => {
     }
   });
 
+  it("passes custom provider flags to onboard", async () => {
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "onboard",
+        "--non-interactive",
+        "--auth-choice",
+        "custom-api-key",
+        "--custom-base-url",
+        "https://llm.example.com/v1",
+        "--custom-api-key",
+        "sk-custom-test",
+        "--custom-model-id",
+        "foo-large",
+        "--custom-provider-id",
+        "my-custom",
+        "--custom-compatibility",
+        "anthropic",
+      ],
+      { from: "user" },
+    );
+
+    expect(onboardCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nonInteractive: true,
+        authChoice: "custom-api-key",
+        customBaseUrl: "https://llm.example.com/v1",
+        customApiKey: "sk-custom-test",
+        customModelId: "foo-large",
+        customProviderId: "my-custom",
+        customCompatibility: "anthropic",
+      }),
+      runtime,
+    );
+  });
+
   it("runs channels login", async () => {
     const program = buildProgram();
     await program.parseAsync(["channels", "login", "--account", "work"], {
