@@ -39,6 +39,14 @@ export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
   const ids = Array.from(
     new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "telegram")]),
   );
+  // When a top-level botToken (or TELEGRAM_BOT_TOKEN env) is configured, ensure
+  // the implicit "default" account is included even when named accounts exist.
+  if (ids.length > 0 && !ids.includes(DEFAULT_ACCOUNT_ID)) {
+    const defaultToken = resolveTelegramToken(cfg, { accountId: DEFAULT_ACCOUNT_ID });
+    if (defaultToken.source !== "none") {
+      ids.push(DEFAULT_ACCOUNT_ID);
+    }
+  }
   debugAccounts("listTelegramAccountIds", ids);
   if (ids.length === 0) {
     return [DEFAULT_ACCOUNT_ID];
