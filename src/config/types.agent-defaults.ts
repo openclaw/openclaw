@@ -210,6 +210,8 @@ export type AgentDefaultsConfig = {
     model?: string | { primary?: string; fallbacks?: string[] };
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
+    /** Enable auto-compaction for long-running sub-agent sessions. Can be boolean or config object. */
+    compaction?: boolean | AgentCompactionConfig;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {
