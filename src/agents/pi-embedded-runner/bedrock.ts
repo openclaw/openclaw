@@ -59,7 +59,7 @@ export function sanitizeBedrockToolName(name: string): string {
  * Detect and resolve duplicate tool names that may arise from sanitization.
  * Appends a numeric suffix to disambiguate collisions.
  */
-function deduplicateToolNames(tools: Array<{ name: string } & Record<string, unknown>>): void {
+function deduplicateToolNames(tools: Array<{ name: string }>): void {
   const seen = new Map<string, number>();
   for (const tool of tools) {
     const count = seen.get(tool.name) ?? 0;
