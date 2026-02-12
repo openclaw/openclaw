@@ -4,6 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sendMock = vi.fn();
 const clientFactory = () => ({ send: sendMock }) as unknown as BedrockClient;
 
+/** Helper: queue a foundation-models response followed by an inference-profiles response. */
+function mockBedrockResponses(modelSummaries: unknown[], inferenceProfiles: unknown[] = []) {
+  sendMock
+    .mockResolvedValueOnce({ modelSummaries })
+    .mockResolvedValueOnce({ inferenceProfileSummaries: inferenceProfiles });
+}
+
 describe("bedrock discovery", () => {
   beforeEach(() => {
     sendMock.mockReset();
@@ -14,46 +21,44 @@ describe("bedrock discovery", () => {
       await import("./bedrock-discovery.js");
     resetBedrockDiscoveryCacheForTest();
 
-    sendMock.mockResolvedValueOnce({
-      modelSummaries: [
-        {
-          modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-          modelName: "Claude 3.7 Sonnet",
-          providerName: "anthropic",
-          inputModalities: ["TEXT", "IMAGE"],
-          outputModalities: ["TEXT"],
-          responseStreamingSupported: true,
-          modelLifecycle: { status: "ACTIVE" },
-        },
-        {
-          modelId: "anthropic.claude-3-haiku-20240307-v1:0",
-          modelName: "Claude 3 Haiku",
-          providerName: "anthropic",
-          inputModalities: ["TEXT"],
-          outputModalities: ["TEXT"],
-          responseStreamingSupported: false,
-          modelLifecycle: { status: "ACTIVE" },
-        },
-        {
-          modelId: "meta.llama3-8b-instruct-v1:0",
-          modelName: "Llama 3 8B",
-          providerName: "meta",
-          inputModalities: ["TEXT"],
-          outputModalities: ["TEXT"],
-          responseStreamingSupported: true,
-          modelLifecycle: { status: "INACTIVE" },
-        },
-        {
-          modelId: "amazon.titan-embed-text-v1",
-          modelName: "Titan Embed",
-          providerName: "amazon",
-          inputModalities: ["TEXT"],
-          outputModalities: ["EMBEDDING"],
-          responseStreamingSupported: true,
-          modelLifecycle: { status: "ACTIVE" },
-        },
-      ],
-    });
+    mockBedrockResponses([
+      {
+        modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        modelName: "Claude 3.7 Sonnet",
+        providerName: "anthropic",
+        inputModalities: ["TEXT", "IMAGE"],
+        outputModalities: ["TEXT"],
+        responseStreamingSupported: true,
+        modelLifecycle: { status: "ACTIVE" },
+      },
+      {
+        modelId: "anthropic.claude-3-haiku-20240307-v1:0",
+        modelName: "Claude 3 Haiku",
+        providerName: "anthropic",
+        inputModalities: ["TEXT"],
+        outputModalities: ["TEXT"],
+        responseStreamingSupported: false,
+        modelLifecycle: { status: "ACTIVE" },
+      },
+      {
+        modelId: "meta.llama3-8b-instruct-v1:0",
+        modelName: "Llama 3 8B",
+        providerName: "meta",
+        inputModalities: ["TEXT"],
+        outputModalities: ["TEXT"],
+        responseStreamingSupported: true,
+        modelLifecycle: { status: "INACTIVE" },
+      },
+      {
+        modelId: "amazon.titan-embed-text-v1",
+        modelName: "Titan Embed",
+        providerName: "amazon",
+        inputModalities: ["TEXT"],
+        outputModalities: ["EMBEDDING"],
+        responseStreamingSupported: true,
+        modelLifecycle: { status: "ACTIVE" },
+      },
+    ]);
 
     const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
     expect(models).toHaveLength(1);
@@ -72,19 +77,17 @@ describe("bedrock discovery", () => {
       await import("./bedrock-discovery.js");
     resetBedrockDiscoveryCacheForTest();
 
-    sendMock.mockResolvedValueOnce({
-      modelSummaries: [
-        {
-          modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-          modelName: "Claude 3.7 Sonnet",
-          providerName: "anthropic",
-          inputModalities: ["TEXT"],
-          outputModalities: ["TEXT"],
-          responseStreamingSupported: true,
-          modelLifecycle: { status: "ACTIVE" },
-        },
-      ],
-    });
+    mockBedrockResponses([
+      {
+        modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        modelName: "Claude 3.7 Sonnet",
+        providerName: "anthropic",
+        inputModalities: ["TEXT"],
+        outputModalities: ["TEXT"],
+        responseStreamingSupported: true,
+        modelLifecycle: { status: "ACTIVE" },
+      },
+    ]);
 
     const models = await discoverBedrockModels({
       region: "us-east-1",
@@ -99,19 +102,17 @@ describe("bedrock discovery", () => {
       await import("./bedrock-discovery.js");
     resetBedrockDiscoveryCacheForTest();
 
-    sendMock.mockResolvedValueOnce({
-      modelSummaries: [
-        {
-          modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-          modelName: "Claude 3.7 Sonnet",
-          providerName: "anthropic",
-          inputModalities: ["TEXT"],
-          outputModalities: ["TEXT"],
-          responseStreamingSupported: true,
-          modelLifecycle: { status: "ACTIVE" },
-        },
-      ],
-    });
+    mockBedrockResponses([
+      {
+        modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        modelName: "Claude 3.7 Sonnet",
+        providerName: "anthropic",
+        inputModalities: ["TEXT"],
+        outputModalities: ["TEXT"],
+        responseStreamingSupported: true,
+        modelLifecycle: { status: "ACTIVE" },
+      },
+    ]);
 
     const models = await discoverBedrockModels({
       region: "us-east-1",
@@ -126,8 +127,82 @@ describe("bedrock discovery", () => {
       await import("./bedrock-discovery.js");
     resetBedrockDiscoveryCacheForTest();
 
-    sendMock.mockResolvedValueOnce({
-      modelSummaries: [
+    mockBedrockResponses([
+      {
+        modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        modelName: "Claude 3.7 Sonnet",
+        providerName: "anthropic",
+        inputModalities: ["TEXT"],
+        outputModalities: ["TEXT"],
+        responseStreamingSupported: true,
+        modelLifecycle: { status: "ACTIVE" },
+      },
+    ]);
+
+    await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    // Two sends per discovery (foundation models + inference profiles), but only one discovery call
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips cache when refreshInterval is 0", async () => {
+    const { discoverBedrockModels, resetBedrockDiscoveryCacheForTest } =
+      await import("./bedrock-discovery.js");
+    resetBedrockDiscoveryCacheForTest();
+
+    mockBedrockResponses([
+      {
+        modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        modelName: "Claude 3.7 Sonnet",
+        providerName: "anthropic",
+        inputModalities: ["TEXT"],
+        outputModalities: ["TEXT"],
+        responseStreamingSupported: true,
+        modelLifecycle: { status: "ACTIVE" },
+      },
+    ]);
+    mockBedrockResponses([
+      {
+        modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        modelName: "Claude 3.7 Sonnet",
+        providerName: "anthropic",
+        inputModalities: ["TEXT"],
+        outputModalities: ["TEXT"],
+        responseStreamingSupported: true,
+        modelLifecycle: { status: "ACTIVE" },
+      },
+    ]);
+
+    await discoverBedrockModels({
+      region: "us-east-1",
+      config: { refreshInterval: 0 },
+      clientFactory,
+    });
+    await discoverBedrockModels({
+      region: "us-east-1",
+      config: { refreshInterval: 0 },
+      clientFactory,
+    });
+    // Two discovery calls × 2 sends each = 4
+    expect(sendMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("prefers inference profile IDs over foundation model IDs", async () => {
+    const { discoverBedrockModels, resetBedrockDiscoveryCacheForTest } =
+      await import("./bedrock-discovery.js");
+    resetBedrockDiscoveryCacheForTest();
+
+    mockBedrockResponses(
+      [
+        {
+          modelId: "amazon.nova-2-lite-v1:0",
+          modelName: "Amazon Nova 2 Lite",
+          providerName: "amazon",
+          inputModalities: ["TEXT"],
+          outputModalities: ["TEXT"],
+          responseStreamingSupported: true,
+          modelLifecycle: { status: "ACTIVE" },
+        },
         {
           modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
           modelName: "Claude 3.7 Sonnet",
@@ -138,14 +213,97 @@ describe("bedrock discovery", () => {
           modelLifecycle: { status: "ACTIVE" },
         },
       ],
-    });
+      [
+        {
+          inferenceProfileId: "us.amazon.nova-2-lite-v1:0",
+          inferenceProfileName: "US Amazon Nova 2 Lite",
+          inferenceProfileArn:
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-2-lite-v1:0",
+          status: "ACTIVE",
+          type: "SYSTEM_DEFINED",
+          models: [{ modelArn: "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0" }],
+        },
+      ],
+    );
 
-    await discoverBedrockModels({ region: "us-east-1", clientFactory });
-    await discoverBedrockModels({ region: "us-east-1", clientFactory });
-    expect(sendMock).toHaveBeenCalledTimes(1);
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    expect(models).toHaveLength(2);
+    const nova = models.find((m) => m.name === "Amazon Nova 2 Lite");
+    const claude = models.find((m) => m.name === "Claude 3.7 Sonnet");
+    // Nova should use the inference profile ID
+    expect(nova?.id).toBe("us.amazon.nova-2-lite-v1:0");
+    // Claude has no inference profile, keeps foundation model ID
+    expect(claude?.id).toBe("anthropic.claude-3-7-sonnet-20250219-v1:0");
   });
 
-  it("skips cache when refreshInterval is 0", async () => {
+  it("ignores non-SYSTEM_DEFINED inference profiles", async () => {
+    const { discoverBedrockModels, resetBedrockDiscoveryCacheForTest } =
+      await import("./bedrock-discovery.js");
+    resetBedrockDiscoveryCacheForTest();
+
+    mockBedrockResponses(
+      [
+        {
+          modelId: "amazon.nova-2-lite-v1:0",
+          modelName: "Amazon Nova 2 Lite",
+          providerName: "amazon",
+          inputModalities: ["TEXT"],
+          outputModalities: ["TEXT"],
+          responseStreamingSupported: true,
+          modelLifecycle: { status: "ACTIVE" },
+        },
+      ],
+      [
+        {
+          inferenceProfileId: "custom.amazon.nova-2-lite-v1:0",
+          inferenceProfileName: "Custom Nova 2 Lite",
+          inferenceProfileArn: "arn:aws:bedrock:us-east-1:123456789012:inference-profile/custom",
+          status: "ACTIVE",
+          type: "APPLICATION",
+          models: [{ modelArn: "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0" }],
+        },
+      ],
+    );
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    expect(models[0]?.id).toBe("amazon.nova-2-lite-v1:0");
+  });
+
+  it("ignores inactive inference profiles", async () => {
+    const { discoverBedrockModels, resetBedrockDiscoveryCacheForTest } =
+      await import("./bedrock-discovery.js");
+    resetBedrockDiscoveryCacheForTest();
+
+    mockBedrockResponses(
+      [
+        {
+          modelId: "amazon.nova-2-lite-v1:0",
+          modelName: "Amazon Nova 2 Lite",
+          providerName: "amazon",
+          inputModalities: ["TEXT"],
+          outputModalities: ["TEXT"],
+          responseStreamingSupported: true,
+          modelLifecycle: { status: "ACTIVE" },
+        },
+      ],
+      [
+        {
+          inferenceProfileId: "us.amazon.nova-2-lite-v1:0",
+          inferenceProfileName: "US Amazon Nova 2 Lite",
+          inferenceProfileArn:
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-2-lite-v1:0",
+          status: "DEPRECATED",
+          type: "SYSTEM_DEFINED",
+          models: [{ modelArn: "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0" }],
+        },
+      ],
+    );
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    expect(models[0]?.id).toBe("amazon.nova-2-lite-v1:0");
+  });
+
+  it("falls back to foundation model IDs when ListInferenceProfiles fails", async () => {
     const { discoverBedrockModels, resetBedrockDiscoveryCacheForTest } =
       await import("./bedrock-discovery.js");
     resetBedrockDiscoveryCacheForTest();
@@ -154,9 +312,9 @@ describe("bedrock discovery", () => {
       .mockResolvedValueOnce({
         modelSummaries: [
           {
-            modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-            modelName: "Claude 3.7 Sonnet",
-            providerName: "anthropic",
+            modelId: "amazon.nova-2-lite-v1:0",
+            modelName: "Amazon Nova 2 Lite",
+            providerName: "amazon",
             inputModalities: ["TEXT"],
             outputModalities: ["TEXT"],
             responseStreamingSupported: true,
@@ -164,30 +322,10 @@ describe("bedrock discovery", () => {
           },
         ],
       })
-      .mockResolvedValueOnce({
-        modelSummaries: [
-          {
-            modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-            modelName: "Claude 3.7 Sonnet",
-            providerName: "anthropic",
-            inputModalities: ["TEXT"],
-            outputModalities: ["TEXT"],
-            responseStreamingSupported: true,
-            modelLifecycle: { status: "ACTIVE" },
-          },
-        ],
-      });
+      .mockRejectedValueOnce(new Error("AccessDeniedException"));
 
-    await discoverBedrockModels({
-      region: "us-east-1",
-      config: { refreshInterval: 0 },
-      clientFactory,
-    });
-    await discoverBedrockModels({
-      region: "us-east-1",
-      config: { refreshInterval: 0 },
-      clientFactory,
-    });
-    expect(sendMock).toHaveBeenCalledTimes(2);
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    expect(models).toHaveLength(1);
+    expect(models[0]?.id).toBe("amazon.nova-2-lite-v1:0");
   });
 });

@@ -1,7 +1,9 @@
 import {
   BedrockClient,
   ListFoundationModelsCommand,
+  ListInferenceProfilesCommand,
   type ListFoundationModelsCommandOutput,
+  type ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
 
@@ -16,6 +18,9 @@ const DEFAULT_COST = {
 };
 
 type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelSummaries"]>[number];
+type BedrockInferenceProfile = NonNullable<
+  ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
+>[number];
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
@@ -121,11 +126,38 @@ function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): b
   return true;
 }
 
+function buildInferenceProfileMap(profiles: BedrockInferenceProfile[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const profile of profiles) {
+    if (profile.status !== "ACTIVE" || !profile.inferenceProfileId) {
+      continue;
+    }
+    // Only use SYSTEM_DEFINED profiles (cross-region inference profiles provided by AWS).
+    if (profile.type !== "SYSTEM_DEFINED") {
+      continue;
+    }
+    for (const model of profile.models ?? []) {
+      // modelArn looks like "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0"
+      const arnMatch = model.modelArn?.match(/foundation-model\/(.+)$/);
+      if (arnMatch?.[1]) {
+        const foundationModelId = arnMatch[1];
+        // Prefer the first (shortest / most specific region) profile per foundation model
+        if (!map.has(foundationModelId)) {
+          map.set(foundationModelId, profile.inferenceProfileId);
+        }
+      }
+    }
+  }
+  return map;
+}
+
 function toModelDefinition(
   summary: BedrockModelSummary,
   defaults: { contextWindow: number; maxTokens: number },
+  inferenceProfileMap?: Map<string, string>,
 ): ModelDefinitionConfig {
-  const id = summary.modelId?.trim() ?? "";
+  const foundationId = summary.modelId?.trim() ?? "";
+  const id = inferenceProfileMap?.get(foundationId) ?? foundationId;
   return {
     id,
     name: summary.modelName?.trim() || id,
@@ -178,17 +210,31 @@ export async function discoverBedrockModels(params: {
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
-    const response = await client.send(new ListFoundationModelsCommand({}));
+    const [modelsResponse, profilesResponse] = await Promise.all([
+      client.send(new ListFoundationModelsCommand({})),
+      client.send(new ListInferenceProfilesCommand({})).catch(() => {
+        // ListInferenceProfiles may fail if the caller lacks permissions.
+        // Fall back gracefully to foundation model IDs only.
+        return { inferenceProfileSummaries: [] } as ListInferenceProfilesCommandOutput;
+      }),
+    ]);
+    const inferenceProfileMap = buildInferenceProfileMap(
+      profilesResponse.inferenceProfileSummaries ?? [],
+    );
     const discovered: ModelDefinitionConfig[] = [];
-    for (const summary of response.modelSummaries ?? []) {
+    for (const summary of modelsResponse.modelSummaries ?? []) {
       if (!shouldIncludeSummary(summary, providerFilter)) {
         continue;
       }
       discovered.push(
-        toModelDefinition(summary, {
-          contextWindow: defaultContextWindow,
-          maxTokens: defaultMaxTokens,
-        }),
+        toModelDefinition(
+          summary,
+          {
+            contextWindow: defaultContextWindow,
+            maxTokens: defaultMaxTokens,
+          },
+          inferenceProfileMap,
+        ),
       );
     }
     return discovered.toSorted((a, b) => a.name.localeCompare(b.name));
