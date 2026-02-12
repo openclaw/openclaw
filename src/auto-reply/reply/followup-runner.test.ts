@@ -229,7 +229,6 @@ describe("createFollowupRunner compaction", () => {
     expect(notice).toContain("window 50.0%→20.0%");
   });
 
-
   it("adds verbose full compaction summary block", async () => {
     const onBlockReply = vi.fn(async () => {});
     runEmbeddedPiAgentMock.mockImplementationOnce(
@@ -253,7 +252,9 @@ describe("createFollowupRunner compaction", () => {
 
     const queued = baseQueuedRun();
     queued.run.verboseLevel = "full";
-    queued.run.config = { agents: { defaults: { contextTokens: 240_000, compaction: { notify: "always" } } } };
+    queued.run.config = {
+      agents: { defaults: { contextTokens: 240_000, compaction: { notify: "always" } } },
+    };
 
     await runner(queued);
 

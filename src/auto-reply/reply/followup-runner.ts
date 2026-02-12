@@ -301,7 +301,8 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });
-        const verboseEnabled = queued.run.verboseLevel && queued.run.verboseLevel !== "off";
+        const verboseEnabled =
+          queued.run.verboseLevel !== undefined && queued.run.verboseLevel !== "off";
         const contextTokensUsed =
           agentCfgContextTokens ??
           lookupContextTokens(fallbackModel ?? defaultModel) ??
