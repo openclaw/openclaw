@@ -6,7 +6,7 @@ import type {
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import {
-  createReplyPrefixOptions,
+  createReplyPrefixContext,
   createTypingCallbacks,
   logInboundDrop,
   logTypingFailure,
@@ -771,12 +771,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
     });
 
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-      cfg,
-      agentId: route.agentId,
-      channel: "mattermost",
-      accountId: account.accountId,
-    });
+    const { onModelSelected, responsePrefix, responsePrefixContextProvider } =
+      createReplyPrefixContext({
+        cfg,
+        agentId: route.agentId,
+        channel: "mattermost",
+        accountId: account.accountId,
+      });
 
     const typingCallbacks = createTypingCallbacks({
       start: () => sendTypingIndicator(channelId, threadRootId),
@@ -791,7 +792,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
-        ...prefixOptions,
+        responsePrefix,
+        responsePrefixContextProvider,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         deliver: async (payload: ReplyPayload) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);

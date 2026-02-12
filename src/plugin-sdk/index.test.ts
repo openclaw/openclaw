@@ -47,3 +47,13 @@ describe("plugin-sdk exports", () => {
     }
   });
 });
+
+describe("plugin-sdk reply-prefix exports", () => {
+  it("exports createReplyPrefixContext as a function", () => {
+    expect(typeof sdk.createReplyPrefixContext).toBe("function");
+  });
+
+  it("exports createReplyPrefixOptions as a function", () => {
+    expect(typeof sdk.createReplyPrefixOptions).toBe("function");
+  });
+});
