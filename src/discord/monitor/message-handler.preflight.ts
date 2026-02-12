@@ -242,28 +242,6 @@ export async function preflightDiscordMessage(
       (message.mentionedUsers?.length ?? 0) > 0 ||
       (message.mentionedRoles?.length ?? 0) > 0),
   );
-  const wasMentioned =
-    !isDirectMessage &&
-    matchesMentionWithExplicit({
-      text: baseText,
-      mentionRegexes,
-      explicit: {
-        hasAnyMention,
-        isExplicitlyMentioned: explicitlyMentioned,
-        canResolveExplicit: Boolean(botId),
-      },
-    });
-  const implicitMention = Boolean(
-    !isDirectMessage &&
-    botId &&
-    message.referencedMessage?.author?.id &&
-    message.referencedMessage.author.id === botId,
-  );
-  if (shouldLogVerbose()) {
-    logVerbose(
-      `discord: inbound id=${message.id} guild=${message.guild?.id ?? "dm"} channel=${message.channelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${messageText ? "yes" : "no"}`,
-    );
-  }
 
   if (
     isGuildMessage &&
@@ -400,6 +378,74 @@ export async function preflightDiscordMessage(
     channelConfig,
     guildInfo,
   });
+
+  // Preflight audio transcription for mention detection in guilds
+  // This allows voice notes to be checked for mentions before being dropped
+  let preflightTranscript: string | undefined;
+  const hasAudioAttachment = message.attachments?.some((att: { contentType?: string }) =>
+    att.contentType?.startsWith("audio/"),
+  );
+  const needsPreflightTranscription =
+    !isDirectMessage &&
+    shouldRequireMention &&
+    hasAudioAttachment &&
+    !baseText &&
+    mentionRegexes.length > 0;
+
+  if (needsPreflightTranscription) {
+    try {
+      const { transcribeFirstAudio } = await import("../../media-understanding/audio-preflight.js");
+      const audioPaths =
+        message.attachments
+          ?.filter((att: { contentType?: string; url: string }) =>
+            att.contentType?.startsWith("audio/"),
+          )
+          .map((att: { url: string }) => att.url) ?? [];
+      if (audioPaths.length > 0) {
+        const tempCtx = {
+          MediaUrls: audioPaths,
+          MediaTypes: message.attachments
+            ?.filter((att: { contentType?: string; url: string }) =>
+              att.contentType?.startsWith("audio/"),
+            )
+            .map((att: { contentType?: string }) => att.contentType)
+            .filter(Boolean) as string[],
+        };
+        preflightTranscript = await transcribeFirstAudio({
+          ctx: tempCtx,
+          cfg: params.cfg,
+          agentDir: undefined,
+        });
+      }
+    } catch (err) {
+      logVerbose(`discord: audio preflight transcription failed: ${String(err)}`);
+    }
+  }
+
+  const wasMentioned =
+    !isDirectMessage &&
+    matchesMentionWithExplicit({
+      text: baseText,
+      mentionRegexes,
+      explicit: {
+        hasAnyMention,
+        isExplicitlyMentioned: explicitlyMentioned,
+        canResolveExplicit: Boolean(botId),
+      },
+      transcript: preflightTranscript,
+    });
+  const implicitMention = Boolean(
+    !isDirectMessage &&
+    botId &&
+    message.referencedMessage?.author?.id &&
+    message.referencedMessage.author.id === botId,
+  );
+  if (shouldLogVerbose()) {
+    logVerbose(
+      `discord: inbound id=${message.id} guild=${message.guild?.id ?? "dm"} channel=${message.channelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${messageText ? "yes" : "no"}`,
+    );
+  }
+
   const allowTextCommands = shouldHandleTextCommands({
     cfg: params.cfg,
     surface: "discord",

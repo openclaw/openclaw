@@ -90,18 +90,24 @@ export function matchesMentionWithExplicit(params: {
   text: string;
   mentionRegexes: RegExp[];
   explicit?: ExplicitMentionSignal;
+  transcript?: string;
 }): boolean {
   const cleaned = normalizeMentionText(params.text ?? "");
   const explicit = params.explicit?.isExplicitlyMentioned === true;
   const explicitAvailable = params.explicit?.canResolveExplicit === true;
   const hasAnyMention = params.explicit?.hasAnyMention === true;
+
+  // Check transcript if text is empty and transcript is provided
+  const transcriptCleaned = params.transcript ? normalizeMentionText(params.transcript) : "";
+  const textToCheck = cleaned || transcriptCleaned;
+
   if (hasAnyMention && explicitAvailable) {
-    return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
+    return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
   }
-  if (!cleaned) {
+  if (!textToCheck) {
     return explicit;
   }
-  return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
+  return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
 }
 
 export function stripStructuralPrefixes(text: string): string {
