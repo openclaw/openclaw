@@ -9,7 +9,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
-import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
@@ -38,8 +38,7 @@ import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
-import { incrementCompactionCount } from "./session-updates.js";
-import { persistSessionUsageUpdate } from "./session-usage.js";
+import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
@@ -384,7 +383,7 @@ export async function runReplyAgent(params: {
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 
-    await persistSessionUsageUpdate({
+    await persistRunSessionUsage({
       storePath,
       sessionKey,
       usage,
@@ -496,19 +495,13 @@ export async function runReplyAgent(params: {
     let finalPayloads = replyPayloads;
     const verboseEnabled = resolvedVerboseLevel !== "off";
     if (autoCompactionCompleted) {
-      // Derive post-compaction token count from the last API call's usage.
-      // This reflects the actual context size after compaction, not the
-      // accumulated sum across all calls in the run.
-      const lastCallUsage = runResult.meta.agentMeta?.lastCallUsage;
-      const tokensAfterCompaction = lastCallUsage
-        ? deriveSessionTotalTokens({ usage: lastCallUsage, contextTokens: contextTokensUsed })
-        : undefined;
-      const count = await incrementCompactionCount({
+      const count = await incrementRunCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey,
         storePath,
-        tokensAfter: tokensAfterCompaction,
+        lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+        contextTokensUsed,
       });
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";

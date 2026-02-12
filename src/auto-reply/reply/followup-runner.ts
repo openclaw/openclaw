@@ -22,8 +22,7 @@ import {
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { incrementCompactionCount } from "./session-updates.js";
-import { persistSessionUsageUpdate } from "./session-usage.js";
+import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 export function createFollowupRunner(params: {
@@ -203,10 +202,11 @@ export function createFollowupRunner(params: {
           sessionEntry?.contextTokens ??
           DEFAULT_CONTEXT_TOKENS;
 
-        await persistSessionUsageUpdate({
+        await persistRunSessionUsage({
           storePath,
           sessionKey,
           usage,
+          lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,
@@ -263,11 +263,13 @@ export function createFollowupRunner(params: {
       }
 
       if (autoCompactionCompleted) {
-        const count = await incrementCompactionCount({
+        const count = await incrementRunCompactionCount({
           sessionEntry,
           sessionStore,
           sessionKey,
           storePath,
+          lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+          contextTokensUsed,
         });
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
