@@ -195,11 +195,14 @@ function mergeIncludedContent(
 
 /**
  * Deep merge source into target (mutates target).
- * Matches the merge semantics used by the include resolver.
+ * Matches the merge semantics used by the include resolver:
+ * arrays concatenate, objects merge recursively, primitives: source wins.
  */
 function deepMergeInto(target: Record<string, unknown>, source: Record<string, unknown>): void {
   for (const key of Object.keys(source)) {
-    if (key in target && isPlainObject(target[key]) && isPlainObject(source[key])) {
+    if (key in target && Array.isArray(target[key]) && Array.isArray(source[key])) {
+      target[key] = [...(target[key] as unknown[]), ...(source[key] as unknown[])];
+    } else if (key in target && isPlainObject(target[key]) && isPlainObject(source[key])) {
       deepMergeInto(target[key], source[key]);
     } else {
       target[key] = source[key];

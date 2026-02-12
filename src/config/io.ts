@@ -538,6 +538,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             parseJson: (raw: string) => deps.json5.parse(raw),
           };
           const includeMap = buildIncludeMap(parsedRes.parsed, configPath, includeResolver);
+          // Apply config.env entries to a local env copy so that ${VAR}
+          // references defined in the config file (not just process env) are
+          // resolved correctly — matching the read path behaviour.
+          const envForResolve = { ...deps.env };
+          if (isPlainObject(parsedRes.parsed) && "env" in parsedRes.parsed) {
+            applyConfigEnv(parsedRes.parsed as OpenClawConfig, envForResolve);
+          }
           // Resolve env vars in included content so comparison against the
           // fully-resolved incoming config is accurate.  Without this, env var
           // placeholders (e.g. "${API_KEY}") won't match their substituted
@@ -545,7 +552,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           const resolvedIncludeMap = new Map<string, unknown>();
           for (const [key, value] of includeMap) {
             try {
-              resolvedIncludeMap.set(key, resolveConfigEnvVars(value, deps.env));
+              resolvedIncludeMap.set(key, resolveConfigEnvVars(value, envForResolve));
             } catch {
               // If env var resolution fails (e.g. missing var), keep the raw
               // value — restoreIncludeDirectives will treat the mismatch as a

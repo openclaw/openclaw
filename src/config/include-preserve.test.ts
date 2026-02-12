@@ -1,12 +1,21 @@
+import path from "node:path";
 import { describe, it, expect } from "vitest";
 import type { IncludeResolver } from "./includes.js";
 import { restoreIncludeDirectives, buildIncludeMap } from "./include-preserve.js";
 
 function createMockResolver(files: Record<string, unknown>): IncludeResolver {
+  // Normalise file paths so lookups work on both Unix and Windows.
+  // On Windows, path.resolve("/config", "./base.json5") produces
+  // "C:\config\base.json5", so we need to normalise the keys the same way.
+  const normalised = new Map<string, unknown>();
+  for (const [k, v] of Object.entries(files)) {
+    normalised.set(path.resolve(k), v);
+  }
   return {
     readFile: (filePath: string) => {
-      if (filePath in files) {
-        return JSON.stringify(files[filePath]);
+      const resolved = path.resolve(filePath);
+      if (normalised.has(resolved)) {
+        return JSON.stringify(normalised.get(resolved));
       }
       throw new Error(`ENOENT: no such file: ${filePath}`);
     },
