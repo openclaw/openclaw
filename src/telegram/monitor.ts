@@ -87,15 +87,28 @@ const isGrammyHttpError = (err: unknown): boolean => {
   return (err as { name?: string }).name === "HttpError";
 };
 
+/** Detect native fetch/undici network errors (TypeError: fetch failed). */
+const isFetchNetworkError = (err: unknown): boolean => {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const name = (err as { name?: string }).name;
+  const message = (err as { message?: string }).message ?? "";
+  return name === "TypeError" && /fetch failed|terminated|network/i.test(message);
+};
+
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
 
-  // Register handler for Grammy HttpError unhandled rejections.
-  // This catches network errors that escape the polling loop's try-catch
-  // (e.g., from setMyCommands during bot setup).
-  // We gate on isGrammyHttpError to avoid suppressing non-Telegram errors.
+  // Register handler for unhandled rejections from the Telegram polling pipeline.
+  // Grammy HttpErrors and native fetch TypeErrors can both escape the polling
+  // loop's try-catch (e.g., from setMyCommands, long-poll fetch timeouts).
+  // Only suppress errors that are recoverable network issues to avoid masking real bugs.
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
-    if (isGrammyHttpError(err) && isRecoverableTelegramNetworkError(err, { context: "polling" })) {
+    if (
+      (isGrammyHttpError(err) || isFetchNetworkError(err)) &&
+      isRecoverableTelegramNetworkError(err, { context: "polling" })
+    ) {
       log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
       return true; // handled - don't crash
     }
