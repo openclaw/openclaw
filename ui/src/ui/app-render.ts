@@ -127,17 +127,17 @@ export function renderApp(state: AppViewState) {
             <div class="brand-logo">
               <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
             </div>
-            <div class="brand-text">
-              <div class="brand-title">OPENCLAW</div>
-              <div class="brand-sub">Gateway Dashboard</div>
-            </div>
+              <div class="brand-text">
+                <div class="brand-title">RYKIRI <span class="accent-text">//</span> ELITE</div>
+                <div class="brand-sub">Mission Active</div>
+              </div>
           </div>
         </div>
         <div class="topbar-status">
           <div class="pill">
-            <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span>${t("common.health")}</span>
-            <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
+            <span class="status-pulse ${state.connected ? "ok" : ""}"></span>
+            <span>Mission</span>
+            <span class="mono">${state.connected ? "ACTIVE" : "OFFLINE"}</span>
           </div>
           ${renderThemeToggle(state)}
         </div>

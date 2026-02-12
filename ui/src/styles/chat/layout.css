@@ -9,7 +9,8 @@
   flex-direction: column;
   flex: 1 1 0;
   height: 100%;
-  min-height: 0; /* Allow flex shrinking */
+  min-height: 0;
+  /* Allow flex shrinking */
   overflow: hidden;
   background: transparent !important;
   border: none !important;
@@ -49,12 +50,14 @@
 
 /* Chat thread - scrollable middle section, transparent */
 .chat-thread {
-  flex: 1 1 0; /* Grow, shrink, and use 0 base for proper scrolling */
+  flex: 1 1 0;
+  /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
   padding: 12px 4px;
   margin: 0 -4px;
-  min-height: 0; /* Allow shrinking for flex scroll behavior */
+  min-height: 0;
+  /* Allow shrinking for flex scroll behavior */
   border-radius: 12px;
   background: transparent;
 }
@@ -146,7 +149,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-top: auto; /* Push to bottom of flex container */
+  margin-top: auto;
+  /* Push to bottom of flex container */
   padding: 12px 4px 4px;
   background: linear-gradient(to bottom, transparent, var(--bg) 20%);
   z-index: 10;
@@ -163,7 +167,8 @@
   border: 1px solid var(--border);
   width: fit-content;
   max-width: 100%;
-  align-self: flex-start; /* Don't stretch in flex column parent */
+  align-self: flex-start;
+  /* Don't stretch in flex column parent */
 }
 
 .chat-attachment {
@@ -279,7 +284,7 @@
 }
 
 /* Hide the "Message" label - keep textarea only */
-.chat-compose__field > span {
+.chat-compose__field>span {
   display: none;
 }
 
@@ -439,4 +444,49 @@
   .chat-controls__session {
     min-width: 120px;
   }
+}
+
+/* Rykiri Initialization Animation */
+.rykiri-init {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 40px;
+  font-family: var(--mono);
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  font-size: 14px;
+}
+
+.rykiri-init__line {
+  opacity: 0;
+  transform: translateX(-10px);
+  animation: rise 0.5s var(--ease-out) forwards;
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+}
+
+.rykiri-init__line.stagger-2 {
+  animation-delay: 0.2s;
+}
+
+.rykiri-init__line.stagger-3 {
+  animation-delay: 0.4s;
+}
+
+.rykiri-init__line.stagger-4 {
+  animation-delay: 0.6s;
+}
+
+/* Terminal Module Header */
+.chat-module-header {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+  opacity: 0.8;
+  letter-spacing: 2px;
+  border-bottom: 1px solid var(--accent-subtle);
+  padding-bottom: 4px;
 }

@@ -262,6 +262,7 @@ function renderGroupedMessage(
 
   return html`
     <div class="${bubbleClasses}">
+      ${role === "assistant" ? html`<div class="chat-module-header">RYKIRI // ELITE // MODULE</div>` : nothing}
       ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
       ${renderMessageImages(images)}
       ${

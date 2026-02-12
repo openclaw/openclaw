@@ -219,7 +219,16 @@ export function renderChat(props: ChatProps) {
           ? html`
               <div class="muted">Loading chat…</div>
             `
-          : nothing
+          : history.length === 0 && !props.stream
+            ? html`
+                <div class="rykiri-init">
+                  <div class="rykiri-init__line">INITIALIZING RYKIRI // ELITE CORE...</div>
+                  <div class="rykiri-init__line stagger-2">UZUMAKI RESILIENCE: ONLINE</div>
+                  <div class="rykiri-init__line stagger-3">SOLANA PROTOCOLS: ENGAGED</div>
+                  <div class="rykiri-init__line stagger-4">MISSION STATUS: ACTIVE</div>
+                </div>
+              `
+            : nothing
       }
       ${repeat(
         buildChatItems(props),

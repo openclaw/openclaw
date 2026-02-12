@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rykiri - Mission Active</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@300;500;700&display=swap');
+
+        :root {
+            --bg: #050505;
+            --accent: #EAFF00;
+            --surface: rgba(20, 20, 20, 0.8);
+            --border: rgba(234, 255, 0, 0.2);
+            --text: #ffffff;
+            --text-dim: rgba(255, 255, 255, 0.6);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Space Grotesk', sans-serif;
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 80px;
+            background: rgba(10, 10, 10, 0.9);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px 0;
+            gap: 30px;
+        }
+
+        .icon {
+            width: 40px;
+            height: 40px;
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--accent);
+            font-size: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .icon:hover {
+            background: var(--accent);
+            color: var(--bg);
+            box-shadow: 0 0 15px var(--accent);
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            height: 60px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 40px;
+            background: rgba(5, 5, 5, 0.95);
+        }
+
+        .status {
+            color: var(--accent);
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--accent);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+
+        .chat-container {
+            flex: 1;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+            overflow-y: auto;
+            background: radial-gradient(circle at center, rgba(234, 255, 0, 0.03) 0%, transparent 70%);
+        }
+
+        .message {
+            max-width: 800px;
+            padding: 24px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            backdrop-filter: blur(20px);
+            border-radius: 4px;
+            line-height: 1.6;
+        }
+
+        .message.rykiri {
+            border-left: 4px solid var(--accent);
+        }
+
+        .message h3 {
+            color: var(--accent);
+            margin-bottom: 15px;
+            font-family: 'JetBrains Mono', monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .code-block {
+            background: #000;
+            padding: 20px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            color: #d1d1d1;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            margin: 15px 0;
+            position: relative;
+        }
+
+        .code-block::after {
+            content: "RUST";
+            position: absolute;
+            top: 0;
+            right: 10px;
+            font-size: 10px;
+            color: var(--accent);
+            padding: 2px 5px;
+        }
+
+        .accent-text { color: var(--accent); }
+
+        .footer {
+            height: 80px;
+            padding: 0 40px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            background: rgba(5, 5, 5, 0.95);
+            border-top: 1px solid var(--border);
+        }
+
+        .input-bar {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            height: 50px;
+            padding: 0 20px;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .input-cursor {
+            width: 10px;
+            height: 20px;
+            background: var(--accent);
+            margin-left: 5px;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+
+        .orb {
+            position: absolute;
+            bottom: -100px;
+            right: -100px;
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(234, 255, 0, 0.05) 0%, transparent 70%);
+            z-index: -1;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="icon">⚡</div>
+        <div class="icon">🛡️</div>
+        <div class="icon">🚀</div>
+        <div class="icon">🧬</div>
+        <div style="margin-top: auto;" class="icon">⚙️</div>
+    </div>
+    <div class="main">
+        <header class="header">
+            <h1 style="font-size: 18px; letter-spacing: 2px;">RYKIRI <span class="accent-text">//</span> ELITE</h1>
+            <div class="status">MISSION: ACTIVE</div>
+        </header>
+        <div class="chat-container">
+            <div class="message rykiri">
+                <h3>System Initialized</h3>
+                <p>Uzumaki Resilience engaged. All Solana skills are online. Protocol <span class="accent-text">INDUSTRIAL_FUTURISM</span> loaded.</p>
+            </div>
+            <div class="message rykiri">
+                <h3>Solana Simulate // Result</h3>
+                <p>I've dry-run your Anchor instruction. Simulation reveals a potential <span class="accent-text">Compute Unit</span> bottleneck in the re-allocation logic. Refactoring recommended.</p>
+                <div class="code-block">
+pub fn update_vault(ctx: Context<UpdateVault>, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+    // Optimized math to minimize CU
+    vault.balance = vault.balance.checked_add(amount)
+        .ok_or(ErrorCode::Overflow)?;
+    Ok(())
+}
+                </div>
+                <p>I've also verified the PDA seeds. Every rule in <span class="accent-text">SOUL.md</span> is satisfied. Ready to deploy whenever you are, Partner.</p>
+            </div>
+        </div>
+        <footer class="footer">
+            <div class="input-bar">
+                > Initializing horizontal scaling for v0 transactions...<span class="input-cursor"></span>
+            </div>
+        </footer>
+    </div>
+    <div class="orb"></div>
+</body>
+</html>

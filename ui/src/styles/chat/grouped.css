@@ -92,8 +92,10 @@
   font-weight: 600;
   font-size: 14px;
   flex-shrink: 0;
-  align-self: flex-end; /* Align with last message in group */
-  margin-bottom: 4px; /* Optical alignment */
+  align-self: flex-end;
+  /* Align with last message in group */
+  margin-bottom: 4px;
+  /* Optical alignment */
 }
 
 .chat-avatar.user {
@@ -123,15 +125,23 @@ img.chat-avatar {
   object-position: center;
 }
 
-/* Minimal Bubble Design - dynamic width based on content */
+/* Terminal Module Design */
 .chat-bubble {
   position: relative;
   display: inline-block;
-  border: 1px solid transparent;
-  background: var(--card);
-  border-radius: var(--radius-lg);
-  padding: 10px 14px;
-  box-shadow: none;
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--bg-elevated) 0%, var(--bg) 100%);
+  border-radius: 2px;
+  /* Sharper corners */
+  padding: 12px 18px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  clip-path: polygon(0 0,
+      calc(100% - 12px) 0,
+      100% 12px,
+      100% 100%,
+      12px 100%,
+      0 calc(100% - 12px));
+  /* Angled corners for industrial feel */
   transition:
     background 150ms ease-out,
     border-color 150ms ease-out;
@@ -253,19 +263,16 @@ img.chat-avatar {
   background: var(--bg-hover);
 }
 
-/* User bubbles have different styling */
+/* User bubbles: Inverted Industrial Motif */
 .chat-group.user .chat-bubble {
-  background: var(--accent-subtle);
-  border-color: transparent;
-}
-
-:root[data-theme="light"] .chat-group.user .chat-bubble {
-  border-color: rgba(234, 88, 12, 0.2);
-  background: rgba(251, 146, 60, 0.12);
+  background: linear-gradient(135deg, rgba(234, 255, 0, 0.05) 0%, transparent 100%);
+  border-color: var(--accent-subtle);
+  border-right: 3px solid var(--accent);
 }
 
 .chat-group.user .chat-bubble:hover {
-  background: rgba(255, 77, 77, 0.15);
+  background: rgba(234, 255, 0, 0.08);
+  border-color: var(--accent);
 }
 
 /* Streaming animation */
@@ -274,12 +281,16 @@ img.chat-avatar {
 }
 
 @keyframes pulsing-border {
+
   0%,
   100% {
     border-color: var(--border);
+    box-shadow: 0 0 5px rgba(234, 255, 0, 0);
   }
+
   50% {
     border-color: var(--accent);
+    box-shadow: 0 0 15px var(--accent-glow);
   }
 }
 
@@ -293,6 +304,7 @@ img.chat-avatar {
     opacity: 0;
     transform: translateY(4px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
