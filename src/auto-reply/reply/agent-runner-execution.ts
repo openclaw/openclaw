@@ -37,6 +37,7 @@ import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runne
 import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
+import { saveSessionSnapshotToMemory } from "./session-memory-snapshot.js";
 
 export type AgentRunLoopResult =
   | {
@@ -540,12 +541,23 @@ export async function runAgentTurnWithFallback(params: {
         params.storePath
       ) {
         const sessionKey = params.sessionKey;
-        const corruptedSessionId = params.getActiveSessionEntry()?.sessionId;
+        const activeSessionEntry = params.getActiveSessionEntry();
+        const corruptedSessionId = activeSessionEntry?.sessionId;
         defaultRuntime.error(
           `Session history corrupted (Gemini function call ordering). Resetting session: ${params.sessionKey}`,
         );
 
         try {
+          if (activeSessionEntry) {
+            await saveSessionSnapshotToMemory({
+              cfg: params.followupRun.run.config,
+              sessionKey,
+              sessionEntry: activeSessionEntry,
+              reason: "session corruption",
+              source: params.sessionCtx.Provider ?? params.sessionCtx.Surface,
+            });
+          }
+
           // Delete transcript file if it exists
           if (corruptedSessionId) {
             const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);

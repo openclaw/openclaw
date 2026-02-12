@@ -53,6 +53,7 @@ function createMinimalRun(params?: {
   storePath?: string;
   typingMode?: TypingMode;
   blockStreamingEnabled?: boolean;
+  config?: Record<string, unknown>;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -72,7 +73,7 @@ function createMinimalRun(params?: {
       messageProvider: "whatsapp",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
-      config: {},
+      config: params?.config ?? {},
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
@@ -127,6 +128,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       const sessionId = "session-corrupt";
+      const workspaceDir = path.join(stateDir, "workspace");
       const storePath = path.join(stateDir, "sessions", "sessions.json");
       const sessionEntry = { sessionId, updatedAt: Date.now() };
       const sessionStore = { main: sessionEntry };
@@ -149,6 +151,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionStore,
         sessionKey: "main",
         storePath,
+        config: {
+          agents: { defaults: { workspace: workspaceDir } },
+        },
       });
       const res = await run();
 
@@ -160,6 +165,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(persisted.main).toBeUndefined();
+      const memoryFiles = await fs.readdir(path.join(workspaceDir, "memory"));
+      expect(memoryFiles.some((name) => name.includes("session-corruption"))).toBe(true);
     } finally {
       if (prevStateDir) {
         process.env.OPENCLAW_STATE_DIR = prevStateDir;

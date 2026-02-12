@@ -38,6 +38,7 @@ import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import { saveSessionSnapshotToMemory } from "./session-memory-snapshot.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -244,6 +245,13 @@ export async function runReplyAgent(params: {
     if (!prevEntry) {
       return false;
     }
+    await saveSessionSnapshotToMemory({
+      cfg,
+      sessionKey,
+      sessionEntry: prevEntry,
+      reason: failureLabel,
+      source: sessionCtx.Provider ?? sessionCtx.Surface,
+    });
     const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
     const nextSessionId = crypto.randomUUID();
     const nextEntry: SessionEntry = {
