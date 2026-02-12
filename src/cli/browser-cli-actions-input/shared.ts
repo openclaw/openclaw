@@ -69,9 +69,9 @@ export async function readFields(opts: {
     }
     const rec = entry as Record<string, unknown>;
     const ref = typeof rec.ref === "string" ? rec.ref.trim() : "";
-    const type = typeof rec.type === "string" ? rec.type.trim() : "";
+    const type = typeof rec.type === "string" ? rec.type.trim() : "textbox";
     if (!ref || !type) {
-      throw new Error(`fields[${index}] must include ref and type`);
+      throw new Error(`fields[${index}] must include ref`);
     }
     if (
       typeof rec.value === "string" ||
