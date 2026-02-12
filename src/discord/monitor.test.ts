@@ -836,6 +836,22 @@ describe("discord DM reaction handling", () => {
     expect(opts.sessionKey).toBe("discord:acc-1:dm:user-1");
   });
 
+  it("does not drop DM reactions when guild allowlist is configured", async () => {
+    enqueueSystemEventSpy.mockClear();
+    resolveAgentRouteMock.mockClear();
+
+    const data = makeReactionEvent({ botAsAuthor: true });
+    const client = makeReactionClient(ChannelType.DM);
+    const guildEntries = makeEntries({
+      "guild-123": { slug: "guild-123" },
+    });
+    const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+  });
+
   it("still processes guild reactions (no regression)", async () => {
     enqueueSystemEventSpy.mockClear();
     resolveAgentRouteMock.mockClear();
@@ -877,7 +893,7 @@ describe("discord DM reaction handling", () => {
     expect(text).not.toContain("undefined");
   });
 
-  it("routes DM reactions with peer kind 'dm' and user id", async () => {
+  it("routes DM reactions with peer kind 'direct' and user id", async () => {
     enqueueSystemEventSpy.mockClear();
     resolveAgentRouteMock.mockClear();
 
