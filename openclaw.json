@@ -2,6 +2,7 @@
   "gateway": {
     "port": 8080,
     "auth": {
+      "mode": "token",
       "token": "supersecret123"
     },
     "controlUi": {
