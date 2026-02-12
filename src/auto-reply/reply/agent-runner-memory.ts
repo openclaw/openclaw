@@ -14,7 +14,7 @@ import {
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
-import { logVerbose } from "../../globals.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
@@ -23,6 +23,8 @@ import {
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
 import { incrementCompactionCount } from "./session-updates.js";
+
+const log = createSubsystemLogger("memory");
 
 export async function runMemoryFlushIfNeeded(params: {
   cfg: OpenClawConfig;
@@ -57,6 +59,10 @@ export async function runMemoryFlushIfNeeded(params: {
     const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, runtime.agentId);
     return sandboxCfg.workspaceAccess === "rw";
   })();
+
+  if (!memoryFlushWritable) {
+    log.warn("memory flush skipped: workspace is read-only");
+  }
 
   const shouldFlushMemory =
     memoryFlushSettings &&
@@ -191,11 +197,11 @@ export async function runMemoryFlushIfNeeded(params: {
           activeSessionEntry = updatedEntry;
         }
       } catch (err) {
-        logVerbose(`failed to persist memory flush metadata: ${String(err)}`);
+        log.warn(`failed to persist memory flush metadata: ${String(err)}`);
       }
     }
   } catch (err) {
-    logVerbose(`memory flush run failed: ${String(err)}`);
+    log.warn(`memory flush run failed: ${String(err)}`);
   }
 
   return activeSessionEntry;

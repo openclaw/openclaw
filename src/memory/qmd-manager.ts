@@ -29,7 +29,7 @@ import { parseQmdQueryJson } from "./qmd-query-parser.js";
 const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
-const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
+const SEARCH_PENDING_UPDATE_WAIT_MS = 2000;
 
 type CollectionRoot = {
   path: string;
@@ -471,6 +471,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private enqueueForcedUpdate(reason: string): Promise<void> {
+    if (this.closed) {
+      return Promise.resolve();
+    }
     this.queuedForcedRuns += 1;
     if (!this.queuedForcedUpdate) {
       this.queuedForcedUpdate = this.drainForcedUpdates(reason).finally(() => {
@@ -599,7 +602,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const { DatabaseSync } = requireNodeSqlite();
     this.db = new DatabaseSync(this.indexPath, { readOnly: true });
     // Keep QMD recall responsive when the updater holds a write lock.
-    this.db.exec("PRAGMA busy_timeout = 1");
+    this.db.exec("PRAGMA busy_timeout = 100");
     return this.db;
   }
 
@@ -623,7 +626,9 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       const target = path.join(exportDir, `${path.basename(sessionFile, ".jsonl")}.md`);
-      await fs.writeFile(target, this.renderSessionMarkdown(entry), "utf-8");
+      const tmpTarget = `${target}.tmp`;
+      await fs.writeFile(tmpTarget, this.renderSessionMarkdown(entry), "utf-8");
+      await fs.rename(tmpTarget, target);
       keep.add(target);
     }
     const exported = await fs.readdir(exportDir).catch(() => []);
@@ -680,8 +685,8 @@ export class QmdMemoryManager implements MemorySearchManager {
         .get(`${normalized}%`) as { collection: string; path: string } | undefined;
     } catch (err) {
       if (this.isSqliteBusyError(err)) {
-        log.debug(`qmd index is busy while resolving doc path: ${String(err)}`);
-        throw this.createQmdBusyError(err);
+        log.warn(`qmd index is busy while resolving doc path, skipping entry: ${String(err)}`);
+        return null;
       }
       throw err;
     }
