@@ -330,7 +330,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           : undefined;
       const contentType = contentInfo?.mimetype;
       const contentSize = typeof contentInfo?.size === "number" ? contentInfo.size : undefined;
-      if (mediaUrl?.startsWith("mxc://")) {
+      if (mediaUrl?.startsWith("mxc://") && mediaMaxBytes > 0) {
         try {
           media = await downloadMatrixMedia({
             client,

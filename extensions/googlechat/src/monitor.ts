@@ -770,6 +770,9 @@ async function downloadAttachment(
   mediaMaxMb: number,
   core: GoogleChatCoreRuntime,
 ): Promise<{ path: string; contentType?: string } | null> {
+  if (mediaMaxMb <= 0) {
+    return null;
+  }
   const resourceName = attachment.attachmentDataRef?.resourceName;
   if (!resourceName) {
     return null;
