@@ -13,6 +13,7 @@ import type { EmbeddedPiCompactResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
@@ -443,6 +444,27 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+        // Fire before_compaction plugin hook
+        {
+          const hookRunner = getGlobalHookRunner();
+          if (hookRunner?.hasHooks("before_compaction")) {
+            try {
+              await hookRunner.runBeforeCompaction(
+                {
+                  messageCount: session.messages.length,
+                  tokenCount: undefined,
+                },
+                {
+                  agentId: undefined,
+                  sessionKey: params.sessionKey,
+                  workspaceDir: params.workspaceDir,
+                },
+              );
+            } catch {
+              // Compaction hooks are best-effort; don't block compaction.
+            }
+          }
+        }
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
@@ -458,6 +480,26 @@ export async function compactEmbeddedPiSessionDirect(
         } catch {
           // If estimation fails, leave tokensAfter undefined
           tokensAfter = undefined;
+        }
+        // Fire after_compaction plugin hook
+        {
+          const hookRunner = getGlobalHookRunner();
+          if (hookRunner?.hasHooks("after_compaction")) {
+            hookRunner
+              .runAfterCompaction(
+                {
+                  messageCount: session.messages.length,
+                  tokenCount: tokensAfter,
+                  compactedCount: result.tokensBefore - (tokensAfter ?? result.tokensBefore),
+                },
+                {
+                  agentId: undefined,
+                  sessionKey: params.sessionKey,
+                  workspaceDir: params.workspaceDir,
+                },
+              )
+              .catch(() => {});
+          }
         }
         return {
           ok: true,

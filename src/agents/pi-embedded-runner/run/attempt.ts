@@ -724,7 +724,25 @@ export async function runEmbeddedAttempt(
               config: params.config,
             }).sessionAgentId;
 
+      // Fire session_start plugin hook.
+      if (hookRunner?.hasHooks("session_start")) {
+        hookRunner
+          .runSessionStart(
+            {
+              sessionId: params.sessionId,
+            },
+            {
+              agentId: hookAgentId,
+              sessionId: params.sessionId,
+            },
+          )
+          .catch((err) => {
+            log.warn(`session_start hook failed: ${String(err)}`);
+          });
+      }
+
       let promptError: unknown = null;
+      const sessionStartedAt = Date.now();
       try {
         const promptStartedAt = Date.now();
 
@@ -876,6 +894,25 @@ export async function runEmbeddedAttempt(
             )
             .catch((err) => {
               log.warn(`agent_end hook failed: ${err}`);
+            });
+        }
+
+        // Fire session_end plugin hook (fire-and-forget).
+        if (hookRunner?.hasHooks("session_end")) {
+          hookRunner
+            .runSessionEnd(
+              {
+                sessionId: params.sessionId,
+                messageCount: messagesSnapshot.length,
+                durationMs: Date.now() - sessionStartedAt,
+              },
+              {
+                agentId: hookAgentId,
+                sessionId: params.sessionId,
+              },
+            )
+            .catch((err) => {
+              log.warn(`session_end hook failed: ${String(err)}`);
             });
         }
       } finally {

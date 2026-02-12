@@ -11,12 +11,14 @@ describe("before_tool_call hook integration", () => {
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
+    runAfterToolCall: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     hookRunner = {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
+      runAfterToolCall: vi.fn().mockResolvedValue(undefined),
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
@@ -112,12 +114,14 @@ describe("before_tool_call hook integration for client tools", () => {
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
+    runAfterToolCall: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     hookRunner = {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
+      runAfterToolCall: vi.fn().mockResolvedValue(undefined),
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
@@ -148,5 +152,88 @@ describe("before_tool_call hook integration for client tools", () => {
       value: "ok",
       extra: true,
     });
+  });
+});
+
+describe("after_tool_call hook integration", () => {
+  let hookRunner: {
+    hasHooks: ReturnType<typeof vi.fn>;
+    runBeforeToolCall: ReturnType<typeof vi.fn>;
+    runAfterToolCall: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    hookRunner = {
+      hasHooks: vi.fn(),
+      runBeforeToolCall: vi.fn(),
+      runAfterToolCall: vi.fn().mockResolvedValue(undefined),
+    };
+    // oxlint-disable-next-line typescript/no-explicit-any
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+  });
+
+  it("fires after_tool_call on successful execution", async () => {
+    hookRunner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as any, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+
+    await tool.execute("call-a1", { path: "/tmp/file" }, undefined, undefined);
+
+    expect(hookRunner.runAfterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "read",
+        params: expect.any(Object),
+        result: { content: [], details: { ok: true } },
+        error: undefined,
+        durationMs: expect.any(Number),
+      }),
+      expect.objectContaining({
+        toolName: "read",
+        agentId: "main",
+        sessionKey: "main",
+      }),
+    );
+  });
+
+  it("fires after_tool_call on failed execution with error", async () => {
+    hookRunner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+    const execute = vi.fn().mockRejectedValue(new Error("kaboom"));
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      agentId: "main",
+    });
+
+    await expect(tool.execute("call-a2", { cmd: "fail" }, undefined, undefined)).rejects.toThrow(
+      "kaboom",
+    );
+
+    expect(hookRunner.runAfterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        error: expect.stringContaining("kaboom"),
+        durationMs: expect.any(Number),
+      }),
+      expect.objectContaining({
+        toolName: "exec",
+        agentId: "main",
+      }),
+    );
+  });
+
+  it("does not fire after_tool_call when no hooks registered", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const execute = vi.fn().mockResolvedValue({ content: [] });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as any);
+
+    await tool.execute("call-a3", {}, undefined, undefined);
+
+    expect(hookRunner.runAfterToolCall).not.toHaveBeenCalled();
   });
 });

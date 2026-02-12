@@ -82,7 +82,45 @@ export function wrapToolWithBeforeToolCallHook(
       if (outcome.blocked) {
         throw new Error(outcome.reason);
       }
-      return await execute(toolCallId, outcome.params, signal, onUpdate);
+      const startMs = Date.now();
+      let result: unknown;
+      let error: string | undefined;
+      try {
+        result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        return result as Awaited<ReturnType<typeof execute>>;
+      } catch (err) {
+        error = String(err);
+        throw err;
+      } finally {
+        // Fire after_tool_call hook (fire-and-forget).
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("after_tool_call")) {
+          const normalizedParams =
+            outcome.params && typeof outcome.params === "object" && outcome.params !== null
+              ? (outcome.params as Record<string, unknown>)
+              : {};
+          hookRunner
+            .runAfterToolCall(
+              {
+                toolName: normalizeToolName(toolName),
+                params: normalizedParams,
+                result,
+                error,
+                durationMs: Date.now() - startMs,
+              },
+              {
+                toolName: normalizeToolName(toolName),
+                agentId: ctx?.agentId,
+                sessionKey: ctx?.sessionKey,
+              },
+            )
+            .catch((hookErr) => {
+              log.warn(
+                `after_tool_call hook failed: tool=${normalizeToolName(toolName)} error=${String(hookErr)}`,
+              );
+            });
+        }
+      }
     },
   };
 }

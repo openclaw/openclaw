@@ -21,6 +21,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { throwIfAborted } from "./abort.js";
@@ -337,12 +338,48 @@ export async function deliverOutboundPayloads(params: {
     const normalized = normalizeWhatsAppPayload(payload);
     return normalized ? [normalized] : [];
   });
+  // Build message context for plugin hooks
+  const hookChannelId = channel;
+  const hookAccountId = accountId;
+  const hookConversationId = to;
+
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
       channelData: payload.channelData,
     };
+
+    // Fire message_sending plugin hook (modifying — can cancel or alter content).
+    const hookRunner = getGlobalHookRunner();
+    let sendingContent = payloadSummary.text;
+    if (hookRunner?.hasHooks("message_sending")) {
+      try {
+        const sendingResult = await hookRunner.runMessageSending(
+          {
+            to,
+            content: sendingContent,
+            metadata: { channel, mediaUrls: payloadSummary.mediaUrls },
+          },
+          {
+            channelId: hookChannelId,
+            accountId: hookAccountId,
+            conversationId: hookConversationId,
+          },
+        );
+        if (sendingResult?.cancel) {
+          continue; // Plugin requested cancellation of this payload.
+        }
+        if (sendingResult?.content !== undefined) {
+          sendingContent = sendingResult.content;
+          payloadSummary.text = sendingContent;
+          payload.text = sendingContent;
+        }
+      } catch {
+        // Best-effort: don't block delivery on hook failures.
+      }
+    }
+
     try {
       throwIfAborted(abortSignal);
       params.onPayload?.(payloadSummary);
@@ -370,7 +407,42 @@ export async function deliverOutboundPayloads(params: {
           results.push(await handler.sendMedia(caption, url));
         }
       }
+      // Fire message_sent plugin hook (fire-and-forget).
+      if (hookRunner?.hasHooks("message_sent")) {
+        hookRunner
+          .runMessageSent(
+            {
+              to,
+              content: sendingContent,
+              success: true,
+            },
+            {
+              channelId: hookChannelId,
+              accountId: hookAccountId,
+              conversationId: hookConversationId,
+            },
+          )
+          .catch(() => {});
+      }
     } catch (err) {
+      // Fire message_sent hook with error.
+      if (hookRunner?.hasHooks("message_sent")) {
+        hookRunner
+          .runMessageSent(
+            {
+              to,
+              content: sendingContent,
+              success: false,
+              error: String(err),
+            },
+            {
+              channelId: hookChannelId,
+              accountId: hookAccountId,
+              conversationId: hookConversationId,
+            },
+          )
+          .catch(() => {});
+      }
       if (!params.bestEffort) {
         throw err;
       }

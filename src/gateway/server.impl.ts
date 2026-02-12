@@ -41,6 +41,7 @@ import {
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
@@ -622,6 +623,16 @@ export async function startGatewayServer(
     httpServers,
   });
 
+  // Fire gateway_start plugin hook now that the server is fully initialized.
+  {
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("gateway_start")) {
+      hookRunner.runGatewayStart({ port }, { port }).catch((err) => {
+        log.warn(`gateway_start hook failed: ${String(err)}`);
+      });
+    }
+  }
+
   return {
     close: async (opts) => {
       if (diagnosticsEnabled) {
@@ -632,6 +643,20 @@ export async function startGatewayServer(
         skillsRefreshTimer = null;
       }
       skillsChangeUnsub();
+      // Fire gateway_stop plugin hook before tearing down.
+      {
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("gateway_stop")) {
+          try {
+            await hookRunner.runGatewayStop(
+              { reason: opts?.reason ?? "gateway stopping" },
+              { port },
+            );
+          } catch (err) {
+            log.warn(`gateway_stop hook failed: ${String(err)}`);
+          }
+        }
+      }
       await close(opts);
     },
   };
