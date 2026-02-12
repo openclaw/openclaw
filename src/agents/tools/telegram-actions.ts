@@ -109,11 +109,18 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
+    const reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
       token,
       remove,
       accountId: accountId ?? undefined,
     });
+    if (!reactionResult.ok) {
+      return jsonResult({
+        ok: false,
+        warning: reactionResult.warning,
+        ...(remove || isEmpty ? { removed: true } : { added: emoji }),
+      });
+    }
     if (!remove && !isEmpty) {
       return jsonResult({ ok: true, added: emoji });
     }
