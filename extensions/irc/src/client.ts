@@ -38,6 +38,7 @@ export type IrcClientOptions = {
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
   onLine?: (line: string) => void;
+  log?: (message: string) => void;
 };
 
 export type IrcNickServOptions = {
@@ -143,7 +144,19 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   let nickServRecoverAttempted = false;
   let fallbackNickAttempted = false;
 
+  const log = options.log ?? (() => {});
+
+  log(`connecting to ${options.host}:${options.port} (tls=${options.tls}, nick=${desiredNick})`);
+
   const bypassTlsVerification = Boolean(options.tlsInsecure || options.tlsFingerprints?.length);
+  if (options.tls) {
+    log(
+      `tls config: tlsInsecure=${Boolean(options.tlsInsecure)}, ` +
+        `tlsFingerprints=[${(options.tlsFingerprints ?? []).join(", ")}], ` +
+        `rejectUnauthorized=${!bypassTlsVerification}`,
+    );
+  }
+
   const socket = options.tls
     ? tls.connect({
         host: options.host,
@@ -155,18 +168,27 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
   if (options.tls && !options.tlsInsecure && options.tlsFingerprints?.length) {
     const allowedFingerprints = new Set(options.tlsFingerprints.map(normalizeTlsFingerprint));
+    log(
+      `fingerprint validation enabled: expecting one of [${[...allowedFingerprints].join(", ")}]`,
+    );
     const tlsSocket = socket as tls.TLSSocket;
     tlsSocket.once("secureConnect", () => {
       const cert = tlsSocket.getPeerCertificate();
       const peerFingerprint = normalizeTlsFingerprint(cert.fingerprint256 ?? "");
+      log(`peer certificate fingerprint: ${peerFingerprint || "(empty)"}`);
       if (!peerFingerprint || !allowedFingerprints.has(peerFingerprint)) {
+        log(`fingerprint mismatch — destroying connection`);
         tlsSocket.destroy(
           new Error(
             `TLS certificate fingerprint mismatch: got ${peerFingerprint}, expected one of [${[...allowedFingerprints].join(", ")}]`,
           ),
         );
+      } else {
+        log(`fingerprint matched`);
       }
     });
+  } else if (options.tls && options.tlsInsecure) {
+    log(`tls verification fully bypassed (tlsInsecure=true)`);
   }
 
   socket.setEncoding("utf8");
@@ -354,8 +376,12 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         if (nickParam && nickParam.trim()) {
           currentNick = nickParam.trim();
         }
+        log(`received 001 (welcome) as ${currentNick}`);
         try {
           const nickServCommands = buildIrcNickServCommands(options.nickserv);
+          if (nickServCommands.length > 0) {
+            log(`sending ${nickServCommands.length} NickServ command(s)`);
+          }
           for (const command of nickServCommands) {
             sendRaw(command);
           }
@@ -368,6 +394,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
             continue;
           }
           try {
+            log(`joining ${trimmed}`);
             join(trimmed);
           } catch (err) {
             fail(err);
@@ -416,10 +443,13 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   });
 
   socket.once("connect", () => {
+    log(`socket connected to ${options.host}:${options.port}`);
     try {
       if (options.password && options.password.trim()) {
+        log(`sending PASS`);
         sendRaw(`PASS ${options.password.trim()}`);
       }
+      log(`sending NICK ${options.nick.trim()}`);
       sendRaw(`NICK ${options.nick.trim()}`);
       sendRaw(`USER ${options.username.trim()} 0 * :${sanitizeIrcOutboundText(options.realname)}`);
     } catch (err) {
@@ -429,10 +459,12 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   });
 
   socket.once("error", (err: unknown) => {
+    log(`socket error: ${err instanceof Error ? err.message : String(err)}`);
     fail(err);
   });
 
   socket.once("close", () => {
+    log(`socket closed (ready=${ready}, closed=${closed})`);
     if (!closed) {
       closed = true;
       if (!ready) {

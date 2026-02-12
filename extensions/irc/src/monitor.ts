@@ -60,10 +60,19 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
 
   let client: IrcClient | null = null;
 
+  logger.info(
+    `[${account.accountId}] connecting to ${account.host}:${account.port} ` +
+      `(tls=${account.tls}, tlsInsecure=${account.tlsInsecure}, ` +
+      `tlsFingerprints=[${account.tlsFingerprints.join(", ")}])`,
+  );
+
   client = await connectIrcClient(
     buildIrcConnectOptions(account, {
       channels: account.config.channels,
       abortSignal: opts.abortSignal,
+      log: (message) => {
+        logger.info(`[${account.accountId}] ${message}`);
+      },
       onLine: (line) => {
         if (core.logging.shouldLogVerbose()) {
           logger.debug?.(`[${account.accountId}] << ${line}`);
