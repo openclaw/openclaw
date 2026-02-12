@@ -89,7 +89,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import { runWithPromptRetry } from "./prompt-retry.js";
+import { getRetryConfig, runWithPromptRetry } from "./prompt-retry.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -824,12 +824,14 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
+          const retryConfig = getRetryConfig(params.provider, params.config);
           if (imageResult.images.length > 0) {
             await abortable(
               runWithPromptRetry(
                 () => activeSession.prompt(effectivePrompt, { images: imageResult.images }),
                 params.provider,
                 params.modelId,
+                retryConfig,
               ),
             );
           } else {
@@ -838,6 +840,7 @@ export async function runEmbeddedAttempt(
                 () => activeSession.prompt(effectivePrompt),
                 params.provider,
                 params.modelId,
+                retryConfig,
               ),
             );
           }

@@ -1,7 +1,8 @@
+import type { OutboundRetryConfig } from "../../../config/types.base.js";
 import { retryAsync } from "../../../infra/retry.js";
 import { log } from "../logger.js";
 
-const DEFAULT_RETRY_CONFIG = {
+const DEFAULT_RETRY_CONFIG: OutboundRetryConfig = {
   attempts: 3,
   minDelayMs: 1000,
   maxDelayMs: 60000,
@@ -21,19 +22,32 @@ function getRetryAfterMs(err: unknown): number | undefined {
   return undefined;
 }
 
+export function getRetryConfig(
+  provider: string,
+  config?: { models?: { providers?: Record<string, { retry?: OutboundRetryConfig }> } },
+): OutboundRetryConfig | undefined {
+  return config?.models?.providers?.[provider]?.retry;
+}
+
 export async function runWithPromptRetry<T>(
   fn: () => Promise<T>,
   provider: string,
   modelId: string,
-  retryConfig?: typeof DEFAULT_RETRY_CONFIG,
+  retryConfig?: OutboundRetryConfig,
 ): Promise<T> {
-  const config = { ...DEFAULT_RETRY_CONFIG, ...retryConfig };
+  // First check for config-based retry, fall back to default
+  const effectiveConfig = retryConfig ?? DEFAULT_RETRY_CONFIG;
+
+  const attempts = effectiveConfig.attempts ?? DEFAULT_RETRY_CONFIG.attempts!;
+  const minDelayMs = effectiveConfig.minDelayMs ?? DEFAULT_RETRY_CONFIG.minDelayMs!;
+  const maxDelayMs = effectiveConfig.maxDelayMs ?? DEFAULT_RETRY_CONFIG.maxDelayMs!;
+  const jitter = effectiveConfig.jitter ?? DEFAULT_RETRY_CONFIG.jitter!;
 
   return retryAsync(fn, {
-    attempts: config.attempts,
-    minDelayMs: config.minDelayMs,
-    maxDelayMs: config.maxDelayMs,
-    jitter: config.jitter,
+    attempts,
+    minDelayMs,
+    maxDelayMs,
+    jitter,
     shouldRetry: isRetryableError,
     retryAfterMs: getRetryAfterMs,
     onRetry: (info) => {
@@ -45,4 +59,4 @@ export async function runWithPromptRetry<T>(
   });
 }
 
-export type PromptRetryConfig = typeof DEFAULT_RETRY_CONFIG;
+export type { OutboundRetryConfig };
