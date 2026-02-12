@@ -19,6 +19,22 @@ export type ChatState = {
   lastError: string | null;
 };
 
+/**
+ * Marker field on optimistic (locally-added) messages.
+ * Messages carrying this field have not yet been confirmed by the server.
+ */
+const LOCAL_ID_KEY = "_localId";
+
+/** Type guard: returns true when a message carries an optimistic local-id. */
+export function isLocalMessage(m: unknown): m is Record<string, unknown> & { _localId: string } {
+  return (
+    typeof m === "object" &&
+    m !== null &&
+    LOCAL_ID_KEY in (m as Record<string, unknown>) &&
+    typeof (m as Record<string, unknown>)[LOCAL_ID_KEY] === "string"
+  );
+}
+
 export type ChatEventPayload = {
   runId: string;
   sessionKey: string;
@@ -41,7 +57,34 @@ export async function loadChatHistory(state: ChatState) {
         limit: 200,
       },
     );
-    state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
+    const serverMessages = Array.isArray(res.messages) ? res.messages : [];
+
+    // Preserve optimistic (locally-added) user messages that the server has
+    // not yet acknowledged.  Without this, a loadChatHistory triggered by a
+    // "final" event would overwrite messages the user sent while the agent
+    // was still responding.  See #14799.
+    const pendingLocal = state.chatMessages.filter(isLocalMessage);
+    if (pendingLocal.length > 0) {
+      // A local message is "confirmed" when the server returns a user message
+      // whose text content matches.  This avoids duplicates once the server
+      // has persisted the message.
+      const serverTexts = new Set(
+        serverMessages
+          .filter(
+            (m: unknown) =>
+              typeof m === "object" && m !== null && (m as Record<string, unknown>).role === "user",
+          )
+          .map((m: unknown) => extractText(m))
+          .filter((t): t is string => typeof t === "string"),
+      );
+      const unconfirmed = pendingLocal.filter((m) => {
+        const text = extractText(m);
+        return typeof text === "string" ? !serverTexts.has(text) : true;
+      });
+      state.chatMessages = [...serverMessages, ...unconfirmed];
+    } else {
+      state.chatMessages = serverMessages;
+    }
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
     state.lastError = String(err);
@@ -89,18 +132,20 @@ export async function sendChatMessage(
     }
   }
 
+  const runId = generateUUID();
+
   state.chatMessages = [
     ...state.chatMessages,
     {
       role: "user",
       content: contentBlocks,
       timestamp: now,
+      [LOCAL_ID_KEY]: runId,
     },
   ];
 
   state.chatSending = true;
   state.lastError = null;
-  const runId = generateUUID();
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
