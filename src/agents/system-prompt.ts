@@ -447,7 +447,7 @@ export function buildAgentSystemPrompt(params: {
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
     userTimezone
-      ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
+      ? "If you need current date, time, or day of week (includes ISO-8601 and Unix for scheduling), run session_status (📊 session_status)."
       : "",
     "## Workspace",
     `Your working directory is: ${params.workspaceDir}`,

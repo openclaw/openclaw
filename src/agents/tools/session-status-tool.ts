@@ -419,10 +419,13 @@ export function createSessionStatusTool(opts?: {
 
       const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
       const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
-      const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+      const now = new Date();
+      const userTime = formatUserTime(now, userTimezone, userTimeFormat);
+      const iso = now.toISOString();
+      const unix = Math.floor(now.getTime() / 1000);
       const timeLine = userTime
-        ? `🕒 Time: ${userTime} (${userTimezone})`
-        : `🕒 Time zone: ${userTimezone}`;
+        ? `🕒 Time: ${userTime} (${userTimezone})\n   ISO-8601: ${iso} | Unix: ${unix}`
+        : `🕒 Time zone: ${userTimezone}\n   ISO-8601: ${iso} | Unix: ${unix}`;
 
       const agentDefaults = cfg.agents?.defaults ?? {};
       const defaultLabel = `${configured.provider}/${configured.model}`;

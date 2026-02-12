@@ -106,6 +106,33 @@ describe("session_status tool", () => {
     expect(details.statusText).not.toContain("OAuth/token status");
   });
 
+  it("includes ISO-8601 and Unix timestamps for scheduling", async () => {
+    loadSessionStoreMock.mockReset();
+    updateSessionStoreMock.mockReset();
+    loadSessionStoreMock.mockReturnValue({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = createOpenClawTools({ agentSessionKey: "main" }).find(
+      (candidate) => candidate.name === "session_status",
+    );
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing session_status tool");
+    }
+
+    const result = await tool.execute("call-time", {});
+    const details = result.details as { ok?: boolean; statusText?: string };
+    expect(details.ok).toBe(true);
+    // ISO-8601 format: YYYY-MM-DDTHH:MM:SS.sssZ
+    expect(details.statusText).toMatch(/ISO-8601: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
+    // Unix timestamp (seconds since epoch)
+    expect(details.statusText).toMatch(/Unix: \d+/);
+  });
+
   it("errors for unknown session keys", async () => {
     loadSessionStoreMock.mockReset();
     updateSessionStoreMock.mockReset();
