@@ -164,11 +164,19 @@ jobs:
             }
 
             const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
-            const merged = await github.rest.search.issuesAndPullRequests({
-              q: mergedQuery,
-              per_page: 1,
-            });
-            const mergedCount = merged?.data?.total_count ?? 0;
+            let mergedCount = 0;
+            try {
+              const merged = await github.rest.search.issuesAndPullRequests({
+                q: mergedQuery,
+                per_page: 1,
+              });
+              mergedCount = merged?.data?.total_count ?? 0;
+            } catch (error) {
+              if (error?.status !== 422) {
+                throw error;
+              }
+              core.warning(`Skipping merged search for ${login}; treating as 0.`);
+            }
 
             if (mergedCount >= experiencedThreshold) {
               await github.rest.issues.addLabels({
@@ -273,11 +281,19 @@ jobs:
               }
 
               const mergedQuery = `repo:${repoFull} is:pr is:merged author:${login}`;
-              const merged = await github.rest.search.issuesAndPullRequests({
-                q: mergedQuery,
-                per_page: 1,
-              });
-              const mergedCount = merged?.data?.total_count ?? 0;
+              let mergedCount = 0;
+              try {
+                const merged = await github.rest.search.issuesAndPullRequests({
+                  q: mergedQuery,
+                  per_page: 1,
+                });
+                mergedCount = merged?.data?.total_count ?? 0;
+              } catch (error) {
+                if (error?.status !== 422) {
+                  throw error;
+                }
+                core.warning(`Skipping merged search for ${login}; treating as 0.`);
+              }
 
               let label = null;
               if (mergedCount >= experiencedThreshold) {
@@ -471,11 +487,19 @@ jobs:
             }
 
             const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
-            const merged = await github.rest.search.issuesAndPullRequests({
-              q: mergedQuery,
-              per_page: 1,
-            });
-            const mergedCount = merged?.data?.total_count ?? 0;
+            let mergedCount = 0;
+            try {
+              const merged = await github.rest.search.issuesAndPullRequests({
+                q: mergedQuery,
+                per_page: 1,
+              });
+              mergedCount = merged?.data?.total_count ?? 0;
+            } catch (error) {
+              if (error?.status !== 422) {
+                throw error;
+              }
+              core.warning(`Skipping merged search for ${login}; treating as 0.`);
+            }
 
             if (mergedCount >= experiencedThreshold) {
               await github.rest.issues.addLabels({
