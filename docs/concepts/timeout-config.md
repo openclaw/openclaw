@@ -85,7 +85,7 @@ In `~/.openclaw/openclaw.json`:
         "baseUrl": "https://api.openai.com/v1",
         "apiKey": "sk-...",
         "timeoutMs": 600000,
-        "timeout": 600000, // Backward compatibility
+        "timeout": 600000,
         "models": [...]
       }
     }
