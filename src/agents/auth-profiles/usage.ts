@@ -14,6 +14,43 @@ function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
 }
 
 /**
+ * Resolve the most representative failure reason across cooldown profiles.
+ * Aggregates `failureCounts` from each profile in cooldown and returns
+ * the reason with the highest total count.  Falls back to `"rate_limit"`
+ * when no failure data is recorded (backward-compatible default).
+ */
+export function resolveDominantCooldownReason(
+  store: AuthProfileStore,
+  profileIds: string[],
+): AuthProfileFailureReason {
+  const totals: Partial<Record<AuthProfileFailureReason, number>> = {};
+
+  for (const id of profileIds) {
+    const stats = store.usageStats?.[id];
+    if (!stats) {
+      continue;
+    }
+    if (stats.failureCounts) {
+      for (const [reason, count] of Object.entries(stats.failureCounts)) {
+        const key = reason as AuthProfileFailureReason;
+        totals[key] = (totals[key] ?? 0) + (count ?? 0);
+      }
+    }
+  }
+
+  let bestReason: AuthProfileFailureReason | null = null;
+  let bestCount = 0;
+  for (const [reason, count] of Object.entries(totals)) {
+    if ((count ?? 0) > bestCount) {
+      bestReason = reason as AuthProfileFailureReason;
+      bestCount = count ?? 0;
+    }
+  }
+
+  return bestReason ?? "rate_limit";
+}
+
+/**
  * Check if a profile is currently in cooldown (due to rate limiting or errors).
  */
 export function isProfileInCooldown(store: AuthProfileStore, profileId: string): boolean {

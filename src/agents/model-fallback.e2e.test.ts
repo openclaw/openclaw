@@ -220,6 +220,123 @@ describe("runWithModelFallback", () => {
     }
   });
 
+  it("reports auth reason when profiles are in cooldown due to auth errors", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const provider = `auth-cooldown-${crypto.randomUUID()}`;
+    const profileId = `${provider}:default`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider,
+          key: "test-key",
+        },
+      },
+      usageStats: {
+        [profileId]: {
+          cooldownUntil: Date.now() + 60_000,
+          failureCounts: { auth: 1 },
+        },
+      },
+    };
+
+    saveAuthProfileStore(store, tempDir);
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/m1`,
+            fallbacks: ["fallback/ok-model"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === "fallback") {
+        return "ok";
+      }
+      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+    });
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider,
+        model: "m1",
+        agentDir: tempDir,
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+      expect(result.attempts[0]?.reason).toBe("auth");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports billing reason when profiles are in cooldown due to billing errors", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const provider = `billing-cooldown-${crypto.randomUUID()}`;
+    const profileId = `${provider}:default`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider,
+          key: "test-key",
+        },
+      },
+      usageStats: {
+        [profileId]: {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "billing",
+          failureCounts: { billing: 1 },
+        },
+      },
+    };
+
+    saveAuthProfileStore(store, tempDir);
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/m1`,
+            fallbacks: ["fallback/ok-model"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === "fallback") {
+        return "ok";
+      }
+      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+    });
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider,
+        model: "m1",
+        agentDir: tempDir,
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+      expect(result.attempts[0]?.reason).toBe("billing");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not skip when any profile is available", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
     const provider = `cooldown-mixed-${crypto.randomUUID()}`;

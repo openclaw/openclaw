@@ -37,5 +37,6 @@ export {
   markAuthProfileCooldown,
   markAuthProfileFailure,
   markAuthProfileUsed,
+  resolveDominantCooldownReason,
   resolveProfileUnusableUntilForDisplay,
 } from "./auth-profiles/usage.js";
