@@ -210,4 +210,31 @@ describe("hooks", () => {
       expect(keys).toEqual([]);
     });
   });
+
+  // Test added to verify the fix for bundler code-splitting issues.
+  // See: https://github.com/openclaw/openclaw/issues/14270
+  describe("globalThis registry resilience", () => {
+    const HOOK_REGISTRY_KEY = "__openclaw_internal_hook_handlers__";
+
+    it("should store the handler map on globalThis to survive module duplication", () => {
+      const handler = vi.fn();
+      registerInternalHook("command:test-global", handler);
+
+      const globalRegistry = (globalThis as Record<string, unknown>)[HOOK_REGISTRY_KEY];
+      expect(globalRegistry).toBeDefined();
+      expect(globalRegistry).toBeInstanceOf(Map);
+      expect(globalRegistry.has("command:test-global")).toBe(true);
+    });
+
+    it("clearInternalHooks should correctly clear the global registry", () => {
+      registerInternalHook("command:test-clear", vi.fn());
+
+      const globalRegistry = (globalThis as Record<string, unknown>)[HOOK_REGISTRY_KEY];
+      expect(globalRegistry.size).toBeGreaterThan(0);
+
+      clearInternalHooks();
+
+      expect(globalRegistry.size).toBe(0);
+    });
+  });
 });
