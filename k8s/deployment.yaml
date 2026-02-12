@@ -25,7 +25,6 @@ spec:
             - node
             - dist/index.js
             - gateway
-            - run
             - --bind
             - lan
             - --port
