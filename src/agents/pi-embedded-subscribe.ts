@@ -16,7 +16,11 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
-import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
+import {
+  formatReasoningMessage,
+  stripDowngradedToolCallText,
+  stripJsonToolCallText,
+} from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
@@ -451,7 +455,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
-    const chunk = stripDowngradedToolCallText(stripBlockTags(text, state.blockState)).trimEnd();
+    const chunk = stripDowngradedToolCallText(
+      stripJsonToolCallText(stripBlockTags(text, state.blockState)),
+    ).trimEnd();
     if (!chunk) {
       return;
     }
