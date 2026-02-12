@@ -228,6 +228,7 @@ export function loadAuthProfileStore(): AuthProfileStore {
           token: cred.token,
           ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
           ...(cred.email ? { email: cred.email } : {}),
+          ...(cred.enterpriseUrl ? { enterpriseUrl: cred.enterpriseUrl } : {}),
         };
       } else {
         store.profiles[profileId] = {
@@ -304,6 +305,7 @@ function loadAuthProfileStoreForAgent(
           token: cred.token,
           ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
           ...(cred.email ? { email: cred.email } : {}),
+          ...(cred.enterpriseUrl ? { enterpriseUrl: cred.enterpriseUrl } : {}),
         };
       } else {
         store.profiles[profileId] = {

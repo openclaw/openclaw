@@ -5,10 +5,10 @@ import { updateConfig } from "../commands/models/shared.js";
 import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
-
-const CLIENT_ID = "Iv1.b507a08c87ecfe98";
-const DEVICE_CODE_URL = "https://github.com/login/device/code";
-const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
+import {
+  resolveGitHubCopilotEndpoints,
+  type GitHubCopilotEndpoints,
+} from "./github-copilot-token.js";
 
 type DeviceCodeResponse = {
   device_code: string;
@@ -37,13 +37,16 @@ function parseJsonResponse<T>(value: unknown): T {
   return value as T;
 }
 
-async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeResponse> {
+async function requestDeviceCode(params: {
+  scope: string;
+  endpoints: GitHubCopilotEndpoints;
+}): Promise<DeviceCodeResponse> {
   const body = new URLSearchParams({
-    client_id: CLIENT_ID,
+    client_id: params.endpoints.clientId,
     scope: params.scope,
   });
 
-  const res = await fetch(DEVICE_CODE_URL, {
+  const res = await fetch(params.endpoints.deviceCodeUrl, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -67,15 +70,16 @@ async function pollForAccessToken(params: {
   deviceCode: string;
   intervalMs: number;
   expiresAt: number;
+  endpoints: GitHubCopilotEndpoints;
 }): Promise<string> {
   const bodyBase = new URLSearchParams({
-    client_id: CLIENT_ID,
+    client_id: params.endpoints.clientId,
     device_code: params.deviceCode,
     grant_type: "urn:ietf:params:oauth:grant-type:device_code",
   });
 
   while (Date.now() < params.expiresAt) {
-    const res = await fetch(ACCESS_TOKEN_URL, {
+    const res = await fetch(params.endpoints.accessTokenUrl, {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -115,16 +119,23 @@ async function pollForAccessToken(params: {
 }
 
 export async function githubCopilotLoginCommand(
-  opts: { profileId?: string; yes?: boolean },
+  opts: { profileId?: string; yes?: boolean; githubHost?: string; clientId?: string },
   runtime: RuntimeEnv,
 ) {
   if (!process.stdin.isTTY) {
     throw new Error("github-copilot login requires an interactive TTY.");
   }
 
-  intro(stylePromptTitle("GitHub Copilot login"));
+  const endpoints = resolveGitHubCopilotEndpoints(opts.githubHost, opts.clientId);
+  const isEnterprise = endpoints.host !== "github.com";
+  const hostLabel = isEnterprise ? `GitHub Enterprise (${endpoints.host})` : "GitHub";
 
-  const profileId = opts.profileId?.trim() || "github-copilot:github";
+  intro(stylePromptTitle(`${hostLabel} Copilot login`));
+
+  const defaultProfileId = isEnterprise
+    ? `github-copilot:${endpoints.host}`
+    : "github-copilot:github";
+  const profileId = opts.profileId?.trim() || defaultProfileId;
   const store = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
   });
@@ -137,8 +148,8 @@ export async function githubCopilotLoginCommand(
   }
 
   const spin = spinner();
-  spin.start("Requesting device code from GitHub...");
-  const device = await requestDeviceCode({ scope: "read:user" });
+  spin.start(`Requesting device code from ${hostLabel}...`);
+  const device = await requestDeviceCode({ scope: "read:user", endpoints });
   spin.stop("Device code ready");
 
   note(
@@ -150,13 +161,14 @@ export async function githubCopilotLoginCommand(
   const intervalMs = Math.max(1000, device.interval * 1000);
 
   const polling = spinner();
-  polling.start("Waiting for GitHub authorization...");
+  polling.start(`Waiting for ${hostLabel} authorization...`);
   const accessToken = await pollForAccessToken({
     deviceCode: device.device_code,
     intervalMs,
     expiresAt,
+    endpoints,
   });
-  polling.stop("GitHub access token acquired");
+  polling.stop(`${hostLabel} access token acquired`);
 
   upsertAuthProfile({
     profileId,
@@ -166,6 +178,7 @@ export async function githubCopilotLoginCommand(
       token: accessToken,
       // GitHub device flow token doesn't reliably include expiry here.
       // Leave expires unset; we'll exchange into Copilot token plus expiry later.
+      ...(isEnterprise ? { enterpriseUrl: endpoints.host } : {}),
     },
   });
 

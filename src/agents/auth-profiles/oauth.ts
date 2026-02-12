@@ -151,7 +151,7 @@ export async function resolveApiKeyForProfile(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
-}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+}): Promise<{ apiKey: string; provider: string; email?: string; enterpriseUrl?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
   if (!cred) {
@@ -188,7 +188,12 @@ export async function resolveApiKeyForProfile(params: {
     ) {
       return null;
     }
-    return { apiKey: token, provider: cred.provider, email: cred.email };
+    return {
+      apiKey: token,
+      provider: cred.provider,
+      email: cred.email,
+      enterpriseUrl: cred.enterpriseUrl,
+    };
   }
   if (Date.now() < cred.expires) {
     return {

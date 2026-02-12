@@ -1,4 +1,5 @@
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+import { resolveGitHubCopilotEndpoints } from "../providers/github-copilot-token.js";
 import { fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 
@@ -14,9 +15,12 @@ export async function fetchCopilotUsage(
   token: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
+  /** GitHub Enterprise host (e.g. "myorg.ghe.com"), or omit for github.com. */
+  githubHost?: string,
 ): Promise<ProviderUsageSnapshot> {
+  const endpoints = resolveGitHubCopilotEndpoints(githubHost);
   const res = await fetchJson(
-    "https://api.github.com/copilot_internal/user",
+    endpoints.copilotUserUrl,
     {
       headers: {
         Authorization: `token ${token}`,

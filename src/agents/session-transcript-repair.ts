@@ -155,6 +155,98 @@ export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMes
   return repairToolUseResultPairing(messages).messages;
 }
 
+/**
+ * Split assistant messages with multiple tool calls into one assistant+toolResult
+ * pair per tool call. Copilot's Gemini proxy rejects assistant messages containing
+ * more than one tool call — this serialises parallel calls so each assistant turn
+ * carries exactly one tool_call followed by its matching toolResult.
+ *
+ * Non-tool-call content blocks (text, thinking) are kept on the first split
+ * assistant message. Must run AFTER repairToolUseResultPairing so every tool call
+ * already has a matching toolResult immediately following the assistant message.
+ */
+export function splitParallelToolCalls(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const out: AgentMessage[] = [];
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const msg = messages[i];
+    if (
+      !msg ||
+      typeof msg !== "object" ||
+      msg.role !== "assistant" ||
+      !Array.isArray(msg.content)
+    ) {
+      out.push(msg);
+      continue;
+    }
+
+    const toolCallBlocks: Array<{ block: unknown; id: string }> = [];
+    const otherBlocks: unknown[] = [];
+
+    for (const block of msg.content) {
+      if (isToolCallBlock(block) && typeof (block as { id?: unknown }).id === "string") {
+        toolCallBlocks.push({ block, id: (block as { id: string }).id });
+      } else {
+        otherBlocks.push(block);
+      }
+    }
+
+    if (toolCallBlocks.length <= 1) {
+      // 0 or 1 tool call — nothing to split.
+      out.push(msg);
+      continue;
+    }
+
+    changed = true;
+
+    // Collect the toolResult messages that immediately follow this assistant message.
+    // repairToolUseResultPairing guarantees they exist and are ordered by call id.
+    const followingResults = new Map<string, AgentMessage>();
+    let j = i + 1;
+    while (j < messages.length) {
+      const next = messages[j];
+      if (!next || typeof next !== "object" || next.role !== "toolResult") {
+        break;
+      }
+      const id = extractToolResultId(next);
+      if (id) {
+        followingResults.set(id, next);
+      }
+      j += 1;
+    }
+
+    // Emit one assistant(1 call) → toolResult pair per tool call.
+    for (let k = 0; k < toolCallBlocks.length; k += 1) {
+      const tc = toolCallBlocks[k];
+      const contentBlocks: unknown[] = k === 0 ? [...otherBlocks, tc.block] : [tc.block];
+
+      out.push({
+        ...msg,
+        content: contentBlocks,
+      } as AgentMessage);
+
+      // Emit the matching toolResult (if present).
+      const result = followingResults.get(tc.id);
+      if (result) {
+        out.push(result);
+        followingResults.delete(tc.id);
+      }
+    }
+
+    // Emit any remaining toolResults that didn't match (shouldn't happen after repair,
+    // but be defensive).
+    for (const remaining of followingResults.values()) {
+      out.push(remaining);
+    }
+
+    // Skip past the toolResult messages we already consumed.
+    i = j - 1;
+  }
+
+  return changed ? out : messages;
+}
+
 export type ToolUseRepairReport = {
   messages: AgentMessage[];
   added: Array<Extract<AgentMessage, { role: "toolResult" }>>;

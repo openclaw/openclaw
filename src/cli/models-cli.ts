@@ -366,12 +366,19 @@ export function registerModelsCli(program: Command) {
     .description("Login to GitHub Copilot via GitHub device flow (TTY required)")
     .option("--profile-id <id>", "Auth profile id (default: github-copilot:github)")
     .option("--yes", "Overwrite existing profile without prompting", false)
+    .option(
+      "--github-host <host>",
+      "GitHub Enterprise host (e.g. myorg.ghe.com) for Enterprise Cloud with data residency",
+    )
+    .option("--client-id <id>", "OAuth Client ID override (advanced)")
     .action(async (opts) => {
       await runModelsCommand(async () => {
         await githubCopilotLoginCommand(
           {
             profileId: opts.profileId as string | undefined,
             yes: Boolean(opts.yes),
+            githubHost: opts.githubHost as string | undefined,
+            clientId: opts.clientId as string | undefined,
           },
           defaultRuntime,
         );

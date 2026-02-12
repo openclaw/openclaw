@@ -21,6 +21,8 @@ export type TokenCredential = {
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
   email?: string;
+  /** GitHub Enterprise host (e.g. "myorg.ghe.com"), if not github.com. */
+  enterpriseUrl?: string;
 };
 
 export type OAuthCredential = OAuthCredentials & {

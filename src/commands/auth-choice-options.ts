@@ -105,8 +105,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "copilot",
     label: "Copilot",
-    hint: "GitHub + local proxy",
-    choices: ["github-copilot", "copilot-proxy"],
+    hint: "GitHub + Enterprise + local proxy",
+    choices: ["github-copilot", "github-copilot-enterprise", "copilot-proxy"],
   },
   {
     value: "ai-gateway",
@@ -230,6 +230,11 @@ export function buildAuthChoiceOptions(params: {
     value: "github-copilot",
     label: "GitHub Copilot (GitHub device login)",
     hint: "Uses GitHub device flow",
+  });
+  options.push({
+    value: "github-copilot-enterprise",
+    label: "GitHub Copilot Enterprise (GHE Cloud)",
+    hint: "GitHub Enterprise with data residency",
   });
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({

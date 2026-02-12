@@ -2,7 +2,61 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 
-const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
+// ── Endpoint resolution ─────────────────────────────────────────────────────
+// Derives all GitHub Copilot-related endpoint URLs from a single host value.
+// Supports github.com (default) and GHE Cloud with data residency (e.g. "myorg.ghe.com").
+
+const DEFAULT_CLIENT_ID = "Iv1.b507a08c87ecfe98";
+
+export type GitHubCopilotEndpoints = {
+  /** The GitHub host, e.g. "github.com" or "myorg.ghe.com". */
+  host: string;
+  /** OAuth App Client ID for the device flow. */
+  clientId: string;
+  /** POST — request a device code. */
+  deviceCodeUrl: string;
+  /** POST — poll for an access token. */
+  accessTokenUrl: string;
+  /** GET — exchange GitHub token for Copilot API token. */
+  copilotTokenUrl: string;
+  /** GET — Copilot user / usage info. */
+  copilotUserUrl: string;
+  /** Fallback Copilot API base URL (if not derivable from token response). */
+  defaultCopilotApiBaseUrl: string;
+};
+
+export function isGitHubDotCom(host: string): boolean {
+  return !host || host === "github.com";
+}
+
+/**
+ * Resolve all Copilot endpoint URLs from a host string.
+ *
+ * @param host - GitHub host, e.g. "github.com" (default) or "myorg.ghe.com".
+ * @param clientId - OAuth Client ID override; defaults to the public Copilot App.
+ */
+export function resolveGitHubCopilotEndpoints(
+  host?: string,
+  clientId?: string,
+): GitHubCopilotEndpoints {
+  const effectiveHost = host?.trim() || "github.com";
+  const dotCom = isGitHubDotCom(effectiveHost);
+  const apiBase = dotCom ? "https://api.github.com" : `https://api.${effectiveHost}`;
+
+  return {
+    host: effectiveHost,
+    clientId: clientId?.trim() || DEFAULT_CLIENT_ID,
+    deviceCodeUrl: `https://${effectiveHost}/login/device/code`,
+    accessTokenUrl: `https://${effectiveHost}/login/oauth/access_token`,
+    copilotTokenUrl: `${apiBase}/copilot_internal/v2/token`,
+    copilotUserUrl: `${apiBase}/copilot_internal/user`,
+    defaultCopilotApiBaseUrl: dotCom
+      ? "https://api.individual.githubcopilot.com"
+      : `https://copilot-api.${effectiveHost}`,
+  };
+}
+
+// ── Token resolution ────────────────────────────────────────────────────────
 
 export type CachedCopilotToken = {
   token: string;
@@ -12,8 +66,12 @@ export type CachedCopilotToken = {
   updatedAt: number;
 };
 
-function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
-  return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");
+function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env, host?: string) {
+  const suffix =
+    host && !isGitHubDotCom(host)
+      ? `github-copilot.${host}.token.json`
+      : "github-copilot.token.json";
+  return path.join(resolveStateDir(env), "credentials", suffix);
 }
 
 function isTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
@@ -24,6 +82,8 @@ function isTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
 function parseCopilotTokenResponse(value: unknown): {
   token: string;
   expiresAt: number;
+  /** Proxy endpoint from the response JSON (GHE Cloud returns this as endpoints.proxy). */
+  proxyEndpoint: string | null;
 } {
   if (!value || typeof value !== "object") {
     throw new Error("Unexpected response from GitHub Copilot token endpoint");
@@ -49,7 +109,19 @@ function parseCopilotTokenResponse(value: unknown): {
     throw new Error("Copilot token response missing expires_at");
   }
 
-  return { token, expiresAt: expiresAtMs };
+  // GHE Cloud with data residency returns endpoints in the JSON body, e.g.:
+  //   { "endpoints": { "proxy": "https://copilot-proxy.myorg.ghe.com" } }
+  // Extract the proxy endpoint if present.
+  let proxyEndpoint: string | null = null;
+  const endpoints = asRecord.endpoints;
+  if (endpoints && typeof endpoints === "object") {
+    const ep = endpoints as Record<string, unknown>;
+    if (typeof ep.proxy === "string" && ep.proxy.trim().length > 0) {
+      proxyEndpoint = ep.proxy.trim();
+    }
+  }
+
+  return { token, expiresAt: expiresAtMs, proxyEndpoint };
 }
 
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
@@ -82,6 +154,8 @@ export async function resolveCopilotApiToken(params: {
   githubToken: string;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
+  /** GitHub host for Enterprise, e.g. "myorg.ghe.com". Defaults to github.com. */
+  githubHost?: string;
 }): Promise<{
   token: string;
   expiresAt: number;
@@ -89,7 +163,8 @@ export async function resolveCopilotApiToken(params: {
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
-  const cachePath = resolveCopilotTokenCachePath(env);
+  const endpoints = resolveGitHubCopilotEndpoints(params.githubHost);
+  const cachePath = resolveCopilotTokenCachePath(env, endpoints.host);
   const cached = loadJsonFile(cachePath) as CachedCopilotToken | undefined;
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
     if (isTokenUsable(cached)) {
@@ -97,13 +172,15 @@ export async function resolveCopilotApiToken(params: {
         token: cached.token,
         expiresAt: cached.expiresAt,
         source: `cache:${cachePath}`,
-        baseUrl: deriveCopilotApiBaseUrlFromToken(cached.token) ?? DEFAULT_COPILOT_API_BASE_URL,
+        baseUrl:
+          deriveCopilotApiBaseUrlFromToken(cached.token) ?? endpoints.defaultCopilotApiBaseUrl,
       };
     }
   }
 
+  const tokenUrl = endpoints.copilotTokenUrl;
   const fetchImpl = params.fetchImpl ?? fetch;
-  const res = await fetchImpl(COPILOT_TOKEN_URL, {
+  const res = await fetchImpl(tokenUrl, {
     method: "GET",
     headers: {
       Accept: "application/json",
@@ -123,10 +200,55 @@ export async function resolveCopilotApiToken(params: {
   };
   saveJsonFile(cachePath, payload);
 
+  // Prefer: 1) proxy-ep from the token string (github.com tokens embed this)
+  //         2) host-derived default (works for both github.com and GHE Cloud)
+  //
+  // Note: we intentionally skip the `endpoints.proxy` JSON field for API base
+  // URL derivation. GHE Cloud returns a shared proxy domain (e.g.
+  // copilot-proxy.githubusercontent.com) that cannot be hostname-swapped to get
+  // the org-specific API base URL (copilot-api.{host}).
+  const baseUrl =
+    deriveCopilotApiBaseUrlFromToken(payload.token) ?? endpoints.defaultCopilotApiBaseUrl;
+
   return {
     token: payload.token,
     expiresAt: payload.expiresAt,
-    source: `fetched:${COPILOT_TOKEN_URL}`,
-    baseUrl: deriveCopilotApiBaseUrlFromToken(payload.token) ?? DEFAULT_COPILOT_API_BASE_URL,
+    source: `fetched:${tokenUrl}`,
+    baseUrl,
   };
+}
+
+/**
+ * Derive a Copilot API base URL from the `endpoints.proxy` field in the
+ * token response by transforming `copilot-proxy.X` → `copilot-api.X`.
+ *
+ * WARNING: This does NOT work for GHE Cloud with data residency because
+ * the token response returns a shared proxy (`copilot-proxy.githubusercontent.com`)
+ * rather than an org-specific one. Use `endpoints.defaultCopilotApiBaseUrl`
+ * (from `resolveGitHubCopilotEndpoints`) for GHE Cloud instead.
+ *
+ * Exported for edge-case callers; not used in the main resolution chain.
+ */
+export function deriveCopilotApiBaseUrlFromProxyEndpoint(
+  proxyEndpoint: string | null | undefined,
+): string | null {
+  if (!proxyEndpoint) {
+    return null;
+  }
+  const trimmed = proxyEndpoint.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    // copilot-proxy.myorg.ghe.com → copilot-api.myorg.ghe.com
+    if (url.hostname.startsWith("copilot-proxy.")) {
+      url.hostname = url.hostname.replace(/^copilot-proxy\./, "copilot-api.");
+    }
+    // Strip trailing slash for consistency.
+    return url.origin;
+  } catch {
+    return null;
+  }
 }

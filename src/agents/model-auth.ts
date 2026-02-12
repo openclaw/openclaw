@@ -130,6 +130,8 @@ export type ResolvedProviderAuth = {
   profileId?: string;
   source: string;
   mode: "api-key" | "oauth" | "token" | "aws-sdk";
+  /** GitHub Enterprise host (e.g. "myorg.ghe.com") for Copilot Enterprise profiles. */
+  enterpriseUrl?: string;
 };
 
 export async function resolveApiKeyForProvider(params: {
@@ -159,6 +161,7 @@ export async function resolveApiKeyForProvider(params: {
       profileId,
       source: `profile:${profileId}`,
       mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
+      enterpriseUrl: resolved.enterpriseUrl,
     };
   }
 
@@ -188,6 +191,7 @@ export async function resolveApiKeyForProvider(params: {
           profileId: candidate,
           source: `profile:${candidate}`,
           mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
+          enterpriseUrl: resolved.enterpriseUrl,
         };
       }
     } catch {}

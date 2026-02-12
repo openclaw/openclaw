@@ -15,6 +15,7 @@ import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
   sanitizeToolCallInputs,
   sanitizeToolUseResultPairing,
+  splitParallelToolCalls,
 } from "../session-transcript-repair.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
@@ -366,10 +367,14 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
+  // Split parallel tool calls into sequential assistant+toolResult pairs.
+  // Must run after repairToolUseResultPairing so every call has a matching result.
+  const splitTools = policy.splitParallelToolCalls
+    ? splitParallelToolCalls(repairedTools)
+    : repairedTools;
+
   const sanitizedOpenAI =
-    isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(repairedTools)
-      : repairedTools;
+    isOpenAIResponsesApi && modelChanged ? downgradeOpenAIReasoningBlocks(splitTools) : splitTools;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

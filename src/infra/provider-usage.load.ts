@@ -57,7 +57,7 @@ export async function loadProviderUsageSummary(
           case "anthropic":
             return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
           case "github-copilot":
-            return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
+            return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn, auth.enterpriseUrl);
           case "google-antigravity":
             return await fetchAntigravityUsage(auth.token, timeoutMs, fetchFn);
           case "google-gemini-cli":

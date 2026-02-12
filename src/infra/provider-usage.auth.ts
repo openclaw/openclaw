@@ -17,6 +17,8 @@ export type ProviderAuth = {
   provider: UsageProviderId;
   token: string;
   accountId?: string;
+  /** GitHub Enterprise host (e.g. "myorg.ghe.com"), for github-copilot provider. */
+  enterpriseUrl?: string;
 };
 
 function parseGoogleToken(apiKey: string): { token: string } | null {
@@ -201,6 +203,10 @@ async function resolveOAuthToken(params: {
         accountId:
           cred.type === "oauth" && "accountId" in cred
             ? (cred as { accountId?: string }).accountId
+            : undefined,
+        enterpriseUrl:
+          cred.type === "token" && "enterpriseUrl" in cred
+            ? (cred as { enterpriseUrl?: string }).enterpriseUrl
             : undefined,
       };
     } catch {
