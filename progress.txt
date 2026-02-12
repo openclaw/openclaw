@@ -1,0 +1,32 @@
+# Progress Log
+Run: 086452bc-1faa-446f-8487-6745143092fd
+Task: TEST: installatie check
+Started: Thursday, February 12th, 2026 — 5:32 PM
+
+## Codebase Patterns
+- Commands are in `src/commands/` directory
+- Tests use vitest with `describe`, `it`, `expect` patterns
+- Tests are co-located with source files (e.g., `check.ts` has `check.test.ts`)
+- Build uses `pnpm build` (tsdown/rolldown bundler)
+- Tests run with `pnpm test <path>` (parallel test runner)
+- Use `@clack/prompts` for CLI UX
+- Runtime abstraction for logging: `RuntimeEnv` with `log`, `error`, `warn`, `debug`, `exit`
+
+---
+
+## 2026-02-12 - US-002: Implement Node.js and pnpm version checks
+- Implemented version checking functions: `parseVersion`, `compareVersions`, `checkNodeVersion`, `checkPnpmVersion`
+- Added `node-version` and `pnpm-version` checks to the installation check command
+- Added comprehensive unit tests for version parsing and comparison
+- Build passes, all tests pass
+
+**Files changed:**
+- `src/commands/check.ts` - Added version check functions and integrated into runInstallationChecks
+- `src/commands/check.test.ts` - Added tests for version parsing, comparison, and version checks
+
+**Learnings:**
+- parseVersion needs to handle empty strings explicitly (returns null for `''` since `Number('') === 0`)
+- pnpm check uses `execSync` with timeout, graceful error handling for missing pnpm
+- Version comparison uses numeric array comparison with padded zeros for different lengths
+
+---

@@ -1,0 +1,2638 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:news="http://www.google.com/schemas/sitemap-news/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">
+    
+  <url>
+    <loc>https://docs.openclaw.ai/automation/auth-monitoring</loc>
+    <lastmod>2026-02-12T02:27:33.137Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/automation/cron-jobs</loc>
+    <lastmod>2026-02-12T02:27:33.143Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/automation/cron-vs-heartbeat</loc>
+    <lastmod>2026-02-12T02:27:33.140Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/automation/gmail-pubsub</loc>
+    <lastmod>2026-02-12T02:27:33.139Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/automation/hooks</loc>
+    <lastmod>2026-02-12T02:27:33.146Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/automation/poll</loc>
+    <lastmod>2026-02-12T02:27:33.140Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/automation/troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:33.142Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/automation/webhook</loc>
+    <lastmod>2026-02-12T02:27:33.143Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/broadcast-groups</loc>
+    <lastmod>2026-02-12T02:27:33.179Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/channel-routing</loc>
+    <lastmod>2026-02-12T02:27:33.181Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/discord</loc>
+    <lastmod>2026-02-12T02:27:33.177Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/feishu</loc>
+    <lastmod>2026-02-12T02:27:33.183Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/googlechat</loc>
+    <lastmod>2026-02-12T02:27:33.183Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/grammy</loc>
+    <lastmod>2026-02-12T02:27:33.181Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/group-messages</loc>
+    <lastmod>2026-02-12T02:27:33.179Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/groups</loc>
+    <lastmod>2026-02-12T02:27:33.180Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/imessage</loc>
+    <lastmod>2026-02-12T02:27:33.182Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels</loc>
+    <lastmod>2026-02-12T02:27:33.178Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/irc</loc>
+    <lastmod>2026-02-11T17:20:25.723Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/line</loc>
+    <lastmod>2026-02-12T02:27:33.214Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/location</loc>
+    <lastmod>2026-02-12T02:27:33.217Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/matrix</loc>
+    <lastmod>2026-02-12T02:27:33.221Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/mattermost</loc>
+    <lastmod>2026-02-12T02:27:33.219Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/msteams</loc>
+    <lastmod>2026-02-12T02:27:33.218Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/pairing</loc>
+    <lastmod>2026-02-12T02:27:33.216Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/signal</loc>
+    <lastmod>2026-02-12T02:27:33.216Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/slack</loc>
+    <lastmod>2026-02-12T02:27:33.264Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/telegram</loc>
+    <lastmod>2026-02-12T02:27:33.272Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:33.267Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/whatsapp</loc>
+    <lastmod>2026-02-12T02:27:33.270Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/zalo</loc>
+    <lastmod>2026-02-12T02:27:33.271Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/channels/zalouser</loc>
+    <lastmod>2026-02-12T02:27:33.275Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/ci</loc>
+    <lastmod>2026-02-12T00:38:09.413Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/agent</loc>
+    <lastmod>2026-02-12T02:27:33.388Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/agents</loc>
+    <lastmod>2026-02-12T02:27:33.394Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/approvals</loc>
+    <lastmod>2026-02-12T02:27:33.392Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/browser</loc>
+    <lastmod>2026-02-12T02:27:33.386Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/channels</loc>
+    <lastmod>2026-02-12T02:27:33.389Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/configure</loc>
+    <lastmod>2026-02-12T02:27:33.389Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/cron</loc>
+    <lastmod>2026-02-12T02:27:33.391Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/dashboard</loc>
+    <lastmod>2026-02-12T02:27:33.392Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/directory</loc>
+    <lastmod>2026-02-12T02:27:33.423Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/dns</loc>
+    <lastmod>2026-02-12T02:27:33.427Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/docs</loc>
+    <lastmod>2026-02-12T02:27:33.429Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/doctor</loc>
+    <lastmod>2026-02-12T02:27:33.424Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/gateway</loc>
+    <lastmod>2026-02-12T02:27:33.425Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/health</loc>
+    <lastmod>2026-02-12T02:27:33.427Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/hooks</loc>
+    <lastmod>2026-02-12T02:27:33.429Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli</loc>
+    <lastmod>2026-02-12T02:27:33.431Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/logs</loc>
+    <lastmod>2026-02-12T02:27:33.428Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/memory</loc>
+    <lastmod>2026-02-12T02:27:33.430Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/message</loc>
+    <lastmod>2026-02-12T02:27:33.466Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/models</loc>
+    <lastmod>2026-02-12T02:27:33.469Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/nodes</loc>
+    <lastmod>2026-02-12T02:27:33.470Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/onboard</loc>
+    <lastmod>2026-02-12T02:27:33.477Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/pairing</loc>
+    <lastmod>2026-02-12T02:27:33.473Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/plugins</loc>
+    <lastmod>2026-02-12T02:27:33.477Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/reset</loc>
+    <lastmod>2026-02-12T02:27:33.471Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/sandbox</loc>
+    <lastmod>2026-02-12T02:27:33.471Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/security</loc>
+    <lastmod>2026-02-12T02:27:33.472Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/sessions</loc>
+    <lastmod>2026-02-12T02:27:33.513Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/setup</loc>
+    <lastmod>2026-02-12T02:27:33.510Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/skills</loc>
+    <lastmod>2026-02-12T02:27:33.514Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/status</loc>
+    <lastmod>2026-02-12T02:27:33.508Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/system</loc>
+    <lastmod>2026-02-12T02:27:33.508Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/tui</loc>
+    <lastmod>2026-02-12T02:27:33.510Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/uninstall</loc>
+    <lastmod>2026-02-12T02:27:33.507Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/update</loc>
+    <lastmod>2026-02-12T02:27:33.512Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/cli/voicecall</loc>
+    <lastmod>2026-02-12T02:27:33.509Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/agent</loc>
+    <lastmod>2026-02-12T02:27:33.551Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/agent-loop</loc>
+    <lastmod>2026-02-12T02:27:33.547Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/agent-workspace</loc>
+    <lastmod>2026-02-12T02:27:33.547Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/architecture</loc>
+    <lastmod>2026-02-12T02:27:33.548Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/compaction</loc>
+    <lastmod>2026-02-12T02:27:33.549Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/context</loc>
+    <lastmod>2026-02-12T02:27:33.552Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/features</loc>
+    <lastmod>2026-02-12T02:27:33.554Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/markdown-formatting</loc>
+    <lastmod>2026-02-12T02:27:33.542Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/memory</loc>
+    <lastmod>2026-02-12T02:27:33.541Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/messages</loc>
+    <lastmod>2026-02-12T02:27:33.546Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/model-failover</loc>
+    <lastmod>2026-02-12T02:27:33.700Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/model-providers</loc>
+    <lastmod>2026-02-12T02:27:33.708Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/models</loc>
+    <lastmod>2026-02-12T02:27:33.704Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/multi-agent</loc>
+    <lastmod>2026-02-12T02:27:33.711Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/oauth</loc>
+    <lastmod>2026-02-12T02:27:33.703Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/presence</loc>
+    <lastmod>2026-02-12T02:27:33.701Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/queue</loc>
+    <lastmod>2026-02-12T02:27:33.704Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/retry</loc>
+    <lastmod>2026-02-12T02:27:33.702Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/session</loc>
+    <lastmod>2026-02-12T02:27:33.752Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/session-pruning</loc>
+    <lastmod>2026-02-12T02:27:33.713Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/session-tool</loc>
+    <lastmod>2026-02-12T02:27:33.702Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/sessions</loc>
+    <lastmod>2026-02-12T02:27:33.752Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/streaming</loc>
+    <lastmod>2026-02-12T02:27:33.743Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/system-prompt</loc>
+    <lastmod>2026-02-12T02:27:33.751Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/timezone</loc>
+    <lastmod>2026-02-12T02:27:33.745Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/typebox</loc>
+    <lastmod>2026-02-12T02:27:33.744Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/typing-indicators</loc>
+    <lastmod>2026-02-12T02:27:33.750Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/concepts/usage-tracking</loc>
+    <lastmod>2026-02-12T02:27:33.745Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/experiments/onboarding-config-protocol</loc>
+    <lastmod>2026-02-12T02:27:33.790Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/experiments/plans/cron-add-hardening</loc>
+    <lastmod>2026-02-12T02:27:33.793Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/experiments/plans/group-policy-hardening</loc>
+    <lastmod>2026-02-12T02:27:33.796Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/experiments/proposals/model-config</loc>
+    <lastmod>2026-02-12T02:27:33.792Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/experiments/research/memory</loc>
+    <lastmod>2026-02-12T02:27:33.791Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/authentication</loc>
+    <lastmod>2026-02-12T02:27:33.790Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/background-process</loc>
+    <lastmod>2026-02-12T02:27:33.792Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/bonjour</loc>
+    <lastmod>2026-02-12T02:27:33.843Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/bridge-protocol</loc>
+    <lastmod>2026-02-12T02:27:33.831Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/cli-backends</loc>
+    <lastmod>2026-02-12T02:27:33.842Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/configuration</loc>
+    <lastmod>2026-02-12T02:27:33.830Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/configuration-examples</loc>
+    <lastmod>2026-02-12T02:27:33.832Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/configuration-reference</loc>
+    <lastmod>2026-02-11T17:20:38.616Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/discovery</loc>
+    <lastmod>2026-02-12T02:27:33.829Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/doctor</loc>
+    <lastmod>2026-02-12T02:27:33.834Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/gateway-lock</loc>
+    <lastmod>2026-02-12T02:27:33.853Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/health</loc>
+    <lastmod>2026-02-12T02:27:33.841Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/heartbeat</loc>
+    <lastmod>2026-02-12T02:27:33.892Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway</loc>
+    <lastmod>2026-02-12T02:27:33.884Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/local-models</loc>
+    <lastmod>2026-02-12T02:27:33.883Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/logging</loc>
+    <lastmod>2026-02-12T02:27:33.889Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/multiple-gateways</loc>
+    <lastmod>2026-02-12T02:27:33.890Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/network-model</loc>
+    <lastmod>2026-02-12T02:27:33.885Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/openai-http-api</loc>
+    <lastmod>2026-02-12T02:27:33.890Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/pairing</loc>
+    <lastmod>2026-02-12T02:27:33.893Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/protocol</loc>
+    <lastmod>2026-02-12T02:27:33.891Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/remote</loc>
+    <lastmod>2026-02-12T02:27:33.924Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/remote-gateway-readme</loc>
+    <lastmod>2026-02-12T02:27:33.922Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/sandbox-vs-tool-policy-vs-elevated</loc>
+    <lastmod>2026-02-12T02:27:33.926Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/sandboxing</loc>
+    <lastmod>2026-02-12T02:27:33.919Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/security</loc>
+    <lastmod>2026-02-12T02:27:33.923Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/tailscale</loc>
+    <lastmod>2026-02-12T02:27:33.924Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/tools-invoke-http-api</loc>
+    <lastmod>2026-02-12T02:27:33.927Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/gateway/troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:33.929Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/help/debugging</loc>
+    <lastmod>2026-02-12T02:27:33.928Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/help/environment</loc>
+    <lastmod>2026-02-12T02:27:33.925Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/help/faq</loc>
+    <lastmod>2026-02-12T02:27:34.009Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/help</loc>
+    <lastmod>2026-02-12T02:27:33.994Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/help/scripts</loc>
+    <lastmod>2026-02-12T02:27:34.004Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/help/submitting-a-pr</loc>
+    <lastmod>2026-02-12T02:27:34.006Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/help/submitting-an-issue</loc>
+    <lastmod>2026-02-12T02:27:33.995Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/help/testing</loc>
+    <lastmod>2026-02-12T02:27:34.005Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/help/troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:34.003Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/hooks/soul-evil</loc>
+    <lastmod>2026-02-12T02:27:34.007Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai</loc>
+    <lastmod>2026-02-12T02:27:34.008Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/ansible</loc>
+    <lastmod>2026-02-12T02:27:34.005Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/bun</loc>
+    <lastmod>2026-02-12T02:27:34.048Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/development-channels</loc>
+    <lastmod>2026-02-12T02:27:34.049Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/docker</loc>
+    <lastmod>2026-02-12T02:27:34.048Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/exe-dev</loc>
+    <lastmod>2026-02-12T02:27:34.052Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/fly</loc>
+    <lastmod>2026-02-11T17:20:49.232Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/gcp</loc>
+    <lastmod>2026-02-12T02:27:34.047Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/hetzner</loc>
+    <lastmod>2026-02-12T02:27:34.043Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install</loc>
+    <lastmod>2026-02-12T02:27:34.051Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/installer</loc>
+    <lastmod>2026-02-12T02:27:34.044Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/macos-vm</loc>
+    <lastmod>2026-02-12T02:27:34.046Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/migrating</loc>
+    <lastmod>2026-02-12T02:27:34.086Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/nix</loc>
+    <lastmod>2026-02-12T02:27:34.088Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/node</loc>
+    <lastmod>2026-02-12T02:27:34.084Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/northflank</loc>
+    <lastmod>2026-02-12T02:27:34.083Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/railway</loc>
+    <lastmod>2026-02-12T02:27:34.075Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/render</loc>
+    <lastmod>2026-02-12T02:27:34.079Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/uninstall</loc>
+    <lastmod>2026-02-12T02:27:34.085Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/install/updating</loc>
+    <lastmod>2026-02-12T02:27:34.090Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/ja-JP</loc>
+    <lastmod>2026-02-12T02:27:34.087Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/ja-JP/start/getting-started</loc>
+    <lastmod>2026-02-12T02:27:34.125Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/ja-JP/start/wizard</loc>
+    <lastmod>2026-02-12T02:27:34.124Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/nodes/audio</loc>
+    <lastmod>2026-02-12T02:27:34.120Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/nodes/camera</loc>
+    <lastmod>2026-02-12T02:27:34.125Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/nodes/images</loc>
+    <lastmod>2026-02-12T02:27:34.124Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/nodes</loc>
+    <lastmod>2026-02-12T02:27:34.128Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/nodes/location-command</loc>
+    <lastmod>2026-02-12T02:27:34.128Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/nodes/talk</loc>
+    <lastmod>2026-02-12T02:27:34.159Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/nodes/troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:34.160Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/nodes/voicewake</loc>
+    <lastmod>2026-02-12T02:27:34.163Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/android</loc>
+    <lastmod>2026-02-12T02:27:34.161Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms</loc>
+    <lastmod>2026-02-12T02:27:34.158Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/ios</loc>
+    <lastmod>2026-02-12T02:27:34.160Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/linux</loc>
+    <lastmod>2026-02-12T02:27:34.200Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/bundled-gateway</loc>
+    <lastmod>2026-02-12T02:27:34.192Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/canvas</loc>
+    <lastmod>2026-02-12T02:27:34.202Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/child-process</loc>
+    <lastmod>2026-02-12T02:27:34.197Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/dev-setup</loc>
+    <lastmod>2026-02-12T02:27:34.191Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/health</loc>
+    <lastmod>2026-02-12T02:27:34.210Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/icon</loc>
+    <lastmod>2026-02-12T02:27:34.199Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/logging</loc>
+    <lastmod>2026-02-12T02:27:34.197Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/menu-bar</loc>
+    <lastmod>2026-02-12T02:27:34.198Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/peekaboo</loc>
+    <lastmod>2026-02-12T02:27:34.203Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/permissions</loc>
+    <lastmod>2026-02-12T02:27:34.245Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/release</loc>
+    <lastmod>2026-02-12T02:27:34.247Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/remote</loc>
+    <lastmod>2026-02-12T02:27:34.238Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/signing</loc>
+    <lastmod>2026-02-12T02:27:34.241Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/skills</loc>
+    <lastmod>2026-02-12T02:27:34.237Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/voice-overlay</loc>
+    <lastmod>2026-02-12T02:27:34.242Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/voicewake</loc>
+    <lastmod>2026-02-12T02:27:34.248Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/webchat</loc>
+    <lastmod>2026-02-12T02:27:34.243Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/mac/xpc</loc>
+    <lastmod>2026-02-12T02:27:34.244Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/macos</loc>
+    <lastmod>2026-02-12T02:27:34.236Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/platforms/windows</loc>
+    <lastmod>2026-02-12T02:27:34.279Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/plugins/voice-call</loc>
+    <lastmod>2026-02-12T02:27:34.281Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/plugins/zalouser</loc>
+    <lastmod>2026-02-12T02:27:34.279Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/anthropic</loc>
+    <lastmod>2026-02-12T02:27:34.285Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/bedrock</loc>
+    <lastmod>2026-02-12T02:27:34.281Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/glm</loc>
+    <lastmod>2026-02-12T02:27:34.311Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers</loc>
+    <lastmod>2026-02-12T02:27:34.316Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/litellm</loc>
+    <lastmod>2026-02-12T02:27:34.308Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/minimax</loc>
+    <lastmod>2026-02-12T02:27:34.315Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/models</loc>
+    <lastmod>2026-02-12T02:27:34.317Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/moonshot</loc>
+    <lastmod>2026-02-12T02:27:34.314Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/openai</loc>
+    <lastmod>2026-02-12T02:27:34.353Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/opencode</loc>
+    <lastmod>2026-02-12T02:27:34.352Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/openrouter</loc>
+    <lastmod>2026-02-12T02:27:34.349Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/qianfan</loc>
+    <lastmod>2026-02-12T02:27:34.357Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/synthetic</loc>
+    <lastmod>2026-02-12T02:27:34.354Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/vercel-ai-gateway</loc>
+    <lastmod>2026-02-12T02:27:34.352Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/providers/zai</loc>
+    <lastmod>2026-02-12T02:27:34.391Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/AGENTS.default</loc>
+    <lastmod>2026-02-12T02:27:34.396Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/RELEASING</loc>
+    <lastmod>2026-02-12T02:27:34.397Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/credits</loc>
+    <lastmod>2026-02-12T02:27:34.428Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/device-models</loc>
+    <lastmod>2026-02-12T02:27:34.444Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/rpc</loc>
+    <lastmod>2026-02-12T02:27:34.427Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/session-management-compaction</loc>
+    <lastmod>2026-02-12T02:27:34.446Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/templates/AGENTS</loc>
+    <lastmod>2026-02-12T02:27:34.445Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/templates/BOOT</loc>
+    <lastmod>2026-02-12T02:27:34.440Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/templates/BOOTSTRAP</loc>
+    <lastmod>2026-02-12T02:27:34.449Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/templates/HEARTBEAT</loc>
+    <lastmod>2026-02-12T02:27:34.450Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/templates/IDENTITY</loc>
+    <lastmod>2026-02-12T02:27:34.480Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/templates/SOUL</loc>
+    <lastmod>2026-02-12T02:27:34.481Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/templates/TOOLS</loc>
+    <lastmod>2026-02-12T02:27:34.483Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/templates/USER</loc>
+    <lastmod>2026-02-12T02:27:34.491Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/test</loc>
+    <lastmod>2026-02-12T02:27:34.482Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/token-use</loc>
+    <lastmod>2026-02-12T02:27:34.493Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/reference/wizard</loc>
+    <lastmod>2026-02-12T02:27:34.534Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/security/formal-verification</loc>
+    <lastmod>2026-02-12T02:27:34.530Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/bootstrapping</loc>
+    <lastmod>2026-02-12T02:27:34.532Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/docs-directory</loc>
+    <lastmod>2026-02-12T02:27:34.531Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/getting-started</loc>
+    <lastmod>2026-02-12T02:27:34.520Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/hubs</loc>
+    <lastmod>2026-02-12T02:27:34.521Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/lore</loc>
+    <lastmod>2026-02-12T02:27:34.529Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/onboarding</loc>
+    <lastmod>2026-02-12T02:27:34.563Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/onboarding-overview</loc>
+    <lastmod>2026-02-12T02:27:34.534Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/openclaw</loc>
+    <lastmod>2026-02-12T02:27:34.568Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/setup</loc>
+    <lastmod>2026-02-12T02:27:34.567Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/showcase</loc>
+    <lastmod>2026-01-30T20:42:53.354Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/start/wizard</loc>
+    <lastmod>2026-02-12T02:27:34.571Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/agent-send</loc>
+    <lastmod>2026-02-12T02:27:34.563Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/apply-patch</loc>
+    <lastmod>2026-02-12T02:27:34.572Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/browser</loc>
+    <lastmod>2026-02-12T02:27:34.618Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/browser-linux-troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:34.599Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/browser-login</loc>
+    <lastmod>2026-02-12T02:27:34.600Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/chrome-extension</loc>
+    <lastmod>2026-02-12T02:27:34.603Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/clawhub</loc>
+    <lastmod>2026-02-12T02:27:34.622Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/elevated</loc>
+    <lastmod>2026-02-12T02:27:34.624Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/exec</loc>
+    <lastmod>2026-02-12T02:27:34.604Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools</loc>
+    <lastmod>2026-02-12T02:27:34.654Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/llm-task</loc>
+    <lastmod>2026-02-12T02:27:34.656Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/lobster</loc>
+    <lastmod>2026-02-11T17:21:04.878Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/multi-agent-sandbox-tools</loc>
+    <lastmod>2026-02-12T02:27:34.648Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/plugin</loc>
+    <lastmod>2026-02-12T02:27:34.652Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/reactions</loc>
+    <lastmod>2026-02-12T02:27:34.658Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/skills</loc>
+    <lastmod>2026-02-12T02:27:34.655Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/skills-config</loc>
+    <lastmod>2026-02-12T02:27:34.653Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/slash-commands</loc>
+    <lastmod>2026-02-12T02:27:34.658Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/subagents</loc>
+    <lastmod>2026-02-12T02:27:34.659Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/thinking</loc>
+    <lastmod>2026-02-12T02:27:34.697Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/tools/web</loc>
+    <lastmod>2026-02-12T02:27:34.687Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/web/control-ui</loc>
+    <lastmod>2026-02-12T02:27:34.693Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/web/dashboard</loc>
+    <lastmod>2026-02-12T02:27:34.696Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/web</loc>
+    <lastmod>2026-02-12T02:27:34.683Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/web/tui</loc>
+    <lastmod>2026-02-12T02:27:34.687Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/web/webchat</loc>
+    <lastmod>2026-02-12T02:27:34.696Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/automation/auth-monitoring</loc>
+    <lastmod>2026-02-12T02:27:34.739Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/automation/cron-jobs</loc>
+    <lastmod>2026-02-12T02:27:34.737Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/automation/cron-vs-heartbeat</loc>
+    <lastmod>2026-02-12T02:27:34.736Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/automation/gmail-pubsub</loc>
+    <lastmod>2026-02-12T02:27:34.753Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/automation/hooks</loc>
+    <lastmod>2026-02-12T02:27:34.755Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/automation/poll</loc>
+    <lastmod>2026-02-12T02:27:34.745Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/automation/troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:34.738Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/automation/webhook</loc>
+    <lastmod>2026-02-12T02:27:34.737Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/broadcast-groups</loc>
+    <lastmod>2026-02-12T02:27:34.789Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/channel-routing</loc>
+    <lastmod>2026-02-12T02:27:34.788Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/discord</loc>
+    <lastmod>2026-02-12T02:27:34.790Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/feishu</loc>
+    <lastmod>2026-02-12T02:27:34.792Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/googlechat</loc>
+    <lastmod>2026-02-12T02:27:34.792Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/group-messages</loc>
+    <lastmod>2026-02-12T02:27:34.787Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/groups</loc>
+    <lastmod>2026-02-12T02:27:34.782Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/imessage</loc>
+    <lastmod>2026-02-12T02:27:34.791Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels</loc>
+    <lastmod>2026-02-12T02:27:34.789Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/line</loc>
+    <lastmod>2026-02-12T02:27:34.865Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/location</loc>
+    <lastmod>2026-02-12T02:27:34.853Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/matrix</loc>
+    <lastmod>2026-02-12T02:27:34.860Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/mattermost</loc>
+    <lastmod>2026-02-12T02:27:34.818Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/msteams</loc>
+    <lastmod>2026-02-12T02:27:34.861Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/pairing</loc>
+    <lastmod>2026-02-12T02:27:34.853Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/signal</loc>
+    <lastmod>2026-02-12T02:27:34.854Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/slack</loc>
+    <lastmod>2026-02-12T02:27:34.852Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/telegram</loc>
+    <lastmod>2026-02-12T02:27:34.892Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:34.893Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/whatsapp</loc>
+    <lastmod>2026-02-12T02:27:34.895Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/zalo</loc>
+    <lastmod>2026-02-12T02:27:34.892Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/channels/zalouser</loc>
+    <lastmod>2026-02-12T02:27:34.898Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/agent</loc>
+    <lastmod>2026-02-12T02:27:34.894Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/agents</loc>
+    <lastmod>2026-02-12T02:27:34.894Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/approvals</loc>
+    <lastmod>2026-02-12T02:27:34.924Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/browser</loc>
+    <lastmod>2026-02-12T02:27:34.926Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/channels</loc>
+    <lastmod>2026-02-12T02:27:34.925Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/configure</loc>
+    <lastmod>2026-02-12T02:27:34.924Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/cron</loc>
+    <lastmod>2026-02-12T02:27:34.919Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/dashboard</loc>
+    <lastmod>2026-02-12T02:27:34.928Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/directory</loc>
+    <lastmod>2026-02-12T02:27:34.923Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/dns</loc>
+    <lastmod>2026-02-12T02:27:34.927Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/docs</loc>
+    <lastmod>2026-02-12T02:27:34.958Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/doctor</loc>
+    <lastmod>2026-02-12T02:27:34.963Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/gateway</loc>
+    <lastmod>2026-02-12T02:27:34.964Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/health</loc>
+    <lastmod>2026-02-12T02:27:34.960Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/hooks</loc>
+    <lastmod>2026-02-12T02:27:34.972Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli</loc>
+    <lastmod>2026-02-12T02:27:34.963Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/logs</loc>
+    <lastmod>2026-02-12T02:27:34.962Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/memory</loc>
+    <lastmod>2026-02-12T02:27:34.965Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/message</loc>
+    <lastmod>2026-02-12T02:27:34.961Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/models</loc>
+    <lastmod>2026-02-12T02:27:34.961Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/nodes</loc>
+    <lastmod>2026-02-12T02:27:35.001Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/onboard</loc>
+    <lastmod>2026-02-12T02:27:35.000Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/pairing</loc>
+    <lastmod>2026-02-12T02:27:34.998Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/plugins</loc>
+    <lastmod>2026-02-12T02:27:34.999Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/reset</loc>
+    <lastmod>2026-02-12T02:27:35.005Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/sandbox</loc>
+    <lastmod>2026-02-12T02:27:35.002Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/security</loc>
+    <lastmod>2026-02-12T02:27:35.001Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/sessions</loc>
+    <lastmod>2026-02-12T02:27:34.999Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/setup</loc>
+    <lastmod>2026-02-12T02:27:35.002Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/skills</loc>
+    <lastmod>2026-02-12T02:27:35.043Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/status</loc>
+    <lastmod>2026-02-12T02:27:35.045Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/system</loc>
+    <lastmod>2026-02-12T02:27:35.041Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/tui</loc>
+    <lastmod>2026-02-12T02:27:35.039Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/uninstall</loc>
+    <lastmod>2026-02-12T02:27:35.043Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/update</loc>
+    <lastmod>2026-02-12T02:27:35.047Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/cli/voicecall</loc>
+    <lastmod>2026-02-12T02:27:35.046Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/agent</loc>
+    <lastmod>2026-02-12T02:27:35.079Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/agent-loop</loc>
+    <lastmod>2026-02-12T02:27:35.040Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/agent-workspace</loc>
+    <lastmod>2026-02-12T02:27:35.042Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/architecture</loc>
+    <lastmod>2026-02-12T02:27:35.073Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/compaction</loc>
+    <lastmod>2026-02-12T02:27:35.078Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/context</loc>
+    <lastmod>2026-02-12T02:27:35.082Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/features</loc>
+    <lastmod>2026-02-12T02:27:35.079Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/markdown-formatting</loc>
+    <lastmod>2026-02-12T02:27:35.072Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/memory</loc>
+    <lastmod>2026-02-12T02:27:35.082Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/messages</loc>
+    <lastmod>2026-02-12T02:27:35.077Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/model-failover</loc>
+    <lastmod>2026-02-12T02:27:35.081Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/model-providers</loc>
+    <lastmod>2026-02-12T02:27:35.077Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/models</loc>
+    <lastmod>2026-02-12T02:27:35.128Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/multi-agent</loc>
+    <lastmod>2026-02-12T02:27:35.142Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/oauth</loc>
+    <lastmod>2026-02-12T02:27:35.119Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/presence</loc>
+    <lastmod>2026-02-12T02:27:35.145Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/queue</loc>
+    <lastmod>2026-02-12T02:27:35.144Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/retry</loc>
+    <lastmod>2026-02-12T02:27:35.141Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/session</loc>
+    <lastmod>2026-02-12T02:27:35.143Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/session-pruning</loc>
+    <lastmod>2026-02-12T02:27:35.127Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/session-tool</loc>
+    <lastmod>2026-02-12T02:27:35.129Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/sessions</loc>
+    <lastmod>2026-02-12T02:27:35.130Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/streaming</loc>
+    <lastmod>2026-02-12T02:27:35.196Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/system-prompt</loc>
+    <lastmod>2026-02-12T02:27:35.193Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/timezone</loc>
+    <lastmod>2026-02-12T02:27:35.190Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/typebox</loc>
+    <lastmod>2026-02-12T02:27:35.196Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/typing-indicators</loc>
+    <lastmod>2026-02-12T02:27:35.197Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/concepts/usage-tracking</loc>
+    <lastmod>2026-02-12T02:27:35.192Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/experiments/onboarding-config-protocol</loc>
+    <lastmod>2026-02-12T02:27:35.197Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/experiments/plans/cron-add-hardening</loc>
+    <lastmod>2026-02-12T02:27:35.224Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/experiments/plans/group-policy-hardening</loc>
+    <lastmod>2026-02-12T02:27:35.229Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/experiments/proposals/model-config</loc>
+    <lastmod>2026-02-12T02:27:35.232Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/experiments/research/memory</loc>
+    <lastmod>2026-02-12T02:27:35.229Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/authentication</loc>
+    <lastmod>2026-02-12T02:27:35.231Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/background-process</loc>
+    <lastmod>2026-02-12T02:27:35.231Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/bonjour</loc>
+    <lastmod>2026-02-12T02:27:35.233Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/bridge-protocol</loc>
+    <lastmod>2026-02-12T02:27:35.228Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/cli-backends</loc>
+    <lastmod>2026-02-12T02:27:35.234Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/configuration</loc>
+    <lastmod>2026-02-12T02:27:35.273Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/configuration-examples</loc>
+    <lastmod>2026-02-12T02:27:35.269Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/discovery</loc>
+    <lastmod>2026-02-12T02:27:35.274Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/doctor</loc>
+    <lastmod>2026-02-12T02:27:35.268Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/gateway-lock</loc>
+    <lastmod>2026-02-12T02:27:35.271Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/health</loc>
+    <lastmod>2026-02-12T02:27:35.271Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/heartbeat</loc>
+    <lastmod>2026-02-12T02:27:35.272Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway</loc>
+    <lastmod>2026-02-12T02:27:35.269Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/local-models</loc>
+    <lastmod>2026-02-12T02:27:35.270Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/logging</loc>
+    <lastmod>2026-02-12T02:27:35.272Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/multiple-gateways</loc>
+    <lastmod>2026-02-12T02:27:35.303Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/network-model</loc>
+    <lastmod>2026-02-12T02:27:35.307Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/openai-http-api</loc>
+    <lastmod>2026-02-12T02:27:35.308Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/pairing</loc>
+    <lastmod>2026-02-12T02:27:35.304Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/protocol</loc>
+    <lastmod>2026-02-12T02:27:35.306Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/remote</loc>
+    <lastmod>2026-02-12T02:27:35.305Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/remote-gateway-readme</loc>
+    <lastmod>2026-02-12T02:27:35.302Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/sandbox-vs-tool-policy-vs-elevated</loc>
+    <lastmod>2026-02-12T02:27:35.309Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/sandboxing</loc>
+    <lastmod>2026-02-12T02:27:35.301Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/security</loc>
+    <lastmod>2026-02-12T02:27:35.344Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/tailscale</loc>
+    <lastmod>2026-02-12T02:27:35.338Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/tools-invoke-http-api</loc>
+    <lastmod>2026-02-12T02:27:35.347Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/gateway/troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:35.345Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/help/debugging</loc>
+    <lastmod>2026-02-12T02:27:35.338Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/help/environment</loc>
+    <lastmod>2026-02-12T02:27:35.346Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/help/faq</loc>
+    <lastmod>2026-02-12T02:27:35.350Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/help</loc>
+    <lastmod>2026-02-12T02:27:35.339Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/help/scripts</loc>
+    <lastmod>2026-02-12T02:27:35.349Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/help/submitting-a-pr</loc>
+    <lastmod>2026-02-12T02:27:35.348Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/help/submitting-an-issue</loc>
+    <lastmod>2026-02-12T02:27:35.382Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/help/testing</loc>
+    <lastmod>2026-02-12T02:27:35.387Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/help/troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:35.383Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/hooks/soul-evil</loc>
+    <lastmod>2026-02-12T02:27:35.387Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN</loc>
+    <lastmod>2026-02-12T02:27:35.385Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/ansible</loc>
+    <lastmod>2026-02-12T02:27:35.390Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/bun</loc>
+    <lastmod>2026-02-12T02:27:35.382Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/development-channels</loc>
+    <lastmod>2026-02-12T02:27:35.386Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/docker</loc>
+    <lastmod>2026-02-12T02:27:35.388Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/exe-dev</loc>
+    <lastmod>2026-02-12T02:27:35.391Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/fly</loc>
+    <lastmod>2026-02-11T17:21:30.524Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/gcp</loc>
+    <lastmod>2026-02-12T02:27:35.424Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/hetzner</loc>
+    <lastmod>2026-02-12T02:27:35.419Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install</loc>
+    <lastmod>2026-02-12T02:27:35.422Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/installer</loc>
+    <lastmod>2026-02-12T02:27:35.422Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/macos-vm</loc>
+    <lastmod>2026-02-12T02:27:35.417Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/migrating</loc>
+    <lastmod>2026-02-12T02:27:35.421Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/nix</loc>
+    <lastmod>2026-02-12T02:27:35.418Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/node</loc>
+    <lastmod>2026-02-12T02:27:35.423Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/northflank</loc>
+    <lastmod>2026-02-12T02:27:35.421Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/railway</loc>
+    <lastmod>2026-02-12T02:27:35.449Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/render</loc>
+    <lastmod>2026-02-12T02:27:35.451Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/uninstall</loc>
+    <lastmod>2026-02-12T02:27:35.455Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/install/updating</loc>
+    <lastmod>2026-02-12T02:27:35.454Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/nodes/audio</loc>
+    <lastmod>2026-02-12T02:27:35.456Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/nodes/camera</loc>
+    <lastmod>2026-02-12T02:27:35.455Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/nodes/images</loc>
+    <lastmod>2026-02-12T02:27:35.452Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/nodes</loc>
+    <lastmod>2026-02-12T02:27:35.451Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/nodes/location-command</loc>
+    <lastmod>2026-02-12T02:27:35.499Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/nodes/talk</loc>
+    <lastmod>2026-02-12T02:27:35.495Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/nodes/troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:35.496Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/nodes/voicewake</loc>
+    <lastmod>2026-02-12T02:27:35.498Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/android</loc>
+    <lastmod>2026-02-12T02:27:35.507Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms</loc>
+    <lastmod>2026-02-12T02:27:35.538Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/ios</loc>
+    <lastmod>2026-02-12T02:27:35.543Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/linux</loc>
+    <lastmod>2026-02-12T02:27:35.544Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/bundled-gateway</loc>
+    <lastmod>2026-02-12T02:27:35.542Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/canvas</loc>
+    <lastmod>2026-02-12T02:27:35.540Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/child-process</loc>
+    <lastmod>2026-02-12T02:27:35.546Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/dev-setup</loc>
+    <lastmod>2026-02-12T02:27:35.538Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/health</loc>
+    <lastmod>2026-02-12T02:27:35.539Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/icon</loc>
+    <lastmod>2026-02-12T02:27:35.547Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/logging</loc>
+    <lastmod>2026-02-12T02:27:35.543Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/menu-bar</loc>
+    <lastmod>2026-02-12T02:27:35.579Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/peekaboo</loc>
+    <lastmod>2026-02-12T02:27:35.577Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/permissions</loc>
+    <lastmod>2026-02-12T02:27:35.578Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/release</loc>
+    <lastmod>2026-02-12T02:27:35.573Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/remote</loc>
+    <lastmod>2026-02-12T02:27:35.582Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/signing</loc>
+    <lastmod>2026-02-12T02:27:35.577Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/skills</loc>
+    <lastmod>2026-02-12T02:27:35.576Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/voice-overlay</loc>
+    <lastmod>2026-02-12T02:27:35.579Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/voicewake</loc>
+    <lastmod>2026-02-12T02:27:35.580Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/webchat</loc>
+    <lastmod>2026-02-12T02:27:35.581Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/mac/xpc</loc>
+    <lastmod>2026-02-12T02:27:35.632Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/macos</loc>
+    <lastmod>2026-02-12T02:27:35.636Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/platforms/windows</loc>
+    <lastmod>2026-02-12T02:27:35.617Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/plugins/voice-call</loc>
+    <lastmod>2026-02-12T02:27:35.631Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/plugins/zalouser</loc>
+    <lastmod>2026-02-12T02:27:35.623Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/anthropic</loc>
+    <lastmod>2026-02-12T02:27:35.684Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/bedrock</loc>
+    <lastmod>2026-02-12T02:27:35.660Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/glm</loc>
+    <lastmod>2026-02-12T02:27:35.684Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers</loc>
+    <lastmod>2026-02-12T02:27:35.683Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/minimax</loc>
+    <lastmod>2026-02-12T02:27:35.664Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/models</loc>
+    <lastmod>2026-02-12T02:27:35.686Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/moonshot</loc>
+    <lastmod>2026-02-12T02:27:35.686Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/openai</loc>
+    <lastmod>2026-02-12T02:27:35.717Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/opencode</loc>
+    <lastmod>2026-02-12T02:27:35.719Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/openrouter</loc>
+    <lastmod>2026-02-12T02:27:35.714Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/qianfan</loc>
+    <lastmod>2026-02-12T02:27:35.721Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/synthetic</loc>
+    <lastmod>2026-02-12T02:27:35.722Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/vercel-ai-gateway</loc>
+    <lastmod>2026-02-12T02:27:35.719Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/providers/zai</loc>
+    <lastmod>2026-02-12T02:27:35.755Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/AGENTS.default</loc>
+    <lastmod>2026-02-12T02:27:35.747Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/RELEASING</loc>
+    <lastmod>2026-02-12T02:27:35.753Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/credits</loc>
+    <lastmod>2026-02-12T02:27:35.746Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/device-models</loc>
+    <lastmod>2026-02-12T02:27:35.786Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/rpc</loc>
+    <lastmod>2026-02-12T02:27:35.784Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/session-management-compaction</loc>
+    <lastmod>2026-02-12T02:27:35.788Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/templates/AGENTS</loc>
+    <lastmod>2026-02-12T02:27:35.781Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/templates/BOOT</loc>
+    <lastmod>2026-02-12T02:27:35.786Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/templates/BOOTSTRAP</loc>
+    <lastmod>2026-02-12T02:27:35.776Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/templates/HEARTBEAT</loc>
+    <lastmod>2026-02-12T02:27:35.783Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/templates/IDENTITY</loc>
+    <lastmod>2026-02-12T02:27:35.785Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/templates/SOUL</loc>
+    <lastmod>2026-02-12T02:27:35.830Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/templates/TOOLS</loc>
+    <lastmod>2026-02-12T02:27:35.830Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/templates/USER</loc>
+    <lastmod>2026-02-12T02:27:35.807Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/test</loc>
+    <lastmod>2026-02-12T02:27:35.829Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/token-use</loc>
+    <lastmod>2026-02-12T02:27:35.821Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/reference/wizard</loc>
+    <lastmod>2026-02-12T02:27:35.822Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/security/formal-verification</loc>
+    <lastmod>2026-02-12T02:27:35.861Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/start/bootstrapping</loc>
+    <lastmod>2026-02-12T02:27:35.869Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/start/docs-directory</loc>
+    <lastmod>2026-02-12T02:27:35.867Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/start/getting-started</loc>
+    <lastmod>2026-02-12T02:27:35.862Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/start/hubs</loc>
+    <lastmod>2026-02-12T02:27:35.860Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/start/lore</loc>
+    <lastmod>2026-02-12T02:27:35.865Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/start/onboarding</loc>
+    <lastmod>2026-02-12T02:27:35.866Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/start/openclaw</loc>
+    <lastmod>2026-02-12T02:27:35.867Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/start/setup</loc>
+    <lastmod>2026-02-12T02:27:35.870Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/start/showcase</loc>
+    <lastmod>2026-02-03T21:26:52.729Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/start/wizard</loc>
+    <lastmod>2026-02-12T02:27:35.904Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/agent-send</loc>
+    <lastmod>2026-02-12T02:27:35.906Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/apply-patch</loc>
+    <lastmod>2026-02-12T02:27:35.907Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/browser</loc>
+    <lastmod>2026-02-12T02:27:35.901Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/browser-linux-troubleshooting</loc>
+    <lastmod>2026-02-12T02:27:35.903Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/browser-login</loc>
+    <lastmod>2026-02-12T02:27:35.902Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/chrome-extension</loc>
+    <lastmod>2026-02-12T02:27:35.904Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/clawhub</loc>
+    <lastmod>2026-02-12T02:27:35.907Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/elevated</loc>
+    <lastmod>2026-02-12T02:27:35.948Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/exec</loc>
+    <lastmod>2026-02-12T02:27:35.933Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools</loc>
+    <lastmod>2026-02-12T02:27:35.946Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/llm-task</loc>
+    <lastmod>2026-02-12T02:27:35.944Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/lobster</loc>
+    <lastmod>2026-02-11T17:21:39.709Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/multi-agent-sandbox-tools</loc>
+    <lastmod>2026-02-12T02:27:35.945Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/plugin</loc>
+    <lastmod>2026-02-12T02:27:35.947Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/reactions</loc>
+    <lastmod>2026-02-12T02:27:35.948Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/skills</loc>
+    <lastmod>2026-02-12T02:27:35.976Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/skills-config</loc>
+    <lastmod>2026-02-12T02:27:35.974Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/slash-commands</loc>
+    <lastmod>2026-02-12T02:27:35.979Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/subagents</loc>
+    <lastmod>2026-02-12T02:27:35.974Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/thinking</loc>
+    <lastmod>2026-02-12T02:27:35.977Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/tools/web</loc>
+    <lastmod>2026-02-12T02:27:35.976Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/web/control-ui</loc>
+    <lastmod>2026-02-12T02:27:35.975Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/web/dashboard</loc>
+    <lastmod>2026-02-12T02:27:35.979Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/web</loc>
+    <lastmod>2026-02-12T02:27:36.000Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/web/tui</loc>
+    <lastmod>2026-02-12T02:27:35.999Z</lastmod>
+  </url>
+
+  <url>
+    <loc>https://docs.openclaw.ai/zh-CN/web/webchat</loc>
+    <lastmod>2026-02-12T02:27:35.997Z</lastmod>
+  </url>
+</urlset>

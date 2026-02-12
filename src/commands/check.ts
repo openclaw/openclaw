@@ -1,4 +1,5 @@
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -10,6 +11,95 @@ import { stylePromptTitle } from "../terminal/prompt-style.js";
 
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
 const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
+
+/** Minimum required Node.js version (from package.json engines.node) */
+const MIN_NODE_VERSION = "22.12.0";
+
+/** Minimum required pnpm version (from package.json packageManager) */
+const MIN_PNPM_VERSION = "10.23.0";
+
+/**
+ * Parse a version string into a comparable array of numbers
+ * Returns null if the version string is invalid
+ */
+export function parseVersion(version: string): number[] | null {
+  // Remove leading 'v' if present
+  const clean = version.replace(/^v/, "").trim();
+  if (!clean) {
+    return null;
+  }
+  const parts = clean.split(".").map(Number);
+  if (parts.some(Number.isNaN)) {
+    return null;
+  }
+  return parts;
+}
+
+/**
+ * Compare two version arrays
+ * Returns:
+ *   - negative if v1 < v2
+ *   - 0 if v1 === v2
+ *   - positive if v1 > v2
+ */
+export function compareVersions(v1: number[], v2: number[]): number {
+  const maxLength = Math.max(v1.length, v2.length);
+  for (let i = 0; i < maxLength; i++) {
+    const part1 = v1[i] ?? 0;
+    const part2 = v2[i] ?? 0;
+    if (part1 !== part2) {
+      return part1 - part2;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Check if the current Node.js version meets the minimum requirement
+ */
+export function checkNodeVersion(): { ok: boolean; current: string; required: string } {
+  const current = process.version;
+  const currentParsed = parseVersion(current);
+  const requiredParsed = parseVersion(MIN_NODE_VERSION);
+
+  if (!currentParsed || !requiredParsed) {
+    return { ok: false, current, required: MIN_NODE_VERSION };
+  }
+
+  const comparison = compareVersions(currentParsed, requiredParsed);
+  return { ok: comparison >= 0, current, required: MIN_NODE_VERSION };
+}
+
+/**
+ * Check if the pnpm version meets the minimum requirement
+ */
+export function checkPnpmVersion(): {
+  ok: boolean;
+  current: string | null;
+  required: string;
+  error?: string;
+} {
+  try {
+    const result = execSync("pnpm --version", { encoding: "utf-8", timeout: 5000 });
+    const current = result.trim();
+    const currentParsed = parseVersion(current);
+    const requiredParsed = parseVersion(MIN_PNPM_VERSION);
+
+    if (!currentParsed || !requiredParsed) {
+      return { ok: false, current, required: MIN_PNPM_VERSION };
+    }
+
+    const comparison = compareVersions(currentParsed, requiredParsed);
+    return { ok: comparison >= 0, current, required: MIN_PNPM_VERSION };
+  } catch (error) {
+    return {
+      ok: false,
+      current: null,
+      required: MIN_PNPM_VERSION,
+      error: error instanceof Error ? error.message : "Failed to check pnpm version",
+    };
+  }
+}
 
 export interface CheckOptions {
   /** Run without interactive prompts */
@@ -42,7 +132,31 @@ export interface CheckItemResult {
 async function runInstallationChecks(): Promise<CheckResult> {
   const checks: CheckItemResult[] = [];
 
-  // Check 1: Config file exists
+  // Check 1: Node.js version
+  const nodeVersionCheck = checkNodeVersion();
+  checks.push({
+    id: "node-version",
+    name: "Node.js version",
+    ok: nodeVersionCheck.ok,
+    message: nodeVersionCheck.ok
+      ? undefined
+      : `Node.js ${nodeVersionCheck.current} installed, but ${nodeVersionCheck.required} or higher is required`,
+  });
+
+  // Check 2: pnpm version
+  const pnpmVersionCheck = checkPnpmVersion();
+  checks.push({
+    id: "pnpm-version",
+    name: "pnpm version",
+    ok: pnpmVersionCheck.ok,
+    message: pnpmVersionCheck.ok
+      ? undefined
+      : pnpmVersionCheck.error
+        ? `Could not check pnpm version: ${pnpmVersionCheck.error}`
+        : `pnpm ${pnpmVersionCheck.current} installed, but ${pnpmVersionCheck.required} or higher is required`,
+  });
+
+  // Check 3: Config file exists
   const configExists = fs.existsSync(CONFIG_PATH);
   checks.push({
     id: "config-exists",
