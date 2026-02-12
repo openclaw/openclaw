@@ -31,6 +31,7 @@ import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import { pruneConsecutiveNoReplies } from "../../no-reply-pruning.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -568,8 +569,20 @@ export async function runEmbeddedAttempt(
           ? sanitizeToolUseResultPairing(truncated)
           : truncated;
         cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        // Prune consecutive NO_REPLY messages to prevent the "cascade of silence" effect
+        // where the model learns that NO_REPLY is always the correct response.
+        // See: https://github.com/openclaw/openclaw/issues/13387
+        const pruneNoReply = params.config?.agents?.defaults?.pruneConsecutiveNoReply;
+        const maxConsecutive =
+          pruneNoReply === false
+            ? -1 // disabled
+            : Math.max(0, typeof pruneNoReply === "number" ? pruneNoReply : 1);
+        const pruned =
+          maxConsecutive >= 0 ? pruneConsecutiveNoReplies(limited, maxConsecutive) : limited;
+        cacheTrace?.recordStage("session:no-reply-pruned", { messages: pruned });
+        // Always update if pruning changed the array (even if result is empty)
+        if (pruned !== limited || pruned.length > 0) {
+          activeSession.agent.replaceMessages(pruned);
         }
       } catch (err) {
         sessionManager.flushPendingToolResults?.();
