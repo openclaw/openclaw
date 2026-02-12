@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { FailoverReason, X402PaymentInfo } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 
-
 /**
  * Attempts to extract x402 v2 payment information from a billing error payload.
  *
@@ -113,7 +112,10 @@ export function parseX402PaymentInfo(raw: string): X402PaymentInfo | null {
  * Formats a billing error message, enriching it with x402 payment info when available.
  * Falls back to a provider-specific or generic billing error message.
  */
-export function formatBillingErrorMessage(paymentInfo?: X402PaymentInfo | null, provider?: string): string {
+export function formatBillingErrorMessage(
+  paymentInfo?: X402PaymentInfo | null,
+  provider?: string,
+): string {
   if (paymentInfo) {
     const parts: string[] = ["⚠️ Credits exhausted"];
 
