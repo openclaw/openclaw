@@ -410,3 +410,219 @@ class TestHelpers:
     def test_now_iso(self):
         now = _now()
         assert "T" in now and len(now) > 20
+
+
+# ============================================================
+# Working Memory (SQLite-backed)
+# ============================================================
+
+class TestWorkingMemory:
+    def test_pin_returns_id(self, brain):
+        pin_id = brain.pin_working_memory("test", "Test content")
+        assert pin_id.startswith("wm_")
+
+    def test_get_empty(self, brain):
+        assert brain.get_working_memory() == []
+
+    def test_pin_and_get(self, brain):
+        brain.pin_working_memory("first", "Content A")
+        brain.pin_working_memory("second", "Content B")
+        items = brain.get_working_memory()
+        assert len(items) == 2
+        assert items[0]["label"] == "first"
+        assert items[1]["label"] == "second"
+        assert items[0]["position"] < items[1]["position"]
+
+    def test_unpin_by_index(self, brain):
+        brain.pin_working_memory("a", "A")
+        brain.pin_working_memory("b", "B")
+        brain.pin_working_memory("c", "C")
+        assert brain.unpin_working_memory("1") is True  # Remove "b"
+        items = brain.get_working_memory()
+        assert len(items) == 2
+        labels = [i["label"] for i in items]
+        assert "b" not in labels
+
+    def test_unpin_by_id(self, brain):
+        pin_id = brain.pin_working_memory("x", "X")
+        assert brain.unpin_working_memory(pin_id) is True
+        assert brain.get_working_memory() == []
+
+    def test_unpin_nonexistent(self, brain):
+        assert brain.unpin_working_memory("999") is False
+        assert brain.unpin_working_memory("wm_nonexistent") is False
+
+    def test_clear(self, brain):
+        brain.pin_working_memory("a", "A")
+        brain.pin_working_memory("b", "B")
+        count = brain.clear_working_memory()
+        assert count == 2
+        assert brain.get_working_memory() == []
+
+    def test_clear_empty(self, brain):
+        assert brain.clear_working_memory() == 0
+
+    def test_backward_compat_wm_pin(self, brain):
+        result = brain.wm_pin("Content", label="Label")
+        assert result["pinned"] is True
+        assert result["total_pins"] == 1
+
+    def test_backward_compat_wm_view(self, brain):
+        brain.wm_pin("Content", label="Label")
+        result = brain.wm_view()
+        assert result["count"] == 1
+        assert result["items"][0]["label"] == "Label"
+        assert result["items"][0]["content"] == "Content"
+        assert "pinnedAt" in result["items"][0]
+
+    def test_backward_compat_wm_clear_index(self, brain):
+        brain.wm_pin("A", label="a")
+        brain.wm_pin("B", label="b")
+        result = brain.wm_clear(index=0)
+        assert result["cleared"] is True
+        assert result["remaining"] == 1
+
+    def test_backward_compat_wm_clear_all(self, brain):
+        brain.wm_pin("A", label="a")
+        result = brain.wm_clear()
+        assert result["cleared"] is True
+        assert result["items_removed"] == 1
+
+    def test_stats_includes_wm(self, brain):
+        brain.pin_working_memory("test", "content")
+        s = brain.stats()
+        assert s["working_memory_pins"] == 1
+
+
+# ============================================================
+# Categories (SQLite-backed)
+# ============================================================
+
+class TestCategories:
+    def test_create_returns_true(self, brain):
+        assert brain.create_category("trading", "Market analysis", ["trade", "market"]) is True
+
+    def test_create_duplicate_returns_false(self, brain):
+        brain.create_category("test_cat", "Test", ["test"])
+        assert brain.create_category("test_cat", "Test 2", ["test"]) is False
+
+    def test_list_empty(self, brain):
+        assert brain.list_categories() == []
+
+    def test_list_with_data(self, brain):
+        brain.create_category("alpha", "First", ["a", "b"])
+        brain.create_category("beta", "Second", ["c"])
+        cats = brain.list_categories()
+        assert len(cats) == 2
+        names = [c["name"] for c in cats]
+        assert "alpha" in names
+        assert "beta" in names
+        alpha = next(c for c in cats if c["name"] == "alpha")
+        assert alpha["description"] == "First"
+        assert alpha["keywords"] == ["a", "b"]
+        assert "created_at" in alpha
+
+    def test_delete(self, brain):
+        brain.create_category("doomed", "To be deleted", [])
+        assert brain.delete_category("doomed") is True
+        assert brain.list_categories() == []
+
+    def test_delete_nonexistent(self, brain):
+        assert brain.delete_category("ghost") is False
+
+    def test_stats_includes_categories(self, brain):
+        brain.create_category("test_cat", "Test", ["test"])
+        s = brain.stats()
+        assert s["categories"] == 1
+
+    def test_default_description(self, brain):
+        brain.create_category("quick")
+        cats = brain.list_categories()
+        assert cats[0]["description"].startswith("User-created category")
+
+
+# ============================================================
+# Schema additions (tables exist)
+# ============================================================
+
+class TestSchemaAdditions:
+    def test_working_memory_table_exists(self, brain):
+        conn = sqlite3.connect(str(brain.db_path))
+        tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()]
+        conn.close()
+        assert "working_memory" in tables
+
+    def test_categories_table_exists(self, brain):
+        conn = sqlite3.connect(str(brain.db_path))
+        tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()]
+        conn.close()
+        assert "categories" in tables
+
+    def test_working_memory_columns(self, brain):
+        conn = sqlite3.connect(str(brain.db_path))
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(working_memory)").fetchall()]
+        conn.close()
+        for col in ["id", "label", "content", "pinned_at", "position"]:
+            assert col in cols
+
+    def test_categories_columns(self, brain):
+        conn = sqlite3.connect(str(brain.db_path))
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(categories)").fetchall()]
+        conn.close()
+        for col in ["name", "description", "keywords", "created_at"]:
+            assert col in cols
+
+
+# ============================================================
+# Migration
+# ============================================================
+
+class TestMigration:
+    def test_migrate_empty(self, brain):
+        result = brain.migrate_sidecars()
+        assert result == {"working_memory": 0, "categories": 0}
+
+    def test_migrate_working_memory(self, brain, tmp_path):
+        # Create a fake working_memory.json in the db's parent dir
+        wm_file = Path(brain.db_path).parent / "working_memory.json"
+        wm_file.write_text(json.dumps({
+            "items": [
+                {"content": "Pin A", "label": "Label A", "pinnedAt": "2026-01-01T00:00:00"},
+                {"content": "Pin B", "label": "Label B", "pinnedAt": "2026-01-02T00:00:00"},
+            ]
+        }))
+        result = brain.migrate_sidecars()
+        assert result["working_memory"] == 2
+        items = brain.get_working_memory()
+        assert len(items) == 2
+        assert items[0]["label"] == "Label A"
+
+    def test_migrate_categories(self, brain, tmp_path):
+        cats_file = Path(brain.db_path).parent / "categories.json"
+        cats_file.write_text(json.dumps({
+            "categories": {
+                "trading": {"description": "Market stuff", "keywords": ["trade", "market"]},
+                "coding": {"description": "Dev stuff", "keywords": ["code", "debug"]},
+            },
+            "extensible": True,
+        }))
+        result = brain.migrate_sidecars()
+        assert result["categories"] == 2
+        cats = brain.list_categories()
+        assert len(cats) == 2
+        names = [c["name"] for c in cats]
+        assert "trading" in names
+
+    def test_migrate_idempotent(self, brain, tmp_path):
+        wm_file = Path(brain.db_path).parent / "working_memory.json"
+        wm_file.write_text(json.dumps({
+            "items": [{"content": "Pin A", "label": "A", "pinnedAt": "2026-01-01T00:00:00"}]
+        }))
+        brain.migrate_sidecars()
+        result = brain.migrate_sidecars()
+        assert result["working_memory"] == 0  # Already migrated
+        assert len(brain.get_working_memory()) == 1  # Still just one

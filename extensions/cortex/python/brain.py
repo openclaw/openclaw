@@ -247,6 +247,27 @@ class UnifiedBrain:
             )
         """)
 
+        # -- WORKING MEMORY (pins always in context) --
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS working_memory (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                content TEXT NOT NULL,
+                pinned_at TEXT NOT NULL,
+                position INTEGER NOT NULL
+            )
+        """)
+
+        # -- CATEGORIES (knowledge taxonomy) --
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS categories (
+                name TEXT PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                keywords TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL
+            )
+        """)
+
         # -- INDEXES --
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, created_at)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_agent, created_at)")
@@ -257,6 +278,7 @@ class UnifiedBrain:
         c.execute("CREATE INDEX IF NOT EXISTS idx_stm_source ON stm(source_message_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_atoms_source ON atoms(source_message_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_type, source_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_wm_position ON working_memory(position)")
 
         conn.commit()
         conn.close()
@@ -1428,6 +1450,12 @@ class UnifiedBrain:
         c.execute("SELECT source_type, COUNT(*) FROM embeddings GROUP BY source_type")
         emb_by_type = dict(c.fetchall())
 
+        c.execute("SELECT COUNT(*) FROM working_memory")
+        wm_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM categories")
+        cat_count = c.fetchone()[0]
+
         conn.close()
 
         return {
@@ -1438,6 +1466,8 @@ class UnifiedBrain:
             "causal_links": link_count,
             "embeddings": emb_count,
             "embeddings_by_type": emb_by_type,
+            "working_memory_pins": wm_count,
+            "categories": cat_count,
             "db_path": str(self.db_path),
         }
 
@@ -1529,80 +1559,205 @@ class UnifiedBrain:
         return deep_abstraction.abstract_deeper(query)
 
     # ===================================================================
-    # WORKING MEMORY (pins) — lightweight JSON sidecar
+    # WORKING MEMORY (pins) — SQLite-backed
     # ===================================================================
 
-    def _wm_path(self) -> Path:
-        return self.db_path.parent / "working_memory.json"
+    def pin_working_memory(self, label: str, content: str) -> str:
+        """Pin an item to working memory. Returns the pin ID."""
+        pin_id = _gen_id("wm")
+        now = _now()
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        # Next position = max + 1
+        c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM working_memory")
+        pos = c.fetchone()[0]
+        c.execute(
+            "INSERT INTO working_memory (id, label, content, pinned_at, position) VALUES (?, ?, ?, ?, ?)",
+            (pin_id, label, content, now, pos),
+        )
+        conn.commit()
+        conn.close()
+        return pin_id
 
-    def _load_wm(self) -> dict:
-        p = self._wm_path()
-        if p.exists():
-            with open(p, "r") as f:
-                return json.load(f)
-        return {"items": []}
+    def unpin_working_memory(self, index_or_id: str) -> bool:
+        """Remove a pin by 0-based index or by ID. Returns True if removed."""
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        # Try by ID first
+        c.execute("DELETE FROM working_memory WHERE id = ?", (index_or_id,))
+        if c.rowcount > 0:
+            conn.commit()
+            conn.close()
+            return True
+        # Try by numeric index
+        try:
+            idx = int(index_or_id)
+        except (ValueError, TypeError):
+            conn.close()
+            return False
+        c.execute("SELECT id FROM working_memory ORDER BY position LIMIT 1 OFFSET ?", (idx,))
+        row = c.fetchone()
+        if row is None:
+            conn.close()
+            return False
+        c.execute("DELETE FROM working_memory WHERE id = ?", (row["id"],))
+        conn.commit()
+        conn.close()
+        return True
 
-    def _save_wm(self, data: dict):
-        with open(self._wm_path(), "w") as f:
-            json.dump(data, f, indent=2)
+    def get_working_memory(self) -> List[dict]:
+        """Get all pinned working memory items, ordered by position."""
+        conn = self._conn()
+        c = conn.cursor()
+        c.execute("SELECT id, label, content, pinned_at, position FROM working_memory ORDER BY position")
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return rows
 
+    def clear_working_memory(self) -> int:
+        """Remove all pins. Returns count removed."""
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM working_memory")
+        count = c.fetchone()[0]
+        c.execute("DELETE FROM working_memory")
+        conn.commit()
+        conn.close()
+        return count
+
+    # Backward-compat wrappers (existing callers use wm_pin/wm_view/wm_clear)
     def wm_pin(self, content: str, label: str = "") -> dict:
-        wm = self._load_wm()
-        item = {"content": content, "pinnedAt": _now(), "label": label}
-        wm["items"].append(item)
-        self._save_wm(wm)
-        return {"pinned": True, "label": label, "total_pins": len(wm["items"])}
+        pin_id = self.pin_working_memory(label, content)
+        items = self.get_working_memory()
+        return {"pinned": True, "label": label, "total_pins": len(items), "id": pin_id}
 
     def wm_view(self) -> dict:
-        wm = self._load_wm()
-        return {"count": len(wm.get("items", [])), "items": wm.get("items", [])}
+        items = self.get_working_memory()
+        # Map to legacy format
+        legacy = [{"content": i["content"], "pinnedAt": i["pinned_at"], "label": i["label"]} for i in items]
+        return {"count": len(legacy), "items": legacy}
 
     def wm_clear(self, index: Optional[int] = None) -> dict:
-        wm = self._load_wm()
-        items = wm.get("items", [])
         if index is not None:
-            if 0 <= index < len(items):
-                removed = items.pop(index)
-                self._save_wm(wm)
-                return {"cleared": True, "removed": removed, "remaining": len(items)}
-            return {"cleared": False, "error": f"Index {index} out of range (0-{len(items)-1})"}
-        count = len(items)
-        wm["items"] = []
-        self._save_wm(wm)
+            ok = self.unpin_working_memory(str(index))
+            if ok:
+                remaining = len(self.get_working_memory())
+                return {"cleared": True, "remaining": remaining}
+            return {"cleared": False, "error": f"Index {index} out of range"}
+        count = self.clear_working_memory()
         return {"cleared": True, "items_removed": count}
 
     # ===================================================================
-    # CATEGORIES — lightweight JSON sidecar
+    # CATEGORIES — SQLite-backed knowledge taxonomy
     # ===================================================================
 
-    def _cats_path(self) -> Path:
-        return self.db_path.parent / "categories.json"
+    def create_category(self, name: str, description: str = "", keywords: Optional[List[str]] = None) -> bool:
+        """Create a category. Returns True if created, False if already exists."""
+        now = _now()
+        kw_json = json.dumps(keywords or [])
+        if not description:
+            description = f"User-created category: {name}"
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        try:
+            c.execute(
+                "INSERT INTO categories (name, description, keywords, created_at) VALUES (?, ?, ?, ?)",
+                (name, description, kw_json, now),
+            )
+            conn.commit()
+            conn.close()
+            return True
+        except sqlite3.IntegrityError:
+            conn.close()
+            return False
 
-    def _load_cats(self) -> dict:
-        p = self._cats_path()
-        if p.exists():
-            with open(p, "r") as f:
-                return json.load(f)
-        return {"categories": {}, "extensible": True}
+    def list_categories(self) -> List[dict]:
+        """List all categories with their descriptions and keywords."""
+        conn = self._conn()
+        c = conn.cursor()
+        c.execute("SELECT name, description, keywords, created_at FROM categories ORDER BY name")
+        rows = []
+        for r in c.fetchall():
+            d = dict(r)
+            try:
+                d["keywords"] = json.loads(d["keywords"])
+            except (json.JSONDecodeError, TypeError):
+                d["keywords"] = []
+            rows.append(d)
+        conn.close()
+        return rows
 
-    def _save_cats(self, data: dict):
-        with open(self._cats_path(), "w") as f:
-            json.dump(data, f, indent=2)
+    def delete_category(self, name: str) -> bool:
+        """Delete a category by name. Returns True if deleted."""
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        c.execute("DELETE FROM categories WHERE name = ?", (name,))
+        deleted = c.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
 
-    def create_category(self, name: str, keywords: Optional[List[str]] = None) -> dict:
-        cats = self._load_cats()
-        cats["categories"][name] = {"description": f"User-created category: {name}", "keywords": keywords or []}
-        self._save_cats(cats)
-        return {"created": True, "category": name, "keywords": keywords or []}
+    # ===================================================================
+    # MIGRATION: JSON sidecars → SQLite tables
+    # ===================================================================
 
-    def list_categories(self) -> dict:
-        cats = self._load_cats()
-        return {
-            "categories": {
-                name: {"description": info.get("description", ""), "keywords": info.get("keywords", [])}
-                for name, info in cats.get("categories", {}).items()
-            }
-        }
+    def migrate_sidecars(self) -> dict:
+        """Migrate working_memory.json and categories.json into brain.db tables.
+        
+        Idempotent: skips items that already exist.
+        Returns {"working_memory": N, "categories": N} counts migrated.
+        """
+        wm_count = 0
+        cat_count = 0
+
+        # --- Working Memory ---
+        wm_path = self.db_path.parent / "working_memory.json"
+        if wm_path.exists():
+            try:
+                with open(wm_path, "r") as f:
+                    wm_data = json.load(f)
+                items = wm_data.get("items", [])
+                for idx, item in enumerate(items):
+                    content = item.get("content", "")
+                    label = item.get("label", "")
+                    pinned_at = item.get("pinnedAt", _now())
+                    if not content:
+                        continue
+                    # Check for duplicate by content (idempotent)
+                    conn = self._conn()
+                    c = conn.cursor()
+                    c.execute("SELECT COUNT(*) FROM working_memory WHERE content = ?", (content,))
+                    if c.fetchone()[0] == 0:
+                        pin_id = _gen_id("wm")
+                        c2 = self._conn(immediate=True)
+                        c2.execute(
+                            "INSERT INTO working_memory (id, label, content, pinned_at, position) VALUES (?, ?, ?, ?, ?)",
+                            (pin_id, label, content, pinned_at, idx),
+                        )
+                        c2.commit()
+                        c2.close()
+                        wm_count += 1
+                    conn.close()
+            except (json.JSONDecodeError, IOError) as e:
+                pass  # Best-effort
+
+        # --- Categories ---
+        cats_path = self.db_path.parent / "categories.json"
+        if cats_path.exists():
+            try:
+                with open(cats_path, "r") as f:
+                    cats_data = json.load(f)
+                categories = cats_data.get("categories", {})
+                for name, info in categories.items():
+                    desc = info.get("description", "")
+                    kws = info.get("keywords", [])
+                    created = self.create_category(name, description=desc, keywords=kws)
+                    if created:
+                        cat_count += 1
+            except (json.JSONDecodeError, IOError) as e:
+                pass  # Best-effort
+
+        return {"working_memory": wm_count, "categories": cat_count}
 
     # ===================================================================
     # EXPORT (backward compat)
