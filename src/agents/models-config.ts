@@ -78,6 +78,32 @@ async function readJson(pathname: string): Promise<unknown> {
   }
 }
 
+/**
+ * Strip apiKey from provider configs before writing to disk.
+ *
+ * The models.json cache should only contain model metadata (id, name, cost,
+ * contextWindow, etc.) — never credentials.  API keys are resolved at runtime
+ * via env vars, auth profiles, or the in-memory config.  Writing them to a
+ * cache file on disk is a security risk (see #14808).
+ */
+function stripApiKeysFromProviders(
+  providers: ModelsConfig["providers"],
+): ModelsConfig["providers"] {
+  if (!providers) {
+    return providers;
+  }
+  const stripped: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    if (provider.apiKey !== undefined) {
+      const { apiKey: _apiKey, ...rest } = provider;
+      stripped[key] = rest as ProviderConfig;
+    } else {
+      stripped[key] = provider;
+    }
+  }
+  return stripped;
+}
+
 export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
@@ -127,7 +153,8 @@ export async function ensureOpenClawModelsJson(
     providers: mergedProviders,
     agentDir,
   });
-  const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
+  const sanitizedProviders = stripApiKeysFromProviders(normalizedProviders);
+  const next = `${JSON.stringify({ providers: sanitizedProviders }, null, 2)}\n`;
   try {
     existingRaw = await fs.readFile(targetPath, "utf8");
   } catch {

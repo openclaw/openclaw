@@ -43,7 +43,7 @@ describe("models-config", () => {
     process.env.HOME = previousHome;
   });
 
-  it("fills missing provider.apiKey from env var name when models exist", async () => {
+  it("resolves implicit provider models even when env apiKey is set but strips apiKey from cache", async () => {
     await withTempHome(async () => {
       vi.resetModules();
       const prevKey = process.env.MINIMAX_API_KEY;
@@ -81,7 +81,8 @@ describe("models-config", () => {
         const parsed = JSON.parse(raw) as {
           providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
         };
-        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
+        // apiKey must NOT be written to the cache file (security: #14808)
+        expect(parsed.providers.minimax?.apiKey).toBeUndefined();
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-VL-01");
       } finally {
