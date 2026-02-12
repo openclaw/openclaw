@@ -51,6 +51,10 @@ export type AgentRunLoopResult =
       fallbackModel?: string;
       didLogHeartbeatStrip: boolean;
       autoCompactionCompleted: boolean;
+      compactionStats?: {
+        tokensBefore?: number;
+        tokensAfter?: number;
+      };
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
     }
@@ -87,6 +91,7 @@ export async function runAgentTurnWithFallback(params: {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
+  let compactionStats: { tokensBefore?: number; tokensAfter?: number } | undefined;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
@@ -353,6 +358,24 @@ export async function runAgentTurnWithFallback(params: {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 if (phase === "end") {
                   autoCompactionCompleted = true;
+                  const data = evt.data as {
+                    tokensBefore?: unknown;
+                    tokensAfter?: unknown;
+                    result?: { tokensBefore?: unknown; tokensAfter?: unknown };
+                  };
+                  const rawBefore = data.tokensBefore ?? data.result?.tokensBefore;
+                  const rawAfter = data.tokensAfter ?? data.result?.tokensAfter;
+                  const tokensBefore =
+                    typeof rawBefore === "number" && Number.isFinite(rawBefore) && rawBefore > 0
+                      ? rawBefore
+                      : undefined;
+                  const tokensAfter =
+                    typeof rawAfter === "number" && Number.isFinite(rawAfter) && rawAfter > 0
+                      ? rawAfter
+                      : undefined;
+                  if (tokensBefore != null || tokensAfter != null) {
+                    compactionStats = { tokensBefore, tokensAfter };
+                  }
                 }
               }
             },
@@ -562,6 +585,7 @@ export async function runAgentTurnWithFallback(params: {
     fallbackModel,
     didLogHeartbeatStrip,
     autoCompactionCompleted,
+    compactionStats,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
   };
 }

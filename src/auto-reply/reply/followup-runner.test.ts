@@ -195,6 +195,40 @@ describe("createFollowupRunner compaction", () => {
     expect(store[sessionKey]?.outputTokens).toBeUndefined();
   });
 
+  it("includes token and window reduction when compaction stats are provided", async () => {
+    const onBlockReply = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+      }) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry: false, tokensBefore: 100_000, tokensAfter: 40_000 },
+        });
+        return { payloads: [{ text: "final" }], meta: {} };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = baseQueuedRun();
+    queued.run.verboseLevel = "on";
+    queued.run.config = { agents: { defaults: { contextTokens: 200_000 } } };
+
+    await runner(queued);
+
+    expect(onBlockReply).toHaveBeenCalled();
+    const notice = String(onBlockReply.mock.calls[0]?.[0]?.text ?? "");
+    expect(notice).toContain("100k→40k");
+    expect(notice).toContain("window 50.0%→20.0%");
+  });
+
   it("shows compaction notice when notify=always even if verbose is off", async () => {
     const onBlockReply = vi.fn(async () => {});
 

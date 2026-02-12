@@ -123,6 +123,7 @@ export function createFollowupRunner(params: {
         });
       }
       let autoCompactionCompleted = false;
+      let compactionStats: { tokensBefore?: number; tokensAfter?: number } | undefined;
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
@@ -180,6 +181,24 @@ export function createFollowupRunner(params: {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 if (phase === "end") {
                   autoCompactionCompleted = true;
+                  const data = evt.data as {
+                    tokensBefore?: unknown;
+                    tokensAfter?: unknown;
+                    result?: { tokensBefore?: unknown; tokensAfter?: unknown };
+                  };
+                  const rawBefore = data.tokensBefore ?? data.result?.tokensBefore;
+                  const rawAfter = data.tokensAfter ?? data.result?.tokensAfter;
+                  const tokensBefore =
+                    typeof rawBefore === "number" && Number.isFinite(rawBefore) && rawBefore > 0
+                      ? rawBefore
+                      : undefined;
+                  const tokensAfter =
+                    typeof rawAfter === "number" && Number.isFinite(rawAfter) && rawAfter > 0
+                      ? rawAfter
+                      : undefined;
+                  if (tokensBefore != null || tokensAfter != null) {
+                    compactionStats = { tokensBefore, tokensAfter };
+                  }
                 }
               },
             });
@@ -280,7 +299,18 @@ export function createFollowupRunner(params: {
         });
         const verboseEnabled = queued.run.verboseLevel && queued.run.verboseLevel !== "off";
         if (shouldEmitCompactionNotice({ cfg: queued.run.config, verboseEnabled })) {
-          finalPayloads.unshift({ text: formatCompactionNotice(count) });
+          const contextTokensUsed =
+            agentCfgContextTokens ??
+            lookupContextTokens(fallbackModel ?? defaultModel) ??
+            sessionEntry?.contextTokens ??
+            DEFAULT_CONTEXT_TOKENS;
+          finalPayloads.unshift({
+            text: formatCompactionNotice(count, {
+              tokensBefore: compactionStats?.tokensBefore,
+              tokensAfter: compactionStats?.tokensAfter,
+              contextTokens: contextTokensUsed,
+            }),
+          });
         }
       }
 
