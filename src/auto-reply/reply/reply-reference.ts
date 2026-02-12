@@ -29,6 +29,9 @@ export function createReplyReferencePlanner(options: {
     if (!allowReference) {
       return undefined;
     }
+    // existingId means we're already inside a thread — always stay in it,
+    // regardless of replyToMode. replyToMode only controls whether we
+    // *start* a new quote/thread via startId.
     if (existingId) {
       hasReplied = true;
       return existingId;
