@@ -31,6 +31,9 @@ Docs: https://docs.openclaw.ai
 - Feishu: probe status uses the resolved account context for multi-account credential checks. (#11233) Thanks @onevcat.
 - Feishu DocX: preserve top-level converted block order using `firstLevelBlockIds` when writing/appending documents. (#13994) Thanks @Cynosure159.
 - Feishu plugin packaging: remove `workspace:*` `openclaw` dependency from `extensions/feishu` and sync lockfile for install compatibility. (#14423) Thanks @jackcooper2015.
+- Telegram: handle no-text message in model picker editMessageText. (#14397) Thanks @0xRaini.
+- Slack: change default replyToMode from "off" to "all". (#14364) Thanks @nm-de.
+- Tests: update thread ID handling in Slack message collection tests. (#14108) Thanks @swizzmagik.
 
 ## 2026.2.9
 
