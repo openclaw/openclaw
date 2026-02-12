@@ -216,6 +216,15 @@ describe("resolveAgentConfig", () => {
     expect(workspace).toBe(path.join(path.resolve(home), ".openclaw", "workspace"));
   });
 
+  it("strips null bytes from configured workspace path", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/home/user/workspace\0" } },
+    } as unknown as OpenClawConfig;
+    const workspace = resolveAgentWorkspaceDir(cfg, "main");
+    expect(workspace).not.toContain("\0");
+    expect(workspace).toBe("/home/user/workspace");
+  });
+
   it("uses OPENCLAW_HOME for default agentDir", () => {
     const home = path.join(path.sep, "srv", "openclaw-home");
     vi.stubEnv("OPENCLAW_HOME", home);

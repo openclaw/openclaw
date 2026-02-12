@@ -92,7 +92,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.cfg = params.cfg;
     this.agentId = params.agentId;
     this.qmd = params.resolved;
-    this.workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    // Strip null bytes from the workspace path — some config sources or file
+    // system operations can introduce trailing \0 which causes ENOTDIR (#12919).
+    this.workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId).replaceAll("\0", "");
     this.stateDir = resolveStateDir(process.env, os.homedir);
     this.agentStateDir = path.join(this.stateDir, "agents", this.agentId);
     this.qmdDir = path.join(this.agentStateDir, "qmd");

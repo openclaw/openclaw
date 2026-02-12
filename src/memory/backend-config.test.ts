@@ -73,6 +73,20 @@ describe("resolveMemoryBackendConfig", () => {
     expect(custom?.path).toBe(path.resolve(workspaceRoot, "notes"));
   });
 
+  it("strips null bytes from default collection paths", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/home/user/clawd\0" } },
+      memory: {
+        backend: "qmd",
+        qmd: {},
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    for (const collection of resolved.qmd?.collections ?? []) {
+      expect(collection.path).not.toContain("\0");
+    }
+  });
+
   it("resolves qmd update timeout overrides", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },

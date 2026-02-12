@@ -261,7 +261,9 @@ export function resolveMemoryBackendConfig(params: {
     return { backend: "builtin", citations };
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  // Strip null bytes once at the top so all downstream paths (default
+  // collections, custom paths, session export dirs) are clean (#12919).
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId).replaceAll("\0", "");
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
