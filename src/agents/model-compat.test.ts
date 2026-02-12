@@ -41,4 +41,72 @@ describe("normalizeModelCompat", () => {
     const normalized = normalizeModelCompat(model);
     expect(normalized.compat?.supportsDeveloperRole).toBe(false);
   });
+
+  describe("provider prefix stripping", () => {
+    it("strips anthropic/ prefix from model id", () => {
+      const model = {
+        ...baseModel(),
+        id: "anthropic/claude-opus-4-5",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+      };
+      const normalized = normalizeModelCompat(model);
+      expect(normalized.id).toBe("claude-opus-4-5");
+    });
+
+    it("strips provider prefix case-insensitively", () => {
+      const model = {
+        ...baseModel(),
+        id: "Anthropic/claude-opus-4-5",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+      };
+      const normalized = normalizeModelCompat(model);
+      expect(normalized.id).toBe("claude-opus-4-5");
+    });
+
+    it("does NOT strip openai/ prefix (not in allowlist)", () => {
+      const model = {
+        ...baseModel(),
+        id: "openai/gpt-4o",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      };
+      const normalized = normalizeModelCompat(model);
+      expect(normalized.id).toBe("openai/gpt-4o");
+    });
+
+    it("leaves model id unchanged when no provider prefix", () => {
+      const model = {
+        ...baseModel(),
+        id: "claude-opus-4-5",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+      };
+      const normalized = normalizeModelCompat(model);
+      expect(normalized.id).toBe("claude-opus-4-5");
+    });
+
+    it("does not strip mismatched provider prefix", () => {
+      const model = {
+        ...baseModel(),
+        id: "openai/gpt-4o",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+      };
+      const normalized = normalizeModelCompat(model);
+      expect(normalized.id).toBe("openai/gpt-4o");
+    });
+
+    it("handles empty provider gracefully", () => {
+      const model = {
+        ...baseModel(),
+        id: "claude-opus-4-5",
+        provider: "",
+        baseUrl: "https://api.anthropic.com",
+      };
+      const normalized = normalizeModelCompat(model);
+      expect(normalized.id).toBe("claude-opus-4-5");
+    });
+  });
 });
