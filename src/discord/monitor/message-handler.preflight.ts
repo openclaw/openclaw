@@ -42,6 +42,7 @@ import {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
 } from "./allow-list.js";
+import { evaluateChimeIn } from "./chime-in-eval.js";
 import {
   formatDiscordUserTag,
   resolveDiscordSystemLocation,
@@ -468,6 +469,7 @@ export async function preflightDiscordMessage(
     userName: sender.name,
     userTag: sender.tag,
   });
+  const chimeInConfig = channelConfig?.chimeIn ?? guildInfo?.chimeIn;
 
   if (!isDirectMessage) {
     const ownerAllowList = normalizeDiscordAllowList(params.allowFrom, [
@@ -519,22 +521,6 @@ export async function preflightDiscordMessage(
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-
-  if (isGuildMessage) {
-    const channelUsers = channelConfig?.users ?? guildInfo?.users;
-    if (Array.isArray(channelUsers) && channelUsers.length > 0) {
-      const userOk = resolveDiscordUserAllowed({
-        allowList: channelUsers,
-        userId: sender.id,
-        userName: sender.name,
-        userTag: sender.tag,
-      });
-      if (!userOk) {
-        logVerbose(`Blocked discord guild sender ${sender.id} (not in channel users allowlist)`);
-        return null;
-      }
-    }
-  }
 
   if (isGuildMessage && shouldRequireMention) {
     if (botId && mentionGate.shouldSkip) {

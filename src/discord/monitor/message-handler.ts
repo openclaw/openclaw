@@ -39,6 +39,7 @@ export function createDiscordMessageHandler(params: {
 }): DiscordMessageHandler {
   const groupPolicy = params.discordConfig?.groupPolicy ?? "open";
   const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
+  const chimeInCounters = new Map<string, number>();
   const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
 
   const debouncer = createInboundDebouncer<{ data: DiscordMessageEvent; client: Client }>({
@@ -77,6 +78,7 @@ export function createDiscordMessageHandler(params: {
       if (entries.length === 1) {
         const ctx = await preflightDiscordMessage({
           ...params,
+          chimeInCounters,
           ackReactionScope,
           groupPolicy,
           data: last.data,
@@ -108,6 +110,7 @@ export function createDiscordMessageHandler(params: {
       };
       const ctx = await preflightDiscordMessage({
         ...params,
+        chimeInCounters,
         ackReactionScope,
         groupPolicy,
         data: syntheticData,

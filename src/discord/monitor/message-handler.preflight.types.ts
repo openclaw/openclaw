@@ -88,6 +88,7 @@ export type DiscordMessagePreflightParams = {
   runtime: RuntimeEnv;
   botUserId?: string;
   guildHistories: Map<string, HistoryEntry[]>;
+  chimeInCounters: Map<string, number>;
   historyLimit: number;
   mediaMaxBytes: number;
   textLimit: number;
