@@ -36,6 +36,7 @@ See [Venice AI](/providers/venice).
 ## Provider docs
 
 - [OpenAI (API + Codex)](/providers/openai)
+- [Azure OpenAI](/providers/azure-openai)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [Qwen (OAuth)](/providers/qwen)
 - [OpenRouter](/providers/openrouter)

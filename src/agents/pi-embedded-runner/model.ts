@@ -17,6 +17,7 @@ type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
+  headers?: Record<string, string>;
 };
 
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
@@ -127,6 +128,8 @@ export function buildInlineProviderModels(
       provider: trimmed,
       baseUrl: entry?.baseUrl,
       api: model.api ?? entry?.api,
+      headers:
+        entry?.headers || model.headers ? { ...entry?.headers, ...model.headers } : undefined,
     }));
   });
 }
@@ -207,6 +210,7 @@ export function resolveModel(
         api: providerCfg?.api ?? "openai-responses",
         provider,
         baseUrl: providerCfg?.baseUrl,
+        headers: providerCfg?.headers,
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
