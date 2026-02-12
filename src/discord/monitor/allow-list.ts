@@ -22,6 +22,7 @@ export type DiscordGuildEntryResolved = {
   requireMention?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: Array<string | number>;
+  roles?: Array<string | number>;
   channels?: Record<
     string,
     {
@@ -30,6 +31,7 @@ export type DiscordGuildEntryResolved = {
       skills?: string[];
       enabled?: boolean;
       users?: Array<string | number>;
+      roles?: Array<string | number>;
       systemPrompt?: string;
       includeThreadStarter?: boolean;
       autoThread?: boolean;
@@ -43,6 +45,7 @@ export type DiscordChannelConfigResolved = {
   skills?: string[];
   enabled?: boolean;
   users?: Array<string | number>;
+  roles?: Array<string | number>;
   systemPrompt?: string;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
@@ -283,6 +286,7 @@ function resolveDiscordChannelConfigEntry(
     skills: entry.skills,
     enabled: entry.enabled,
     users: entry.users,
+    roles: entry.roles,
     systemPrompt: entry.systemPrompt,
     includeThreadStarter: entry.includeThreadStarter,
     autoThread: entry.autoThread,

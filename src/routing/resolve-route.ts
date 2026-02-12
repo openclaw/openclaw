@@ -29,6 +29,8 @@ export type ResolveAgentRouteInput = {
   parentPeer?: RoutePeer | null;
   guildId?: string | null;
   teamId?: string | null;
+  /** Discord member role IDs — used for role-based agent routing. */
+  memberRoleIds?: string[];
 };
 
 export type ResolvedAgentRoute = {
@@ -169,12 +171,24 @@ function matchesTeam(match: { teamId?: string | undefined } | undefined, teamId:
   return id === teamId;
 }
 
+function matchesRoles(
+  match: { roles?: string[] | undefined } | undefined,
+  memberRoleIds: string[],
+): boolean {
+  const roles = match?.roles;
+  if (!Array.isArray(roles) || roles.length === 0) {
+    return false;
+  }
+  return roles.some((r) => memberRoleIds.includes(r));
+}
+
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer ? { kind: input.peer.kind, id: normalizeId(input.peer.id) } : null;
   const guildId = normalizeId(input.guildId);
   const teamId = normalizeId(input.teamId);
+  const memberRoleIds = input.memberRoleIds ?? [];
 
   const bindings = listBindings(input.cfg).filter((binding) => {
     if (!binding || typeof binding !== "object") {

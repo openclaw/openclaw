@@ -78,5 +78,6 @@ export type AgentBinding = {
     peer?: { kind: ChatType; id: string };
     guildId?: string;
     teamId?: string;
+    roles?: string[];
   };
 };
