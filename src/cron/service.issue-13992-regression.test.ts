@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CronServiceState } from "./service/state.js";
-import { recomputeNextRunsForMaintenance } from "./service/jobs.js";
 import type { CronJob } from "./types.js";
+import { recomputeNextRunsForMaintenance } from "./service/jobs.js";
 
 describe("issue #13992 regression - cron jobs skip execution", () => {
   function createMockState(jobs: CronJob[]): CronServiceState {
