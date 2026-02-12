@@ -36,5 +36,9 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   }
   // Best-effort: kick off loading, but don't block.
   void loadPromise;
-  return MODEL_CACHE.get(modelId);
+
+  // Try the full model id first (e.g. "amazon-bedrock/eu.anthropic.claude-opus-4-6-v1"),
+  // then fall back to the bare id after stripping the provider prefix.
+  // MODEL_CACHE stores entries by bare id from model discovery.
+  return MODEL_CACHE.get(modelId) ?? MODEL_CACHE.get(modelId.replace(/^[^/]+\//, ""));
 }
