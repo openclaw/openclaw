@@ -58,7 +58,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const request = p as {
       to: string;
-      message: string;
+      message?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
       gifPlayback?: boolean;
@@ -85,8 +85,24 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const to = request.to.trim();
-    const message = request.message.trim();
-    const mediaUrls = Array.isArray(request.mediaUrls) ? request.mediaUrls : undefined;
+    const message = typeof request.message === "string" ? request.message.trim() : "";
+    const mediaUrl =
+      typeof request.mediaUrl === "string" && request.mediaUrl.trim().length > 0
+        ? request.mediaUrl.trim()
+        : undefined;
+    const mediaUrls = Array.isArray(request.mediaUrls)
+      ? request.mediaUrls
+          .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+          .filter((entry) => entry.length > 0)
+      : undefined;
+    if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid send params: text or media is required"),
+      );
+      return;
+    }
     const channelInput = typeof request.channel === "string" ? request.channel : undefined;
     const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
     if (channelInput && !normalizedChannel) {
@@ -132,7 +148,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
         const mirrorPayloads = normalizeReplyPayloadsForDelivery([
-          { text: message, mediaUrl: request.mediaUrl, mediaUrls },
+          { text: message, mediaUrl, mediaUrls },
         ]);
         const mirrorText = mirrorPayloads
           .map((payload) => payload.text)
@@ -170,7 +186,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           channel: outboundChannel,
           to: resolved.to,
           accountId,
-          payloads: [{ text: message, mediaUrl: request.mediaUrl, mediaUrls }],
+          payloads: [{ text: message, mediaUrl, mediaUrls }],
           gifPlayback: request.gifPlayback,
           deps: outboundDeps,
           mirror: providedSessionKey
