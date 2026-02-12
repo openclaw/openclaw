@@ -114,6 +114,28 @@ function buildCronEventPrompt(pendingEvents: string[]): string {
   );
 }
 
+// Returns true when a system event should be treated as real cron reminder content.
+export function isCronSystemEvent(evt: string) {
+  const trimmed = evt.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const lower = trimmed.toLowerCase();
+  const heartbeatOk = HEARTBEAT_TOKEN.toLowerCase();
+  if (lower === heartbeatOk || lower.startsWith(`${heartbeatOk} `)) {
+    return false;
+  }
+  if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
+    return false;
+  }
+  if (lower.includes("exec finished")) {
+    return false;
+  }
+
+  return true;
+}
+
 type HeartbeatAgentState = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
@@ -500,18 +522,7 @@ export async function runHeartbeatOnce(opts: {
   const isCronEvent = Boolean(opts.reason?.startsWith("cron:"));
   const pendingEvents = isExecEvent || isCronEvent ? peekSystemEvents(sessionKey) : [];
   const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
-  
-  // Fix for #13317: Only treat as cron event if there are actual cron-related messages,
-  // not just any system events (which could be heartbeat acks, exec completions, etc.)
-  const hasCronEvents = isCronEvent && pendingEvents.some((evt) => {
-    const trimmed = evt.trim();
-    // Exclude standard heartbeat acks and exec completion messages
-    return (
-      trimmed.length > 0 &&
-      !trimmed.includes("HEARTBEAT_OK") &&
-      !trimmed.includes("Exec finished")
-    );
-  });
+  const hasCronEvents = isCronEvent && pendingEvents.some((evt) => isCronSystemEvent(evt));
   const prompt = hasExecCompletion
     ? EXEC_EVENT_PROMPT
     : hasCronEvents
