@@ -200,6 +200,49 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
+  it("passes agentId to runHeartbeatOnce for main-session wakeMode now jobs", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runHeartbeatOnce,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "wakeMode now with agent",
+      agentId: "ops",
+      enabled: true,
+      schedule: { kind: "at", at: new Date(1).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    expect(runHeartbeatOnce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `cron:${job.id}`,
+        agentId: "ops",
+      }),
+    );
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("hello", { agentId: "ops" });
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("wakeMode now falls back to queued heartbeat when main lane stays busy", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
