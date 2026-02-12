@@ -67,6 +67,7 @@ import { buildEmbeddedExtensionPaths } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
+  sanitizeAntigravityThinkingBlocks,
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
 } from "../google.js";
@@ -770,7 +771,10 @@ export async function runEmbeddedAttempt(
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
+          const sanitizedOrphan = transcriptPolicy.normalizeAntigravityThinkingBlocks
+            ? sanitizeAntigravityThinkingBlocks(sessionContext.messages)
+            : sessionContext.messages;
+          activeSession.agent.replaceMessages(sanitizedOrphan);
           log.warn(
             `Removed orphaned user message to prevent consecutive user turns. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,
@@ -810,17 +814,6 @@ export async function runEmbeddedAttempt(
             note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
           });
 
-          const shouldTrackCacheTtl =
-            params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-            isCacheTtlEligibleProvider(params.provider, params.modelId);
-          if (shouldTrackCacheTtl) {
-            appendCacheTtlTimestamp(sessionManager, {
-              timestamp: Date.now(),
-              provider: params.provider,
-              modelId: params.modelId,
-            });
-          }
-
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
@@ -846,6 +839,22 @@ export async function runEmbeddedAttempt(
           } else {
             throw err;
           }
+        }
+
+        // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
+        // Previously this was before the prompt, which caused a custom entry to be
+        // inserted between compaction and the next prompt — breaking the
+        // prepareCompaction() guard that checks the last entry type, leading to
+        // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
+        const shouldTrackCacheTtl =
+          params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
+          isCacheTtlEligibleProvider(params.provider, params.modelId);
+        if (shouldTrackCacheTtl) {
+          appendCacheTtlTimestamp(sessionManager, {
+            timestamp: Date.now(),
+            provider: params.provider,
+            modelId: params.modelId,
+          });
         }
 
         messagesSnapshot = activeSession.messages.slice();

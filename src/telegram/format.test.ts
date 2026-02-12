@@ -37,9 +37,35 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toBe("2. two\n3. three");
   });
 
-  it("flattens headings and blockquotes", () => {
-    const res = markdownToTelegramHtml("# Title\n\n> Quote");
-    expect(res).toBe("Title\n\nQuote");
+  it("flattens headings", () => {
+    const res = markdownToTelegramHtml("# Title");
+    expect(res).toBe("Title");
+  });
+
+  it("renders blockquotes as native Telegram blockquote tags", () => {
+    const res = markdownToTelegramHtml("> Quote");
+    expect(res).toContain("<blockquote>");
+    expect(res).toContain("Quote");
+    expect(res).toContain("</blockquote>");
+  });
+
+  it("renders blockquotes with inline formatting", () => {
+    const res = markdownToTelegramHtml("> **bold** quote");
+    expect(res).toContain("<blockquote>");
+    expect(res).toContain("<b>bold</b>");
+    expect(res).toContain("</blockquote>");
+  });
+
+  it("renders multiline blockquotes as a single Telegram blockquote", () => {
+    const res = markdownToTelegramHtml("> first\n> second");
+    expect(res).toBe("<blockquote>first\nsecond</blockquote>");
+  });
+
+  it("renders separated quoted paragraphs as distinct blockquotes", () => {
+    const res = markdownToTelegramHtml("> first\n\n> second");
+    expect(res).toContain("<blockquote>first");
+    expect(res).toContain("<blockquote>second</blockquote>");
+    expect(res.match(/<blockquote>/g)).toHaveLength(2);
   });
 
   it("renders fenced code blocks", () => {
