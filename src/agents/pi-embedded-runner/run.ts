@@ -736,26 +736,34 @@ export async function runEmbeddedPiAgent(
 
           if (shouldRotate) {
             if (lastProfileId) {
-              const reason =
-                timedOut || assistantFailoverReason === "timeout"
-                  ? "timeout"
-                  : (assistantFailoverReason ?? "unknown");
-              await markAuthProfileFailure({
-                store: authStore,
-                profileId: lastProfileId,
-                reason,
-                cfg: params.config,
-                agentDir: params.agentDir,
-              });
-              if (timedOut && !isProbeSession) {
-                log.warn(
-                  `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
-                );
-              }
+              // Format errors (e.g. orphaned tool_use_id after compaction) are caused by
+              // a corrupted transcript payload, NOT by the auth profile itself.  Marking the
+              // profile as failed would put it into exponential-backoff cooldown and — because
+              // the *same* broken payload is sent to the next profile — cascade through every
+              // profile in milliseconds, locking out the entire provider.
+              // See: https://github.com/openclaw/openclaw/issues/8434
               if (cloudCodeAssistFormatError) {
                 log.warn(
-                  `Profile ${lastProfileId} hit Cloud Code Assist format error. Tool calls will be sanitized on retry.`,
+                  `Profile ${lastProfileId} hit Cloud Code Assist format error. ` +
+                    `Skipping cooldown (payload issue, not profile issue). Tool calls will be sanitized on retry.`,
                 );
+              } else {
+                const reason =
+                  timedOut || assistantFailoverReason === "timeout"
+                    ? "timeout"
+                    : (assistantFailoverReason ?? "unknown");
+                await markAuthProfileFailure({
+                  store: authStore,
+                  profileId: lastProfileId,
+                  reason,
+                  cfg: params.config,
+                  agentDir: params.agentDir,
+                });
+                if (timedOut && !isProbeSession) {
+                  log.warn(
+                    `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
+                  );
+                }
               }
             }
 

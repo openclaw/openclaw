@@ -53,7 +53,13 @@ export async function handleToolExecutionStart(
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-    const filePath = typeof record.path === "string" ? record.path.trim() : "";
+    // Some providers (e.g. Antigravity proxy with toolu_vrtx_ prefixed IDs) send
+    // "file_path" instead of "path".  normalizeToolParams handles the actual
+    // conversion later, but this diagnostic check runs before normalization.
+    // Check both keys to avoid false-positive warnings.
+    const filePath =
+      (typeof record.path === "string" ? record.path.trim() : "") ||
+      (typeof record.file_path === "string" ? record.file_path.trim() : "");
     if (!filePath) {
       const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
       ctx.log.warn(
