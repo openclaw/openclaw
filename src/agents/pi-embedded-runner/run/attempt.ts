@@ -868,14 +868,16 @@ export async function runEmbeddedAttempt(
         let effectivePrompt = params.prompt;
         const hookTools =
           tools.length > 0
-            ? tools.map((tool) => ({
-                name: tool.name || "tool",
-                description: tool.description ?? "",
-                parameters:
-                  tool.parameters && typeof tool.parameters === "object"
-                    ? (tool.parameters as Record<string, unknown>)
-                    : undefined,
-              }))
+            ? tools
+                .filter((tool) => tool.name)
+                .map((tool) => ({
+                  name: tool.name,
+                  description: tool.description ?? "",
+                  parameters:
+                    tool.parameters && typeof tool.parameters === "object"
+                      ? (tool.parameters as Record<string, unknown>)
+                      : undefined,
+                }))
             : undefined;
         const hookCtx = {
           agentId: hookAgentId,

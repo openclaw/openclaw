@@ -1,7 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -333,8 +331,8 @@ export type PluginHookAgentContext = {
   senderUsername?: string;
   senderE164?: string;
   runId?: string;
-  model?: Model<Api>;
-  modelRegistry?: ModelRegistry;
+  model?: unknown;
+  modelRegistry?: unknown;
 };
 
 // before_model_resolve hook
