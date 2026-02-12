@@ -18,11 +18,35 @@ sys.path.append(str(project_root))
 
 from utils.file_utils import ensure_dir, save_text, load_text
 
+def load_env():
+    """Load .env file"""
+    env_path = project_root.parent.parent / ".env"
+    if env_path.exists():
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if '=' in line and not line.strip().startswith('#'):
+                    key, value = line.strip().split('=', 1)
+                    if key.startswith('export '):
+                        key = key[7:].strip()
+                    if key and value and key not in os.environ:
+                        os.environ[key] = value.strip()
+
 def load_kimi_config():
     """加载Kimi配置"""
+    load_env()
     config_path = project_root / "config" / "kimi_config.json"
+    
     with open(config_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+        config = json.load(f)
+        
+    # Resolve API keys from env
+    if config.get("api_key") in ["MOONSHOT_API_KEY", "MONTHSHOT_API_KEY"]:
+        config["api_key"] = os.environ.get("MOONSHOT_API_KEY", config["api_key"])
+        
+    if config.get("search_api_key") == "OPENROUTER_API_KEY":
+        config["search_api_key"] = os.environ.get("OPENROUTER_API_KEY", config["search_api_key"])
+        
+    return config
 
 def init_kimi_client(config):
     """初始化Kimi客户端"""
