@@ -27,7 +27,7 @@ import {
   setMinimaxApiKey,
   writeOAuthCredentials,
   ZAI_CODING_CN_BASE_URL,
-  ZAI_CODING_GLOBAL_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
 
 const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
@@ -311,7 +311,8 @@ describe("applyZaiConfig", () => {
   it("adds zai provider with correct settings", () => {
     const cfg = applyZaiConfig({});
     expect(cfg.models?.providers?.zai).toMatchObject({
-      baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+      // Default: general (non-coding) endpoint. Coding Plan endpoint is detected during onboarding.
+      baseUrl: ZAI_GLOBAL_BASE_URL,
       api: "openai-completions",
     });
     const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
