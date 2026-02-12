@@ -94,6 +94,10 @@ export function createChatRunRegistry(): ChatRunRegistry {
 export type ChatRunState = {
   registry: ChatRunRegistry;
   buffers: Map<string, string>;
+  /** Accumulated text from all completed text blocks (joined with double newlines). */
+  blockBases: Map<string, string>;
+  /** The last `text` value for the current in-progress text block per run. */
+  lastBlockTexts: Map<string, string>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
   clear: () => void;
@@ -102,12 +106,16 @@ export type ChatRunState = {
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const buffers = new Map<string, string>();
+  const blockBases = new Map<string, string>();
+  const lastBlockTexts = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
+    blockBases.clear();
+    lastBlockTexts.clear();
     deltaSentAt.clear();
     abortedRuns.clear();
   };
@@ -115,6 +123,8 @@ export function createChatRunState(): ChatRunState {
   return {
     registry,
     buffers,
+    blockBases,
+    lastBlockTexts,
     deltaSentAt,
     abortedRuns,
     clear,
@@ -232,7 +242,20 @@ export function createAgentEventHandler({
     if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, text);
+    // Detect new text block: when the incoming text doesn't continue from the
+    // previous block's text, a tool call happened in between and the agent
+    // started a fresh text block.  Finalize the previous block into the base.
+    const lastBlock = chatRunState.lastBlockTexts.get(clientRunId);
+    if (lastBlock !== undefined && !text.startsWith(lastBlock)) {
+      const base = chatRunState.blockBases.get(clientRunId) ?? "";
+      chatRunState.blockBases.set(clientRunId, base ? base + "\n\n" + lastBlock : lastBlock);
+    }
+    chatRunState.lastBlockTexts.set(clientRunId, text);
+
+    // Full text = all previous blocks + current block
+    const base = chatRunState.blockBases.get(clientRunId) ?? "";
+    const fullText = base ? base + "\n\n" + text : text;
+    chatRunState.buffers.set(clientRunId, fullText);
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
     if (now - last < 150) {
@@ -246,7 +269,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: fullText }],
         timestamp: now,
       },
     };
@@ -267,6 +290,8 @@ export function createAgentEventHandler({
     const text = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
     const shouldSuppressSilent = isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
+    chatRunState.blockBases.delete(clientRunId);
+    chatRunState.lastBlockTexts.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
       const payload = {
@@ -409,6 +434,8 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(clientRunId);
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
+        chatRunState.blockBases.delete(clientRunId);
+        chatRunState.lastBlockTexts.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
