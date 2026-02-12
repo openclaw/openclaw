@@ -101,7 +101,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
 
   it("should clear stuck running markers during maintenance", () => {
     const now = Date.now();
-    const stuckTime = now - 20 * 60_000; // 20 minutes ago (> 10 min threshold)
+    const stuckTime = now - 3 * 60 * 60_000; // 3 hours ago (> 2 hour threshold)
     const futureTime = now + 3600_000;
 
     const job: CronJob = {
