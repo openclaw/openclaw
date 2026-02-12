@@ -58,7 +58,7 @@ function emit(event: SkillsChangeEvent) {
 function resolveWatchPaths(workspaceDir: string | undefined, config?: OpenClawConfig): string[] {
   const paths: string[] = [];
   if ((workspaceDir ?? "").trim()) {
-    paths.push(path.join(workspaceDir, "skills"));
+    paths.push(path.join(workspaceDir!, "skills"));
   }
   paths.push(path.join(CONFIG_DIR, "skills"));
   const extraDirsRaw = config?.skills?.load?.extraDirs ?? [];
