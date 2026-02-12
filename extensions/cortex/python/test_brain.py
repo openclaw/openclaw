@@ -310,6 +310,67 @@ class TestEmbeddings:
 
 
 # ============================================================
+# Auto-Extract (Messages → Atoms)
+# ============================================================
+
+class TestAutoExtract:
+    def test_atom_tag(self, brain):
+        """@atom subject | action | outcome | consequences"""
+        r = brain.send("a", "b", "Tag", "@atom whales | accumulate | concentration visible | price moves")
+        conn = sqlite3.connect(str(brain.db_path))
+        rows = conn.execute(
+            "SELECT subject FROM atoms WHERE source_message_id = ?", (r["id"],)
+        ).fetchall()
+        conn.close()
+        assert len(rows) >= 1
+        assert rows[0][0] == "whales"
+
+    def test_causal_pattern_causes(self, brain):
+        r = brain.send("a", "b", "Causal", "High volume causes price spikes in the market")
+        conn = sqlite3.connect(str(brain.db_path))
+        rows = conn.execute(
+            "SELECT subject, outcome FROM atoms WHERE source_message_id = ?", (r["id"],)
+        ).fetchall()
+        conn.close()
+        assert len(rows) >= 1
+
+    def test_causal_pattern_leads_to(self, brain):
+        r = brain.send("a", "b", "Causal", "Low liquidity leads to higher slippage costs")
+        conn = sqlite3.connect(str(brain.db_path))
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM atoms WHERE source_message_id = ?", (r["id"],)
+        ).fetchone()
+        conn.close()
+        assert rows[0] >= 1
+
+    def test_causal_cap_per_message(self, brain):
+        """Max 3 atoms per message from causal patterns."""
+        r = brain.send("a", "b", "Many",
+            "A causes B. C causes D. E causes F. G causes H. I causes J.")
+        conn = sqlite3.connect(str(brain.db_path))
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM atoms WHERE source_message_id = ? AND source LIKE 'auto-extract%'",
+            (r["id"],)
+        ).fetchone()
+        conn.close()
+        assert rows[0] <= 3
+
+    def test_extract_from_text(self, brain):
+        ids = brain.extract_atoms_from_text("Heavy rainfall causes severe flooding downstream. Sustained heat leads to rapid evaporation of reservoirs.")
+        assert len(ids) >= 1
+
+    def test_no_extraction_on_normal(self, brain):
+        """Normal messages shouldn't create atoms."""
+        r = brain.send("a", "b", "Normal", "Just a regular message with no causal language")
+        conn = sqlite3.connect(str(brain.db_path))
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM atoms WHERE source_message_id = ?", (r["id"],)
+        ).fetchone()
+        conn.close()
+        assert rows[0] == 0
+
+
+# ============================================================
 # Edge Cases
 # ============================================================
 

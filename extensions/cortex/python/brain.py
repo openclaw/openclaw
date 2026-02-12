@@ -358,6 +358,20 @@ class UnifiedBrain:
                 source_message_id=msg_id,
             )
 
+        # Auto-extract atoms: @atom subject | action | outcome | consequences
+        if "@atom" in body_lower:
+            try:
+                self._extract_atoms_from_message(msg_id, body, from_agent)
+            except Exception:
+                pass  # Best-effort
+
+        # Auto-extract causal patterns (regex-based)
+        if any(kw in body_lower for kw in ["causes", "leads to", "results in", "triggers", "because", "therefore"]):
+            try:
+                self._extract_causal_patterns(msg_id, body, from_agent)
+            except Exception:
+                pass  # Best-effort
+
         conn.close()
 
         return {
@@ -370,6 +384,63 @@ class UnifiedBrain:
             "body": body,
             "created_at": now,
         }
+
+    # -----------------------------------------------------------------------
+    # Auto-extraction helpers
+    # -----------------------------------------------------------------------
+
+    def _extract_atoms_from_message(self, msg_id: str, body: str, from_agent: str):
+        """Extract atoms from @atom tags in message body.
+        
+        Format: @atom subject | action | outcome | consequences
+        """
+        import re
+        pattern = r"@atom\s+([^|]+)\|([^|]+)\|([^|]+)\|([^|\n]+)"
+        for match in re.finditer(pattern, body, re.IGNORECASE):
+            subj, act, out, cons = [m.strip() for m in match.groups()]
+            self.create_atom(
+                subject=subj,
+                action=act,
+                outcome=out,
+                consequences=cons,
+                source=f"synapse:{from_agent}",
+                source_message_id=msg_id,
+            )
+
+    def _extract_causal_patterns(self, msg_id: str, body: str, from_agent: str):
+        """Extract causal relationships from natural language.
+        
+        Looks for patterns like:
+          "X causes Y" → atom(X, causes, Y, <inferred>)
+          "X leads to Y" → atom(X, leads to, Y, <inferred>)
+          "because X, Y" → atom(X, causes, Y, <inferred>)
+        
+        Conservative: only extracts clear, explicit causal statements.
+        Stores as STM with provenance (not atoms — too risky for auto-extraction).
+        """
+        import re
+        
+        causal_patterns = [
+            # "X causes Y" / "X leads to Y" / "X results in Y" / "X triggers Y"
+            r"([A-Za-z][^.]{5,60}?)\s+(?:causes?|leads?\s+to|results?\s+in|triggers?)\s+([^.]{5,80})",
+        ]
+        
+        extracted = []
+        for pat in causal_patterns:
+            for match in re.finditer(pat, body):
+                cause, effect = match.group(1).strip(), match.group(2).strip()
+                if len(cause) > 5 and len(effect) > 5:
+                    extracted.append(f"CAUSAL: {cause} → {effect}")
+        
+        if extracted:
+            content = f"Auto-extracted causal patterns:\n" + "\n".join(extracted[:5])
+            self.remember(
+                content=content[:1000],
+                categories=["causal", "extracted"],
+                importance=1.5,
+                source=f"auto-extract:{from_agent}",
+                source_message_id=msg_id,
+            )
 
     def inbox(self, agent_id: str, include_read: bool = False) -> List[dict]:
         """Get messages for agent_id. Unread only by default."""
@@ -1077,6 +1148,132 @@ class UnifiedBrain:
         conn.close()
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:limit]
+
+    # ===================================================================
+    # AUTO-EXTRACTION (Messages → Atoms)
+    # ===================================================================
+
+    def _extract_atoms_from_message(self, msg_id: str, body: str, from_agent: str):
+        """Extract atoms from @atom tags in message body.
+        
+        Format: @atom subject | action | outcome | consequences
+        Multiple atoms can be tagged in one message.
+        """
+        import re
+        pattern = re.compile(r'@atom\s+([^|]+)\|([^|]+)\|([^|]+)\|([^\n@]+)', re.IGNORECASE)
+        for match in pattern.finditer(body):
+            subj = match.group(1).strip()
+            act = match.group(2).strip()
+            out = match.group(3).strip()
+            cons = match.group(4).strip()
+            if subj and act and out and cons:
+                try:
+                    self.create_atom(
+                        subject=subj[:200],
+                        action=act[:200],
+                        outcome=out[:200],
+                        consequences=cons[:200],
+                        source=f"synapse:{from_agent}",
+                        source_message_id=msg_id,
+                    )
+                except Exception:
+                    pass  # Best-effort
+
+    def _extract_causal_patterns(self, msg_id: str, body: str, from_agent: str):
+        """Extract causal relationships from natural language patterns.
+        
+        Detects patterns like:
+          - "X causes Y" → atom(X, causes, Y, ...)
+          - "X leads to Y" → atom(X, leads to, Y, ...)
+          - "X results in Y" → atom(X, results in, Y, ...)
+          - "Because X, Y happens" → atom(X, causes, Y, ...)
+        
+        Best-effort: may produce imperfect atoms that can be refined later.
+        Only fires on sentences with clear causal structure.
+        """
+        import re
+
+        # Split into sentences
+        sentences = re.split(r'[.!?\n]+', body)
+        
+        causal_patterns = [
+            # "X causes Y" / "X caused Y"
+            re.compile(r'(.{5,80}?)\s+(?:causes?|caused)\s+(.{5,80})', re.IGNORECASE),
+            # "X leads to Y" / "X led to Y"
+            re.compile(r'(.{5,80}?)\s+(?:leads?\s+to|led\s+to)\s+(.{5,80})', re.IGNORECASE),
+            # "X results in Y" / "X resulted in Y"
+            re.compile(r'(.{5,80}?)\s+(?:results?\s+in|resulted\s+in)\s+(.{5,80})', re.IGNORECASE),
+            # "X triggers Y" / "X triggered Y"
+            re.compile(r'(.{5,80}?)\s+(?:triggers?|triggered)\s+(.{5,80})', re.IGNORECASE),
+            # "When X, Y"
+            re.compile(r'[Ww]hen\s+(.{5,80}?),\s+(.{5,80})', re.IGNORECASE),
+        ]
+
+        atoms_created = 0
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if len(sentence) < 15:
+                continue
+            for pattern in causal_patterns:
+                match = pattern.search(sentence)
+                if match:
+                    cause = match.group(1).strip().rstrip(',')
+                    effect = match.group(2).strip().rstrip(',')
+                    if len(cause) > 4 and len(effect) > 4:
+                        try:
+                            self.create_atom(
+                                subject=cause[:200],
+                                action="causes",
+                                outcome=effect[:200],
+                                consequences="auto-extracted causal pattern",
+                                confidence=0.6,  # Lower confidence for auto-extracted
+                                source=f"auto-extract:{from_agent}",
+                                source_message_id=msg_id,
+                            )
+                            atoms_created += 1
+                            if atoms_created >= 3:  # Cap per message
+                                return
+                        except Exception:
+                            pass
+                    break  # One match per sentence
+
+    def extract_atoms_from_text(self, text: str, source: str = "manual") -> List[str]:
+        """Public API: extract atoms from arbitrary text. Returns list of atom IDs."""
+        atom_ids: List[str] = []
+        import re
+
+        # Try @atom format first
+        pattern = re.compile(r'@atom\s+([^|]+)\|([^|]+)\|([^|]+)\|([^\n@]+)', re.IGNORECASE)
+        for match in pattern.finditer(text):
+            subj, act, out, cons = [g.strip() for g in match.groups()]
+            if all([subj, act, out, cons]):
+                aid = self.create_atom(subj[:200], act[:200], out[:200], cons[:200], source=source)
+                atom_ids.append(aid)
+
+        # Then try causal patterns
+        sentences = re.split(r'[.!?\n]+', text)
+        causal_re = [
+            re.compile(r'(.{5,80}?)\s+(?:causes?|caused)\s+(.{5,80})', re.IGNORECASE),
+            re.compile(r'(.{5,80}?)\s+(?:leads?\s+to|led\s+to)\s+(.{5,80})', re.IGNORECASE),
+            re.compile(r'(.{5,80}?)\s+(?:results?\s+in|resulted\s+in)\s+(.{5,80})', re.IGNORECASE),
+            re.compile(r'(.{5,80}?)\s+(?:triggers?|triggered)\s+(.{5,80})', re.IGNORECASE),
+        ]
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if len(sentence) < 15:
+                continue
+            for pat in causal_re:
+                match = pat.search(sentence)
+                if match:
+                    cause, effect = match.group(1).strip(), match.group(2).strip()
+                    if len(cause) > 4 and len(effect) > 4:
+                        aid = self.create_atom(
+                            cause[:200], "causes", effect[:200],
+                            "auto-extracted", confidence=0.6, source=source
+                        )
+                        atom_ids.append(aid)
+                    break
+        return atom_ids
 
     def find_provenance(self, knowledge_id: str, max_depth: int = 10) -> Optional[dict]:
         """Trace the full provenance chain for any knowledge item.
