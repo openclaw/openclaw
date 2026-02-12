@@ -6,7 +6,7 @@ import { log } from "./logger.js";
 
 const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
-  "X-Title": "OpenClaw",
+  "X-Title": "ORION",
 };
 
 /**

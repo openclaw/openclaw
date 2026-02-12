@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/matrix",
   "version": "2026.2.4",
-  "description": "OpenClaw Matrix channel plugin",
+  "description": "O.R.I.O.N Matrix channel plugin",
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",

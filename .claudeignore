@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+*.log
+logs/
+.git/
+.next/
+coverage/
+*.csv
+*.json
+assets/
+datasets/
+data/

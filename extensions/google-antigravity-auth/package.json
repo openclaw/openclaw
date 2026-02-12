@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/google-antigravity-auth",
   "version": "2026.2.4",
-  "description": "OpenClaw Google Antigravity OAuth provider plugin",
+  "description": "O.R.I.O.N Google Antigravity OAuth provider plugin",
   "type": "module",
   "devDependencies": {
     "openclaw": "workspace:*"

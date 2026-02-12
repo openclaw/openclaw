@@ -324,7 +324,7 @@ async function runPerplexitySearch(params: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${params.apiKey}`,
       "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "OpenClaw Web Search",
+      "X-Title": "ORION Web Search",
     },
     body: JSON.stringify({
       model: params.model,

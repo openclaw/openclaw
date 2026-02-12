@@ -86,7 +86,7 @@ describe("dashboardCommand", () => {
     expect(mocks.copyToClipboard).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(mocks.openUrl).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(runtime.log).toHaveBeenCalledWith(
-      "Opened in your browser. Keep that tab to control OpenClaw.",
+      "Opened in your browser. Keep that tab to control O.R.I.O.N.",
     );
   });
 

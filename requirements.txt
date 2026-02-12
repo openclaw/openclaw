@@ -1,0 +1,18 @@
+# O.R.I.O.N. Brain & Evolution System Dependencies
+
+# Memory System (The Hippocampus)
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# Evolution Engine
+requests>=2.31.0
+gitpython>=3.1.40
+
+# Vision Loop - Desktop Automation with Computer Vision
+mss>=9.0.0               # Fast screenshot capture
+pillow>=10.0.0           # Image processing
+pyautogui>=0.9.54        # GUI automation
+google-genai>=0.2.0      # Gemini API for vision analysis
+
+# Core Python Libraries (built-in, listed for documentation)
+# hashlib - included in Python standard library

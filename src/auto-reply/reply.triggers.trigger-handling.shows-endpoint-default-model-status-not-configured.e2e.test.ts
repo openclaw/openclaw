@@ -199,7 +199,7 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("OpenClaw");
+      expect(text).toContain("O.R.I.O.N");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

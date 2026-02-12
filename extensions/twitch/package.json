@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/twitch",
   "version": "2026.2.4",
-  "description": "OpenClaw Twitch channel plugin",
+  "description": "O.R.I.O.N Twitch channel plugin",
   "type": "module",
   "dependencies": {
     "@twurple/api": "^8.0.3",

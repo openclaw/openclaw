@@ -460,8 +460,8 @@ export async function finalizeOnboardingWizard(
       [
         `Dashboard link: ${dashboardUrl}`,
         controlUiOpened
-          ? "Opened in your browser. Keep that tab to control OpenClaw."
-          : "Copy/paste this URL in a browser on this machine to control OpenClaw.",
+          ? "Opened in your browser. Keep that tab to control O.R.I.O.N."
+          : "Copy/paste this URL in a browser on this machine to control O.R.I.O.N.",
         controlUiOpenHint,
       ]
         .filter(Boolean)
@@ -499,7 +499,7 @@ export async function finalizeOnboardingWizard(
   );
 
   await prompter.note(
-    'What now: https://openclaw.ai/showcase ("What People Are Building").',
+    'What now: https://aegissolutions.co.uk/showcase ("What People Are Building").',
     "What now",
   );
 

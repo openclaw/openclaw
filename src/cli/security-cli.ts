@@ -65,7 +65,7 @@ export function registerSecurityCli(program: Command) {
       const muted = (text: string) => (rich ? theme.muted(text) : text);
 
       const lines: string[] = [];
-      lines.push(heading("OpenClaw security audit"));
+      lines.push(heading("O.R.I.O.N security audit"));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
       lines.push(muted(`Run deeper: ${formatCliCommand("openclaw security audit --deep")}`));
 

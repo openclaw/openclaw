@@ -24,6 +24,6 @@ export type AcpServerOptions = {
 
 export const ACP_AGENT_INFO = {
   name: "openclaw-acp",
-  title: "OpenClaw ACP Gateway",
+  title: "O.R.I.O.N ACP Gateway",
   version: VERSION,
 };

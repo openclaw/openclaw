@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/nextcloud-talk",
   "version": "2026.2.4",
-  "description": "OpenClaw Nextcloud Talk channel plugin",
+  "description": "O.R.I.O.N Nextcloud Talk channel plugin",
   "type": "module",
   "devDependencies": {
     "openclaw": "workspace:*"

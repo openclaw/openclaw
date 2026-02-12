@@ -101,7 +101,7 @@ describe("session_status tool", () => {
     const result = await tool.execute("call1", {});
     const details = result.details as { ok?: boolean; statusText?: string };
     expect(details.ok).toBe(true);
-    expect(details.statusText).toContain("OpenClaw");
+    expect(details.statusText).toContain("O.R.I.O.N");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
   });

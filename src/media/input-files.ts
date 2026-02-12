@@ -146,7 +146,7 @@ export async function fetchWithGuard(params: {
     url: params.url,
     maxRedirects: params.maxRedirects,
     timeoutMs: params.timeoutMs,
-    init: { headers: { "User-Agent": "OpenClaw-Gateway/1.0" } },
+    init: { headers: { "User-Agent": "ORION-Gateway/1.0" } },
   });
 
   try {
