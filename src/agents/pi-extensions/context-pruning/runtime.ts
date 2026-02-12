@@ -5,6 +5,8 @@ export type ContextPruningRuntimeValue = {
   contextWindowTokens?: number | null;
   isToolPrunable: (toolName: string) => boolean;
   lastCacheTouchAt?: number | null;
+  /** Called after pruning successfully modifies context. Receives estimated token count of pruned context. */
+  onPruned?: (estimatedTokens: number) => void;
 };
 
 // Session-scoped runtime registry keyed by object identity.

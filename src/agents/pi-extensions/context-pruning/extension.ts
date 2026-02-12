@@ -1,5 +1,5 @@
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { pruneContextMessages } from "./pruner.js";
+import { CHARS_PER_TOKEN_ESTIMATE, estimateContextChars, pruneContextMessages } from "./pruner.js";
 import { getContextPruningRuntime } from "./runtime.js";
 
 export default function contextPruningExtension(api: ExtensionAPI): void {
@@ -30,6 +30,13 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
 
     if (next === event.messages) {
       return undefined;
+    }
+
+    // Notify listeners about the pruned context size so session metadata can be updated
+    if (runtime.onPruned) {
+      const estimatedChars = estimateContextChars(next);
+      const estimatedTokens = Math.ceil(estimatedChars / CHARS_PER_TOKEN_ESTIMATE);
+      runtime.onPruned(estimatedTokens);
     }
 
     if (runtime.settings.mode === "cache-ttl") {
