@@ -5,6 +5,16 @@ on:
     types: [opened, synchronize, reopened]
   issues:
     types: [opened]
+  workflow_dispatch:
+    inputs:
+      max_prs:
+        description: "Maximum number of open PRs to process (0 = all)"
+        required: false
+        default: "200"
+      per_page:
+        description: "PRs per page (1-100)"
+        required: false
+        default: "50"
 
 permissions: {}
 
@@ -176,6 +186,240 @@ jobs:
                 labels: [trustedLabel],
               });
             }
+
+  backfill-pr-labels:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - name: Backfill PR labels
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const repoFull = `${owner}/${repo}`;
+            const inputs = context.payload.inputs ?? {};
+            const maxPrsInput = inputs.max_prs ?? "200";
+            const perPageInput = inputs.per_page ?? "50";
+            const parsedMaxPrs = Number.parseInt(maxPrsInput, 10);
+            const parsedPerPage = Number.parseInt(perPageInput, 10);
+            const maxPrs = Number.isFinite(parsedMaxPrs) ? parsedMaxPrs : 200;
+            const perPage = Number.isFinite(parsedPerPage) ? Math.min(100, Math.max(1, parsedPerPage)) : 50;
+            const processAll = maxPrs <= 0;
+            const maxCount = processAll ? Number.POSITIVE_INFINITY : Math.max(1, maxPrs);
+
+            const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
+            const labelColor = "b76e79";
+            const trustedLabel = "trusted-contributor";
+            const experiencedLabel = "experienced-contributor";
+            const trustedThreshold = 4;
+            const experiencedThreshold = 10;
+
+            const contributorCache = new Map();
+
+            async function ensureSizeLabels() {
+              for (const label of sizeLabels) {
+                try {
+                  await github.rest.issues.getLabel({
+                    owner,
+                    repo,
+                    name: label,
+                  });
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                  await github.rest.issues.createLabel({
+                    owner,
+                    repo,
+                    name: label,
+                    color: labelColor,
+                  });
+                }
+              }
+            }
+
+            async function resolveContributorLabel(login) {
+              if (contributorCache.has(login)) {
+                return contributorCache.get(login);
+              }
+
+              let isMaintainer = false;
+              try {
+                const membership = await github.rest.teams.getMembershipForUserInOrg({
+                  org: owner,
+                  team_slug: "maintainer",
+                  username: login,
+                });
+                isMaintainer = membership?.data?.state === "active";
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+
+              if (isMaintainer) {
+                contributorCache.set(login, "maintainer");
+                return "maintainer";
+              }
+
+              const mergedQuery = `repo:${repoFull} is:pr is:merged author:${login}`;
+              const merged = await github.rest.search.issuesAndPullRequests({
+                q: mergedQuery,
+                per_page: 1,
+              });
+              const mergedCount = merged?.data?.total_count ?? 0;
+
+              let label = null;
+              if (mergedCount >= experiencedThreshold) {
+                label = experiencedLabel;
+              } else if (mergedCount >= trustedThreshold) {
+                label = trustedLabel;
+              }
+
+              contributorCache.set(login, label);
+              return label;
+            }
+
+            async function applySizeLabel(pullRequest, currentLabels, labelNames) {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner,
+                repo,
+                pull_number: pullRequest.number,
+                per_page: 100,
+              });
+
+              const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
+              const totalChangedLines = files.reduce((total, file) => {
+                const path = file.filename ?? "";
+                if (path === "docs.acp.md" || path.startsWith("docs/") || excludedLockfiles.has(path)) {
+                  return total;
+                }
+                return total + (file.additions ?? 0) + (file.deletions ?? 0);
+              }, 0);
+
+              let targetSizeLabel = "size: XL";
+              if (totalChangedLines < 50) {
+                targetSizeLabel = "size: XS";
+              } else if (totalChangedLines < 200) {
+                targetSizeLabel = "size: S";
+              } else if (totalChangedLines < 500) {
+                targetSizeLabel = "size: M";
+              } else if (totalChangedLines < 1000) {
+                targetSizeLabel = "size: L";
+              }
+
+              for (const label of currentLabels) {
+                const name = label.name ?? "";
+                if (!sizeLabels.includes(name)) {
+                  continue;
+                }
+                if (name === targetSizeLabel) {
+                  continue;
+                }
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: pullRequest.number,
+                  name,
+                });
+                labelNames.delete(name);
+              }
+
+              if (!labelNames.has(targetSizeLabel)) {
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: pullRequest.number,
+                  labels: [targetSizeLabel],
+                });
+                labelNames.add(targetSizeLabel);
+              }
+            }
+
+            async function applyContributorLabel(pullRequest, labelNames) {
+              const login = pullRequest.user?.login;
+              if (!login) {
+                return;
+              }
+
+              const label = await resolveContributorLabel(login);
+              if (!label) {
+                return;
+              }
+
+              if (labelNames.has(label)) {
+                return;
+              }
+
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pullRequest.number,
+                labels: [label],
+              });
+              labelNames.add(label);
+            }
+
+            await ensureSizeLabels();
+
+            let page = 1;
+            let processed = 0;
+
+            while (processed < maxCount) {
+              const remaining = maxCount - processed;
+              const pageSize = processAll ? perPage : Math.min(perPage, remaining);
+              const { data: pullRequests } = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: "open",
+                per_page: pageSize,
+                page,
+              });
+
+              if (pullRequests.length === 0) {
+                break;
+              }
+
+              for (const pullRequest of pullRequests) {
+                if (!processAll && processed >= maxCount) {
+                  break;
+                }
+
+                const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+                  owner,
+                  repo,
+                  issue_number: pullRequest.number,
+                  per_page: 100,
+                });
+
+                const labelNames = new Set(
+                  currentLabels.map((label) => label.name).filter((name) => typeof name === "string"),
+                );
+
+                await applySizeLabel(pullRequest, currentLabels, labelNames);
+                await applyContributorLabel(pullRequest, labelNames);
+
+                processed += 1;
+              }
+
+              if (pullRequests.length < pageSize) {
+                break;
+              }
+
+              page += 1;
+            }
+
+            core.info(`Processed ${processed} pull requests.`);
 
   label-issues:
     permissions:
