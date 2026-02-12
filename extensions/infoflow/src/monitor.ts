@@ -5,7 +5,7 @@ import {
   parseAndDispatchInfoflowRequest,
   loadRawBody,
   type WebhookTarget,
-} from "./infoflow_req_parse.js";
+} from "./infoflow-req-parse.js";
 import { getInfoflowRuntime } from "./runtime.js";
 
 // ---------------------------------------------------------------------------

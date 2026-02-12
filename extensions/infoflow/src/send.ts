@@ -5,7 +5,7 @@
 
 import { createHash } from "node:crypto";
 import type { InfoflowAtOptions, InfoflowGroupMessageBodyItem } from "./types.js";
-import { recordSentMessageId } from "./infoflow_req_parse.js";
+import { recordSentMessageId } from "./infoflow-req-parse.js";
 import { getInfoflowRuntime } from "./runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
@@ -182,15 +182,13 @@ export async function sendInfoflowPrivateMessage(params: {
   }
 
   if (verbose) {
-    console.log(
-      `[infoflow:sendPrivate] >>> START: touser=${touser}, content=${content}, msgtype=${msgtype}`,
-    );
+    console.log(`[infoflow:sendPrivate] touser=${touser}, msgtype=${msgtype}`);
   }
 
   // Get token first
   const tokenResult = await getAppAccessToken({ apiHost, appKey, appSecret, timeoutMs });
   if (!tokenResult.ok || !tokenResult.token) {
-    console.error(`[infoflow:sendPrivate] <<< FAILED: token error: ${tokenResult.error}`);
+    console.error(`[infoflow:sendPrivate] token error: ${tokenResult.error}`);
     return { ok: false, error: tokenResult.error ?? "failed to get token" };
   }
 
@@ -199,54 +197,36 @@ export async function sendInfoflowPrivateMessage(params: {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     // Build payload based on message type
-    // Private message format: msgtype="text" with text.content, or msgtype="md" with md.content
     const apiMsgtype = msgtype === "markdown" ? "md" : "text";
-    const payload: Record<string, unknown> = {
-      touser,
-      msgtype: apiMsgtype,
-    };
+    const payload: Record<string, unknown> = { touser, msgtype: apiMsgtype };
     if (apiMsgtype === "text") {
       payload.text = { content };
     } else if (apiMsgtype === "md") {
       payload.md = { content };
     }
 
-    // Build headers with authorization
     const headers = {
       Authorization: `Bearer-${tokenResult.token}`,
       "Content-Type": "application/json; charset=utf-8",
       LOGID: String(Date.now() * 1000 + Math.floor(Math.random() * 1000)),
     };
 
-    const requestUrl = `${ensureHttps(apiHost)}${INFOFLOW_PRIVATE_SEND_PATH}`;
-    const requestBody = JSON.stringify(payload);
-    if (verbose) {
-      console.log(`[infoflow:sendPrivate] REQUEST: url=${requestUrl}`);
-      console.log(`[infoflow:sendPrivate] REQUEST BODY: ${requestBody}`);
-    }
-
-    const res = await fetch(requestUrl, {
+    const res = await fetch(`${ensureHttps(apiHost)}${INFOFLOW_PRIVATE_SEND_PATH}`, {
       method: "POST",
       headers,
-      body: requestBody,
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
 
     clearTimeout(timeout);
 
-    const rawResponse = await res.text();
-    if (verbose) {
-      console.log(`[infoflow:sendPrivate] RESPONSE STATUS: ${res.status}`);
-      console.log(`[infoflow:sendPrivate] RESPONSE RAW: ${rawResponse}`);
-    }
-
-    const data = JSON.parse(rawResponse) as Record<string, unknown>;
+    const data = JSON.parse(await res.text()) as Record<string, unknown>;
 
     // Check outer code first
     const code = typeof data.code === "string" ? data.code : "";
     if (code !== "ok") {
       const errMsg = String(data.message ?? data.errmsg ?? `code=${code || "unknown"}`);
-      console.error(`[infoflow:sendPrivate] <<< FAILED: outer code error: ${errMsg}`);
+      console.error(`[infoflow:sendPrivate] failed: ${errMsg}`);
       return { ok: false, error: errMsg };
     }
 
@@ -255,9 +235,7 @@ export async function sendInfoflowPrivateMessage(params: {
     const errcode = innerData?.errcode;
     if (errcode != null && errcode !== 0) {
       const errMsg = String(innerData?.errmsg ?? `errcode ${errcode}`);
-      console.error(
-        `[infoflow:sendPrivate] <<< FAILED: ${errMsg}, invaliduser=${innerData?.invaliduser}`,
-      );
+      console.error(`[infoflow:sendPrivate] failed: ${errMsg}`);
       return {
         ok: false,
         error: errMsg,
@@ -272,7 +250,7 @@ export async function sendInfoflowPrivateMessage(params: {
     }
 
     if (verbose) {
-      console.log(`[infoflow:sendPrivate] <<< SUCCESS: msgkey=${msgkey}`);
+      console.log(`[infoflow:sendPrivate] ok, msgkey=${msgkey}`);
     }
     return { ok: true, invaliduser: innerData?.invaliduser as string | undefined, msgkey };
   } catch (err) {
@@ -322,15 +300,13 @@ export async function sendInfoflowGroupMessage(params: {
   }
 
   if (verbose) {
-    console.log(
-      `[infoflow:sendGroup] >>> START: groupId=${groupId}, contentLen=${content.length}, msgtype=${msgtype}, atOptions=${JSON.stringify(atOptions)}`,
-    );
+    console.log(`[infoflow:sendGroup] groupId=${groupId}, msgtype=${msgtype}`);
   }
 
   // Get token first
   const tokenResult = await getAppAccessToken({ apiHost, appKey, appSecret, timeoutMs });
   if (!tokenResult.ok || !tokenResult.token) {
-    console.error(`[infoflow:sendGroup] <<< FAILED: token error: ${tokenResult.error}`);
+    console.error(`[infoflow:sendGroup] token error: ${tokenResult.error}`);
     return { ok: false, error: tokenResult.error ?? "failed to get token" };
   }
 
@@ -339,7 +315,6 @@ export async function sendInfoflowGroupMessage(params: {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     // Build group message body
-    // Group message format: header.msgtype="MIXED", body[].type="MD" or "TEXT"
     const bodyType = msgtype === "markdown" ? "MD" : "TEXT";
     const body: InfoflowGroupMessageBodyItem[] = [{ type: bodyType, content }];
 
@@ -352,8 +327,6 @@ export async function sendInfoflowGroupMessage(params: {
       });
     }
 
-    // Build group message payload (nested structure)
-    // header.msgtype is always "MIXED" for group messages
     const payload = {
       message: {
         header: {
@@ -367,41 +340,27 @@ export async function sendInfoflowGroupMessage(params: {
       },
     };
 
-    // Build headers with authorization
     const headers = {
       Authorization: `Bearer-${tokenResult.token}`,
       "Content-Type": "application/json",
     };
 
-    const requestUrl = `${ensureHttps(apiHost)}${INFOFLOW_GROUP_SEND_PATH}`;
-    const requestBody = JSON.stringify(payload);
-    if (verbose) {
-      console.log(`[infoflow:sendGroup] REQUEST: url=${requestUrl}`);
-      console.log(`[infoflow:sendGroup] REQUEST BODY: ${requestBody}`);
-    }
-
-    const res = await fetch(requestUrl, {
+    const res = await fetch(`${ensureHttps(apiHost)}${INFOFLOW_GROUP_SEND_PATH}`, {
       method: "POST",
       headers,
-      body: requestBody,
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
 
     clearTimeout(timeout);
 
-    const rawResponse = await res.text();
-    if (verbose) {
-      console.log(`[infoflow:sendGroup] RESPONSE STATUS: ${res.status}`);
-      console.log(`[infoflow:sendGroup] RESPONSE RAW: ${rawResponse}`);
-    }
-
-    const data = JSON.parse(rawResponse) as Record<string, unknown>;
+    const data = JSON.parse(await res.text()) as Record<string, unknown>;
 
     // Check outer code first
     const code = typeof data.code === "string" ? data.code : "";
     if (code !== "ok") {
       const errMsg = String(data.message ?? data.errmsg ?? `code=${code || "unknown"}`);
-      console.error(`[infoflow:sendGroup] <<< FAILED: outer code error: ${errMsg}`);
+      console.error(`[infoflow:sendGroup] failed: ${errMsg}`);
       return { ok: false, error: errMsg };
     }
 
@@ -410,7 +369,7 @@ export async function sendInfoflowGroupMessage(params: {
     const errcode = innerData?.errcode;
     if (errcode != null && errcode !== 0) {
       const errMsg = String(innerData?.errmsg ?? `errcode ${errcode}`);
-      console.error(`[infoflow:sendGroup] <<< FAILED: ${errMsg}`);
+      console.error(`[infoflow:sendGroup] failed: ${errMsg}`);
       return { ok: false, error: errMsg };
     }
 
@@ -422,12 +381,21 @@ export async function sendInfoflowGroupMessage(params: {
     }
 
     if (verbose) {
-      console.log(`[infoflow:sendGroup] <<< SUCCESS: messageid=${messageid}`);
+      console.log(`[infoflow:sendGroup] ok, messageid=${messageid}`);
     }
     return { ok: true, messageid };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    console.error(`[infoflow:sendGroup] <<< EXCEPTION: ${errMsg}`);
+    console.error(`[infoflow:sendGroup] exception: ${errMsg}`);
     return { ok: false, error: errMsg };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Test-only exports (@internal — not part of the public API)
+// ---------------------------------------------------------------------------
+
+/** @internal — Clears the token cache. Only use in tests. */
+export function _resetTokenCache(): void {
+  tokenCacheMap.clear();
 }

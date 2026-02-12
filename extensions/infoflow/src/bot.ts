@@ -57,10 +57,6 @@ export async function handlePrivateChatMessage(params: HandlePrivateChatParams):
   const core = getInfoflowRuntime();
   const verbose = core.logging.shouldLogVerbose();
 
-  if (verbose) {
-    console.log("[infoflow] Received private chat message:", JSON.stringify(msgData, null, 2));
-  }
-
   // Extract sender and content from msgData (flexible field names)
   const fromuser = String(msgData.FromUserId ?? msgData.fromuserid ?? msgData.from ?? "");
   const mes = String(msgData.Content ?? msgData.content ?? msgData.text ?? msgData.mes ?? "");
@@ -77,15 +73,10 @@ export async function handlePrivateChatMessage(params: HandlePrivateChatParams):
   const timestamp = createTime != null ? Number(createTime) * 1000 : Date.now();
 
   if (verbose) {
-    console.log(
-      `[infoflow] Private chat extracted: fromuser=${fromuser}, senderName=${senderName}, mes=${mes.slice(0, 50)}...`,
-    );
+    console.log(`[infoflow] private chat: fromuser=${fromuser}, senderName=${senderName}`);
   }
 
   if (!fromuser || !mes.trim()) {
-    if (verbose) {
-      console.log(`[infoflow] Private chat skipped: missing fromuser or empty message`);
-    }
     return;
   }
 
@@ -114,10 +105,6 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   const core = getInfoflowRuntime();
   const verbose = core.logging.shouldLogVerbose();
 
-  if (verbose) {
-    console.log("[infoflow] Received group chat message:", JSON.stringify(msgData, null, 2));
-  }
-
   // Extract sender from nested structure or flat fields
   const header = (msgData.message as Record<string, unknown>)?.header as
     | Record<string, unknown>
@@ -136,14 +123,7 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   const rawTime = msgData.time ?? header?.servertime;
   const timestamp = rawTime != null ? Number(rawTime) : Date.now();
 
-  if (verbose) {
-    console.log(`[infoflow] Group chat extracted: fromuser=${fromuser}, groupid=${groupid}`);
-  }
-
   if (!fromuser) {
-    if (verbose) {
-      console.log(`[infoflow] Group chat skipped: missing fromuser`);
-    }
     return;
   }
 
@@ -157,12 +137,6 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
 
   // Check if bot was @mentioned
   const wasMentioned = checkBotMentioned(bodyItems, robotName);
-
-  if (verbose) {
-    console.log(
-      `[infoflow] Group chat mention check: robotName=${robotName ?? "not configured"}, wasMentioned=${wasMentioned}`,
-    );
-  }
 
   // Build two versions: mes (for CommandBody, no @xxx) and rawMes (for RawBody, with @xxx)
   let textContent = "";
@@ -192,9 +166,6 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   const rawMes = rawTextContent.trim() || mes;
 
   if (!mes) {
-    if (verbose) {
-      console.log(`[infoflow] Group chat skipped: empty message content`);
-    }
     return;
   }
 
@@ -203,7 +174,7 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
 
   if (verbose) {
     console.log(
-      `[infoflow] Group chat content: senderName=${senderName}, mes=${mes.slice(0, 50)}...`,
+      `[infoflow] group chat: fromuser=${fromuser}, groupid=${groupid}, wasMentioned=${wasMentioned}`,
     );
   }
 
@@ -238,12 +209,6 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   const core = getInfoflowRuntime();
   const verbose = core.logging.shouldLogVerbose();
 
-  if (verbose) {
-    console.log(
-      `[infoflow] handleInfoflowMessage: chatType=${chatType}, fromuser=${fromuser}, groupId=${groupId || "N/A"}`,
-    );
-  }
-
   const isGroup = chatType === "group";
   // Convert groupId (number) to string for peerId since routing expects string
   const peerId = isGroup ? (groupId !== undefined ? String(groupId) : fromuser) : fromuser;
@@ -274,10 +239,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   const toAddress = isGroup ? `infoflow:${groupId}` : `infoflow:${account.accountId}`;
 
   if (verbose) {
-    console.log(
-      `[infoflow] Route resolved: agentId=${route.agentId}, sessionKey=${route.sessionKey}`,
-    );
-    console.log(`[infoflow] Address: From=${fromAddress}, To=${toAddress}`);
+    console.log(`[infoflow] dispatch: chatType=${chatType}, agentId=${route.agentId}`);
   }
 
   const body = core.channel.reply.formatAgentEnvelope({
@@ -312,19 +274,13 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     CommandAuthorized: true,
   });
 
-  if (verbose) {
-    console.log("======ctxPayload======");
-    console.log(ctxPayload);
-  }
   // Record session using recordInboundSession for proper session tracking
   await core.channel.session.recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
     onRecordError: (err) => {
-      if (verbose) {
-        console.error(`[infoflow] failed updating session meta: ${String(err)}`);
-      }
+      console.error(`[infoflow] failed updating session meta: ${String(err)}`);
     },
   });
 
@@ -336,11 +292,6 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     const wasMentioned = event.wasMentioned === true;
 
     if (requireMention && canDetectMention && !wasMentioned) {
-      if (verbose) {
-        console.log(
-          `[infoflow] Group message recorded but reply skipped: requireMention=true, wasMentioned=false`,
-        );
-      }
       return;
     }
   }
@@ -355,12 +306,6 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     statusSink,
   });
 
-  if (verbose) {
-    console.log(
-      `[infoflow] Dispatching to OpenClaw: agentId=${route.agentId}, Body=${ctxPayload.Body?.slice(0, 100)}...`,
-    );
-  }
-
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
@@ -369,6 +314,6 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   });
 
   if (verbose) {
-    console.log(`[infoflow] Dispatch completed for ${chatType} message from ${fromuser}`);
+    console.log(`[infoflow] dispatch complete: ${chatType} from ${fromuser}`);
   }
 }

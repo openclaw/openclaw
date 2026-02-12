@@ -19,6 +19,90 @@ import { normalizeInfoflowTarget, looksLikeInfoflowId } from "./targets.js";
 export type { InfoflowAccountConfig, ResolvedInfoflowAccount } from "./types.js";
 
 // ---------------------------------------------------------------------------
+// Shared send helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Unified helper for sending messages (text or media-as-text).
+ * Handles target parsing (group vs private) and routes to appropriate API.
+ */
+async function sendInfoflowMessage(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  content: string;
+  accountId?: string;
+  verbose?: boolean;
+}): Promise<{ channel: string; messageId: string }> {
+  const { cfg, to, content, accountId, verbose } = params;
+  const account = resolveInfoflowAccount({ cfg, accountId });
+  const { apiHost, appKey, appSecret } = account.config;
+
+  if (!appKey || !appSecret) {
+    throw new Error("Infoflow appKey/appSecret not configured.");
+  }
+
+  const target = to.replace(/^infoflow:/i, "");
+
+  // Check if target is a group (format: group:123 or group:123?at=user1,user2 or group:123?atall=true)
+  const groupMatch = target.match(/^group:(\d+)/i);
+  if (groupMatch) {
+    const groupId = Number(groupMatch[1]);
+
+    // Parse AT options from query string
+    let atOptions: InfoflowAtOptions | undefined;
+    const atAllMatch = target.match(/[?&]atall=true/i);
+    const atMatch = target.match(/[?&]at=([^&]+)/);
+    if (atAllMatch) {
+      atOptions = { atAll: true };
+    } else if (atMatch) {
+      const atUserIds = atMatch[1]
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (atUserIds.length > 0) {
+        atOptions = { atUserIds };
+      }
+    }
+
+    const result = await sendInfoflowGroupMessage({
+      apiHost,
+      appKey,
+      appSecret,
+      groupId,
+      content,
+      atOptions,
+    });
+
+    if (verbose) {
+      console.log(`[infoflow:send] group result: ok=${result.ok}, messageId=${result.messageid}`);
+    }
+
+    return {
+      channel: "infoflow",
+      messageId: result.ok ? (result.messageid ?? "sent") : "failed",
+    };
+  }
+
+  // Private message (DM)
+  const result = await sendInfoflowPrivateMessage({
+    apiHost,
+    appKey,
+    appSecret,
+    touser: target,
+    content,
+  });
+
+  if (verbose) {
+    console.log(`[infoflow:send] private result: ok=${result.ok}, msgkey=${result.msgkey}`);
+  }
+
+  return {
+    channel: "infoflow",
+    messageId: result.ok ? (result.msgkey ?? "sent") : "failed",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Account resolution helpers
 // ---------------------------------------------------------------------------
 
@@ -288,170 +372,24 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
     sendText: async ({ cfg, to, text, accountId }) => {
       const verbose = getInfoflowRuntime().logging.shouldLogVerbose();
       if (verbose) {
-        console.log(`[infoflow:sendText] start: to=${to}, accountId=${accountId}, text=${text}`);
+        console.log(`[infoflow:sendText] to=${to}, accountId=${accountId}`);
       }
-
-      const account = resolveInfoflowAccount({ cfg, accountId });
-      const { apiHost, appKey, appSecret } = account.config;
-
-      if (!appKey || !appSecret) {
-        console.error(`[infoflow:sendText] error: appKey/appSecret not configured`);
-        throw new Error("Infoflow appKey/appSecret not configured.");
-      }
-
-      const target = to.replace(/^infoflow:/i, "");
-      if (verbose) {
-        console.log(`[infoflow:sendText] resolved target=${target}, apiHost=${apiHost}`);
-      }
-
-      // Check if target is a group (format: group:123 or group:123?at=user1,user2 or group:123?atall=true)
-      const groupMatch = target.match(/^group:(\d+)/i);
-      if (groupMatch) {
-        const groupId = Number(groupMatch[1]);
-
-        // Parse AT options from query string
-        let atOptions: InfoflowAtOptions | undefined;
-        const atAllMatch = target.match(/[?&]atall=true/i);
-        const atMatch = target.match(/[?&]at=([^&]+)/);
-        if (atAllMatch) {
-          atOptions = { atAll: true };
-        } else if (atMatch) {
-          const atUserIds = atMatch[1]
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean);
-          if (atUserIds.length > 0) {
-            atOptions = { atUserIds };
-          }
-        }
-
-        if (verbose) {
-          console.log(
-            `[infoflow:sendText] sending group message: groupId=${groupId}, atOptions=${JSON.stringify(atOptions)}`,
-          );
-        }
-
-        const result = await sendInfoflowGroupMessage({
-          apiHost,
-          appKey,
-          appSecret,
-          groupId,
-          content: text,
-          atOptions,
-        });
-
-        if (verbose) {
-          console.log(
-            `[infoflow:sendText] group message result: ok=${result.ok}, messageId=${result.messageid}, error=${result.error}`,
-          );
-        }
-
-        return {
-          channel: "infoflow",
-          messageId: result.ok ? (result.messageid ?? "sent") : "failed",
-        };
-      }
-
-      // Private message (DM)
-      if (verbose) {
-        console.log(`[infoflow:sendText] sending private message: touser=${target}`);
-      }
-
-      const result = await sendInfoflowPrivateMessage({
-        apiHost,
-        appKey,
-        appSecret,
-        touser: target,
+      return sendInfoflowMessage({
+        cfg,
+        to,
         content: text,
+        accountId: accountId ?? undefined,
+        verbose,
       });
-
-      if (verbose) {
-        console.log(
-          `[infoflow:sendText] private message result: ok=${result.ok}, msgkey=${result.msgkey}, error=${result.error}`,
-        );
-      }
-
-      return { channel: "infoflow", messageId: result.ok ? (result.msgkey ?? "sent") : "failed" };
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
       const verbose = getInfoflowRuntime().logging.shouldLogVerbose();
+      // Infoflow only supports text; send media URL as text link with optional caption
+      const content = text?.trim() ? `${text.trim()}\n\n📎 ${mediaUrl}` : `📎 ${mediaUrl}`;
       if (verbose) {
-        console.log(
-          `[infoflow:sendMedia] start: to=${to}, accountId=${accountId}, textLen=${text?.length ?? 0}, mediaUrl=${mediaUrl}`,
-        );
+        console.log(`[infoflow:sendMedia] to=${to}, accountId=${accountId}, mediaUrl=${mediaUrl}`);
       }
-
-      // Infoflow currently only supports text messages.
-      // Fallback: send media URL as a text link with optional caption.
-      const account = resolveInfoflowAccount({ cfg, accountId });
-      const { apiHost, appKey, appSecret } = account.config;
-
-      if (!appKey || !appSecret) {
-        console.error(`[infoflow:sendMedia] error: appKey/appSecret not configured`);
-        throw new Error("Infoflow appKey/appSecret not configured.");
-      }
-
-      // Build message: caption + media URL
-      const messageText = text?.trim() ? `${text.trim()}\n\n📎 ${mediaUrl}` : `📎 ${mediaUrl}`;
-      if (verbose) {
-        console.log(
-          `[infoflow:sendMedia] built messageText (len=${messageText.length}), using text fallback for media`,
-        );
-      }
-
-      const target = to.replace(/^infoflow:/i, "");
-      if (verbose) {
-        console.log(`[infoflow:sendMedia] resolved target=${target}, apiHost=${apiHost}`);
-      }
-
-      // Check if target is a group
-      const groupMatch = target.match(/^group:(\d+)/i);
-      if (groupMatch) {
-        const groupId = Number(groupMatch[1]);
-        if (verbose) {
-          console.log(`[infoflow:sendMedia] sending group message: groupId=${groupId}`);
-        }
-
-        const result = await sendInfoflowGroupMessage({
-          apiHost,
-          appKey,
-          appSecret,
-          groupId,
-          content: messageText,
-        });
-
-        if (verbose) {
-          console.log(
-            `[infoflow:sendMedia] group message result: ok=${result.ok}, messageId=${result.messageid}, error=${result.error}`,
-          );
-        }
-
-        return {
-          channel: "infoflow",
-          messageId: result.ok ? (result.messageid ?? "sent") : "failed",
-        };
-      }
-
-      // Private message (DM)
-      if (verbose) {
-        console.log(`[infoflow:sendMedia] sending private message: touser=${target}`);
-      }
-
-      const result = await sendInfoflowPrivateMessage({
-        apiHost,
-        appKey,
-        appSecret,
-        touser: target,
-        content: messageText,
-      });
-
-      if (verbose) {
-        console.log(
-          `[infoflow:sendMedia] private message result: ok=${result.ok}, msgkey=${result.msgkey}, error=${result.error}`,
-        );
-      }
-
-      return { channel: "infoflow", messageId: result.ok ? (result.msgkey ?? "sent") : "failed" };
+      return sendInfoflowMessage({ cfg, to, content, accountId: accountId ?? undefined, verbose });
     },
   },
   status: {

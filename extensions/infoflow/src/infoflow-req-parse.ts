@@ -255,8 +255,6 @@ export async function parseAndDispatchInfoflowRequest(
   targets: WebhookTarget[],
 ): Promise<ParseResult> {
   const verbose = targets[0]?.core?.logging?.shouldLogVerbose?.() ?? false;
-
-  // --- 1. Parse all needed headers once ---
   const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
 
   if (verbose) {
@@ -265,19 +263,13 @@ export async function parseAndDispatchInfoflowRequest(
     );
   }
 
-  // --- 2. form-urlencoded: echostr verification + private chat ---
+  // --- form-urlencoded: echostr verification + private chat ---
   if (contentType.startsWith("application/x-www-form-urlencoded")) {
-    if (verbose) {
-      console.log(`[infoflow] handling form-urlencoded request`);
-    }
     const form = new URLSearchParams(rawBody);
 
-    // 2a. echostr signature verification (try all accounts' tokens for multi-account support)
+    // echostr signature verification (try all accounts' tokens for multi-account support)
     const echostr = form.get("echostr") ?? "";
     if (echostr) {
-      if (verbose) {
-        console.log(`[infoflow] echostr verification request`);
-      }
       const signature = form.get("signature") ?? "";
       const timestamp = form.get("timestamp") ?? "";
       const rn = form.get("rn") ?? "";
@@ -289,7 +281,7 @@ export async function parseAndDispatchInfoflowRequest(
           .digest("hex");
         if (signature === expectedSig) {
           if (verbose) {
-            console.log(`[infoflow] echostr verified, returning echostr`);
+            console.log(`[infoflow] echostr verified successfully`);
           }
           return { handled: true, statusCode: 200, body: echostr };
         }
@@ -298,12 +290,9 @@ export async function parseAndDispatchInfoflowRequest(
       return { handled: true, statusCode: 403, body: "Invalid signature" };
     }
 
-    // 2b. private chat message (messageJson field in form)
+    // private chat message (messageJson field in form)
     const messageJsonStr = form.get("messageJson") ?? "";
     if (messageJsonStr) {
-      if (verbose) {
-        console.log(`[infoflow] private chat message detected, dispatching...`);
-      }
       return handlePrivateMessage(messageJsonStr, targets, verbose);
     }
 
@@ -311,17 +300,91 @@ export async function parseAndDispatchInfoflowRequest(
     return { handled: true, statusCode: 400, body: "missing echostr or messageJson" };
   }
 
-  // --- 3. text/plain: group chat ---
+  // --- text/plain: group chat ---
   if (contentType.startsWith("text/plain")) {
-    if (verbose) {
-      console.log(`[infoflow] group chat message detected, dispatching...`);
-    }
     return handleGroupMessage(rawBody, targets, verbose);
   }
 
-  // --- 4. unsupported Content-Type ---
+  // --- unsupported Content-Type ---
   console.error(`[infoflow] unsupported contentType: ${contentType}`);
   return { handled: true, statusCode: 400, body: "unsupported content type" };
+}
+
+// ---------------------------------------------------------------------------
+// Shared decrypt-and-dispatch helper
+// ---------------------------------------------------------------------------
+
+type DecryptDispatchParams = {
+  encryptedContent: string;
+  targets: WebhookTarget[];
+  chatType: "direct" | "group";
+  verbose: boolean;
+  fallbackParser?: (content: string) => Record<string, unknown> | null;
+  dispatchFn: (target: WebhookTarget, msgData: Record<string, unknown>) => void;
+};
+
+/**
+ * Shared helper to decrypt message content and dispatch to handler.
+ * Iterates through accounts, attempts decryption, parses content, checks for duplicates.
+ */
+function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
+  const { encryptedContent, targets, chatType, verbose, fallbackParser, dispatchFn } = params;
+
+  if (targets.length === 0) {
+    console.error(`[infoflow] ${chatType}: no target configured`);
+    return { handled: true, statusCode: 500, body: "no target configured" };
+  }
+
+  if (!encryptedContent.trim()) {
+    console.error(`[infoflow] ${chatType}: empty encrypted content`);
+    return { handled: true, statusCode: 400, body: "empty content" };
+  }
+
+  if (verbose) {
+    console.log(`[infoflow] ${chatType}: trying ${targets.length} account(s) for decryption`);
+  }
+
+  for (const target of targets) {
+    const { encodingAESKey } = target.account.config;
+    if (!encodingAESKey) continue;
+
+    let decryptedContent: string;
+    try {
+      decryptedContent = decryptMessage(encryptedContent, encodingAESKey);
+    } catch {
+      continue; // Try next account
+    }
+
+    // Parse as JSON first, then try fallback parser (XML for private)
+    let msgData: Record<string, unknown> | null = null;
+    try {
+      msgData = JSON.parse(decryptedContent) as Record<string, unknown>;
+    } catch {
+      if (fallbackParser) {
+        msgData = fallbackParser(decryptedContent);
+      }
+    }
+
+    if (msgData && Object.keys(msgData).length > 0) {
+      if (isDuplicateMessage(msgData)) {
+        if (verbose) {
+          console.log(`[infoflow] ${chatType}: duplicate message, skipping`);
+        }
+        return { handled: true, statusCode: 200, body: "success" };
+      }
+
+      target.statusSink?.({ lastInboundAt: Date.now() });
+      dispatchFn(target, msgData);
+
+      if (verbose) {
+        console.log(`[infoflow] ${chatType}: message dispatched successfully`);
+      }
+      return { handled: true, statusCode: 200, body: "success" };
+    }
+  }
+
+  console.error(`[infoflow] ${chatType}: decryption failed for all accounts`);
+  return { handled: true, statusCode: 500, body: "decryption failed for all accounts" };
 }
 
 // ---------------------------------------------------------------------------
@@ -330,10 +393,6 @@ export async function parseAndDispatchInfoflowRequest(
 
 /**
  * Handles a private (dm) chat message.
- *
- * messageJsonStr is the value of the `messageJson` form field,
- * a JSON string in the shape `{ Encrypt: "..." }`.
- *
  * Decrypts the Encrypt field with encodingAESKey (AES-ECB),
  * parses the decrypted content, then dispatches to bot.ts.
  */
@@ -342,11 +401,6 @@ function handlePrivateMessage(
   targets: WebhookTarget[],
   verbose: boolean,
 ): ParseResult {
-  if (targets.length === 0) {
-    console.error(`[infoflow] private: no target configured`);
-    return { handled: true, statusCode: 500, body: "no target configured" };
-  }
-
   let messageJson: Record<string, unknown>;
   try {
     messageJson = JSON.parse(messageJsonStr) as Record<string, unknown>;
@@ -361,78 +415,21 @@ function handlePrivateMessage(
     return { handled: true, statusCode: 400, body: "missing Encrypt field in messageJson" };
   }
 
-  if (verbose) {
-    console.log(`[infoflow] private: trying ${targets.length} account(s) for decryption`);
-  }
-
-  // Try each account's key until decryption succeeds (multi-account support)
-  for (const target of targets) {
-    const { encodingAESKey } = target.account.config;
-    if (!encodingAESKey) {
-      if (verbose) {
-        console.log(`[infoflow] private: account ${target.account.accountId} has no AES key, skip`);
-      }
-      continue;
-    }
-
-    let decryptedContent: string;
-    try {
-      decryptedContent = decryptMessage(encrypt, encodingAESKey);
-      if (verbose) {
-        console.log(
-          `[infoflow] private: decryption success for account ${target.account.accountId}`,
-        );
-      }
-    } catch (err) {
-      if (verbose) {
-        console.log(
-          `[infoflow] private: decryption failed for account ${target.account.accountId}: ${String(err)}`,
-        );
-      }
-      continue; // Try next account
-    }
-
-    // Parse decrypted content as JSON or XML
-    let msgData: Record<string, unknown> | null = null;
-    try {
-      msgData = JSON.parse(decryptedContent) as Record<string, unknown>;
-      if (verbose) {
-        console.log(`[infoflow] private: parsed as JSON`);
-      }
-    } catch {
-      msgData = parseXmlMessage(decryptedContent);
-      if (verbose) {
-        console.log(`[infoflow] private: parsed as XML, result=${msgData ? "ok" : "null"}`);
-      }
-    }
-
-    if (msgData && Object.keys(msgData).length > 0) {
-      if (isDuplicateMessage(msgData)) {
-        if (verbose) {
-          console.log(`[infoflow] private: duplicate message, skipping`);
-        }
-        return { handled: true, statusCode: 200, body: "success" };
-      }
-
-      if (verbose) {
-        console.log(`[infoflow] private: dispatching to handlePrivateChatMessage`);
-      }
-
-      target.statusSink?.({ lastInboundAt: Date.now() });
-
+  return tryDecryptAndDispatch({
+    encryptedContent: encrypt,
+    targets,
+    chatType: "direct",
+    verbose,
+    fallbackParser: parseXmlMessage,
+    dispatchFn: (target, msgData) => {
       void handlePrivateChatMessage({
         cfg: target.config,
         msgData,
         accountId: target.account.accountId,
         statusSink: target.statusSink,
       });
-
-      return { handled: true, statusCode: 200, body: "success" };
-    }
-  }
-
-  console.error(`[infoflow] private: decryption failed for all accounts`);
-  return { handled: true, statusCode: 500, body: "decryption failed for all accounts" };
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -441,94 +438,50 @@ function handlePrivateMessage(
 
 /**
  * Handles a group chat message.
- *
  * The rawBody itself is an AES-encrypted ciphertext (Base64URLSafe encoded).
- * After decryption it yields a JSON object with group message fields.
- *
- * Decrypts rawBody with encodingAESKey (AES-ECB),
- * parses the result, then dispatches to bot.ts.
+ * Decrypts and dispatches to bot.ts.
  */
 function handleGroupMessage(
   rawBody: string,
   targets: WebhookTarget[],
   verbose: boolean,
 ): ParseResult {
-  if (targets.length === 0) {
-    console.error(`[infoflow] group: no target configured`);
-    return { handled: true, statusCode: 500, body: "no target configured" };
-  }
-  if (!rawBody.trim()) {
-    console.error(`[infoflow] group: empty body`);
-    return { handled: true, statusCode: 400, body: "empty body" };
-  }
-
-  if (verbose) {
-    console.log(`[infoflow] group: trying ${targets.length} account(s) for decryption`);
-  }
-
-  // Try each account's key until decryption succeeds (multi-account support)
-  for (const target of targets) {
-    const { encodingAESKey } = target.account.config;
-    if (!encodingAESKey) {
-      if (verbose) {
-        console.log(`[infoflow] group: account ${target.account.accountId} has no AES key, skip`);
-      }
-      continue;
-    }
-
-    let decryptedContent: string;
-    try {
-      decryptedContent = decryptMessage(rawBody, encodingAESKey);
-      if (verbose) {
-        console.log(`[infoflow] group: decryption success for account ${target.account.accountId}`);
-      }
-    } catch (err) {
-      if (verbose) {
-        console.log(
-          `[infoflow] group: decryption failed for account ${target.account.accountId}: ${String(err)}`,
-        );
-      }
-      continue; // Try next account
-    }
-
-    let msgData: Record<string, unknown>;
-    try {
-      msgData = JSON.parse(decryptedContent) as Record<string, unknown>;
-      if (verbose) {
-        console.log(`[infoflow] group: parsed JSON successfully`);
-      }
-    } catch (err) {
-      if (verbose) {
-        console.log(`[infoflow] group: JSON parse failed: ${String(err)}`);
-      }
-      continue; // Try next account
-    }
-
-    if (msgData && Object.keys(msgData).length > 0) {
-      if (isDuplicateMessage(msgData)) {
-        if (verbose) {
-          console.log(`[infoflow] group: duplicate message, skipping`);
-        }
-        return { handled: true, statusCode: 200, body: "success" };
-      }
-
-      if (verbose) {
-        console.log(`[infoflow] group: dispatching to handleGroupChatMessage`);
-      }
-
-      target.statusSink?.({ lastInboundAt: Date.now() });
-
+  return tryDecryptAndDispatch({
+    encryptedContent: rawBody,
+    targets,
+    chatType: "group",
+    verbose,
+    dispatchFn: (target, msgData) => {
       void handleGroupChatMessage({
         cfg: target.config,
         msgData,
         accountId: target.account.accountId,
         statusSink: target.statusSink,
       });
+    },
+  });
+}
 
-      return { handled: true, statusCode: 200, body: "success" };
-    }
-  }
+// ---------------------------------------------------------------------------
+// Test-only exports (@internal — not part of the public API)
+// ---------------------------------------------------------------------------
 
-  console.error(`[infoflow] group: decryption failed for all accounts`);
-  return { handled: true, statusCode: 500, body: "decryption failed for all accounts" };
+/** @internal */
+export const _extractDedupeKey = extractDedupeKey;
+
+/** @internal */
+export const _isDuplicateMessage = isDuplicateMessage;
+
+/** @internal */
+export const _base64UrlSafeDecode = base64UrlSafeDecode;
+
+/** @internal */
+export const _decryptMessage = decryptMessage;
+
+/** @internal */
+export const _parseXmlMessage = parseXmlMessage;
+
+/** @internal — Clears the message dedup cache. Only use in tests. */
+export function _resetMessageCache(): void {
+  messageCache.clear();
 }
