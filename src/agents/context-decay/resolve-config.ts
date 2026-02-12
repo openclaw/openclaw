@@ -83,13 +83,36 @@ function mergeDecayConfig(
  */
 function enforceDecayOrdering(config: ContextDecayConfig): ContextDecayConfig {
   const summarize = config.summarizeToolResultsAfterTurns;
+  const groupSummarize = config.summarizeWindowAfterTurns;
   const strip = config.stripToolResultsAfterTurns;
 
+  // Only enforce strip > individual summarize. Individual summaries are consumed
+  // by the VIEW, so stripping before summarization wastes API calls.
   if (typeof strip === "number" && typeof summarize === "number" && strip <= summarize) {
     const clamped = summarize + 1;
     config.stripToolResultsAfterTurns = clamped;
     log.info(
       `context-decay: stripToolResultsAfterTurns ${strip} -> ${clamped} (must be > summarizeToolResultsAfterTurns=${summarize})`,
+    );
+  }
+
+  // Advisory only: group summarizer reads the raw snapshot, not the decayed view,
+  // so strip < groupSummarize is fine — no enforcement needed.
+  if (typeof strip === "number" && typeof groupSummarize === "number" && strip <= groupSummarize) {
+    log.info(
+      `context-decay: stripToolResultsAfterTurns (${strip}) <= summarizeWindowAfterTurns (${groupSummarize}); OK — group summarizer reads raw transcript`,
+    );
+  }
+
+  // Advisory: individual summaries should ideally fire before group summaries
+  // to provide input to group prompts. Both still work regardless.
+  if (
+    typeof summarize === "number" &&
+    typeof groupSummarize === "number" &&
+    summarize >= groupSummarize
+  ) {
+    log.info(
+      `context-decay: summarizeToolResultsAfterTurns (${summarize}) >= summarizeWindowAfterTurns (${groupSummarize}); individual summaries should fire before group summaries`,
     );
   }
 
