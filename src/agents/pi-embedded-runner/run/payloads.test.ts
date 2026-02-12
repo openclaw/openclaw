@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { formatBillingErrorMessage } from "../../pi-embedded-helpers.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 
 describe("buildEmbeddedRunPayloads", () => {
@@ -14,13 +15,31 @@ describe("buildEmbeddedRunPayloads", () => {
   },
   "request_id": "req_011CX7DwS7tSvggaNHmefwWg"
 }`;
-  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage =>
-    ({
-      stopReason: "error",
-      errorMessage: errorJson,
-      content: [{ type: "text", text: errorJson }],
-      ...overrides,
-    }) as AssistantMessage;
+  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
+    role: "assistant",
+    api: "openai-responses",
+    provider: "openai",
+    model: "test-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    timestamp: 0,
+    stopReason: "error",
+    errorMessage: errorJson,
+    content: [{ type: "text", text: errorJson }],
+    ...overrides,
+  });
 
   it("suppresses raw API error JSON when the assistant errored", () => {
     const lastAssistant = makeAssistant({});
@@ -80,6 +99,27 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
   });
 
+  it("includes provider context for billing errors", () => {
+    const lastAssistant = makeAssistant({
+      errorMessage: "insufficient credits",
+      content: [{ type: "text", text: "insufficient credits" }],
+    });
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: [],
+      lastAssistant,
+      sessionKey: "session:telegram",
+      provider: "Anthropic",
+      inlineToolResultsAllowed: false,
+      verboseLevel: "off",
+      reasoningLevel: "off",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe(formatBillingErrorMessage("Anthropic"));
+    expect(payloads[0]?.isError).toBe(true);
+  });
+
   it("suppresses raw error JSON even when errorMessage is missing", () => {
     const lastAssistant = makeAssistant({ errorMessage: undefined });
     const payloads = buildEmbeddedRunPayloads({
@@ -98,10 +138,15 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("does not suppress error-shaped JSON when the assistant did not error", () => {
+    const lastAssistant = makeAssistant({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [],
+    });
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [errorJsonPretty],
       toolMetas: [],
-      lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
+      lastAssistant,
       sessionKey: "session:telegram",
       inlineToolResultsAllowed: false,
       verboseLevel: "off",
@@ -132,10 +177,15 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("does not add tool error fallback when assistant output exists", () => {
+    const lastAssistant = makeAssistant({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [],
+    });
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: ["All good"],
       toolMetas: [],
-      lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
+      lastAssistant,
       lastToolError: { toolName: "browser", error: "tab not found" },
       sessionKey: "session:telegram",
       inlineToolResultsAllowed: false,
@@ -149,20 +199,22 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("adds tool error fallback when the assistant only invoked tools", () => {
+    const lastAssistant = makeAssistant({
+      stopReason: "toolUse",
+      errorMessage: undefined,
+      content: [
+        {
+          type: "toolCall",
+          id: "toolu_01",
+          name: "exec",
+          arguments: { command: "echo hi" },
+        },
+      ],
+    });
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [],
       toolMetas: [],
-      lastAssistant: {
-        stopReason: "toolUse",
-        content: [
-          {
-            type: "toolCall",
-            id: "toolu_01",
-            name: "exec",
-            arguments: { command: "echo hi" },
-          },
-        ],
-      } as AssistantMessage,
+      lastAssistant,
       lastToolError: { toolName: "exec", error: "Command exited with code 1" },
       sessionKey: "session:telegram",
       inlineToolResultsAllowed: false,
