@@ -85,6 +85,17 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1";
+export const OLLAMA_CLOUD_API_BASE_URL = "https://ollama.com";
+const OLLAMA_CLOUD_DEFAULT_CONTEXT_WINDOW = 128000;
+const OLLAMA_CLOUD_DEFAULT_MAX_TOKENS = 8192;
+const OLLAMA_CLOUD_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -168,6 +179,68 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
     });
   } catch (error) {
     console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    return [];
+  }
+}
+
+/**
+ * Derive the Ollama Cloud native API base URL from a configured base URL.
+ *
+ * Same logic as `resolveOllamaApiBase` but defaults to the cloud endpoint.
+ */
+export function resolveOllamaCloudApiBase(configuredBaseUrl?: string): string {
+  if (!configuredBaseUrl) {
+    return OLLAMA_CLOUD_API_BASE_URL;
+  }
+  const trimmed = configuredBaseUrl.replace(/\/+$/, "");
+  return trimmed.replace(/\/v1$/i, "");
+}
+
+async function discoverOllamaCloudModels(
+  baseUrl?: string,
+  apiKey?: string,
+): Promise<ModelDefinitionConfig[]> {
+  // Skip discovery in test environments
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+  try {
+    const apiBase = resolveOllamaCloudApiBase(baseUrl);
+    const headers: Record<string, string> = {};
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+    const response = await fetch(`${apiBase}/api/tags`, {
+      headers,
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) {
+      console.warn(`Failed to discover Ollama Cloud models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as OllamaTagsResponse;
+    if (!data.models || data.models.length === 0) {
+      console.warn("No models found on Ollama Cloud");
+      return [];
+    }
+    return data.models.map((model) => {
+      const modelId = model.name;
+      const lower = modelId.toLowerCase();
+      const isReasoning =
+        lower.includes("r1") || lower.includes("reasoning") || lower.includes("thinking");
+      const isVision = lower.includes("vl") || lower.includes("vision");
+      return {
+        id: modelId,
+        name: modelId,
+        reasoning: isReasoning,
+        input: isVision ? (["text", "image"] as Array<"text" | "image">) : ["text"],
+        cost: OLLAMA_CLOUD_DEFAULT_COST,
+        contextWindow: OLLAMA_CLOUD_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: OLLAMA_CLOUD_DEFAULT_MAX_TOKENS,
+      };
+    });
+  } catch (error) {
+    console.warn(`Failed to discover Ollama Cloud models: ${String(error)}`);
     return [];
   }
 }
@@ -437,6 +510,18 @@ async function buildOllamaProvider(configuredBaseUrl?: string): Promise<Provider
   };
 }
 
+async function buildOllamaCloudProvider(
+  configuredBaseUrl?: string,
+  apiKey?: string,
+): Promise<ProviderConfig> {
+  const models = await discoverOllamaCloudModels(configuredBaseUrl, apiKey);
+  return {
+    baseUrl: configuredBaseUrl ?? OLLAMA_CLOUD_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 function buildTogetherProvider(): ProviderConfig {
   return {
     baseUrl: TOGETHER_BASE_URL,
@@ -569,6 +654,18 @@ export async function resolveImplicitProviders(params: {
   if (ollamaKey) {
     const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
     providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+  }
+
+  // Ollama Cloud provider — uses ollama.com's hosted API with Bearer auth.
+  const ollamaCloudKey =
+    resolveEnvApiKeyVarName("ollama-cloud") ??
+    resolveApiKeyFromProfiles({ provider: "ollama-cloud", store: authStore });
+  if (ollamaCloudKey) {
+    const ollamaCloudBaseUrl = params.explicitProviders?.["ollama-cloud"]?.baseUrl;
+    providers["ollama-cloud"] = {
+      ...(await buildOllamaCloudProvider(ollamaCloudBaseUrl, ollamaCloudKey)),
+      apiKey: ollamaCloudKey,
+    };
   }
 
   const togetherKey =

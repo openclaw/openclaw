@@ -309,6 +309,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     together: "TOGETHER_API_KEY",
     qianfan: "QIANFAN_API_KEY",
     ollama: "OLLAMA_API_KEY",
+    "ollama-cloud": "OLLAMA_CLOUD_API_KEY",
   };
   const envVar = envMap[normalized];
   if (!envVar) {
