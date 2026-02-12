@@ -112,7 +112,10 @@ export function enqueueCommandInLane<T>(
   },
 ): Promise<T> {
   const cleaned = lane.trim() || CommandLane.Main;
-  const warnAfterMs = opts?.warnAfterMs ?? 2_000;
+  // Cron jobs legitimately take 60-120s (external CLI tools, API polling).
+  // Use a higher default to avoid flooding logs with non-actionable warnings (#14747).
+  const defaultWarnMs = cleaned === "cron" ? 120_000 : 2_000;
+  const warnAfterMs = opts?.warnAfterMs ?? defaultWarnMs;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
     state.queue.push({
