@@ -116,7 +116,8 @@ export function createExecuteSSHCommandTool(api: OpenClawPluginApi) {
       }),
       timeout_ms: Type.Optional(
         Type.Number({
-          description: "Optional: The timeout for this command in milliseconds. Overrides the default command timeout.",
+          description:
+            "Optional: The timeout for this command in milliseconds. Overrides the default command timeout.",
         }),
       ),
     }),

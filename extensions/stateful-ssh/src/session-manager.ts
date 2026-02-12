@@ -367,7 +367,11 @@ export class SSHSessionManager {
     return commandPromise;
   }
 
-  private async executeCommandInternal(session: SSHSession, command: string, timeoutMs?: number): Promise<string> {
+  private async executeCommandInternal(
+    session: SSHSession,
+    command: string,
+    timeoutMs?: number,
+  ): Promise<string> {
     session.lastActivity = Date.now();
     session.buffer = "";
 
