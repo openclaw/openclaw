@@ -183,6 +183,9 @@ def main():
     
     if args.verbose:
         logger.setLevel(logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)
+        for handler in logging.getLogger().handlers:
+            handler.setLevel(logging.DEBUG)
     
     success = process_data(args.input, args.output)
     sys.exit(0 if success else 1)
