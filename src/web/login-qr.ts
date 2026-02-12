@@ -354,10 +354,12 @@ export async function waitForWebLogin(
         message: waitingMessage,
       };
     }
-    const timeout = new Promise<"timeout">((resolve) =>
-      setTimeout(() => resolve("timeout"), remaining),
-    );
-    const result = await Promise.race([login.waitPromise.then(() => "done"), timeout]);
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timeoutId = setTimeout(() => resolve("timeout"), remaining);
+    });
+    const result = await Promise.race([login.waitPromise.then(() => "done" as const), timeout]);
+    clearTimeout(timeoutId);
 
     if (result === "timeout") {
       return {
@@ -365,6 +367,10 @@ export async function waitForWebLogin(
         message: waitingMessage,
       };
     }
+
+    // Yield to microtask queue so attachLoginWaiter's .then() can set
+    // login.connected before we check it (avoids transient false-negative).
+    await Promise.resolve();
 
     if (login.error) {
       if (login.errorStatus === DisconnectReason.loggedOut) {
@@ -394,6 +400,12 @@ export async function waitForWebLogin(
       runtime.log(success(message));
       await resetActiveLogin(account.accountId);
       return { connected: true, message };
+    }
+
+    // waitPromise resolved but connected/error not yet set — retry the loop
+    // instead of returning a false-negative.
+    if (isLoginFresh(login)) {
+      continue;
     }
 
     return { connected: false, message: "Login ended without a connection." };

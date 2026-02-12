@@ -12,6 +12,15 @@ import { formatForLog } from "../ws-log.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.pairing.start", "web.login.wait"]);
 
+function coerceTimeoutMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
 const resolveWebLoginProvider = () =>
   listChannelPlugins().find((plugin) =>
     (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method)),
@@ -58,10 +67,7 @@ export const webHandlers: GatewayRequestHandlers = {
       }
       const result = await provider.gateway.loginWithQrStart({
         force: Boolean((params as { force?: boolean }).force),
-        timeoutMs:
-          typeof (params as { timeoutMs?: unknown }).timeoutMs === "number"
-            ? (params as { timeoutMs?: number }).timeoutMs
-            : undefined,
+        timeoutMs: coerceTimeoutMs((params as { timeoutMs?: unknown }).timeoutMs),
         verbose: Boolean((params as { verbose?: boolean }).verbose),
         accountId,
       });
@@ -108,10 +114,7 @@ export const webHandlers: GatewayRequestHandlers = {
         return;
       }
       const result = await provider.gateway.loginWithQrWait({
-        timeoutMs:
-          typeof (params as { timeoutMs?: unknown }).timeoutMs === "number"
-            ? (params as { timeoutMs?: number }).timeoutMs
-            : undefined,
+        timeoutMs: coerceTimeoutMs((params as { timeoutMs?: unknown }).timeoutMs),
         accountId,
       });
       if (result.connected) {
@@ -164,10 +167,7 @@ export const webHandlers: GatewayRequestHandlers = {
       const result = await provider.gateway.loginWithPairingCodeStart({
         phoneNumber,
         force: Boolean((params as { force?: boolean }).force),
-        timeoutMs:
-          typeof (params as { timeoutMs?: unknown }).timeoutMs === "number"
-            ? (params as { timeoutMs?: number }).timeoutMs
-            : undefined,
+        timeoutMs: coerceTimeoutMs((params as { timeoutMs?: unknown }).timeoutMs),
         verbose: Boolean((params as { verbose?: boolean }).verbose),
         accountId,
       });
