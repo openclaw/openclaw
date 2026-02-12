@@ -31,9 +31,17 @@ import {
   parseExecApprovalResolved,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
+import {
+  loadModelsAvailability,
+  startModelsAvailabilityPolling,
+  stopModelsAvailabilityPolling,
+} from "./controllers/models-availability.ts";
+import { loadModelsCatalog } from "./controllers/models.ts";
 import { loadNodes } from "./controllers/nodes.ts";
+import { loadProjects } from "./controllers/projects.ts";
 import { loadPrimaryModel } from "./controllers/providers-health.ts";
 import { loadSessions } from "./controllers/sessions.ts";
+import { startUsagePolling, stopUsagePolling, type UsagePollHost } from "./controllers/usage.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 
 type GatewayHost = {
@@ -155,10 +163,18 @@ export function connectGateway(host: GatewayHost) {
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void loadPrimaryModel(host as unknown as Parameters<typeof loadPrimaryModel>[0]);
+      void loadModelsCatalog(host as unknown as Parameters<typeof loadModelsCatalog>[0]);
+      startModelsAvailabilityPolling(
+        host as unknown as Parameters<typeof startModelsAvailabilityPolling>[0],
+      );
+      void loadProjects(host as unknown as Parameters<typeof loadProjects>[0]);
+      startUsagePolling(host as unknown as UsagePollHost);
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason }) => {
       host.connected = false;
+      stopUsagePolling();
+      stopModelsAvailabilityPolling();
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       if (code !== 1012) {
         host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
@@ -275,6 +291,8 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         : "Model catalog updated";
     (host as unknown as OpenClawApp).showToast("info", msg);
     void loadPrimaryModel(host as unknown as Parameters<typeof loadPrimaryModel>[0]);
+    void loadModelsCatalog(host as unknown as Parameters<typeof loadModelsCatalog>[0]);
+    void loadModelsAvailability(host as unknown as Parameters<typeof loadModelsAvailability>[0]);
     return;
   }
 
