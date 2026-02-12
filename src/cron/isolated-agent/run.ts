@@ -47,6 +47,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { logWarn } from "../../logger.js";
@@ -363,8 +364,19 @@ export async function runCronIsolatedAgentTurn(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
   let fallbackModel = model;
+  const messageChannel = resolvedDelivery.channel;
   const runStartedAt = Date.now();
   let runEndedAt = runStartedAt;
+
+  // Emit run.started to create root span before tool executions
+  emitDiagnosticEvent({
+    type: "run.started",
+    runId: cronSession.sessionEntry.sessionId,
+    sessionKey: agentSessionKey,
+    sessionId: cronSession.sessionEntry.sessionId,
+    channel: messageChannel,
+  });
+
   try {
     const sessionFile = resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId);
     const resolvedVerboseLevel =
@@ -375,7 +387,7 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionKey: agentSessionKey,
       verboseLevel: resolvedVerboseLevel,
     });
-    const messageChannel = resolvedDelivery.channel;
+
     const fallbackResult = await runWithModelFallback({
       cfg: cfgWithAgentDefaults,
       provider,
@@ -429,41 +441,87 @@ export async function runCronIsolatedAgentTurn(params: {
     fallbackModel = fallbackResult.model;
     runEndedAt = Date.now();
   } catch (err) {
+    // Emit run.completed for failed cron runs
+    emitDiagnosticEvent({
+      type: "run.completed",
+      runId: cronSession.sessionEntry.sessionId,
+      sessionKey: agentSessionKey,
+      sessionId: cronSession.sessionEntry.sessionId,
+      channel: messageChannel,
+      provider: fallbackProvider,
+      model: fallbackModel,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        promptTokens: 0,
+        total: 0,
+      },
+      durationMs: Date.now() - runStartedAt,
+      operationName: "chat",
+      error: String(err),
+      errorType: "runtime_error",
+    });
     return withRunSession({ status: "error", error: String(err) });
   }
 
   const payloads = runResult.payloads ?? [];
 
   // Update token+model fields in the session store.
-  {
-    const usage = runResult.meta.agentMeta?.usage;
-    const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? model;
-    const providerUsed = runResult.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
-    const contextTokens =
-      agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
+  const usage = runResult.meta.agentMeta?.usage;
+  const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? model;
+  const providerUsed = runResult.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
+  const contextTokens =
+    agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
 
-    cronSession.sessionEntry.modelProvider = providerUsed;
-    cronSession.sessionEntry.model = modelUsed;
-    cronSession.sessionEntry.contextTokens = contextTokens;
-    if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
-      const cliSessionId = runResult.meta.agentMeta?.sessionId?.trim();
-      if (cliSessionId) {
-        setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
-      }
+  cronSession.sessionEntry.modelProvider = providerUsed;
+  cronSession.sessionEntry.model = modelUsed;
+  cronSession.sessionEntry.contextTokens = contextTokens;
+  if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
+    const cliSessionId = runResult.meta.agentMeta?.sessionId?.trim();
+    if (cliSessionId) {
+      setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
     }
-    if (hasNonzeroUsage(usage)) {
-      const input = usage.input ?? 0;
-      const output = usage.output ?? 0;
-      cronSession.sessionEntry.inputTokens = input;
-      cronSession.sessionEntry.outputTokens = output;
-      cronSession.sessionEntry.totalTokens =
-        deriveSessionTotalTokens({
-          usage,
-          contextTokens,
-        }) ?? input;
-    }
-    await persistSessionEntry();
   }
+  if (hasNonzeroUsage(usage)) {
+    const input = usage.input ?? 0;
+    const output = usage.output ?? 0;
+    cronSession.sessionEntry.inputTokens = input;
+    cronSession.sessionEntry.outputTokens = output;
+    cronSession.sessionEntry.totalTokens =
+      deriveSessionTotalTokens({
+        usage,
+        contextTokens,
+      }) ?? input;
+  }
+  await persistSessionEntry();
+
+  // Emit run.completed diagnostic event for span lifecycle
+  emitDiagnosticEvent({
+    type: "run.completed",
+    runId: cronSession.sessionEntry.sessionId,
+    sessionKey: agentSessionKey,
+    sessionId: cronSession.sessionEntry.sessionId,
+    channel: messageChannel,
+    provider: providerUsed,
+    model: modelUsed,
+    usage: {
+      input: usage?.input ?? 0,
+      output: usage?.output ?? 0,
+      cacheRead: usage?.cacheRead ?? 0,
+      cacheWrite: usage?.cacheWrite ?? 0,
+      promptTokens: (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0),
+      total: usage?.total ?? 0,
+    },
+    context: {
+      limit: contextTokens,
+      used: usage?.total ?? 0,
+    },
+    durationMs: Date.now() - runStartedAt,
+    operationName: "chat",
+  });
+
   const firstText = payloads[0]?.text ?? "";
   const summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   const outputText = pickLastNonEmptyTextFromPayloads(payloads);

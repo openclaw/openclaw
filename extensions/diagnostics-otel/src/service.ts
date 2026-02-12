@@ -45,6 +45,7 @@ import {
   resolveOtelUrl,
   resolveSampleRate,
   LoggingTraceExporter,
+  formatTraceparent,
   type ActiveTrace,
 } from "./otel-utils.js";
 
@@ -163,6 +164,31 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const meter = metrics.getMeter("openclaw");
       const tracer = trace.getTracer("openclaw");
       const otelMetrics = createMetricInstruments(meter);
+
+      // Trace attribute constants for observability platforms
+      const TRACE_ATTRS = {
+        SESSION_ID: "session.id", // OTEL semconv for session identification
+        USER_ID: "enduser.id", // OTEL semconv for user identification
+      } as const;
+
+      // Global trace context registry for W3C Trace Context propagation
+      // Stores pre-formatted headers to avoid requiring @opentelemetry/api in main package
+      const TRACE_CONTEXT_REGISTRY_KEY = Symbol.for("openclaw.diagnostics-otel.trace-headers");
+
+      type TraceHeaders = {
+        traceparent: string;
+        tracestate?: string;
+      };
+
+      function getTraceHeadersRegistry(): Map<string, TraceHeaders> {
+        const globalStore = globalThis as {
+          [TRACE_CONTEXT_REGISTRY_KEY]?: Map<string, TraceHeaders>;
+        };
+        if (!globalStore[TRACE_CONTEXT_REGISTRY_KEY]) {
+          globalStore[TRACE_CONTEXT_REGISTRY_KEY] = new Map();
+        }
+        return globalStore[TRACE_CONTEXT_REGISTRY_KEY];
+      }
 
       if (logsEnabled) {
         const logExporter = new OTLPLogExporter({
@@ -410,10 +436,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         };
         if (params.sessionKey) {
           spanAttrs["openclaw.sessionKey"] = params.sessionKey;
+          spanAttrs["gen_ai.conversation.id"] = params.sessionKey;
+          spanAttrs[TRACE_ATTRS.SESSION_ID] = params.sessionKey;
+          const agentId = params.sessionKey.split(":")[1] || "unknown";
+          spanAttrs[TRACE_ATTRS.USER_ID] = agentId;
         }
         if (params.sessionId) {
           spanAttrs["openclaw.sessionId"] = params.sessionId;
-          spanAttrs["gen_ai.conversation.id"] = params.sessionId;
         }
         if (params.channel) {
           spanAttrs["openclaw.channel"] = params.channel;
@@ -446,6 +475,18 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           parentCtx,
         );
         runSpans.set(runId, { span, createdAt: Date.now() });
+
+        // Store W3C trace headers for propagation to downstream LLM providers
+        if (params.sessionKey) {
+          const spanContext = span.spanContext();
+          if (spanContext.traceId && spanContext.spanId) {
+            getTraceHeadersRegistry().set(params.sessionKey, {
+              traceparent: formatTraceparent(spanContext),
+              ...(spanContext.traceState && { tracestate: spanContext.traceState.serialize() }),
+            });
+          }
+        }
+
         if (debugExports) {
           ctx.logger.info(`diagnostics-otel: span created ${spanName}`);
         }
@@ -470,6 +511,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         safeJsonStringify,
         createToolSpan,
         ensureRunSpan,
+        TRACE_ATTRS,
+        getTraceHeadersRegistry,
       };
 
       // Periodic cleanup of orphaned buffer entries
@@ -605,6 +648,21 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         await logProvider.shutdown().catch(() => undefined);
         logProvider = null;
       }
+      // Clean up active traces and trace headers registry
+      for (const trace of activeTraces.values()) {
+        try {
+          trace.span.end();
+        } catch {
+          // ignore
+        }
+      }
+      activeTraces.clear();
+      // Clear W3C trace context registry (using same global symbol)
+      const traceHeadersKey = Symbol.for("openclaw.diagnostics-otel.trace-headers");
+      const globalStore = globalThis as {
+        [key: symbol]: Map<string, { traceparent: string; tracestate?: string }>;
+      };
+      globalStore[traceHeadersKey]?.clear();
       if (sdk) {
         await sdk.shutdown().catch(() => undefined);
         sdk = null;

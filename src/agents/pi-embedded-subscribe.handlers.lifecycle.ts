@@ -17,6 +17,7 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
     runId: ctx.params.runId,
     sessionId: (ctx.params.session as { id?: string }).id,
     sessionKey: runContext?.sessionKey,
+    channel: ctx.params.channel,
   });
   emitAgentEvent({
     runId: ctx.params.runId,

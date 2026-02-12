@@ -341,16 +341,43 @@ export function startDiagnosticHeartbeat() {
       queued: totalQueued,
     });
 
-    for (const [, state] of sessionStates) {
+    // Check for stuck sessions and clean up stale entries
+    const SESSION_STUCK_THRESHOLD_MS = 120_000; // 2 minutes
+    // Configurable cleanup threshold (default 10 minutes)
+    const SESSION_CLEANUP_THRESHOLD_MS =
+      parseInt(process.env.OPENCLAW_SESSION_CLEANUP_THRESHOLD_MS ?? "", 10) || 600_000;
+    const keysToDelete: string[] = [];
+
+    for (const [key, state] of sessionStates) {
       const ageMs = now - state.lastActivity;
-      if (state.state === "processing" && ageMs > 120_000) {
-        logSessionStuck({
-          sessionId: state.sessionId,
-          sessionKey: state.sessionKey,
-          state: state.state,
-          ageMs,
-        });
+
+      // Clean up sessions idle for over threshold (default 10 minutes, configurable via OPENCLAW_SESSION_CLEANUP_THRESHOLD_MS)
+      if (ageMs > SESSION_CLEANUP_THRESHOLD_MS) {
+        keysToDelete.push(key);
+        continue;
       }
+
+      // Alert on stuck sessions (only once per session by checking if already logged)
+      if (state.state === "processing" && ageMs > SESSION_STUCK_THRESHOLD_MS) {
+        // Only log if we haven't logged this specific stuck session recently
+        // (avoid spamming every 30s for the same stuck session)
+        const lastLogged = (state as { lastStuckLog?: number }).lastStuckLog ?? 0;
+        if (now - lastLogged > 300_000) {
+          // 5 minutes between alerts for same session
+          logSessionStuck({
+            sessionId: state.sessionId,
+            sessionKey: state.sessionKey,
+            state: state.state,
+            ageMs,
+          });
+          (state as { lastStuckLog?: number }).lastStuckLog = now;
+        }
+      }
+    }
+
+    // Remove stale sessions
+    for (const key of keysToDelete) {
+      sessionStates.delete(key);
     }
   }, 30_000);
   heartbeatInterval.unref?.();

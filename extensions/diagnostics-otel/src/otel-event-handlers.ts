@@ -9,7 +9,7 @@ import {
 } from "@opentelemetry/api";
 import type { OtelMetricInstruments } from "./otel-metrics.js";
 import type { ActiveTrace } from "./otel-utils.js";
-import { mapProviderName } from "./otel-utils.js";
+import { formatTraceparent, mapProviderName } from "./otel-utils.js";
 
 export type AgentInfo = {
   id: string;
@@ -49,6 +49,11 @@ export interface OtelHandlerCtx {
     startTimeMs?: number;
     attributes?: Record<string, string | number | string[]>;
   }) => Span | null;
+  TRACE_ATTRS: {
+    SESSION_ID: string;
+    USER_ID: string;
+  };
+  getTraceHeadersRegistry: () => Map<string, { traceparent: string; tracestate?: string }>;
 }
 
 export function recordRunCompleted(
@@ -106,6 +111,9 @@ export function recordRunCompleted(
   if (!hctx.tracesEnabled) {
     return;
   }
+
+  // Check for active trace (root message span created by message.queued)
+  const activeTrace = evt.sessionKey ? hctx.activeTraces.get(evt.sessionKey) : null;
 
   // Only put lightweight envelope attributes on the agent.turn span.
   // gen_ai.* inference attributes (model, messages, tokens, etc.) belong
@@ -503,6 +511,8 @@ export function recordMessageQueued(
   // This root span covers the entire lifecycle; agent.turn, LLM calls, and tool executions are nested as children.
   // message.processed ends this span (it does not create a new child).
   if (hctx.tracesEnabled && evt.sessionKey) {
+    const agentId = evt.sessionKey.split(":")[1] || "unknown";
+
     const rootSpan = hctx.tracer.startSpan("openclaw.message", {
       kind: SpanKind.SERVER,
       attributes: {
@@ -510,15 +520,31 @@ export function recordMessageQueued(
         "openclaw.channel": evt.channel ?? "unknown",
         "openclaw.source": evt.source ?? "unknown",
         ...(typeof evt.queueDepth === "number" ? { "openclaw.queueDepth": evt.queueDepth } : {}),
+        // OTEL semantic conventions for session/user identification
+        [hctx.TRACE_ATTRS.SESSION_ID]: evt.sessionKey,
+        [hctx.TRACE_ATTRS.USER_ID]: agentId,
       },
     });
 
+    const traceContext = trace.setSpan(context.active(), rootSpan);
+
     hctx.activeTraces.set(evt.sessionKey, {
       span: rootSpan,
+      context: traceContext,
       startedAt: Date.now(),
       sessionKey: evt.sessionKey,
       channel: evt.channel,
+      agentId,
     });
+
+    // Store W3C trace headers for propagation
+    const spanContext = rootSpan.spanContext();
+    if (spanContext.traceId && spanContext.spanId) {
+      hctx.getTraceHeadersRegistry().set(evt.sessionKey, {
+        traceparent: formatTraceparent(spanContext),
+        ...(spanContext.traceState && { tracestate: spanContext.traceState.serialize() }),
+      });
+    }
 
     if (hctx.debugExports) {
       hctx.logger.info(`diagnostics-otel: created root span for session=${evt.sessionKey}`);
@@ -561,6 +587,7 @@ export function recordMessageProcessed(
     }
     activeTrace.span.end();
     hctx.activeTraces.delete(sessionKey!);
+    hctx.getTraceHeadersRegistry().delete(sessionKey!);
     if (hctx.debugExports) {
       hctx.logger.info(`diagnostics-otel: ended root span for session=${sessionKey}`);
     }
@@ -646,12 +673,28 @@ export function recordToolExecution(
   if (!hctx.tracesEnabled) {
     return;
   }
+
+  // Nest tool span under root message.process span (via activeTraces)
+  // or fallback to run/inference spans if activeTrace not found
+  const activeTrace = evt.sessionKey ? hctx.activeTraces.get(evt.sessionKey) : null;
+  if (activeTrace) {
+    hctx.createToolSpan(evt, activeTrace.context);
+    return;
+  }
+
+  // Fallback: try run/inference spans
   const runId = evt.runId;
   const inferenceSpan = runId ? hctx.activeInferenceSpanByRunId.get(runId) : undefined;
   const runEntry = runId ? hctx.runSpans.get(runId) : undefined;
   const parentSpan = inferenceSpan ?? runEntry?.span;
   const parentCtx = parentSpan ? trace.setSpan(context.active(), parentSpan) : undefined;
   hctx.createToolSpan(evt, parentCtx);
+
+  if (hctx.debugExports && !activeTrace && !parentCtx) {
+    hctx.logger.info(
+      `diagnostics-otel: no active trace for tool.execution sessionKey=${evt.sessionKey} tool=${evt.toolName}`,
+    );
+  }
 }
 
 export function recordHeartbeat(
