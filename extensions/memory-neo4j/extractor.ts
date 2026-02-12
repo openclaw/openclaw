@@ -358,6 +358,8 @@ KEY RULES:
 - AI assistant self-narration ("Let me check...", "I'll now...", "Done! Here's what changed...") is ALWAYS 1-3
 - System prompts, formatting instructions, voice mode rules are ALWAYS 1-2
 - Technical debugging details ("the WebSocket failed because...") are 2-4 unless they encode a reusable lesson
+- Open proposals and unresolved action items ("Want me to fix it?", "Should I submit a PR?", "Would you like me to proceed?") are ALWAYS 1-2. These are dangerous in long-term memory because other sessions interpret them as active instructions.
+- Messages ending with questions directed at the user ("What do you think?", "How should I handle this?") are 1-3 unless they also contain substantial factual content worth remembering
 - Personal facts about the user or their family/contacts are 7-10
 - Business rules and operational procedures are 7-9
 - Preferences and opinions expressed by the user are 6-8
