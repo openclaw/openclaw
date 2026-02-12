@@ -30,6 +30,12 @@ export type SubscribeEmbeddedPiSessionParams = {
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
   enforceFinalTag?: boolean;
+  /**
+   * Force-prepend an opening `<think>` tag to the model's response.
+   * Useful for reasoning models that don't reliably emit think tags (e.g., GLM-4.7-Flash, MiniMax-M2.1).
+   * Default: false.
+   */
+  forcePrependThinkTag?: boolean;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

@@ -18,6 +18,12 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
+  /**
+   * Force-prepend an opening `<think>` tag to the model's response.
+   * Useful for reasoning models that don't reliably emit think tags (e.g., GLM-4.7-Flash, MiniMax-M2.1).
+   * Default: false.
+   */
+  forcePrependThinkTag?: boolean;
 };
 
 export type AgentModelListConfig = {
@@ -136,6 +142,13 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  /**
+   * Force-prepend an opening `<think>` tag to all model responses.
+   * Useful for reasoning models that don't reliably emit think tags.
+   * Can be overridden per-model via models[modelId].forcePrependThinkTag.
+   * Default: false.
+   */
+  forcePrependThinkTag?: boolean;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */

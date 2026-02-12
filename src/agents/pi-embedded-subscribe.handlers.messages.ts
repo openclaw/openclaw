@@ -101,6 +101,15 @@ export function handleMessageUpdate(
   }
 
   if (chunk) {
+    // Force-prepend <think> tag if enabled and this is the first chunk of the assistant message.
+    if (
+      ctx.params.forcePrependThinkTag &&
+      !ctx.state.thinkTagPrepended &&
+      ctx.state.deltaBuffer.length === 0
+    ) {
+      chunk = "<think>" + chunk;
+      ctx.state.thinkTagPrepended = true;
+    }
     ctx.state.deltaBuffer += chunk;
     if (ctx.blockChunker) {
       ctx.blockChunker.append(chunk);
