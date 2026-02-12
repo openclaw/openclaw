@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  resolveAgentCompaction,
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentModelFallbacksOverride,
@@ -224,5 +225,254 @@ describe("resolveAgentConfig", () => {
 
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+  });
+});
+
+describe("resolveAgentCompaction", () => {
+  it("returns undefined when no compaction config exists", () => {
+    const cfg: OpenClawConfig = {};
+    expect(resolveAgentCompaction(cfg)).toBeUndefined();
+    expect(resolveAgentCompaction(cfg, "main")).toBeUndefined();
+  });
+
+  it("returns global defaults when agent has no compaction override", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            reserveTokensFloor: 30000,
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+    const result = resolveAgentCompaction(cfg, "main");
+    expect(result?.mode).toBe("safeguard");
+    expect(result?.reserveTokensFloor).toBe(30000);
+  });
+
+  it("returns global defaults when agentId is omitted", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            reserveTokensFloor: 25000,
+          },
+        },
+      },
+    };
+    const result = resolveAgentCompaction(cfg);
+    expect(result?.mode).toBe("safeguard");
+    expect(result?.reserveTokensFloor).toBe(25000);
+  });
+
+  it("returns global defaults for unknown agent", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: { mode: "safeguard" },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+    const result = resolveAgentCompaction(cfg, "nonexistent");
+    expect(result?.mode).toBe("safeguard");
+  });
+
+  it("per-agent compaction overrides defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "default",
+            reserveTokensFloor: 20000,
+            maxHistoryShare: 0.5,
+          },
+        },
+        list: [
+          {
+            id: "researcher",
+            compaction: {
+              mode: "safeguard",
+              reserveTokensFloor: 40000,
+            },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentCompaction(cfg, "researcher");
+    expect(result?.mode).toBe("safeguard");
+    expect(result?.reserveTokensFloor).toBe(40000);
+    // maxHistoryShare inherited from defaults
+    expect(result?.maxHistoryShare).toBe(0.5);
+  });
+
+  it("partial per-agent override merges with defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            reserveTokensFloor: 20000,
+            maxHistoryShare: 0.5,
+          },
+        },
+        list: [
+          {
+            id: "chat",
+            compaction: {
+              maxHistoryShare: 0.3,
+            },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentCompaction(cfg, "chat");
+    expect(result?.mode).toBe("safeguard"); // inherited
+    expect(result?.reserveTokensFloor).toBe(20000); // inherited
+    expect(result?.maxHistoryShare).toBe(0.3); // overridden
+  });
+
+  it("per-agent compaction without any defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "standalone",
+            compaction: {
+              mode: "safeguard",
+              reserveTokensFloor: 15000,
+            },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentCompaction(cfg, "standalone");
+    expect(result?.mode).toBe("safeguard");
+    expect(result?.reserveTokensFloor).toBe(15000);
+  });
+
+  it("memoryFlush partial override preserves default sub-fields", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            memoryFlush: {
+              enabled: true,
+              softThresholdTokens: 5000,
+              prompt: "Flush memories now.",
+              systemPrompt: "You are flushing memory.",
+            },
+          },
+        },
+        list: [
+          {
+            id: "executor",
+            compaction: {
+              memoryFlush: {
+                enabled: false,
+              },
+            },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentCompaction(cfg, "executor");
+    expect(result?.memoryFlush?.enabled).toBe(false);
+    // Sub-fields inherited from defaults despite partial override
+    expect(result?.memoryFlush?.softThresholdTokens).toBe(5000);
+    expect(result?.memoryFlush?.prompt).toBe("Flush memories now.");
+    expect(result?.memoryFlush?.systemPrompt).toBe("You are flushing memory.");
+  });
+
+  it("memoryFlush override with custom prompt preserves other defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            memoryFlush: {
+              enabled: true,
+              softThresholdTokens: 4000,
+              prompt: "Default prompt.",
+              systemPrompt: "Default system prompt.",
+            },
+          },
+        },
+        list: [
+          {
+            id: "companion",
+            compaction: {
+              memoryFlush: {
+                prompt: "Save emotional context and personal stories.",
+              },
+            },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentCompaction(cfg, "companion");
+    expect(result?.memoryFlush?.enabled).toBe(true); // inherited
+    expect(result?.memoryFlush?.softThresholdTokens).toBe(4000); // inherited
+    expect(result?.memoryFlush?.prompt).toBe("Save emotional context and personal stories."); // overridden
+    expect(result?.memoryFlush?.systemPrompt).toBe("Default system prompt."); // inherited
+  });
+
+  it("memoryFlush per-agent only (no default memoryFlush)", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+          },
+        },
+        list: [
+          {
+            id: "custom",
+            compaction: {
+              memoryFlush: {
+                enabled: false,
+              },
+            },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentCompaction(cfg, "custom");
+    expect(result?.mode).toBe("safeguard"); // inherited
+    expect(result?.memoryFlush?.enabled).toBe(false);
+  });
+
+  it("no memoryFlush in either per-agent or defaults returns undefined", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "default",
+          },
+        },
+        list: [
+          {
+            id: "plain",
+            compaction: {
+              reserveTokensFloor: 10000,
+            },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentCompaction(cfg, "plain");
+    expect(result?.memoryFlush).toBeUndefined();
+  });
+
+  it("agent without compaction returns compaction field as undefined in resolveAgentConfig", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "basic", workspace: "~/basic" }],
+      },
+    };
+    const result = resolveAgentConfig(cfg, "basic");
+    expect(result?.compaction).toBeUndefined();
   });
 });
