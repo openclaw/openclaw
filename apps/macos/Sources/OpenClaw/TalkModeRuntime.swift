@@ -792,52 +792,74 @@ extension TalkModeRuntime {
         let apiKey: String?
     }
 
+    /// Response shape for the `talk.config` gateway method (returns unredacted
+    /// talk-mode settings including the real API key).
+    private struct TalkConfigResponse: Decodable {
+        let voiceId: String?
+        let voiceAliases: [String: String]?
+        let modelId: String?
+        let outputFormat: String?
+        let interruptOnSpeech: Bool?
+        let apiKey: String?
+    }
+
     private func fetchTalkConfig() async -> TalkRuntimeConfig {
         let env = ProcessInfo.processInfo.environment
         let envVoice = env["ELEVENLABS_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let sagVoice = env["SAG_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let envApiKey = env["ELEVENLABS_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // Fetch UI settings from config.get (redacted is fine — no secrets needed).
+        Task {
+            do {
+                let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
+                    method: .configGet,
+                    params: nil,
+                    timeoutMs: 8000)
+                let ui = snap.config?["ui"]?.dictionaryValue
+                let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                await MainActor.run {
+                    AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+                }
+            } catch {
+                // Best-effort; seam color is cosmetic.
+            }
+        }
+
+        // Use talk.config for talk-mode settings — returns the real API key
+        // instead of the __OPENCLAW_REDACTED__ sentinel from config.get.
         do {
-            let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
-                method: .configGet,
+            let talkCfg: TalkConfigResponse = try await GatewayConnection.shared.requestDecoded(
+                method: .talkConfig,
                 params: nil,
                 timeoutMs: 8000)
-            let talk = snap.config?["talk"]?.dictionaryValue
-            let ui = snap.config?["ui"]?.dictionaryValue
-            let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            await MainActor.run {
-                AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
-            }
-            let voice = talk?["voiceId"]?.stringValue
-            let rawAliases = talk?["voiceAliases"]?.dictionaryValue
+            let voice = talkCfg.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
             let resolvedAliases: [String: String] =
-                rawAliases?.reduce(into: [:]) { acc, entry in
+                talkCfg.voiceAliases?.reduce(into: [:]) { acc, entry in
                     let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    let value = entry.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let value = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !key.isEmpty, !value.isEmpty else { return }
                     acc[key] = value
                 } ?? [:]
-            let model = talk?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = talkCfg.modelId?.trimmingCharacters(in: .whitespacesAndNewlines)
             let resolvedModel = (model?.isEmpty == false) ? model! : Self.defaultModelIdFallback
-            let outputFormat = talk?["outputFormat"]?.stringValue
-            let interrupt = talk?["interruptOnSpeech"]?.boolValue
-            let apiKey = talk?["apiKey"]?.stringValue
             let resolvedVoice =
-                (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
+                (voice?.isEmpty == false ? voice : nil) ??
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
                 (sagVoice?.isEmpty == false ? sagVoice : nil)
+            let apiKey = talkCfg.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
             let resolvedApiKey =
                 (envApiKey?.isEmpty == false ? envApiKey : nil) ??
-                (apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? apiKey : nil)
+                (apiKey?.isEmpty == false ? apiKey : nil)
             return TalkRuntimeConfig(
                 voiceId: resolvedVoice,
                 voiceAliases: resolvedAliases,
                 modelId: resolvedModel,
-                outputFormat: outputFormat,
-                interruptOnSpeech: interrupt ?? true,
+                outputFormat: talkCfg.outputFormat,
+                interruptOnSpeech: talkCfg.interruptOnSpeech ?? true,
                 apiKey: resolvedApiKey)
         } catch {
+            self.logger.warning("talk.config request failed, falling back to env: \(error.localizedDescription, privacy: .public)")
             let resolvedVoice =
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
                 (sagVoice?.isEmpty == false ? sagVoice : nil)

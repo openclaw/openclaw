@@ -387,3 +387,35 @@ describe("restoreRedactedValues", () => {
     expect(restored).toEqual(originalConfig);
   });
 });
+
+describe("talk.apiKey redaction (issue #14586)", () => {
+  it("redacts talk.apiKey in config.get responses", () => {
+    const snapshot = makeSnapshot({
+      talk: {
+        apiKey: "real-elevenlabs-api-key-value",
+        voiceId: "pMsXgVXv3BLzUgSXRplE",
+        modelId: "eleven_v3",
+      },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const talk = result.config.talk as Record<string, unknown>;
+    expect(talk.apiKey).toBe(REDACTED_SENTINEL);
+    // Non-sensitive fields should be preserved
+    expect(talk.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
+    expect(talk.modelId).toBe("eleven_v3");
+  });
+
+  it("redacts talk.apiKey in raw field too", () => {
+    const config = {
+      talk: {
+        apiKey: "real-elevenlabs-api-key-value",
+        voiceId: "pMsXgVXv3BLzUgSXRplE",
+      },
+    };
+    const raw = JSON.stringify(config, null, 2);
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.raw).not.toContain("real-elevenlabs-api-key-value");
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+  });
+});
