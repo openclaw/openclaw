@@ -489,7 +489,18 @@ export async function runHeartbeatOnce(opts: {
   const isCronEvent = Boolean(opts.reason?.startsWith("cron:"));
   const pendingEvents = isExecEvent || isCronEvent ? peekSystemEvents(sessionKey) : [];
   const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
-  const hasCronEvents = isCronEvent && pendingEvents.length > 0;
+  
+  // Fix for #13317: Only treat as cron event if there are actual cron-related messages,
+  // not just any system events (which could be heartbeat acks, exec completions, etc.)
+  const hasCronEvents = isCronEvent && pendingEvents.some((evt) => {
+    const trimmed = evt.trim();
+    // Exclude standard heartbeat acks and exec completion messages
+    return (
+      trimmed.length > 0 &&
+      !trimmed.includes("HEARTBEAT_OK") &&
+      !trimmed.includes("Exec finished")
+    );
+  });
   const prompt = hasExecCompletion
     ? EXEC_EVENT_PROMPT
     : hasCronEvents
