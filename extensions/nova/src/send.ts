@@ -1,3 +1,4 @@
+import WebSocket from "ws";
 import type { NovaConfig } from "./types.js";
 import { getActiveNovaConnection } from "./connection.js";
 import { resolveNovaCredentials } from "./credentials.js";
@@ -21,7 +22,7 @@ export type SendNovaMessageResult = {
  */
 export function sendNovaMessage(opts: SendNovaMessageOpts): SendNovaMessageResult {
   const ws = getActiveNovaConnection();
-  if (!ws || ws.readyState !== ws.OPEN) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
     throw new Error("Nova WebSocket connection is not open");
   }
 
