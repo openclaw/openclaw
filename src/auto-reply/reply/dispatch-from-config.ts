@@ -214,6 +214,11 @@ export async function dispatchReplyFromConfig(params: {
     isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
 
+  // Resolve humanDelay config once for both block and final pacing.
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const humanDelayConfig = agentId ? resolveHumanDelayConfig(cfg, agentId) : undefined;
+  let routedBlockCount = 0;
+
   /**
    * Helper to send a payload via route-reply (async).
    * Only used when actually routing to a different provider.
@@ -233,6 +238,17 @@ export async function dispatchReplyFromConfig(params: {
     if (abortSignal?.aborted) {
       return;
     }
+
+    // Apply pacing delay between block payloads routed to external channels
+    // (Slack/Telegram) to prevent burst delivery. Skip delay for the first block.
+    if (routedBlockCount > 0) {
+      const delayMs = getHumanDelay(humanDelayConfig);
+      if (delayMs > 0) {
+        await sleep(delayMs);
+      }
+    }
+    routedBlockCount++;
+
     const result = await routeReply({
       payload,
       channel: originatingChannel,
@@ -368,8 +384,6 @@ export async function dispatchReplyFromConfig(params: {
         // Add pacing delay between messages routed to external channels (Slack/Telegram)
         // to prevent burst delivery. Skip delay for the first message.
         if (routedFinalCount > 0) {
-          const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
-          const humanDelayConfig = agentId ? resolveHumanDelayConfig(cfg, agentId) : undefined;
           const delayMs = getHumanDelay(humanDelayConfig);
           if (delayMs > 0) {
             await sleep(delayMs);
