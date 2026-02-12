@@ -35,12 +35,19 @@ export function isRecalledContext(msg: MessageLike): boolean {
   return extractText(msg).includes(RECALLED_CONTEXT_MARKER);
 }
 
+// Pi framework may use "toolUse" / "toolCall" / "functionCall" in addition to
+// the Anthropic-native "tool_use". We must recognise all variants to avoid
+// leaving orphaned tool_results after trimming.
+const TOOL_CALL_TYPES = new Set(["tool_use", "toolUse", "toolCall", "functionCall"]);
+
 function hasToolUse(msg: MessageLike): boolean {
   if (msg.role !== "assistant") {
     return false;
   }
   if (Array.isArray(msg.content)) {
-    return (msg.content as Array<{ type?: string }>).some((b) => b?.type === "tool_use");
+    return (msg.content as Array<{ type?: string }>).some(
+      (b) => typeof b?.type === "string" && TOOL_CALL_TYPES.has(b.type),
+    );
   }
   return false;
 }

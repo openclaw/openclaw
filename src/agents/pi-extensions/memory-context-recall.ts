@@ -14,6 +14,7 @@ import { getGlobalMemoryRuntime, computeHardCap } from "../memory-context/global
 import { buildRecalledContextBlock } from "../memory-context/recall-format.js";
 import { maybeRedact } from "../memory-context/redaction.js";
 import { smartTrim, type MessageLike } from "../memory-context/smart-trim.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
 /** Marker to identify injected recalled-context messages. */
@@ -104,7 +105,9 @@ export default function memoryContextRecallExtension(api: ExtensionAPI): void {
       : { kept: messages, trimmed: [] as MessageLike[], didTrim: false };
 
     if (trimResult.didTrim) {
-      messages = trimResult.kept as AgentMessage[];
+      // Repair tool_use / tool_result pairing after trimming to prevent
+      // "unexpected tool_use_id" errors from the LLM API.
+      messages = sanitizeToolUseResultPairing(trimResult.kept as AgentMessage[]);
 
       // Non-blocking archive of trimmed messages
       if (trimResult.trimmed.length > 0) {
@@ -222,7 +225,8 @@ export default function memoryContextRecallExtension(api: ExtensionAPI): void {
         `memory-context: recalled ${recall.knowledgeCount} knowledge + ${recall.detailCount} detail (${recall.tokens} tokens, hardCap ${hardCap})`,
       );
 
-      return { messages: result };
+      // Final defensive repair: ensure no orphaned tool_results after injection
+      return { messages: sanitizeToolUseResultPairing(result) };
     } catch (err) {
       console.warn(`memory-context: recall failed (non-fatal): ${String(err)}`);
       return messages !== event.messages ? { messages } : undefined;
