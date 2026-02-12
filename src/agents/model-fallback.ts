@@ -239,6 +239,13 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
+  // Track providers where we've already performed a cooldown pre-check.
+  // Cooldown is per-profile, not per-model. Different models on the same
+  // provider may use independent quota pools (e.g. Claude vs Gemini on
+  // google-antigravity), so cooldown from one model should not block
+  // fallback attempts with a different model on the same provider.
+  const cooldownCheckedProviders = new Set<string>();
+
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
     if (authStore) {
@@ -247,17 +254,21 @@ export async function runWithModelFallback<T>(params: {
         store: authStore,
         provider: candidate.provider,
       });
-      const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
 
-      if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        // All profiles for this provider are in cooldown; skip without attempting
-        attempts.push({
-          provider: candidate.provider,
-          model: candidate.model,
-          error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-          reason: "rate_limit",
-        });
-        continue;
+      if (!cooldownCheckedProviders.has(candidate.provider)) {
+        cooldownCheckedProviders.add(candidate.provider);
+        const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+
+        if (profileIds.length > 0 && !isAnyProfileAvailable) {
+          // All profiles for this provider are in cooldown; skip without attempting
+          attempts.push({
+            provider: candidate.provider,
+            model: candidate.model,
+            error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
+            reason: "rate_limit",
+          });
+          continue;
+        }
       }
     }
     try {

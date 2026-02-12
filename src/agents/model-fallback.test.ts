@@ -204,6 +204,66 @@ describe("runWithModelFallback", () => {
     }
   });
 
+  it("does not skip different model on same provider due to cooldown from first model", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const provider = `cooldown-cross-model-${crypto.randomUUID()}`;
+    const profileId = `${provider}:default`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider,
+          key: "test-key",
+        },
+      },
+      usageStats: {
+        [profileId]: {
+          cooldownUntil: Date.now() + 60_000,
+        },
+      },
+    };
+
+    saveAuthProfileStore(store, tempDir);
+
+    // Primary: provider/model-a, fallback: same provider but different model-b
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/model-a`,
+            fallbacks: [`${provider}/model-b`],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === provider && modelId === "model-b") {
+        return "ok";
+      }
+      throw new Error(`unexpected call: ${providerId}/${modelId}`);
+    });
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider,
+        model: "model-a",
+        agentDir: tempDir,
+        run,
+      });
+
+      // model-a should be skipped (cooldown), but model-b on same provider should be attempted
+      expect(result.result).toBe("ok");
+      expect(run.mock.calls).toEqual([[provider, "model-b"]]);
+      expect(result.attempts[0]?.reason).toBe("rate_limit");
+      expect(result.attempts[0]?.model).toBe("model-a");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not skip when any profile is available", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
     const provider = `cooldown-mixed-${crypto.randomUUID()}`;
