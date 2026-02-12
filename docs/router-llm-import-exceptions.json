@@ -1,0 +1,19 @@
+{
+  "$schema": "./router-llm-import-exceptions.schema.json",
+  "version": "1.0.0",
+  "description": "Timeboxed exceptions for LLM provider imports outside router module. All exceptions must have expiry dates and removal tickets.",
+  "exceptions": [
+    {
+      "path": "src/gateway/server-http.ts",
+      "reason": "Gateway HTTP handler wiring requires openai-http import for request forwarding",
+      "expiresAt": "2026-03-15T00:00:00Z",
+      "removalTicket": "ROUTER-001",
+      "gates": ["A"]
+    }
+  ],
+  "rules": {
+    "pathFormat": "Literal file path only. No globs, no wildcards, no directory patterns.",
+    "expiresAtFormat": "ISO8601 UTC datetime (YYYY-MM-DDTHH:mm:ssZ). NOT date-only.",
+    "gates": "Array of gate IDs this exception applies to: A (provider SDK), B (embedded runner), C (raw HTTP)"
+  }
+}

@@ -1,0 +1,68 @@
+# LLM Entrypoints Inventory (auto-generated)
+# Generated: 2026-02-12T17:12:06Z
+
+## runWithModelFallback calls
+src/cron/isolated-agent/run.ts:331:    const fallbackResult = await runWithModelFallback({
+src/commands/agent.ts:381:      const fallbackResult = await runWithModelFallback({
+src/auto-reply/reply/agent-runner-memory.ts:91:    await runWithModelFallback({
+src/auto-reply/reply/followup-runner.ts:128:        const fallbackResult = await runWithModelFallback({
+src/auto-reply/reply/agent-runner-execution.ts:137:      const fallbackResult = await runWithModelFallback({
+src/agents/model-fallback.test.ts:33:      runWithModelFallback({
+src/agents/model-fallback.test.ts:50:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:70:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:94:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:114:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:166:      const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:227:      const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:258:      runWithModelFallback({
+src/agents/model-fallback.test.ts:286:    const res = await runWithModelFallback({
+src/agents/model-fallback.test.ts:324:      runWithModelFallback({
+src/agents/model-fallback.test.ts:353:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:374:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:394:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:417:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:439:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:459:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:481:    const result = await runWithModelFallback({
+src/agents/model-fallback.test.ts:502:      runWithModelFallback({
+src/agents/model-fallback.test.ts:529:    const result = await runWithModelFallback({
+
+## runWithImageModelFallback calls
+src/agents/tools/image-tool.ts:239:  const result = await runWithImageModelFallback({
+
+## runEmbeddedPiAgent calls
+src/cron/isolated-agent/run.ts:355:        return runEmbeddedPiAgent({
+src/auto-reply/reply/agent-runner-execution.ts:224:          return runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.test.ts:197:      runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.test.ts:223:      await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.test.ts:254:    const result = await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.test.ts:315:      await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.test.ts:355:    await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.test.ts:369:    await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.test.ts:419:    const result = await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.test.ts:450:    const result = await runEmbeddedPiAgent({
+src/auto-reply/reply/followup-runner.ts:140:            return runEmbeddedPiAgent({
+src/auto-reply/reply/agent-runner-memory.ts:105:        return runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts:151:      await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts:195:      await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts:256:        await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts:307:      await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts:363:        await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts:412:          runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts:453:        runEmbeddedPiAgent({
+src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts:526:        await runEmbeddedPiAgent({
+src/agents/pi-embedded-runner/run.ts:69:export async function runEmbeddedPiAgent(
+src/agents/pi-embedded-runner/run.overflow-compaction.test.ts:208:    const result = await runEmbeddedPiAgent(baseParams);
+src/agents/pi-embedded-runner/run.overflow-compaction.test.ts:234:    const result = await runEmbeddedPiAgent(baseParams);
+src/agents/pi-embedded-runner/run.overflow-compaction.test.ts:260:    const result = await runEmbeddedPiAgent(baseParams);
+src/agents/pi-embedded-runner/run.overflow-compaction.test.ts:279:    const result = await runEmbeddedPiAgent(baseParams);
+src/hooks/llm-slug-generator.ts:41:    const result = await runEmbeddedPiAgent({
+src/commands/agent.ts:410:          return runEmbeddedPiAgent({
+src/commands/models/list.probe.ts:292:    await runEmbeddedPiAgent({
+
+## createAgentSession calls
+src/agents/pi-embedded-runner/run/attempt.ts:679:      ({ session } = await createAgentSession({
+src/agents/pi-embedded-runner/compact.ts:389:      ({ session } = await createAgentSession({
+
+## session.compact calls
+src/agents/pi-embedded-runner/compact.ts:429:        const result = await session.compact(params.customInstructions);

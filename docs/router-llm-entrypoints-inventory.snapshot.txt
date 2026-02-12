@@ -1,0 +1,26 @@
+## runWithModelFallback calls
+src/auto-reply/reply/agent-runner-execution.ts:137:      const fallbackResult = await runWithModelFallback({
+src/auto-reply/reply/agent-runner-memory.ts:91:    await runWithModelFallback({
+src/auto-reply/reply/followup-runner.ts:128:        const fallbackResult = await runWithModelFallback({
+src/commands/agent.ts:381:      const fallbackResult = await runWithModelFallback({
+src/cron/isolated-agent/run.ts:331:    const fallbackResult = await runWithModelFallback({
+
+## runWithImageModelFallback calls
+src/agents/tools/image-tool.ts:239:  const result = await runWithImageModelFallback({
+
+## runEmbeddedPiAgent calls (non-test only)
+src/agents/pi-embedded-runner/run.ts:69:export async function runEmbeddedPiAgent(
+src/auto-reply/reply/agent-runner-execution.ts:224:          return runEmbeddedPiAgent({
+src/auto-reply/reply/agent-runner-memory.ts:105:        return runEmbeddedPiAgent({
+src/auto-reply/reply/followup-runner.ts:140:            return runEmbeddedPiAgent({
+src/commands/agent.ts:410:          return runEmbeddedPiAgent({
+src/commands/models/list.probe.ts:292:    await runEmbeddedPiAgent({
+src/cron/isolated-agent/run.ts:355:        return runEmbeddedPiAgent({
+src/hooks/llm-slug-generator.ts:41:    const result = await runEmbeddedPiAgent({
+
+## createAgentSession calls
+src/agents/pi-embedded-runner/compact.ts:389:      ({ session } = await createAgentSession({
+src/agents/pi-embedded-runner/run/attempt.ts:679:      ({ session } = await createAgentSession({
+
+## session.compact calls
+src/agents/pi-embedded-runner/compact.ts:429:        const result = await session.compact(params.customInstructions);
