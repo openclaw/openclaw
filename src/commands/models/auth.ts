@@ -11,7 +11,11 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { upsertAuthProfile } from "../../agents/auth-profiles.js";
+import {
+  listProfilesForProvider,
+  loadAuthProfileStore,
+  upsertAuthProfile,
+} from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -21,11 +25,13 @@ import { logConfigUpdated } from "../../config/logging.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { applyAuthChoice } from "../auth-choice.apply.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "../openai-codex-model-default.js";
 import { updateConfig } from "./shared.js";
 
 const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
@@ -342,6 +348,49 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const workspaceDir =
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
 
+  const prompter = createClackPrompter();
+  const requestedProvider = opts.provider?.trim();
+  const normalizedRequestedProvider = requestedProvider
+    ? normalizeProviderId(requestedProvider)
+    : null;
+
+  // Backward compatibility: docs and doctor currently recommend
+  // `openclaw models auth login --provider openai-codex`.
+  // openai-codex is built-in (not plugin-registered), so handle it directly here.
+  if (normalizedRequestedProvider === "openai-codex") {
+    const normalizedMethod = opts.method?.trim() ? normalizeProviderId(opts.method) : null;
+    if (normalizedMethod && normalizedMethod !== "oauth") {
+      throw new Error("Unknown auth method for openai-codex. Use --method oauth.");
+    }
+
+    const beforeProfiles = listProfilesForProvider(loadAuthProfileStore(), "openai-codex").length;
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-codex",
+      config,
+      prompter,
+      runtime,
+      agentDir,
+      setDefaultModel: Boolean(opts.setDefault),
+      agentId: defaultAgentId,
+    });
+
+    await updateConfig(() => result.config);
+
+    const afterProfiles = listProfilesForProvider(loadAuthProfileStore(), "openai-codex").length;
+
+    if (afterProfiles > beforeProfiles) {
+      logConfigUpdated(runtime);
+      runtime.log("Auth profile: openai-codex:default (openai-codex/oauth)");
+      runtime.log(
+        opts.setDefault
+          ? `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`
+          : `Default model available: ${OPENAI_CODEX_DEFAULT_MODEL} (use --set-default to apply)`,
+      );
+    }
+    return;
+  }
+
   const providers = resolvePluginProviders({ config, workspaceDir });
   if (providers.length === 0) {
     throw new Error(
@@ -349,21 +398,27 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  const prompter = createClackPrompter();
   const selectedProvider =
     resolveProviderMatch(providers, opts.provider) ??
-    (await prompter
-      .select({
-        message: "Select a provider",
-        options: providers.map((provider) => ({
-          value: provider.id,
-          label: provider.label,
-          hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,
-        })),
-      })
-      .then((id) => resolveProviderMatch(providers, String(id))));
+    (requestedProvider
+      ? null
+      : await prompter
+          .select({
+            message: "Select a provider",
+            options: providers.map((provider) => ({
+              value: provider.id,
+              label: provider.label,
+              hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,
+            })),
+          })
+          .then((id) => resolveProviderMatch(providers, String(id))));
 
   if (!selectedProvider) {
+    if (requestedProvider) {
+      throw new Error(
+        `Unknown provider plugin: ${requestedProvider}. Use \`${formatCliCommand("openclaw plugins list")}\` to inspect available plugin providers.`,
+      );
+    }
     throw new Error("Unknown provider. Use --provider <id> to pick a provider plugin.");
   }
 
