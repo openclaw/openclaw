@@ -23,6 +23,12 @@ const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
+// pi-ai's built-in Anthropic catalog can lag behind OpenClaw's defaults/docs.
+// Add forward-compat fallbacks for known-new IDs by cloning an older template model.
+const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
+const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
+const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
+
 function resolveOpenAICodexGpt53FallbackModel(
   provider: string,
   modelId: string,
@@ -61,6 +67,51 @@ function resolveOpenAICodexGpt53FallbackModel(
     contextWindow: DEFAULT_CONTEXT_TOKENS,
     maxTokens: DEFAULT_CONTEXT_TOKENS,
   } as Model<Api>);
+}
+
+function resolveAnthropicOpus46ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "anthropic") {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+  const isOpus46 =
+    lower === ANTHROPIC_OPUS_46_MODEL_ID ||
+    lower === ANTHROPIC_OPUS_46_DOT_MODEL_ID ||
+    lower.startsWith(`${ANTHROPIC_OPUS_46_MODEL_ID}-`) ||
+    lower.startsWith(`${ANTHROPIC_OPUS_46_DOT_MODEL_ID}-`);
+  if (!isOpus46) {
+    return undefined;
+  }
+
+  const templateIds: string[] = [];
+  if (lower.startsWith(ANTHROPIC_OPUS_46_MODEL_ID)) {
+    templateIds.push(lower.replace(ANTHROPIC_OPUS_46_MODEL_ID, "claude-opus-4-5"));
+  }
+  if (lower.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID)) {
+    templateIds.push(lower.replace(ANTHROPIC_OPUS_46_DOT_MODEL_ID, "claude-opus-4.5"));
+  }
+  templateIds.push(...ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS);
+
+  for (const templateId of [...new Set(templateIds)].filter(Boolean)) {
+    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    if (!template) {
+      continue;
+    }
+    return normalizeModelCompat({
+      ...template,
+      id: trimmedModelId,
+      name: trimmedModelId,
+    } as Model<Api>);
+  }
+
+  return undefined;
 }
 
 export function buildInlineProviderModels(
@@ -139,6 +190,14 @@ export function resolveModel(
     );
     if (codexForwardCompat) {
       return { model: codexForwardCompat, authStorage, modelRegistry };
+    }
+    const anthropicForwardCompat = resolveAnthropicOpus46ForwardCompatModel(
+      provider,
+      modelId,
+      modelRegistry,
+    );
+    if (anthropicForwardCompat) {
+      return { model: anthropicForwardCompat, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {

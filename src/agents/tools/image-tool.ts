@@ -116,6 +116,8 @@ export function resolveImageModelConfigForTool(params: {
     preferred = "minimax/MiniMax-VL-01";
   } else if (providerOk && providerVisionFromConfig) {
     preferred = providerVisionFromConfig;
+  } else if (primary.provider === "zai" && providerOk) {
+    preferred = "zai/glm-4.6v";
   } else if (primary.provider === "openai" && openaiOk) {
     preferred = "openai/gpt-5-mini";
   } else if (primary.provider === "anthropic" && anthropicOk) {

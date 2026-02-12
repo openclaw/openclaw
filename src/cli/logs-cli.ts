@@ -26,6 +26,7 @@ type LogsCliOptions = {
   json?: boolean;
   plain?: boolean;
   color?: boolean;
+  localTime?: boolean;
   url?: string;
   token?: string;
   timeout?: string;
@@ -59,7 +60,11 @@ async function fetchLogs(
   return payload as LogsTailPayload;
 }
 
-function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain") {
+export function formatLogTimestamp(
+  value?: string,
+  mode: "pretty" | "plain" = "plain",
+  localTime = false,
+) {
   if (!value) {
     return "";
   }
@@ -67,10 +72,18 @@ function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain") 
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
-  if (mode === "pretty") {
-    return parsed.toISOString().slice(11, 19);
+  let timeString: string;
+  if (localTime) {
+    const tzoffset = parsed.getTimezoneOffset() * 60000; // offset in milliseconds
+    const localISOTime = new Date(parsed.getTime() - tzoffset).toISOString().slice(0, -1);
+    timeString = localISOTime;
+  } else {
+    timeString = parsed.toISOString();
   }
-  return parsed.toISOString();
+  if (mode === "pretty") {
+    return timeString.slice(11, 19);
+  }
+  return timeString;
 }
 
 function formatLogLine(
@@ -78,6 +91,7 @@ function formatLogLine(
   opts: {
     pretty: boolean;
     rich: boolean;
+    localTime: boolean;
   },
 ): string {
   const parsed = parseLogLine(raw);
@@ -85,7 +99,7 @@ function formatLogLine(
     return raw;
   }
   const label = parsed.subsystem ?? parsed.module ?? "";
-  const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain");
+  const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
   const level = parsed.level ?? "";
   const levelLabel = level.padEnd(5).trim();
   const message = parsed.message || parsed.raw;
@@ -192,6 +206,7 @@ export function registerLogsCli(program: Command) {
     .option("--json", "Emit JSON log lines", false)
     .option("--plain", "Plain text output (no ANSI styling)", false)
     .option("--no-color", "Disable ANSI colors")
+    .option("--local-time", "Display timestamps in local timezone", false)
     .addHelpText(
       "after",
       () =>
@@ -208,6 +223,7 @@ export function registerLogsCli(program: Command) {
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
     const rich = isRich() && opts.color !== false;
+    const localTime = Boolean(opts.localTime);
 
     while (true) {
       let payload: LogsTailPayload;
@@ -279,6 +295,7 @@ export function registerLogsCli(program: Command) {
               formatLogLine(line, {
                 pretty,
                 rich,
+                localTime,
               }),
             )
           ) {

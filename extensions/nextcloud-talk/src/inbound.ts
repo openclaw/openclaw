@@ -6,7 +6,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
-import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
+import type { CoreConfig, GroupPolicy, NextcloudTalkInboundMessage } from "./types.js";
 import {
   normalizeNextcloudTalkAllowlist,
   resolveNextcloudTalkAllowlistMatch,
@@ -84,8 +84,12 @@ export async function handleNextcloudTalkInbound(params: {
   statusSink?.({ lastInboundAt: message.timestamp });
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const defaultGroupPolicy = (config.channels as Record<string, unknown> | undefined)?.defaults as
+    | { groupPolicy?: string }
+    | undefined;
+  const groupPolicy = (account.config.groupPolicy ??
+    defaultGroupPolicy?.groupPolicy ??
+    "allowlist") as GroupPolicy;
 
   const configAllowFrom = normalizeNextcloudTalkAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(account.config.groupAllowFrom);
@@ -118,7 +122,8 @@ export async function handleNextcloudTalkInbound(params: {
     cfg: config as OpenClawConfig,
     surface: CHANNEL_ID,
   });
-  const useAccessGroups = config.commands?.useAccessGroups !== false;
+  const useAccessGroups =
+    (config.commands as Record<string, unknown> | undefined)?.useAccessGroups !== false;
   const senderAllowedForCommands = resolveNextcloudTalkAllowlistMatch({
     allowFrom: isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
     senderId,
@@ -228,15 +233,18 @@ export async function handleNextcloudTalkInbound(params: {
     channel: CHANNEL_ID,
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "dm",
+      kind: isGroup ? "group" : "direct",
       id: isGroup ? roomToken : senderId,
     },
   });
 
   const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
+  const storePath = core.channel.session.resolveStorePath(
+    (config.session as Record<string, unknown> | undefined)?.store as string | undefined,
+    {
+      agentId: route.agentId,
+    },
+  );
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config as OpenClawConfig);
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
     storePath,
@@ -255,6 +263,7 @@ export async function handleNextcloudTalkInbound(params: {
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: isGroup ? `nextcloud-talk:room:${roomToken}` : `nextcloud-talk:${senderId}`,

@@ -98,10 +98,13 @@ Pairing details: [Gateway pairing](/gateway/pairing).
 ### 5) Verify the node is connected
 
 - Via nodes status:
+
   ```bash
   openclaw nodes status
   ```
+
 - Via Gateway:
+
   ```bash
   openclaw gateway call node.list --params "{}"
   ```

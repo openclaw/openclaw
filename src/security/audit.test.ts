@@ -11,6 +11,20 @@ import { runSecurityAudit } from "./audit.js";
 
 const isWindows = process.platform === "win32";
 
+function successfulProbeResult(url: string) {
+  return {
+    ok: true,
+    url,
+    connectLatencyMs: 1,
+    error: null,
+    close: null,
+    health: null,
+    status: null,
+    presence: null,
+    configSnapshot: null,
+  };
+}
+
 describe("security audit", () => {
   it("includes an attack surface summary (info)", async () => {
     const cfg: OpenClawConfig = {
@@ -1021,6 +1035,7 @@ describe("security audit", () => {
       includeChannelSecurity: false,
       deep: true,
       stateDir: tmpDir,
+      probeGatewayFn: async (opts) => successfulProbeResult(opts.url),
     });
 
     expect(
@@ -1075,6 +1090,7 @@ description: test skill
       includeChannelSecurity: false,
       deep: true,
       stateDir: tmpDir,
+      probeGatewayFn: async (opts) => successfulProbeResult(opts.url),
     });
 
     const pluginFinding = deepRes.findings.find(
@@ -1113,6 +1129,7 @@ description: test skill
       includeChannelSecurity: false,
       deep: true,
       stateDir: tmpDir,
+      probeGatewayFn: async (opts) => successfulProbeResult(opts.url),
     });
 
     expect(res.findings.some((f) => f.checkId === "plugins.code_safety.entry_escape")).toBe(true);

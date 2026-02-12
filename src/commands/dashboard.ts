@@ -23,6 +23,7 @@ export async function dashboardCommand(
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;
   const customBindHost = cfg.gateway?.customBindHost;
+  const token = cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
 
   const links = resolveControlUiLinks({
     port,
@@ -30,7 +31,10 @@ export async function dashboardCommand(
     customBindHost,
     basePath,
   });
-  const dashboardUrl = links.httpUrl;
+  // Prefer URL fragment to avoid leaking auth tokens via query params.
+  const dashboardUrl = token
+    ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
+    : links.httpUrl;
 
   runtime.log(`Dashboard URL: ${dashboardUrl}`);
 
@@ -48,6 +52,7 @@ export async function dashboardCommand(
       hint = formatControlUiSshHint({
         port,
         basePath,
+        token: token || undefined,
       });
     }
   } else {

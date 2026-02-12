@@ -12,12 +12,12 @@
     "@noble/ed25519": "3.0.0",
     "dompurify": "^3.3.1",
     "lit": "^3.3.2",
-    "marked": "^17.0.1",
+    "marked": "^17.0.2",
     "vite": "7.3.1"
   },
   "devDependencies": {
     "@vitest/browser-playwright": "4.0.18",
-    "playwright": "^1.58.1",
+    "playwright": "^1.58.2",
     "vitest": "4.0.18"
   }
 }

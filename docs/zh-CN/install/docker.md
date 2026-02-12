@@ -314,7 +314,7 @@ pnpm test:docker:qr
 - 只读工具 + 只读工作区（家庭/工作智能体）
 - 无文件系统/shell 工具（公共智能体）
 
-参阅[多智能体沙箱与工具](/multi-agent-sandbox-tools)了解示例、优先级和故障排除。
+参阅[多智能体沙箱与工具](/tools/multi-agent-sandbox-tools)了解示例、优先级和故障排除。
 
 ### 默认行为
 

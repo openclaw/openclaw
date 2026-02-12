@@ -29,6 +29,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import {
   readFirstUserMessageFromTranscript,
@@ -568,6 +569,9 @@ export function listSessionsFromStore(params: {
 
   let sessions = Object.entries(store)
     .filter(([key]) => {
+      if (isCronRunSessionKey(key)) {
+        return false;
+      }
       if (!includeGlobal && key === "global") {
         return false;
       }

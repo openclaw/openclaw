@@ -6,8 +6,28 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: install-smoke-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
+  docs-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.check.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs-only changes
+        id: check
+        uses: ./.github/actions/detect-docs-changes
+
   install-smoke:
+    needs: [docs-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout CLI

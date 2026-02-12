@@ -359,7 +359,7 @@ export async function agentsAddCommand(
     await prompter.outro(`Agent "${agentId}" ready.`);
   } catch (err) {
     if (err instanceof WizardCancelledError) {
-      runtime.exit(0);
+      runtime.exit(1);
       return;
     }
     throw err;

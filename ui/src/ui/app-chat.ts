@@ -202,7 +202,7 @@ export async function handleSendChat(
   });
 }
 
-export async function refreshChat(host: ChatHost) {
+export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
@@ -210,7 +210,9 @@ export async function refreshChat(host: ChatHost) {
     }),
     refreshChatAvatar(host),
   ]);
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  if (opts?.scheduleScroll !== false) {
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  }
 }
 
 export const flushChatQueueForEvent = flushChatQueue;

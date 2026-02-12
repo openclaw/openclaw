@@ -76,7 +76,7 @@ OpenClaw 有两个钩子系统：
 - **`agent:bootstrap`**：在系统提示最终确定之前构建引导文件时运行。用于添加/删除引导上下文文件。
 - **命令钩子**：`/new`、`/reset`、`/stop` 和其他命令事件（参见钩子文档）。
 
-参见[钩子](/hooks)了解设置和示例。
+参见[钩子](/automation/hooks)了解设置和示例。
 
 ### 插件钩子（智能体 + Gateway 网关生命周期）
 
@@ -91,7 +91,7 @@ OpenClaw 有两个钩子系统：
 - **`session_start` / `session_end`**：会话生命周期边界。
 - **`gateway_start` / `gateway_stop`**：Gateway 网关生命周期事件。
 
-参见[插件](/plugin#plugin-hooks)了解钩子 API 和注册详情。
+参见[插件](/tools/plugin#plugin-hooks)了解钩子 API 和注册详情。
 
 ## 流式传输 + 部分回复
 

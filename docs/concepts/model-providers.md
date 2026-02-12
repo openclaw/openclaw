@@ -136,14 +136,14 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 
 Kimi K2 model IDs:
 
-{/_ moonshot-kimi-k2-model-refs:start _/ && null}
+{/_moonshot-kimi-k2-model-refs:start_/ && null}
 
 - `moonshot/kimi-k2.5`
 - `moonshot/kimi-k2-0905-preview`
 - `moonshot/kimi-k2-turbo-preview`
 - `moonshot/kimi-k2-thinking`
 - `moonshot/kimi-k2-thinking-turbo`
-  {/_ moonshot-kimi-k2-model-refs:end _/ && null}
+  {/_moonshot-kimi-k2-model-refs:end_/ && null}
 
 ```json5
 {
@@ -242,7 +242,7 @@ Ollama is a local LLM runtime that provides an OpenAI-compatible API:
 - Provider: `ollama`
 - Auth: None required (local server)
 - Example model: `ollama/llama3.3`
-- Installation: https://ollama.ai
+- Installation: [https://ollama.ai](https://ollama.ai)
 
 ```bash
 # Install Ollama, then pull a model:

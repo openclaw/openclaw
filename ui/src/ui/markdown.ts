@@ -112,7 +112,9 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`) as string;
+  const rendered = marked.parse(`${truncated.text}${suffix}`, {
+    renderer: htmlEscapeRenderer,
+  }) as string;
   const sanitized = DOMPurify.sanitize(rendered, {
     ALLOWED_TAGS: allowedTags,
     ALLOWED_ATTR: allowedAttrs,
@@ -122,6 +124,13 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   return sanitized;
 }
+
+// Prevent raw HTML in chat messages from being rendered as formatted HTML.
+// Display it as escaped text so users see the literal markup.
+// Security is handled by DOMPurify, but rendering pasted HTML (e.g. error
+// pages) as formatted output is confusing UX (#13937).
+const htmlEscapeRenderer = new marked.Renderer();
+htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
 
 function escapeHtml(value: string): string {
   return value

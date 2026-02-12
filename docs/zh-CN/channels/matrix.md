@@ -36,7 +36,7 @@ openclaw plugins install ./extensions/matrix
 
 如果你在配置/新手引导期间选择 Matrix 并检测到 git 检出，OpenClaw 将自动提供本地安装路径。
 
-详情：[插件](/plugin)
+详情：[插件](/tools/plugin)
 
 ## 设置
 

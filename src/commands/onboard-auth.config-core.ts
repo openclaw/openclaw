@@ -1,15 +1,26 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelApi } from "../config/types.models.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "../agents/cloudflare-ai-gateway.js";
-import { buildXiaomiProvider, XIAOMI_DEFAULT_MODEL_ID } from "../agents/models-config.providers.js";
+import {
+  buildQianfanProvider,
+  buildXiaomiProvider,
+  QIANFAN_DEFAULT_MODEL_ID,
+  XIAOMI_DEFAULT_MODEL_ID,
+} from "../agents/models-config.providers.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
+import {
+  buildTogetherModelDefinition,
+  TOGETHER_BASE_URL,
+  TOGETHER_MODEL_CATALOG,
+} from "../agents/together-models.js";
 import {
   buildVeniceModelDefinition,
   VENICE_BASE_URL,
@@ -18,7 +29,9 @@ import {
 } from "../agents/venice-models.js";
 import {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  TOGETHER_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
@@ -27,6 +40,8 @@ import {
 import {
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
+  QIANFAN_BASE_URL,
+  QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
@@ -232,6 +247,105 @@ export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
               }
             : undefined),
           primary: OPENROUTER_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export const LITELLM_BASE_URL = "http://localhost:4000";
+export const LITELLM_DEFAULT_MODEL_ID = "claude-opus-4-6";
+const LITELLM_DEFAULT_CONTEXT_WINDOW = 128_000;
+const LITELLM_DEFAULT_MAX_TOKENS = 8_192;
+const LITELLM_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+function buildLitellmModelDefinition(): {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  input: Array<"text" | "image">;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  contextWindow: number;
+  maxTokens: number;
+} {
+  return {
+    id: LITELLM_DEFAULT_MODEL_ID,
+    name: "Claude Opus 4.6",
+    reasoning: true,
+    input: ["text", "image"],
+    // LiteLLM routes to many upstreams; keep neutral placeholders.
+    cost: LITELLM_DEFAULT_COST,
+    contextWindow: LITELLM_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: LITELLM_DEFAULT_MAX_TOKENS,
+  };
+}
+
+export function applyLitellmProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[LITELLM_DEFAULT_MODEL_REF] = {
+    ...models[LITELLM_DEFAULT_MODEL_REF],
+    alias: models[LITELLM_DEFAULT_MODEL_REF]?.alias ?? "LiteLLM",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.litellm;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModel = buildLitellmModelDefinition();
+  const hasDefaultModel = existingModels.some((model) => model.id === LITELLM_DEFAULT_MODEL_ID);
+  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedBaseUrl =
+    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.litellm = {
+    ...existingProviderRest,
+    baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyLitellmConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyLitellmProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: LITELLM_DEFAULT_MODEL_REF,
         },
       },
     },
@@ -592,6 +706,83 @@ export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+/**
+ * Apply Together provider configuration without changing the default model.
+ * Registers Together models and sets up the provider, but preserves existing model selection.
+ */
+export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[TOGETHER_DEFAULT_MODEL_REF] = {
+    ...models[TOGETHER_DEFAULT_MODEL_REF],
+    alias: models[TOGETHER_DEFAULT_MODEL_REF]?.alias ?? "Together AI",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.together;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const togetherModels = TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...togetherModels.filter(
+      (model) => !existingModels.some((existing) => existing.id === model.id),
+    ),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.together = {
+    ...existingProviderRest,
+    baseUrl: TOGETHER_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : togetherModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Together provider configuration AND set Together as the default model.
+ * Use this when Together is the primary provider choice during onboarding.
+ */
+export function applyTogetherConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyTogetherProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: TOGETHER_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
 export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[XAI_DEFAULT_MODEL_REF] = {
@@ -702,6 +893,83 @@ export function applyAuthProfileConfig(
       ...cfg.auth,
       profiles,
       ...(order ? { order } : {}),
+    },
+  };
+}
+
+export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[QIANFAN_DEFAULT_MODEL_REF] = {
+    ...models[QIANFAN_DEFAULT_MODEL_REF],
+    alias: models[QIANFAN_DEFAULT_MODEL_REF]?.alias ?? "QIANFAN",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.qianfan;
+  const defaultProvider = buildQianfanProvider();
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModels = defaultProvider.models ?? [];
+  const hasDefaultModel = existingModels.some((model) => model.id === QIANFAN_DEFAULT_MODEL_ID);
+  const mergedModels =
+    existingModels.length > 0
+      ? hasDefaultModel
+        ? existingModels
+        : [...existingModels, ...defaultModels]
+      : defaultModels;
+  const {
+    apiKey: existingApiKey,
+    baseUrl: existingBaseUrl,
+    api: existingApi,
+    ...existingProviderRest
+  } = (existingProvider ?? {}) as Record<string, unknown> as {
+    apiKey?: string;
+    baseUrl?: string;
+    api?: ModelApi;
+  };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.qianfan = {
+    ...existingProviderRest,
+    baseUrl: existingBaseUrl ?? QIANFAN_BASE_URL,
+    api: existingApi ?? "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultProvider.models,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyQianfanProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: QIANFAN_DEFAULT_MODEL_REF,
+        },
+      },
     },
   };
 }

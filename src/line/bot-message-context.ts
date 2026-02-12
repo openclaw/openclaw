@@ -154,7 +154,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     channel: "line",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "dm",
+      kind: isGroup ? "group" : "direct",
       id: peerId,
     },
   });
@@ -236,6 +236,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
 
   const ctxPayload = finalizeInboundContext({
     Body: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: fromAddress,
@@ -328,7 +329,7 @@ export async function buildLinePostbackContext(params: {
     channel: "line",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "dm",
+      kind: isGroup ? "group" : "direct",
       id: peerId,
     },
   });
@@ -392,6 +393,7 @@ export async function buildLinePostbackContext(params: {
 
   const ctxPayload = finalizeInboundContext({
     Body: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: fromAddress,

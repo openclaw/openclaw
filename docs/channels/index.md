@@ -16,6 +16,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [WhatsApp](/channels/whatsapp) — Most popular; uses Baileys and requires QR pairing.
 - [Telegram](/channels/telegram) — Bot API via grammY; supports groups.
 - [Discord](/channels/discord) — Discord Bot API + Gateway; supports servers, channels, and DMs.
+- [IRC](/channels/irc) — Classic IRC servers; channels + DMs with pairing/allowlist controls.
 - [Slack](/channels/slack) — Bolt SDK; workspace apps.
 - [Feishu](/channels/feishu) — Feishu/Lark bot via WebSocket (plugin, installed separately).
 - [Google Chat](/channels/googlechat) — Google Chat API app via HTTP webhook.
@@ -39,7 +40,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - Channels can run simultaneously; configure multiple and OpenClaw will route per chat.
 - Fastest setup is usually **Telegram** (simple bot token). WhatsApp requires QR pairing and
   stores more state on disk.
-- Group behavior varies by channel; see [Groups](/concepts/groups).
+- Group behavior varies by channel; see [Groups](/channels/groups).
 - DM pairing and allowlists are enforced for safety; see [Security](/gateway/security).
 - Telegram internals: [grammY notes](/channels/grammy).
 - Troubleshooting: [Channel troubleshooting](/channels/troubleshooting).

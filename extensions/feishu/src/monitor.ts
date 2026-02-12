@@ -1,5 +1,6 @@
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import * as http from "http";
 import type { ResolvedFeishuAccount } from "./types.js";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
@@ -13,8 +14,9 @@ export type MonitorFeishuOpts = {
   accountId?: string;
 };
 
-// Per-account WebSocket clients and bot info
+// Per-account WebSocket clients, HTTP servers, and bot info
 const wsClients = new Map<string, Lark.WSClient>();
+const httpServers = new Map<string, http.Server>();
 const botOpenIds = new Map<string, string>();
 
 async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | undefined> {
@@ -27,44 +29,29 @@ async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | 
 }
 
 /**
- * Monitor a single Feishu account.
+ * Register common event handlers on an EventDispatcher.
+ * When fireAndForget is true (webhook mode), message handling is not awaited
+ * to avoid blocking the HTTP response (Lark requires <3s response).
  */
-async function monitorSingleAccount(params: {
-  cfg: ClawdbotConfig;
-  account: ResolvedFeishuAccount;
-  runtime?: RuntimeEnv;
-  abortSignal?: AbortSignal;
-}): Promise<void> {
-  const { cfg, account, runtime, abortSignal } = params;
-  const { accountId } = account;
+function registerEventHandlers(
+  eventDispatcher: Lark.EventDispatcher,
+  context: {
+    cfg: ClawdbotConfig;
+    accountId: string;
+    runtime?: RuntimeEnv;
+    chatHistories: Map<string, HistoryEntry[]>;
+    fireAndForget?: boolean;
+  },
+) {
+  const { cfg, accountId, runtime, chatHistories, fireAndForget } = context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
-
-  // Fetch bot open_id
-  const botOpenId = await fetchBotOpenId(account);
-  botOpenIds.set(accountId, botOpenId ?? "");
-  log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
-
-  const connectionMode = account.config.connectionMode ?? "websocket";
-
-  if (connectionMode !== "websocket") {
-    log(`feishu[${accountId}]: webhook mode not implemented in monitor`);
-    return;
-  }
-
-  log(`feishu[${accountId}]: starting WebSocket connection...`);
-
-  const wsClient = createFeishuWSClient(account);
-  wsClients.set(accountId, wsClient);
-
-  const chatHistories = new Map<string, HistoryEntry[]>();
-  const eventDispatcher = createEventDispatcher(account);
 
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
       try {
         const event = data as unknown as FeishuMessageEvent;
-        await handleFeishuMessage({
+        const promise = handleFeishuMessage({
           cfg,
           event,
           botOpenId: botOpenIds.get(accountId),
@@ -72,6 +59,13 @@ async function monitorSingleAccount(params: {
           chatHistories,
           accountId,
         });
+        if (fireAndForget) {
+          promise.catch((err) => {
+            error(`feishu[${accountId}]: error handling message: ${String(err)}`);
+          });
+        } else {
+          await promise;
+        }
       } catch (err) {
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       }
@@ -96,6 +90,66 @@ async function monitorSingleAccount(params: {
       }
     },
   });
+}
+
+type MonitorAccountParams = {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+  runtime?: RuntimeEnv;
+  abortSignal?: AbortSignal;
+};
+
+/**
+ * Monitor a single Feishu account.
+ */
+async function monitorSingleAccount(params: MonitorAccountParams): Promise<void> {
+  const { cfg, account, runtime, abortSignal } = params;
+  const { accountId } = account;
+  const log = runtime?.log ?? console.log;
+
+  // Fetch bot open_id
+  const botOpenId = await fetchBotOpenId(account);
+  botOpenIds.set(accountId, botOpenId ?? "");
+  log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
+
+  const connectionMode = account.config.connectionMode ?? "websocket";
+  const eventDispatcher = createEventDispatcher(account);
+  const chatHistories = new Map<string, HistoryEntry[]>();
+
+  registerEventHandlers(eventDispatcher, {
+    cfg,
+    accountId,
+    runtime,
+    chatHistories,
+    fireAndForget: connectionMode === "webhook",
+  });
+
+  if (connectionMode === "webhook") {
+    return monitorWebhook({ params, accountId, eventDispatcher });
+  }
+
+  return monitorWebSocket({ params, accountId, eventDispatcher });
+}
+
+type ConnectionParams = {
+  params: MonitorAccountParams;
+  accountId: string;
+  eventDispatcher: Lark.EventDispatcher;
+};
+
+async function monitorWebSocket({
+  params,
+  accountId,
+  eventDispatcher,
+}: ConnectionParams): Promise<void> {
+  const { account, runtime, abortSignal } = params;
+  const log = runtime?.log ?? console.log;
+  const error = runtime?.error ?? console.error;
+
+  log(`feishu[${accountId}]: starting WebSocket connection...`);
+
+  const wsClient = createFeishuWSClient(account);
+  wsClients.set(accountId, wsClient);
 
   return new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -118,13 +172,64 @@ async function monitorSingleAccount(params: {
     abortSignal?.addEventListener("abort", handleAbort, { once: true });
 
     try {
-      void wsClient.start({ eventDispatcher });
+      wsClient.start({ eventDispatcher });
       log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
       cleanup();
       abortSignal?.removeEventListener("abort", handleAbort);
       reject(err);
     }
+  });
+}
+
+async function monitorWebhook({
+  params,
+  accountId,
+  eventDispatcher,
+}: ConnectionParams): Promise<void> {
+  const { account, runtime, abortSignal } = params;
+  const log = runtime?.log ?? console.log;
+  const error = runtime?.error ?? console.error;
+
+  const port = account.config.webhookPort ?? 3000;
+  const path = account.config.webhookPath ?? "/feishu/events";
+
+  log(`feishu[${accountId}]: starting Webhook server on port ${port}, path ${path}...`);
+
+  const server = http.createServer();
+  server.on("request", Lark.adaptDefault(path, eventDispatcher, { autoChallenge: true }));
+  httpServers.set(accountId, server);
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      server.close();
+      httpServers.delete(accountId);
+      botOpenIds.delete(accountId);
+    };
+
+    const handleAbort = () => {
+      log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
+      cleanup();
+      resolve();
+    };
+
+    if (abortSignal?.aborted) {
+      cleanup();
+      resolve();
+      return;
+    }
+
+    abortSignal?.addEventListener("abort", handleAbort, { once: true });
+
+    server.listen(port, () => {
+      log(`feishu[${accountId}]: Webhook server listening on port ${port}`);
+    });
+
+    server.on("error", (err) => {
+      error(`feishu[${accountId}]: Webhook server error: ${err}`);
+      abortSignal?.removeEventListener("abort", handleAbort);
+      reject(err);
+    });
   });
 }
 
@@ -182,9 +287,18 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
 export function stopFeishuMonitor(accountId?: string): void {
   if (accountId) {
     wsClients.delete(accountId);
+    const server = httpServers.get(accountId);
+    if (server) {
+      server.close();
+      httpServers.delete(accountId);
+    }
     botOpenIds.delete(accountId);
   } else {
     wsClients.clear();
+    for (const server of httpServers.values()) {
+      server.close();
+    }
+    httpServers.clear();
     botOpenIds.clear();
   }
 }

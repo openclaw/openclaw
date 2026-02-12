@@ -378,9 +378,12 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
     expect(sendMessageSpy.mock.calls[0]?.[0]).toBe(1234);
-    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Your Telegram user id: 999");
-    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Pairing code:");
-    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("PAIRME12");
+    const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+    expect(pairingText).toContain("Your Telegram user id: 999");
+    expect(pairingText).toContain("Pairing code:");
+    expect(pairingText).toContain("PAIRME12");
+    expect(pairingText).toContain("openclaw pairing approve telegram PAIRME12");
+    expect(pairingText).not.toContain("<code>");
   });
   it("does not resend pairing code when a request is already pending", async () => {
     onSpy.mockReset();

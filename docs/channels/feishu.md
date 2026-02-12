@@ -75,7 +75,7 @@ Choose **Feishu**, then enter the App ID and App Secret.
 
 Visit [Feishu Open Platform](https://open.feishu.cn/app) and sign in.
 
-Lark (global) tenants should use https://open.larksuite.com/app and set `domain: "lark"` in the Feishu config.
+Lark (global) tenants should use [https://open.larksuite.com/app](https://open.larksuite.com/app) and set `domain: "lark"` in the Feishu config.
 
 ### 2. Create an app
 
@@ -261,10 +261,12 @@ After approval, you can chat normally.
 
 - **Default**: `dmPolicy: "pairing"` (unknown users get a pairing code)
 - **Approve pairing**:
+
   ```bash
   openclaw pairing list feishu
   openclaw pairing approve feishu <CODE>
   ```
+
 - **Allowlist mode**: set `channels.feishu.allowFrom` with allowed Open IDs
 
 ### Group chats
@@ -488,14 +490,14 @@ Use `bindings` to route Feishu DMs or groups to different agents.
       agentId: "main",
       match: {
         channel: "feishu",
-        peer: { kind: "dm", id: "ou_xxx" },
+        peer: { kind: "direct", id: "ou_xxx" },
       },
     },
     {
       agentId: "clawd-fan",
       match: {
         channel: "feishu",
-        peer: { kind: "dm", id: "ou_yyy" },
+        peer: { kind: "direct", id: "ou_yyy" },
       },
     },
     {
@@ -512,7 +514,7 @@ Use `bindings` to route Feishu DMs or groups to different agents.
 Routing fields:
 
 - `match.channel`: `"feishu"`
-- `match.peer.kind`: `"dm"` or `"group"`
+- `match.peer.kind`: `"direct"` or `"group"`
 - `match.peer.id`: user Open ID (`ou_xxx`) or group ID (`oc_xxx`)
 
 See [Get group/user IDs](#get-groupuser-ids) for lookup tips.
