@@ -12,6 +12,7 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { isPlainObject } from "../utils.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import {
@@ -26,7 +27,8 @@ import {
 } from "./defaults.js";
 import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
 import { collectConfigEnvVars } from "./env-vars.js";
-import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
+import { buildIncludeMap, restoreIncludeDirectives } from "./include-preserve.js";
+import { ConfigIncludeError, INCLUDE_KEY, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
@@ -59,6 +61,19 @@ const SHELL_ENV_EXPECTED_KEYS = [
 
 const CONFIG_BACKUP_COUNT = 5;
 const loggedInvalidConfigs = new Set<string>();
+
+/** Check if a parsed config object contains any $include directives (at any depth). */
+function hasIncludeDirective(obj: Record<string, unknown>): boolean {
+  if (INCLUDE_KEY in obj) {
+    return true;
+  }
+  for (const value of Object.values(obj)) {
+    if (isPlainObject(value) && hasIncludeDirective(value)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
@@ -505,9 +520,53 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         .join("\n");
       deps.logger.warn(`Config warnings:\n${details}`);
     }
+    // Restore $include directives that were resolved during config loading.
+    // Read the current file (pre-resolution) and restore $include directives
+    // so we don't flatten modular configs or inline secrets from included files.
+    let cfgToWrite: OpenClawConfig = cfg;
+    try {
+      if (deps.fs.existsSync(configPath)) {
+        const currentRaw = deps.fs.readFileSync(configPath, "utf-8");
+        const parsedRes = parseConfigJson5(currentRaw, deps.json5);
+        if (
+          parsedRes.ok &&
+          isPlainObject(parsedRes.parsed) &&
+          hasIncludeDirective(parsedRes.parsed)
+        ) {
+          const includeResolver = {
+            readFile: (p: string) => deps.fs.readFileSync(p, "utf-8"),
+            parseJson: (raw: string) => deps.json5.parse(raw),
+          };
+          const includeMap = buildIncludeMap(parsedRes.parsed, configPath, includeResolver);
+          // Resolve env vars in included content so comparison against the
+          // fully-resolved incoming config is accurate.  Without this, env var
+          // placeholders (e.g. "${API_KEY}") won't match their substituted
+          // values, causing secrets to be inlined as "local overrides".
+          const resolvedIncludeMap = new Map<string, unknown>();
+          for (const [key, value] of includeMap) {
+            try {
+              resolvedIncludeMap.set(key, resolveConfigEnvVars(value, deps.env));
+            } catch {
+              // If env var resolution fails (e.g. missing var), keep the raw
+              // value — restoreIncludeDirectives will treat the mismatch as a
+              // local override, which is the safer fallback.
+              resolvedIncludeMap.set(key, value);
+            }
+          }
+          cfgToWrite = restoreIncludeDirectives(
+            cfg,
+            parsedRes.parsed,
+            resolvedIncludeMap,
+          ) as OpenClawConfig;
+        }
+      }
+    } catch {
+      // If reading the current file fails, write cfg as-is (no include restoration)
+    }
+
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfg)), null, 2)
+    const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfgToWrite)), null, 2)
       .trimEnd()
       .concat("\n");
 
