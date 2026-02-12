@@ -165,7 +165,18 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
+  if (
+    [
+      "ETIMEDOUT",
+      "ESOCKETTIMEDOUT",
+      "ECONNRESET",
+      "ECONNABORTED",
+      "ECONNREFUSED",
+      "ENOTFOUND",
+      "ENETUNREACH",
+      "EHOSTUNREACH",
+    ].includes(code)
+  ) {
     return "timeout";
   }
   if (isTimeoutError(err)) {
