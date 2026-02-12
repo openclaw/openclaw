@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import type { ContextDecayConfig } from "../../config/types.agent-defaults.js";
-import type { GroupSummaryStore, SummaryStore } from "../context-decay/summary-store.js";
+import type { SummaryStore } from "../context-decay/summary-store.js";
 import { applyContextDecay } from "./context-decay/decay.js";
 
 // ---------------------------------------------------------------------------
