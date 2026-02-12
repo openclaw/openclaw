@@ -1666,11 +1666,11 @@ class UnifiedBrain:
                 (name, description, kw_json, now),
             )
             conn.commit()
-            conn.close()
             return True
         except sqlite3.IntegrityError:
-            conn.close()
             return False
+        finally:
+            conn.close()
 
     def list_categories(self) -> List[dict]:
         """List all categories with their descriptions and keywords."""
