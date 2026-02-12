@@ -23,6 +23,10 @@ import {
   getSkillsList,
   checkSkillHasMetadata,
   validateSkills,
+  checkGatewayStatus,
+  readGatewayLock,
+  isProcessRunning,
+  checkGatewayPort,
 } from "./check.js";
 
 describe("check command", () => {
@@ -60,6 +64,7 @@ describe("check command", () => {
     expect(checkIds).toContain("package-root");
     expect(checkIds).toContain("database");
     expect(checkIds).toContain("skills-dir");
+    expect(checkIds).toContain("gateway-running");
   });
 
   it("should output JSON when json option is true", async () => {
@@ -653,6 +658,74 @@ describe("skills validation", () => {
       expect(result.error).toBe("Skills directory not found");
     } finally {
       process.env.OPENCLAW_BUNDLED_SKILLS_DIR = originalEnv;
+    }
+  });
+});
+
+describe("gateway status check", () => {
+  it("should return correct port number from config", () => {
+    const result = checkGatewayStatus();
+
+    // Port should be the default or from config
+    expect(typeof result.port).toBe("number");
+    expect(result.port).toBeGreaterThan(0);
+  });
+
+  it("should detect non-running PID", () => {
+    // Test with a PID that definitely doesn't exist (very high number)
+    const result = isProcessRunning(999999);
+    expect(result).toBe(false);
+  });
+
+  it("should detect running current process", () => {
+    // Current process should be running
+    const result = isProcessRunning(process.pid);
+    expect(result).toBe(true);
+  });
+
+  it("should read gateway lock file correctly", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gateway-test-"));
+    const lockPath = path.join(tmpDir, "gateway.test.lock");
+
+    // Test with no lock file
+    const noFile = readGatewayLock(lockPath);
+    expect(noFile).toBeNull();
+
+    // Test with valid lock file
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 12345, createdAt: "2024-01-01" }));
+    const validFile = readGatewayLock(lockPath);
+    expect(validFile).not.toBeNull();
+    expect(validFile?.pid).toBe(12345);
+
+    // Test with invalid JSON
+    fs.writeFileSync(lockPath, "not valid json");
+    const invalidJson = readGatewayLock(lockPath);
+    expect(invalidJson).toBeNull();
+
+    // Test with missing pid
+    fs.writeFileSync(lockPath, JSON.stringify({ createdAt: "2024-01-01" }));
+    const noPid = readGatewayLock(lockPath);
+    expect(noPid).toBeNull();
+
+    fs.unlinkSync(lockPath);
+    fs.rmdirSync(tmpDir);
+  });
+
+  it("should return valid gateway status structure", () => {
+    // Check that checkGatewayStatus returns a valid result structure
+    const result = checkGatewayStatus();
+
+    // Verify the structure of the result
+    expect(typeof result.ok).toBe("boolean");
+    expect(typeof result.running).toBe("boolean");
+    expect(typeof result.port).toBe("number");
+    expect(typeof result.portResponding).toBe("boolean");
+    expect(typeof result.lockFileExists).toBe("boolean");
+    expect(result.port).toBeGreaterThan(0);
+
+    // If lock file exists, verify pid is present when running
+    if (result.lockFileExists && result.running) {
+      expect(typeof result.pid).toBe("number");
     }
   });
 });

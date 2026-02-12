@@ -11,6 +11,8 @@ Started: Thursday, February 12th, 2026 — 5:32 PM
 - Tests run with `pnpm test <path>` (parallel test runner)
 - Use `@clack/prompts` for CLI UX
 - Runtime abstraction for logging: `RuntimeEnv` with `log`, `error`, `warn`, `debug`, `exit`
+- Skills directory is resolved via `resolveBundledSkillsDir()` from `agents/skills/bundled-dir.js`
+- Can override skills dir with `OPENCLAW_BUNDLED_SKILLS_DIR` env var in tests
 
 ---
 
@@ -69,5 +71,23 @@ Started: Thursday, February 12th, 2026 — 5:32 PM
 - SQLite validation checks for magic header "SQLite format 3\0" at offset 0
 - `fs.accessSync` with `R_OK`/`W_OK` flags tests permissions without opening the file
 - Small files (<16 bytes) fail with "too small" error before header validation
+
+---
+
+## 2026-02-12 - US-005: Implement skills directory validation
+- Implemented skills validation functions: `checkSkillsDirExists()`, `getSkillsList()`, `checkSkillHasMetadata()`, `validateSkills()`
+- Added `skills-dir` check to `runInstallationChecks` with detailed error messages for missing metadata
+- Added 7 new comprehensive unit tests covering all skills validation functions
+- Build passes, all 47 tests pass
+
+**Files changed:**
+- `src/commands/check.ts` - Added skills validation functions and integrated skills-dir check
+- `src/commands/check.test.ts` - Added 7 new test cases for skills validation
+
+**Learnings:**
+- Skills directory resolution uses `resolveBundledSkillsDir()` which checks env var, exec path, and package root
+- For testing, can override skills dir location via `OPENCLAW_BUNDLED_SKILLS_DIR` environment variable
+- Skills are validated by checking each subdirectory has a SKILL.md file
+- The `ok` field in validation result is only true when ALL skills have valid metadata
 
 ---

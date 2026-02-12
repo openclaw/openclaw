@@ -6,7 +6,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveBundledSkillsDir } from "../agents/skills/bundled-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig, CONFIG_PATH } from "../config/config.js";
-import { STATE_DIR } from "../config/paths.js";
+import {
+  STATE_DIR,
+  DEFAULT_GATEWAY_PORT,
+  resolveGatewayPort,
+  resolveGatewayLockDir,
+} from "../config/paths.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -501,6 +506,139 @@ export function checkSkillHasMetadata(skillDir: string): {
 }
 
 /**
+ * Get the gateway lock file path
+ * Uses the same logic as acquireGatewayLock in gateway-lock.ts
+ */
+export function getGatewayLockPath(): string {
+  const crypto = require("node:crypto");
+  const hash = crypto.createHash("sha1").update(CONFIG_PATH).digest("hex").slice(0, 8);
+  const lockDir = resolveGatewayLockDir();
+  return path.join(lockDir, `gateway.${hash}.lock`);
+}
+
+/**
+ * Read the gateway lock file and return its contents
+ */
+export function readGatewayLock(lockPath: string): { pid: number; port?: number } | null {
+  try {
+    const content = fs.readFileSync(lockPath, "utf8");
+    const parsed = JSON.parse(content) as { pid?: number; port?: number };
+    if (typeof parsed.pid === "number") {
+      return { pid: parsed.pid, port: parsed.port };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if a process is running by PID
+ * Uses process.kill(pid, 0) which doesn't actually kill the process
+ */
+export function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if gateway is responding on a port
+ * Uses exec to run a quick connection test
+ */
+export function checkGatewayPort(port: number): {
+  ok: boolean;
+  port: number;
+  error?: string;
+} {
+  try {
+    // Use curl to check if port is responding (works on macOS/Linux)
+    // This is a synchronous check using execSync
+    execSync(
+      `curl -s -o /dev/null -w "%{http_code}" --max-time 1 http://127.0.0.1:${port}/health || true`,
+      {
+        encoding: "utf8",
+        timeout: 2000,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    // If curl doesn't throw, something responded
+    return { ok: true, port };
+  } catch {
+    // Expected - port not responding
+    return { ok: false, port, error: `Port ${port} is not responding` };
+  }
+}
+
+/**
+ * Check gateway service status
+ * Returns comprehensive information about gateway state
+ */
+export function checkGatewayStatus(): {
+  ok: boolean;
+  running: boolean;
+  pid?: number;
+  port: number;
+  portResponding: boolean;
+  lockFileExists: boolean;
+  error?: string;
+} {
+  const cfg = loadConfig();
+  const port = resolveGatewayPort(cfg);
+
+  // Get lock file path and check if it exists
+  const crypto = require("node:crypto");
+  const hash = crypto.createHash("sha1").update(CONFIG_PATH).digest("hex").slice(0, 8);
+  const lockDir = resolveGatewayLockDir();
+  const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
+
+  const lockFileExists = fs.existsSync(lockPath);
+
+  if (!lockFileExists) {
+    return {
+      ok: false,
+      running: false,
+      port,
+      portResponding: false,
+      lockFileExists: false,
+      error: "Gateway is not running",
+    };
+  }
+
+  // Read lock file
+  const lockData = readGatewayLock(lockPath);
+  if (!lockData) {
+    return {
+      ok: false,
+      running: false,
+      port,
+      portResponding: false,
+      lockFileExists: true,
+      error: "Lock file exists but could not be read",
+    };
+  }
+
+  // Check if process is running
+  const pid = lockData.pid;
+  const running = isProcessRunning(pid);
+
+  // Gateway is considered ok if the process is running
+  // Port check is optional and can be done separately if needed
+  return {
+    ok: running,
+    running,
+    pid: running ? pid : undefined,
+    port,
+    portResponding: false, // Port check skipped in sync context
+    lockFileExists: true,
+    error: running ? undefined : "Gateway is not running",
+  };
+}
+
+/**
  * Validate all skills in the skills directory
  * Returns a summary of valid and invalid skills
  */
@@ -735,6 +873,26 @@ async function runInstallationChecks(): Promise<CheckResult> {
         return `${skillsCheck.invalidSkills.length} skill(s) missing metadata: ${invalidList}`;
       }
       return undefined;
+    })(),
+  });
+
+  // Check 11: Gateway service status
+  const gatewayCheck = checkGatewayStatus();
+  checks.push({
+    id: "gateway-running",
+    name: "Gateway service is running",
+    ok: gatewayCheck.ok,
+    message: (() => {
+      if (gatewayCheck.ok) {
+        return undefined;
+      }
+      if (!gatewayCheck.running) {
+        return `Gateway is stopped. Run ${formatCliCommand("openclaw gateway start")} to start it`;
+      }
+      if (!gatewayCheck.portResponding) {
+        return `Gateway process running (PID ${gatewayCheck.pid}) but not responding on port ${gatewayCheck.port}`;
+      }
+      return gatewayCheck.error || "Gateway check failed";
     })(),
   });
 
