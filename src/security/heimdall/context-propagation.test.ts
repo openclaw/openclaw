@@ -53,4 +53,32 @@ describe("SecurityContext propagation", () => {
     expect(tier).toBe(SenderTier.GUEST); // without override
     // The actual OWNER override is applied in createOpenClawCodingTools
   });
+
+  // ---------------------------------------------------------------------------
+  // Task 2.2: internal flag → isTrustedInternal → SYSTEM tier
+  // ---------------------------------------------------------------------------
+
+  it("isTrustedInternal=true → SYSTEM tier (internal runtime calls)", () => {
+    // When isTrustedInternal flag is set, tier is SYSTEM regardless of senderId
+    const tier = resolveSenderTier("cron", undefined, config, undefined, true);
+    expect(tier).toBe(SenderTier.SYSTEM);
+  });
+
+  it("isTrustedInternal=true overrides owner status (SYSTEM has priority)", () => {
+    // Even if senderId is in owners list, isTrustedInternal takes precedence
+    const tier = resolveSenderTier(111, "thebtf", config, undefined, true);
+    expect(tier).toBe(SenderTier.SYSTEM);
+  });
+
+  it("isTrustedInternal=false → normal tier resolution (no SYSTEM)", () => {
+    // Explicit false should not trigger SYSTEM tier
+    const tier = resolveSenderTier(111, "thebtf", config, undefined, false);
+    expect(tier).toBe(SenderTier.OWNER);
+  });
+
+  it("isTrustedInternal=undefined → normal tier resolution (backward compatible)", () => {
+    // Undefined (default) should not trigger SYSTEM tier
+    const tier = resolveSenderTier("cron", undefined, config, undefined, undefined);
+    expect(tier).toBe(SenderTier.GUEST);
+  });
 });

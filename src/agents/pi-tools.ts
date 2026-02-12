@@ -164,8 +164,19 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
-  /** Whether the sender is an owner (required for owner-only tools). */
+  /**
+   * Whether the sender is an owner (required for owner-only tools).
+   * DEPRECATED: Use `internal` flag instead for new code.
+   * This property overrides `internal` flag for backward compatibility (Task 2.3 will remove this).
+   */
   senderIsOwner?: boolean;
+  /**
+   * If true, this call originates from trusted internal runtime (cron, CLI, heartbeat).
+   * Maps to `isTrustedInternal` for Heimdall SYSTEM tier resolution.
+   * When true AND Heimdall enabled, results in SYSTEM tier (limited privileges).
+   * Currently overridden by senderIsOwner for backward compatibility.
+   */
+  internal?: boolean;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -371,12 +382,19 @@ export function createOpenClawCodingTools(options?: {
   if (heimdallCfg?.enabled) {
     // If no senderId, infer from senderIsOwner (e.g. cron runs).
     const effectiveSenderId = options?.senderId ?? (senderIsOwner ? "cron" : "unknown");
+
+    // Task 2.2: Map internal flag → isTrustedInternal for SYSTEM tier.
+    const isTrustedInternal = options?.internal === true;
+
     senderTier = resolveSenderTier(
       effectiveSenderId,
       options?.senderUsername ?? undefined,
       heimdallCfg,
+      undefined, // allowFrom (not applicable here)
+      isTrustedInternal,
     );
     // Override to OWNER if senderIsOwner is explicitly set (cron, CLI).
+    // TODO(Task 2.3): Remove this override after applyOwnerOnlyToolPolicy is deprecated
     if (senderIsOwner && senderTier !== "owner") {
       senderTier = "owner" as SenderTier;
     }

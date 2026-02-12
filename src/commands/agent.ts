@@ -428,7 +428,9 @@ export async function agentCommand(
             currentThreadTs: runContext.currentThreadTs,
             replyToMode: runContext.replyToMode,
             hasRepliedRef: runContext.hasRepliedRef,
-            senderIsOwner: true,
+            // Task 2.2: Mark CLI invocations as internal runtime calls (SYSTEM tier).
+            internal: true,
+            senderIsOwner: true, // Keep for now (legacy tool policy, removed in future)
             sessionFile,
             workspaceDir,
             config: cfg,
