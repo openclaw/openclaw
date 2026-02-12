@@ -247,7 +247,7 @@ describe("legacy config detection", () => {
       expect(parsed.channels).toBeUndefined();
     });
   });
-  it("flags top-level memorySearch as legacy in snapshot", async () => {
+  it("accepts top-level memorySearch as legacy alias in snapshot", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -259,8 +259,10 @@ describe("legacy config detection", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(false);
+      expect(snap.config?.agents?.defaults?.memorySearch?.provider).toBe("local");
+      expect(snap.config?.agents?.defaults?.memorySearch?.fallback).toBe("none");
     });
   });
   it("does not auto-migrate claude-cli auth profile mode on load", async () => {
