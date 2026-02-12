@@ -6,9 +6,31 @@ networks:
         - subnet: 172.20.0.0/16
 
 services:
-  openclaw-gateway:
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: openclaw-vpn
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${PROTONVPN_WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${PROTONVPN_WIREGUARD_ADDRESS}
+      - SERVER_COUNTRIES=${VPN_SERVER_COUNTRY:-Netherlands}
+      - FIREWALL_OUTBOUND_SUBNETS=172.20.0.0/16  # Allow openclaw network
+    ports:
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     networks:
       - openclaw-net
+    restart: unless-stopped
+
+  openclaw-gateway:
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
     build:
       context: .
       dockerfile: Dockerfile
@@ -43,9 +65,6 @@ services:
     #   - "${DOCKER_GID:-999}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    ports:
-      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
     command:
