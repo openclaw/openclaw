@@ -27,6 +27,7 @@ import { rawDataToString } from "../../../infra/ws.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import { authorizeGatewayConnect, isLocalDirectRequest } from "../../auth.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
+import { resolveGatewayInstanceIdentity } from "../../instance-identity.js";
 import { isLoopbackAddress, isTrustedProxyAddress, resolveGatewayClientIp } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
@@ -55,9 +56,7 @@ import {
 } from "../health-state.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
-
 const DEVICE_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
-
 function resolveHostName(hostHeader?: string): string {
   const host = (hostHeader ?? "").trim().toLowerCase();
   if (!host) {
@@ -74,7 +73,6 @@ function resolveHostName(hostHeader?: string): string {
 }
 
 type AuthProvidedKind = "token" | "password" | "none";
-
 function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
   authProvided: AuthProvidedKind;
@@ -129,7 +127,6 @@ function formatGatewayAuthFailureMessage(params: {
   }
   return "unauthorized";
 }
-
 export function attachGatewayWsMessageHandler(params: {
   socket: WebSocket;
   upgradeReq: IncomingMessage;
@@ -852,6 +849,7 @@ export function attachGatewayWsMessageHandler(params: {
             commit: process.env.GIT_COMMIT,
             host: os.hostname(),
             connId,
+            identity: resolveGatewayInstanceIdentity({ cfg: loadConfig(), env: process.env }),
           },
           features: { methods: gatewayMethods, events },
           snapshot,

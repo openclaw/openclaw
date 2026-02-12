@@ -77,6 +77,22 @@ Gateway → Client:
 }
 ```
 
+`hello-ok.server` includes identity metadata so clients can distinguish upstream vs fork instances:
+
+```json
+{
+  "server": {
+    "version": "…",
+    "connId": "…",
+    "identity": {
+      "kind": "upstream",
+      "mode": "auto",
+      "source": "default"
+    }
+  }
+}
+```
+
 When a device token is issued, `hello-ok` also includes:
 
 ```json

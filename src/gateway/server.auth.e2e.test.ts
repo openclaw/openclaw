@@ -96,12 +96,85 @@ describe("gateway server auth/connect", () => {
         | {
             type?: unknown;
             snapshot?: { configPath?: string; stateDir?: string };
+            server?: {
+              identity?: {
+                kind?: string;
+                mode?: string;
+                source?: string;
+              };
+            };
           }
         | undefined;
       expect(payload?.type).toBe("hello-ok");
       expect(payload?.snapshot?.configPath).toBe(CONFIG_PATH);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
+      expect(payload?.server?.identity).toEqual({
+        kind: "upstream",
+        mode: "auto",
+        source: "default",
+      });
 
+      ws.close();
+    });
+
+    test("hello-ok identity honors env override", async () => {
+      process.env.OPENCLAW_GATEWAY_IDENTITY_MODE = "upstream";
+      try {
+        const ws = await openWs(port);
+        const res = await connectReq(ws);
+        expect(res.ok).toBe(true);
+        const payload = res.payload as
+          | {
+              server?: {
+                identity?: {
+                  kind?: string;
+                  mode?: string;
+                  source?: string;
+                };
+              };
+            }
+          | undefined;
+        expect(payload?.server?.identity).toEqual({
+          kind: "upstream",
+          mode: "upstream",
+          source: "env",
+        });
+        ws.close();
+      } finally {
+        delete process.env.OPENCLAW_GATEWAY_IDENTITY_MODE;
+      }
+    });
+
+    test("hello-ok identity honors config override", async () => {
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: {
+          identity: {
+            mode: "upstream",
+          },
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any);
+
+      const ws = await openWs(port);
+      const res = await connectReq(ws);
+      expect(res.ok).toBe(true);
+      const payload = res.payload as
+        | {
+            server?: {
+              identity?: {
+                kind?: string;
+                mode?: string;
+                source?: string;
+              };
+            };
+          }
+        | undefined;
+      expect(payload?.server?.identity).toEqual({
+        kind: "upstream",
+        mode: "upstream",
+        source: "config",
+      });
       ws.close();
     });
 

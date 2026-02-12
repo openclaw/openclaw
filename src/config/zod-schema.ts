@@ -400,6 +400,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        identity: z
+          .object({
+            mode: z.union([z.literal("auto"), z.literal("upstream"), z.literal("fork")]).optional(),
+          })
+          .strict()
+          .optional(),
         trustedProxies: z.array(z.string()).optional(),
         tailscale: z
           .object({

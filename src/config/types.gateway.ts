@@ -211,6 +211,19 @@ export type GatewayNodesConfig = {
   denyCommands?: string[];
 };
 
+export type GatewayIdentityKind = "upstream" | "fork";
+export type GatewayIdentityMode = "auto" | GatewayIdentityKind;
+
+export type GatewayIdentityConfig = {
+  /**
+   * Identity mode exposed in gateway metadata.
+   * - auto: reports this build's default identity (upstream in core; forks may override)
+   * - upstream: force upstream identity (compatibility testing)
+   * - fork: force fork identity
+   */
+  mode?: GatewayIdentityMode;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -233,6 +246,7 @@ export type GatewayConfig = {
   customBindHost?: string;
   controlUi?: GatewayControlUiConfig;
   auth?: GatewayAuthConfig;
+  identity?: GatewayIdentityConfig;
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;
