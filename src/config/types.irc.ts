@@ -51,6 +51,10 @@ export type IrcAccountConfig = CommonChannelMessagingConfig & {
   >;
   /** Optional mention patterns specific to IRC channel messages. */
   mentionPatterns?: string[];
+  /** Skip all TLS certificate verification (insecure; vulnerable to MITM). */
+  tlsInsecure?: boolean;
+  /** Accept only TLS certificates matching these SHA-256 fingerprints (colon-separated hex). */
+  tlsFingerprints?: string[];
 };
 
 export type IrcConfig = {
