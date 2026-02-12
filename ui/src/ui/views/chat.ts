@@ -524,7 +524,10 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
 
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    const trimmed = props.stream.trim();
+    const isSilentReply = trimmed === "NO_REPLY" || trimmed === "HEARTBEAT_OK";
+    
+    if (trimmed.length > 0 && !isSilentReply) {
       items.push({
         kind: "stream",
         key,
