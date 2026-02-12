@@ -12,6 +12,7 @@ import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
+import { logWarn } from "../../logger.js";
 
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -37,10 +38,40 @@ export async function resolveDeliveryTarget(
   const store = loadSessionStore(storePath);
   const main = store[mainSessionKey];
 
+  // When the job requests a specific channel and the session's lastChannel differs,
+  // scan all sessions for a recent delivery context matching the requested channel.
+  // This prevents cross-channel pollution where e.g. WhatsApp activity overwrites
+  // the Telegram delivery target.
+  let channelMatchedTo = explicitTo;
+  if (!channelMatchedTo && requestedChannel !== "last" && main) {
+    const lastChannel = main.lastChannel ?? main.deliveryContext?.channel;
+    if (lastChannel && lastChannel !== requestedChannel) {
+      // lastChannel differs from requested — look through session store for a
+      // session that last interacted on the requested channel.
+      for (const key of Object.keys(store)) {
+        const entry = store[key];
+        if (!entry) continue;
+        const entryChannel = entry.lastChannel ?? entry.deliveryContext?.channel;
+        const entryTo = entry.lastTo ?? entry.deliveryContext?.to;
+        if (entryChannel === requestedChannel && entryTo) {
+          channelMatchedTo = entryTo;
+          break;
+        }
+      }
+      if (!channelMatchedTo) {
+        logWarn(
+          `[cron] Delivery channel "${requestedChannel}" requested but lastChannel is "${lastChannel}" ` +
+            `and no session with a matching delivery context was found. ` +
+            `Consider adding an explicit "to" to the cron job delivery config.`,
+        );
+      }
+    }
+  }
+
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
     requestedChannel,
-    explicitTo,
+    explicitTo: channelMatchedTo,
     allowMismatchedLastTo: true,
   });
 
@@ -58,7 +89,7 @@ export async function resolveDeliveryTarget(
     ? resolveSessionDeliveryTarget({
         entry: main,
         requestedChannel,
-        explicitTo,
+        explicitTo: channelMatchedTo,
         fallbackChannel,
         allowMismatchedLastTo: true,
         mode: preliminary.mode,
