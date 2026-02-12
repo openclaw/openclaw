@@ -10,6 +10,58 @@ export type ConfigSchema = ReturnType<typeof OpenClawSchema.toJSONSchema>;
 
 type JsonSchemaNode = Record<string, unknown>;
 
+type JsonSchemaObject = JsonSchemaNode & {
+  type?: string | string[];
+  properties?: Record<string, JsonSchemaObject>;
+  required?: string[];
+  additionalProperties?: JsonSchemaObject | boolean;
+};
+
+function cloneSchema<T>(value: T): T {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function asSchemaObject(value: unknown): JsonSchemaObject | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as JsonSchemaObject;
+}
+
+function isObjectSchema(schema: JsonSchemaObject): boolean {
+  const type = schema.type;
+  if (type === "object") {
+    return true;
+  }
+  if (Array.isArray(type) && type.includes("object")) {
+    return true;
+  }
+  return Boolean(schema.properties || schema.additionalProperties);
+}
+
+function mergeObjectSchema(base: JsonSchemaObject, extension: JsonSchemaObject): JsonSchemaObject {
+  const mergedRequired = new Set<string>([...(base.required ?? []), ...(extension.required ?? [])]);
+  const merged: JsonSchemaObject = {
+    ...base,
+    ...extension,
+    properties: {
+      ...base.properties,
+      ...extension.properties,
+    },
+  };
+  if (mergedRequired.size > 0) {
+    merged.required = Array.from(mergedRequired);
+  }
+  const additional = extension.additionalProperties ?? base.additionalProperties;
+  if (additional !== undefined) {
+    merged.additionalProperties = additional;
+  }
+  return merged;
+}
+
 export type ConfigSchemaResponse = {
   schema: ConfigSchema;
   uiHints: ConfigUiHints;
