@@ -38,6 +38,7 @@ export function sendNovaMessage(opts: SendNovaMessageOpts): SendNovaMessageResul
     text: opts.text,
     messageId,
     replyTo: opts.replyTo ?? "",
+    to: opts.to,
   });
 
   ws.send(frame);

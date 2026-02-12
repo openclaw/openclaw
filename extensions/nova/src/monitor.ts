@@ -243,10 +243,14 @@ export async function monitorNovaProvider(opts: MonitorNovaOpts): Promise<void> 
           responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(msgCfg, route.agentId),
           deliver: async (payload) => {
-            const chunks = payload.parts ?? [];
-            const fullText = chunks
-              .map((part) => (typeof part === "string" ? part : (part.text ?? "")))
-              .join("");
+            const fullText =
+              typeof payload.text === "string"
+                ? payload.text
+                : (payload.parts ?? [])
+                    .map((part: string | { text?: string }) =>
+                      typeof part === "string" ? part : (part.text ?? ""),
+                    )
+                    .join("");
             if (!fullText.trim()) {
               return;
             }

@@ -50,6 +50,7 @@ def list_connections() -> list[dict]:
         conn = {
             "connectionId": item.get("connectionId", {}).get("S", ""),
             "deviceId": item.get("deviceId", {}).get("S", ""),
+            "userId": item.get("userId", {}).get("S", ""),
             "sourceIp": (
                 item.get("metadata", {}).get("M", {}).get("sourceIp", {}).get("S", "")
             ),
@@ -65,9 +66,10 @@ def list_connections() -> list[dict]:
 def find_connection(
     connection_id: str | None = None,
     device_id: str | None = None,
+    user_id: str | None = None,
     source_ip: str | None = None,
 ) -> dict:
-    """Find a bot connection by connectionId, deviceId, or sourceIp."""
+    """Find a bot connection by connectionId, deviceId, userId, or sourceIp."""
     connections = list_connections()
     if not connections:
         raise RuntimeError("No connections found in DynamoDB")
@@ -77,6 +79,12 @@ def find_connection(
             if c["connectionId"] == connection_id:
                 return c
         raise RuntimeError(f"No connection found with connectionId={connection_id}")
+
+    if user_id:
+        for c in connections:
+            if c["userId"] == user_id:
+                return c
+        raise RuntimeError(f"No connection found with userId={user_id}")
 
     if device_id:
         for c in connections:
@@ -101,6 +109,7 @@ def print_connections(connections: list[dict]):
         return
     for i, c in enumerate(connections):
         print(f"  [{i}] connectionId: {c['connectionId']}")
+        print(f"      userId:       {c['userId'] or '(not set)'}")
         print(f"      deviceId:     {c['deviceId']}")
         print(f"      sourceIp:     {c['sourceIp']}")
         print(f"      connectedAt:  {c['connectedAt']}")
@@ -126,6 +135,7 @@ async def run_test(
     timeout_secs: int,
     connection_id: str | None,
     device_id: str | None,
+    user_id: str | None,
     source_ip: str | None,
 ):
     """Run the E2E test."""
@@ -135,9 +145,10 @@ async def run_test(
 
     # Step 1: Find the bot's connection
     print("\n[1] Looking up bot connection from DynamoDB...")
-    conn = find_connection(connection_id, device_id, source_ip)
+    conn = find_connection(connection_id, device_id, user_id, source_ip)
     bot_conn_id = conn["connectionId"]
     print(f"  connectionId: {conn['connectionId']}")
+    print(f"  userId:       {conn['userId'] or '(not set)'}")
     print(f"  deviceId:     {conn['deviceId']}")
     print(f"  sourceIp:     {conn['sourceIp']}")
     print(f"  connectedAt:  {conn['connectedAt']}")
@@ -269,6 +280,10 @@ def main():
         help="Target bot's deviceId (from DynamoDB)",
     )
     parser.add_argument(
+        "--user-id",
+        help="Target bot's userId (from DynamoDB) — stable across reconnects",
+    )
+    parser.add_argument(
         "--source-ip",
         help="Target bot's source IP (from DynamoDB)",
     )
@@ -287,6 +302,7 @@ def main():
             args.timeout,
             args.connection_id,
             args.device_id,
+            args.user_id,
             args.source_ip,
         ))
 
