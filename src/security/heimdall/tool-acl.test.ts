@@ -306,3 +306,56 @@ describe("tool name normalization", () => {
     expect(isToolAllowed("Bash", SenderTier.MEMBER, config)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// SYSTEM tier — trusted internal runtime calls
+// ---------------------------------------------------------------------------
+
+describe("SYSTEM tier ACL", () => {
+  it("allows SYSTEM to use MEMBER safe tools (conservative baseline)", () => {
+    const safes = ["search", "read", "sessions_list", "memory_search", "web_search"];
+    safes.forEach((tool) => {
+      expect(isToolAllowed(tool, SenderTier.SYSTEM, noACL)).toBe(true);
+    });
+  });
+
+  it("denies SYSTEM dangerous tools by default (no OWNER bypass)", () => {
+    const dangerous = ["exec", "write", "edit", "apply_patch", "process"];
+    dangerous.forEach((tool) => {
+      expect(isToolAllowed(tool, SenderTier.SYSTEM, noACL)).toBe(false);
+    });
+  });
+
+  it("denies SYSTEM MCP execute/write/delete patterns", () => {
+    expect(isToolAllowed("mcp__server__execute_command", SenderTier.SYSTEM, noACL)).toBe(false);
+    expect(isToolAllowed("mcp__fs__write_file", SenderTier.SYSTEM, noACL)).toBe(false);
+    expect(isToolAllowed("mcp__db__delete_record", SenderTier.SYSTEM, noACL)).toBe(false);
+  });
+
+  it("respects custom ACL for SYSTEM tier", () => {
+    const config = {
+      ...deny,
+      toolACL: [
+        { pattern: "kg_query", allowedTiers: [SenderTier.SYSTEM, SenderTier.MEMBER] },
+        { pattern: "telegram_send*", allowedTiers: [SenderTier.SYSTEM] },
+      ],
+    };
+    expect(isToolAllowed("kg_query", SenderTier.SYSTEM, config)).toBe(true);
+    expect(isToolAllowed("telegram_send_message", SenderTier.SYSTEM, config)).toBe(true);
+    expect(isToolAllowed("exec", SenderTier.SYSTEM, config)).toBe(false);
+  });
+
+  it("denies SYSTEM tools not in safe list or custom ACL (fail-closed)", () => {
+    expect(isToolAllowed("unknown_tool", SenderTier.SYSTEM, noACL)).toBe(false);
+    expect(isToolAllowed("domain_resolve", SenderTier.SYSTEM, noACL)).toBe(false); // not in DEFAULT_MEMBER_SAFE
+  });
+
+  it("SYSTEM tier can be granted via custom ACL (explicit allow)", () => {
+    const config = {
+      ...deny,
+      toolACL: [{ pattern: "session_heartbeat", allowedTiers: [SenderTier.SYSTEM] }],
+    };
+    expect(isToolAllowed("session_heartbeat", SenderTier.SYSTEM, config)).toBe(true);
+    expect(isToolAllowed("session_heartbeat", SenderTier.MEMBER, config)).toBe(false);
+  });
+});

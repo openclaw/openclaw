@@ -4,9 +4,10 @@
  * Determines whether a given tool is allowed for a specific sender tier.
  * Evaluation order:
  *   1. OWNER bypass (always allowed, cannot be restricted by config)
- *   2. Normalize tool name via normalizeToolName
- *   3. Custom toolACL entries (glob-matched, first match wins)
- *   4. Default rules: dangerous patterns → deny; safe lists → allow; else deny
+ *   2. SYSTEM tier (conservative: MEMBER safe list, respects custom ACL)
+ *   3. Normalize tool name via normalizeToolName
+ *   4. Custom toolACL entries (glob-matched, first match wins)
+ *   5. Default rules: dangerous patterns → deny; safe lists → allow; else deny
  */
 
 import type { HeimdallConfig, SenderTier } from "./types.js";
@@ -106,9 +107,10 @@ function isDangerous(toolName: string): boolean {
  * 3. Custom `toolACL` — first matching glob wins; allow if tier is listed.
  * 4. Defaults:
  *    a. Matches a dangerous pattern → deny.
- *    b. MEMBER + tool in safe list → allow.
- *    c. GUEST + "read-only" policy + tool in read-only list → allow.
- *    d. Otherwise → deny.
+ *    b. SYSTEM + tool in MEMBER safe list → allow (conservative baseline).
+ *    c. MEMBER + tool in MEMBER safe list → allow.
+ *    d. GUEST + "read-only" policy + tool in read-only list → allow.
+ *    e. Otherwise → deny.
  */
 export function isToolAllowed(
   toolName: string,
@@ -137,12 +139,17 @@ export function isToolAllowed(
     return false;
   }
 
-  // 4b. MEMBER safe list
+  // 4b. SYSTEM tier — conservative baseline (same as MEMBER safe list)
+  if (senderTier === SenderTierEnum.SYSTEM && DEFAULT_MEMBER_SAFE.has(normalized)) {
+    return true;
+  }
+
+  // 4c. MEMBER safe list
   if (senderTier === SenderTierEnum.MEMBER && DEFAULT_MEMBER_SAFE.has(normalized)) {
     return true;
   }
 
-  // 4c. GUEST read-only policy
+  // 4d. GUEST read-only policy
   if (
     senderTier === SenderTierEnum.GUEST &&
     config.defaultGuestPolicy === "read-only" &&
@@ -151,6 +158,6 @@ export function isToolAllowed(
     return true;
   }
 
-  // 4d. Default deny
+  // 4e. Default deny
   return false;
 }
