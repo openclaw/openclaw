@@ -2,7 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
-import { stripHistoricalContextText } from "./historical-context-repair.js";
+import { stripCallTagsFromText, stripHistoricalContextText } from "./custom-context-to-blocks.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
@@ -222,8 +222,10 @@ export function extractAssistantText(msg: AssistantMessage): string {
         .filter(isTextBlock)
         .map((c) =>
           stripThinkingTagsFromText(
-            stripHistoricalContextText(
-              stripDowngradedToolCallText(stripMinimaxToolCallXml(c.text)),
+            stripCallTagsFromText(
+              stripHistoricalContextText(
+                stripDowngradedToolCallText(stripMinimaxToolCallXml(c.text)),
+              ),
             ),
           ).trim(),
         )

@@ -1,23 +1,31 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 
 /**
- * Repair patch for "Historical context" tool-call leakage.
+ * Custom context block promotion and text-leakage repair.
  *
- * Some models (e.g. during multi-model handoff) emit tool calls as plain text
- * in the format:
+ * Handles two categories of model output that should not leak as raw text:
+ *
+ * ## 1. Historical context tool-call leakage
+ *
+ * Some models (e.g. during multi-model handoff) emit tool calls as plain text:
  *
  *   [Historical context: a different model called tool "NAME" with arguments: {
  *     …JSON…
  *   }. Do not mimic this format - use proper function calling.]
  *
- * This module:
- * 1. Promotes those patterns to proper `toolCall` content blocks.
- * 2. Wraps any free-form text *preceding* the marker as `thinking` blocks
- *    (equivalent to `<think>…</think>`).
- * 3. Provides a text-level strip function as a safety net for
- *    `extractAssistantText`.
+ * ## 2. Gemini CLI `<call>` tag fallback
  *
- * Kept in a standalone file to minimise churn on the rest of the codebase.
+ * `gemini-3-pro-preview` via `google-gemini-cli` sometimes outputs tool calls
+ * as text instead of native function calls, using the format:
+ *
+ *   <call>
+ *   toolName{key:<ctrl46>value<ctrl46>,key2:<ctrl46>value2<ctrl46>}
+ *   </call>
+ *
+ * where `<ctrl46>` is the literal string used as a value delimiter.
+ *
+ * This module promotes both patterns to proper content blocks and provides
+ * text-level strip functions as safety nets for `extractAssistantText`.
  */
 
 // ── constants ───────────────────────────────────────────────
@@ -300,6 +308,198 @@ export function stripHistoricalContextText(text: string): string {
     } else {
       result += HC_PREFIX;
       cursor = idx + HC_PREFIX.length;
+    }
+  }
+
+  return result.trim();
+}
+
+// ── <call> tag promotion (Gemini CLI fallback) ──────────────
+
+const CALL_OPEN = "<call>";
+const CALL_CLOSE = "</call>";
+/** The literal string Gemini CLI uses as a value delimiter. */
+const CTRL46 = "<ctrl46>";
+
+/**
+ * Parse a single `<call>toolName{key:<ctrl46>val<ctrl46>,...}</call>` block.
+ * Returns the tool name, parsed arguments, and end index, or `null`.
+ */
+function parseOneCallTag(
+  text: string,
+  openStart: number,
+): { toolName: string; args: Record<string, string>; end: number } | null {
+  const bodyStart = openStart + CALL_OPEN.length;
+
+  // Find the matching </call>
+  const closeIdx = text.indexOf(CALL_CLOSE, bodyStart);
+  if (closeIdx < 0) {
+    return null;
+  }
+
+  const body = text.slice(bodyStart, closeIdx).trim();
+  // body format: toolName{key:<ctrl46>val<ctrl46>,key2:<ctrl46>val2<ctrl46>}
+  const braceIdx = body.indexOf("{");
+  if (braceIdx < 0) {
+    return null;
+  }
+
+  const toolName = body.slice(0, braceIdx).trim();
+  if (!toolName) {
+    return null;
+  }
+
+  // Extract content between outer braces
+  const lastBrace = body.lastIndexOf("}");
+  if (lastBrace <= braceIdx) {
+    return null;
+  }
+  const paramsStr = body.slice(braceIdx + 1, lastBrace);
+
+  // Parse key-value pairs using <ctrl46> as string delimiter.
+  // Format: key:<ctrl46>value<ctrl46>,key2:<ctrl46>value2<ctrl46>
+  const args: Record<string, string> = {};
+  const paramRe = new RegExp(
+    `(\\w+):${escapeRegex(CTRL46)}([\\s\\S]*?)${escapeRegex(CTRL46)}`,
+    "g",
+  );
+  for (const match of paramsStr.matchAll(paramRe)) {
+    args[match[1]] = match[2];
+  }
+
+  return { toolName, args, end: closeIdx + CALL_CLOSE.length };
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+let callTagIdCounter = 0;
+
+/**
+ * Scan assistant-message text blocks for `<call>…</call>` patterns
+ * (Gemini CLI text-based tool call fallback) and promote each occurrence
+ * to a proper `toolCall` content block so the runtime executes them.
+ *
+ * Mutates `message.content` in place.
+ */
+export function promoteCallTagsToBlocks(message: AssistantMessage): void {
+  if (!Array.isArray(message.content)) {
+    return;
+  }
+
+  const hasCallTag = message.content.some((b) => {
+    if (!b || typeof b !== "object") {
+      return false;
+    }
+    const r = b as unknown as Record<string, unknown>;
+    return r.type === "text" && typeof r.text === "string" && String(r.text).includes(CALL_OPEN);
+  });
+  if (!hasCallTag) {
+    return;
+  }
+
+  const next: AssistantMessage["content"] = [];
+  let changed = false;
+
+  for (const block of message.content) {
+    if (
+      !block ||
+      typeof block !== "object" ||
+      (block as unknown as Record<string, unknown>).type !== "text"
+    ) {
+      next.push(block);
+      continue;
+    }
+
+    const rawText = (block as unknown as Record<string, unknown>).text;
+    const src = typeof rawText === "string" ? rawText : "";
+    if (!src.includes(CALL_OPEN)) {
+      next.push(block);
+      continue;
+    }
+
+    changed = true;
+    let cursor = 0;
+
+    while (cursor < src.length) {
+      const idx = src.indexOf(CALL_OPEN, cursor);
+      if (idx < 0) {
+        const tail = src.slice(cursor).trim();
+        if (tail) {
+          next.push({ type: "text", text: tail } as never);
+        }
+        break;
+      }
+
+      // Keep text before <call> tag
+      const before = src.slice(cursor, idx).trim();
+      if (before) {
+        next.push({ type: "text", text: before } as never);
+      }
+
+      const parsed = parseOneCallTag(src, idx);
+      if (parsed) {
+        // Promote to a proper toolCall block so the runtime can execute it.
+        const callId = `call-tag-${++callTagIdCounter}`;
+        next.push({
+          type: "toolCall",
+          id: callId,
+          name: parsed.toolName,
+          arguments: parsed.args,
+        } as never);
+        cursor = parsed.end;
+        // skip trailing whitespace
+        while (cursor < src.length && /\s/.test(src[cursor])) {
+          cursor++;
+        }
+      } else {
+        // un-parseable — keep as-is and step past the tag
+        cursor = idx + CALL_OPEN.length;
+      }
+    }
+  }
+
+  if (changed) {
+    message.content = next;
+    // The model set stopReason to "stop" but actually intended a tool call.
+    // Override so the runtime processes the tool call blocks.
+    (message as unknown as Record<string, unknown>).stopReason = "tool_call";
+  }
+}
+
+/**
+ * Strip `<call>…</call>` blocks from plain text.
+ * Safety net for `extractAssistantText` — prevents raw call tags
+ * from leaking into user-facing output.
+ */
+export function stripCallTagsFromText(text: string): string {
+  if (!text || !text.includes(CALL_OPEN)) {
+    return text;
+  }
+
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const idx = text.indexOf(CALL_OPEN, cursor);
+    if (idx < 0) {
+      result += text.slice(cursor);
+      break;
+    }
+    result += text.slice(cursor, idx);
+
+    const closeIdx = text.indexOf(CALL_CLOSE, idx);
+    if (closeIdx >= 0) {
+      cursor = closeIdx + CALL_CLOSE.length;
+      // collapse trailing newlines
+      while (cursor < text.length && (text[cursor] === "\n" || text[cursor] === "\r")) {
+        cursor++;
+      }
+    } else {
+      // No closing tag — keep remainder as-is
+      result += text.slice(idx);
+      break;
     }
   }
 
