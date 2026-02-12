@@ -9,9 +9,11 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@radix-ui/react-scroll-area": "^1.2.10",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "dockerode": "^4.0.2",
+    "framer-motion": "^12.34.0",
     "lucide-react": "^0.330.0",
     "next": "14.1.0",
     "react": "^18",

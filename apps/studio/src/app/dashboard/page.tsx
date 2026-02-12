@@ -2,6 +2,7 @@ import { KanbanBoard } from "@/components/kanban-board";
 import { AnalyticsCharts } from "@/components/analytics-charts";
 import { ConfigForm } from "@/components/config-form";
 import { ChatConsole } from "@/components/chat-console";
+import { ActivityFeed } from "@/components/dashboard/activity-feed";
 
 export default function DashboardPage() {
   // For prototype, we hardcode the agent ID we are monitoring.
@@ -15,12 +16,14 @@ export default function DashboardPage() {
       </header>
       
       <main className="flex-1 p-6 space-y-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {/* Left Column: Launch Control */}
           <section className="lg:col-span-1">
              <h2 className="text-lg font-medium mb-4">Launch Control</h2>
              <ConfigForm />
           </section>
 
+          {/* Middle Column: Status & Chat */}
           <section className="lg:col-span-2 space-y-6">
              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
@@ -37,6 +40,12 @@ export default function DashboardPage() {
                 <h2 className="text-lg font-medium mb-4">Performance Analytics</h2>
                 <AnalyticsCharts agentId={AGENT_ID} />
              </div>
+          </section>
+
+          {/* Right Column: Activity Stream (The Lobster Protocol) */}
+          <section className="lg:col-span-1 h-[calc(100vh-180px)]">
+             <h2 className="text-lg font-medium mb-4">Activity Stream</h2>
+             <ActivityFeed agentId={AGENT_ID} />
           </section>
         </div>
       </main>

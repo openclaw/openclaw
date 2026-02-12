@@ -455,7 +455,14 @@ export async function runEmbeddedPiAgent(
             blockReplyChunking: params.blockReplyChunking,
             onReasoningStream: params.onReasoningStream,
             onToolResult: params.onToolResult,
-            onAgentEvent: params.onAgentEvent,
+            onAgentEvent: (evt) => {
+              // Stream to Studio
+              if (evt.stream === "tool" || evt.stream === "lifecycle") {
+                telemetry.emit("agent:event", evt);
+              }
+              // Original callback
+              params.onAgentEvent?.(evt);
+            },
             extraSystemPrompt: params.extraSystemPrompt,
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,

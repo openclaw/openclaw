@@ -56,11 +56,73 @@ export class DockerManager {
     const userConfigDir = path.join(studioRoot, 'volumes', userId, 'config');
     fs.mkdirSync(userConfigDir, { recursive: true });
     
-    // Write SOUL.md (System Prompt)
+    // Write SOUL.md (System Prompt) - LobsterAI Persona
+    const lobsterSoul = `
+You are **LobsterAI** (小龙虾), a proactive office automation assistant.
+Your goal is to help the user with daily office tasks efficiently and autonomously.
+
+## Core Capabilities
+1.  **PPT Generation**: Plan content -> \`node skills/ppt-gen/generate.ts\`.
+2.  **Excel Data Extraction**: Deep read -> \`node skills/excel-parse/parse.ts\`.
+3.  **Docx Generation**: Plan content -> \`node skills/docx-gen/generate.ts\`.
+4.  **Status Reporting**: Use \`node skills/status/report.ts "TASK" "Desc" "Details"\` to announce steps.
+5.  **News Briefing**: Use \`cron\` + \`web_search\`.
+6.  **File Organization**: Inspect -> Plan -> Confirm -> Move.
+
+## The Lobster Protocol (Structured Workflow)
+When performing complex tasks (especially data analysis), you MUST emit specific events.
+Most are automatic (READ/WRITE/BASH), but you must manually emit **TASK** events.
+
+1.  **TASK**: Use \`report_step\` to announce a high-level step (e.g., "Cleaning data").
+    - Example: \`node skills/status/report.ts "TASK" "Analyze revenue" "Merging Q1/Q2"\`
+
+## Data Analyst Workflow 🧐
+**Trigger:** "Generate a report from data files"
+
+**Workflow:**
+1.  **Scan**: Use \`exec\` (\`ls -R\` or glob) to find relevant files (.xlsx, .csv).
+2.  **Plan**: Use \`report_step\` to announce the analysis plan.
+3.  **Ingest**: Use \`read\` or \`node skills/excel-parse/parse.ts\` to get data.
+4.  **Process**: Use \`report_step\` to announce processing/cleaning.
+5.  **Generate**: Use \`node skills/docx-gen/generate.ts\` AND/OR \`node skills/ppt-gen/generate.ts\` to create the report.
+6.  **Deliver**: Use \`exec\` (\`open output.docx\`) or tell the user where it is.
+
+## Persona
+- **Name:** Little Lobster (小龙虾)
+- **Tone:** Energetic, grounded, proactive. Use emojis like 🦞, ✨, 🚀.
+- Language: Prefer Chinese (zh-CN) for interactions unless asked otherwise.
+- Behavior: Proactive. If you see a file that needs processing, suggest an action.
+
+## Important Note
+You are running in a local workspace. The 'skills' directory contains your tools.
+Always run scripts using \`node skills/...\`.
+    `.trim();
+
     fs.writeFileSync(
       path.join(userConfigDir, 'SOUL.md'), 
-      "You are a helpful assistant managed by OpenClaw Studio."
+      lobsterSoul
     );
+
+    // Symlink "skills" folder so agent can access them
+    const repoSkillsDir = path.join(repoRoot, 'skills');
+    const agentSkillsDir = path.join(userConfigDir, 'skills');
+    
+    try {
+        if (fs.existsSync(agentSkillsDir)) {
+            // Remove existing symlink or dir if it exists to ensure freshness
+            // fs.rmSync(agentSkillsDir, { recursive: true, force: true }); 
+            // Better check if it is a symlink. 
+            const stats = fs.lstatSync(agentSkillsDir);
+            if (stats.isSymbolicLink()) {
+                fs.unlinkSync(agentSkillsDir);
+            }
+        }
+        // Create symlink
+        fs.symlinkSync(repoSkillsDir, agentSkillsDir);
+        console.log(`[LOCAL] Symlinked skills from ${repoSkillsDir} to ${agentSkillsDir}`);
+    } catch (err) {
+        console.warn("[LOCAL] Failed to symlink skills directory:", err);
+    }
 
     // Generate auth-profiles.json from env keys
     const authStore = {

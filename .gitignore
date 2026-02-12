@@ -82,3 +82,5 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 local/
+apps/studio/volumes/
+apps/studio/.next/

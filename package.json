@@ -131,6 +131,7 @@
     "commander": "^14.0.3",
     "croner": "^10.0.1",
     "discord-api-types": "^0.38.38",
+    "docx": "^9.5.1",
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
     "file-type": "^21.3.0",
@@ -145,6 +146,7 @@
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.4.624",
     "playwright-core": "1.58.2",
+    "pptxgenjs": "^4.0.1",
     "proper-lockfile": "^4.1.2",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
@@ -154,6 +156,7 @@
     "tslog": "^4.10.2",
     "undici": "^7.21.0",
     "ws": "^8.19.0",
+    "xlsx": "^0.18.5",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
