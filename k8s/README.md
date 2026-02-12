@@ -8,6 +8,13 @@ This directory contains standard Kubernetes manifests for deploying OpenClaw Gat
 - `kubectl` configured to communicate with your cluster.
 - An OpenClaw Docker image (either pulled from a registry or built locally and imported).
 
+## Community Helm Charts
+
+If you prefer using Helm, there are community-maintained charts available:
+
+- **[Chrisbattarbee/openclaw-helm](https://github.com/Chrisbattarbee/openclaw-helm)**: A comprehensive chart with support for configuration injection, persistence, and ingress.
+- **[serhanekicii/openclaw-helm](https://github.com/serhanekicii/openclaw-helm)**: Another popular community chart.
+
 ## Setup Instructions
 
 ### 1. Configure Secrets
