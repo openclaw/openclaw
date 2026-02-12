@@ -73,6 +73,8 @@ export async function sendMessageIrc(
       username: account.username,
       realname: account.realname,
       password: account.password,
+      tlsInsecure: account.tlsInsecure,
+      tlsFingerprints: account.tlsFingerprints,
       nickserv: {
         enabled: account.config.nickserv?.enabled,
         service: account.config.nickserv?.service,
