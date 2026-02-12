@@ -535,7 +535,7 @@ const ERROR_PATTERNS = {
   overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
   timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
   billing: [
-    /\b402\b/,
+    /\b402\s+payment/i,
     "payment required",
     "insufficient credits",
     "credit balance",
