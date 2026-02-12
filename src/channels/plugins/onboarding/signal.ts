@@ -18,6 +18,7 @@ import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 const channel = "signal" as const;
 const MIN_E164_DIGITS = 5;
 const MAX_E164_DIGITS = 15;
+const DIGITS_ONLY = /^\d+$/;
 const INVALID_SIGNAL_ACCOUNT_ERROR =
   "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
 
@@ -28,10 +29,13 @@ export function normalizeSignalAccountInput(value: string | null | undefined): s
   }
   const normalized = normalizeE164(trimmed);
   const digits = normalized.slice(1);
+  if (!DIGITS_ONLY.test(digits)) {
+    return null;
+  }
   if (digits.length < MIN_E164_DIGITS || digits.length > MAX_E164_DIGITS) {
     return null;
   }
-  return normalized;
+  return `+${digits}`;
 }
 
 function setSignalDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
@@ -273,7 +277,9 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
           message: `Signal account set (${account}). Keep it?`,
           initialValue: true,
         });
-        if (!keep) account = "";
+        if (!keep) {
+          account = "";
+        }
       }
     }
 
