@@ -37,6 +37,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } = params;
 
   const usage = result.meta.agentMeta?.usage;
+  const promptTokens = result.meta.agentMeta?.promptTokens;
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
@@ -71,6 +72,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       deriveSessionTotalTokens({
         usage,
         contextTokens,
+        promptTokens,
       }) ?? input;
   }
   if (compactionsThisRun > 0) {

@@ -34,7 +34,7 @@ import {
   isAuthAssistantError,
   isBillingAssistantError,
   isCompactionFailureError,
-  isContextOverflowError,
+  isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
   parseImageSizeError,
@@ -44,7 +44,7 @@ import {
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
-import { normalizeUsage, type UsageLike } from "../usage.js";
+import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -408,6 +408,7 @@ export async function runEmbeddedPiAgent(
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       const usageAccumulator = createUsageAccumulator();
+      let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       try {
         while (true) {
@@ -475,10 +476,12 @@ export async function runEmbeddedPiAgent(
           });
 
           const { aborted, promptError, timedOut, sessionIdUsed, lastAssistant } = attempt;
-          mergeUsageIntoAccumulator(
-            usageAccumulator,
-            attempt.attemptUsage ?? normalizeUsage(lastAssistant?.usage as UsageLike),
-          );
+          const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
+          const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
+          mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
+          // Keep prompt size from the latest model call so session totalTokens
+          // reflects current context usage, not accumulated tool-loop usage.
+          lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
           autoCompactionCount += Math.max(0, attempt.compactionCount ?? 0);
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
@@ -496,14 +499,14 @@ export async function runEmbeddedPiAgent(
             ? (() => {
                 if (promptError) {
                   const errorText = describeUnknownError(promptError);
-                  if (isContextOverflowError(errorText)) {
+                  if (isLikelyContextOverflowError(errorText)) {
                     return { text: errorText, source: "promptError" as const };
                   }
                   // Prompt submission failed with a non-overflow error. Do not
                   // inspect prior assistant errors from history for this attempt.
                   return null;
                 }
-                if (assistantErrorText && isContextOverflowError(assistantErrorText)) {
+                if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
                   return { text: assistantErrorText, source: "assistantError" as const };
                 }
                 return null;
@@ -826,12 +829,14 @@ export async function runEmbeddedPiAgent(
           // overstates the actual context size. `lastCallUsage` reflects only
           // the final call, giving an accurate snapshot of current context.
           const lastCallUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
+          const promptTokens = derivePromptTokens(lastRunPromptUsage);
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,
             model: lastAssistant?.model ?? model.id,
             usage,
             lastCallUsage: lastCallUsage ?? undefined,
+            promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
 

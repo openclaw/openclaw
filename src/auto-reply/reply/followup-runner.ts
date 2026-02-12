@@ -194,6 +194,7 @@ export function createFollowupRunner(params: {
       }
 
       const usage = runResult.meta.agentMeta?.usage;
+      const promptTokens = runResult.meta.agentMeta?.promptTokens;
       const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const contextTokensUsed =
         agentCfgContextTokens ??
@@ -207,6 +208,7 @@ export function createFollowupRunner(params: {
           sessionKey,
           usage,
           lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+          promptTokens,
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,

@@ -30,6 +30,8 @@ describe("isLikelyContextOverflowError", () => {
       "too many requests",
       "429 Too Many Requests",
       "exceeded your current quota",
+      "This request would exceed your account's rate limit",
+      "429 Too Many Requests: request exceeds rate limit",
     ];
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(false);

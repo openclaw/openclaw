@@ -6,6 +6,7 @@ describe("isCompactionFailureError", () => {
       'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
       "auto-compaction failed due to context overflow",
       "Compaction failed: prompt is too long",
+      "Summarization failed: context window exceeded for this request",
     ];
     for (const sample of samples) {
       expect(isCompactionFailureError(sample)).toBe(true);
