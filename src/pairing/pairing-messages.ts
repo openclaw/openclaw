@@ -7,6 +7,13 @@ export function buildPairingReply(params: {
   code: string;
 }): string {
   const { channel, idLine, code } = params;
+
+  // Skip system messages for WhatsApp - log to console only
+  if (channel === "whatsapp") {
+    console.log(`[WhatsApp pairing] Code: ${code} - suppressed system message`);
+    return "";
+  }
+
   return [
     "OpenClaw: access not configured.",
     "",
