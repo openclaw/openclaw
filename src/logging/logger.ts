@@ -1,26 +1,15 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ConsoleStyle } from "./console.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig } from "./config.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { loggingState } from "./state.js";
 
-// Prefer /tmp/openclaw so macOS Debug UI and docs match, but fall back to
-// os.tmpdir() on platforms where /tmp is read-only (e.g. Termux/Android).
-function resolveDefaultLogDir(): string {
-  try {
-    fs.mkdirSync("/tmp/openclaw", { recursive: true });
-    return "/tmp/openclaw";
-  } catch {
-    return path.join(os.tmpdir(), "openclaw");
-  }
-}
-
-export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
+export const DEFAULT_LOG_DIR = resolvePreferredOpenClawTmpDir();
 export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
 
 const LOG_PREFIX = "openclaw";

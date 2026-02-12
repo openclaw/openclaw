@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { handleRouteError, readBody, requirePwAi, resolveProfileContext } from "./agent.shared.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
+
+const DEFAULT_TRACE_DIR = resolvePreferredOpenClawTmpDir();
 
 export function registerBrowserAgentDebugRoutes(
   app: BrowserRouteRegistrar,
@@ -132,7 +134,7 @@ export function registerBrowserAgentDebugRoutes(
         return;
       }
       const id = crypto.randomUUID();
-      const dir = path.join(os.tmpdir(), "openclaw");
+      const dir = DEFAULT_TRACE_DIR;
       await fs.mkdir(dir, { recursive: true });
       const tracePath = out.trim() || path.join(dir, `browser-trace-${id}.zip`);
       await pw.traceStopViaPlaywright({
