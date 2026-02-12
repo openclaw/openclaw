@@ -334,9 +334,11 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
   try {
     const response = await fetch(`${VENICE_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(5000),
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -389,5 +391,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
   } catch (error) {
     console.warn(`[venice-models] Discovery failed: ${String(error)}, using static catalog`);
     return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
+  } finally {
+    clearTimeout(timeout);
   }
 }
