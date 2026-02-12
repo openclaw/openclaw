@@ -721,9 +721,9 @@ function getWorkerDailyParticipationHours(w) {
 }
 
 function getWorkerNetWorkingHours(w) {
-  // Net Working Hours = Hours/Day × Participation% × Working Days/Year (YEARLY)
+  // Net Working Hours = Daily Part. Hrs × (Working Days/Year / 365)
   const workingDays = w.workingDaysPerYear || WORKING_DAYS_PER_YEAR;
-  return getWorkerDailyParticipationHours(w) * workingDays;
+  return getWorkerDailyParticipationHours(w) * (workingDays / DAYS_PER_YEAR);
 }
 
 function getWorkingDaysPerYearPercent() {
