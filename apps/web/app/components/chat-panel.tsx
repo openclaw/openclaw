@@ -657,7 +657,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 											🦞
 										</p>
 										<h3 className="text-lg font-semibold mb-1">
-											OpenClaw Chat
+											Ironclaw Chat
 										</h3>
 										<p
 											className="text-sm"
@@ -740,7 +740,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							placeholder={
 								compact && fileContext
 									? `Ask about ${fileContext.filename}...`
-									: "Message OpenClaw..."
+									: "Message Ironclaw..."
 							}
 							disabled={
 								isStreaming ||

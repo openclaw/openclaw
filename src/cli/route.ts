@@ -12,7 +12,7 @@ async function prepareRoutedCommand(params: {
   commandPath: string[];
   loadPlugins?: boolean;
 }) {
-  emitCliBanner(VERSION, { argv: params.argv });
+  await emitCliBanner(VERSION, { argv: params.argv });
   await ensureConfigReady({ runtime: defaultRuntime, commandPath: params.commandPath });
   if (params.loadPlugins) {
     ensurePluginRegistryLoaded();

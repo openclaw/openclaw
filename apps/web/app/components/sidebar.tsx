@@ -402,7 +402,7 @@ export function Sidebar({
       {/* Header with New Chat button */}
       <div className="px-4 py-4 border-b border-[var(--color-border)] flex items-center justify-between">
         <h1 className="text-base font-bold flex items-center gap-2">
-          <span>OpenClaw Dench</span>
+          <span>Ironclaw</span>
         </h1>
         <button
           onClick={onNewSession}

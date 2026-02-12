@@ -1,3 +1,4 @@
+import gradient from "gradient-string";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -12,103 +13,130 @@ type BannerOptions = TaglineOptions & {
 
 let bannerEmitted = false;
 
-const graphemeSegmenter =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
-
-function splitGraphemes(value: string): string[] {
-  if (!graphemeSegmenter) {
-    return Array.from(value);
-  }
-  try {
-    return Array.from(graphemeSegmenter.segment(value), (seg) => seg.segment);
-  } catch {
-    return Array.from(value);
-  }
-}
-
 const hasJsonFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
 
 const hasVersionFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--version" || arg === "-V" || arg === "-v");
 
+// ---------------------------------------------------------------------------
+// IRONCLAW ASCII art (figlet "ANSI Shadow" font, baked at build time)
+// ---------------------------------------------------------------------------
+const IRONCLAW_ASCII = [
+  " ██╗██████╗  ██████╗ ███╗   ██╗ ██████╗██╗      █████╗ ██╗    ██╗",
+  " ██║██╔══██╗██╔═══██╗████╗  ██║██╔════╝██║     ██╔══██╗██║    ██║",
+  " ██║██████╔╝██║   ██║██╔██╗ ██║██║     ██║     ███████║██║ █╗ ██║",
+  " ██║██╔══██╗██║   ██║██║╚██╗██║██║     ██║     ██╔══██║██║███╗██║",
+  " ██║██║  ██║╚██████╔╝██║ ╚████║╚██████╗███████╗██║  ██║╚███╔███╔╝",
+  " ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ ",
+];
+
+// ---------------------------------------------------------------------------
+// Iron-metallic gradient colors (dark iron → bright silver → dark iron)
+// ---------------------------------------------------------------------------
+const IRON_GRADIENT_COLORS = [
+  "#374151", // dark iron
+  "#4B5563",
+  "#6B7280", // medium iron
+  "#9CA3AF", // steel
+  "#D1D5DB", // bright silver
+  "#F3F4F6", // near-white highlight
+  "#D1D5DB",
+  "#9CA3AF",
+  "#6B7280",
+  "#4B5563",
+];
+
+// ---------------------------------------------------------------------------
+// Gradient animation helpers
+// ---------------------------------------------------------------------------
+
+function rotateArray<T>(arr: T[], offset: number): T[] {
+  const n = arr.length;
+  const o = ((offset % n) + n) % n;
+  return [...arr.slice(o), ...arr.slice(0, o)];
+}
+
+function renderGradientFrame(lines: string[], frame: number): string {
+  const colors = rotateArray(IRON_GRADIENT_COLORS, frame);
+  return gradient(colors).multiline(lines.join("\n"));
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Play the iron shimmer animation: a bright highlight sweeps across the
+ * ASCII art like light glinting off polished metal. Runs for ~2.5 seconds
+ * at 12 fps, completing 3 full gradient cycles.
+ */
+async function animateIronBanner(): Promise<void> {
+  const lineCount = IRONCLAW_ASCII.length;
+  const fps = 12;
+  const totalFrames = IRON_GRADIENT_COLORS.length * 3; // 3 full shimmer sweeps
+  const frameMs = Math.round(1000 / fps);
+
+  // Print the first frame to claim vertical space
+  process.stdout.write(renderGradientFrame(IRONCLAW_ASCII, 0) + "\n");
+
+  for (let frame = 1; frame < totalFrames; frame++) {
+    await sleep(frameMs);
+    // Move cursor up to overwrite the previous frame
+    process.stdout.write(`\x1b[${lineCount}A\r`);
+    process.stdout.write(renderGradientFrame(IRONCLAW_ASCII, frame) + "\n");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Static (non-animated) banner rendering
+// ---------------------------------------------------------------------------
+
+export function formatCliBannerArt(options: BannerOptions = {}): string {
+  const rich = options.richTty ?? isRich();
+  if (!rich) {
+    return IRONCLAW_ASCII.join("\n");
+  }
+  return renderGradientFrame(IRONCLAW_ASCII, 0);
+}
+
+// ---------------------------------------------------------------------------
+// One-line version + tagline (prints below the ASCII art)
+// ---------------------------------------------------------------------------
+
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit = options.commit ?? resolveCommitHash({ env: options.env });
   const commitLabel = commit ?? "unknown";
   const tagline = pickTagline(options);
   const rich = options.richTty ?? isRich();
-  const title = "🦞 OpenClaw";
-  const prefix = "🦞 ";
+  const title = "IRONCLAW";
+  const prefix = "  ";
   const columns = options.columns ?? process.stdout.columns ?? 120;
-  const plainFullLine = `${title} ${version} (${commitLabel}) — ${tagline}`;
+  const plainFullLine = `${prefix}${title} ${version} (${commitLabel}) — ${tagline}`;
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
   if (rich) {
     if (fitsOnOneLine) {
-      return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
+      return `${prefix}${theme.heading(title)} ${theme.info(version)} ${theme.muted(
         `(${commitLabel})`,
       )} ${theme.muted("—")} ${theme.accentDim(tagline)}`;
     }
-    const line1 = `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
+    const line1 = `${prefix}${theme.heading(title)} ${theme.info(version)} ${theme.muted(
       `(${commitLabel})`,
     )}`;
-    const line2 = `${" ".repeat(prefix.length)}${theme.accentDim(tagline)}`;
+    const line2 = `${prefix}${theme.accentDim(tagline)}`;
     return `${line1}\n${line2}`;
   }
   if (fitsOnOneLine) {
     return plainFullLine;
   }
-  const line1 = `${title} ${version} (${commitLabel})`;
-  const line2 = `${" ".repeat(prefix.length)}${tagline}`;
+  const line1 = `${prefix}${title} ${version} (${commitLabel})`;
+  const line2 = `${prefix}${tagline}`;
   return `${line1}\n${line2}`;
 }
 
-const LOBSTER_ASCII = [
-  "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-  "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
-  "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
-  "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
-  "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-  "                  🦞 OPENCLAW 🦞                    ",
-  " ",
-];
+// ---------------------------------------------------------------------------
+// Emit the full banner (animated ASCII art + version line)
+// ---------------------------------------------------------------------------
 
-export function formatCliBannerArt(options: BannerOptions = {}): string {
-  const rich = options.richTty ?? isRich();
-  if (!rich) {
-    return LOBSTER_ASCII.join("\n");
-  }
-
-  const colorChar = (ch: string) => {
-    if (ch === "█") {
-      return theme.accentBright(ch);
-    }
-    if (ch === "░") {
-      return theme.accentDim(ch);
-    }
-    if (ch === "▀") {
-      return theme.accent(ch);
-    }
-    return theme.muted(ch);
-  };
-
-  const colored = LOBSTER_ASCII.map((line) => {
-    if (line.includes("OPENCLAW")) {
-      return (
-        theme.muted("              ") +
-        theme.accent("🦞") +
-        theme.info(" OPENCLAW ") +
-        theme.accent("🦞")
-      );
-    }
-    return splitGraphemes(line).map(colorChar).join("");
-  });
-
-  return colored.join("\n");
-}
-
-export function emitCliBanner(version: string, options: BannerOptions = {}) {
+export async function emitCliBanner(version: string, options: BannerOptions = {}) {
   if (bannerEmitted) {
     return;
   }
@@ -122,9 +150,22 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
   if (hasVersionFlag(argv)) {
     return;
   }
-  const line = formatCliBannerLine(version, options);
-  process.stdout.write(`\n${line}\n\n`);
+
   bannerEmitted = true;
+  const rich = options.richTty ?? isRich();
+
+  process.stdout.write("\n");
+
+  if (rich) {
+    // Animated iron shimmer
+    await animateIronBanner();
+  } else {
+    // Plain ASCII fallback
+    process.stdout.write(IRONCLAW_ASCII.join("\n") + "\n");
+  }
+
+  const line = formatCliBannerLine(version, options);
+  process.stdout.write(`${line}\n\n`);
 }
 
 export function hasEmittedCliBanner(): boolean {

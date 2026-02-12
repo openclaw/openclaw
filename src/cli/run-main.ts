@@ -3,14 +3,16 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { loadDotEnv } from "../infra/dotenv.js";
-import { normalizeEnv } from "../infra/env.js";
+import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
-import { getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
+import { VERSION } from "../version.js";
+import { getCommandPath, getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
+import { emitCliBanner } from "./banner.js";
 import { tryRouteCli } from "./route.js";
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
@@ -33,6 +35,20 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
 
+  // Show the animated Ironclaw banner early so it appears for ALL invocations
+  // (bare `ironclaw`, subcommands, help, etc.). The bannerEmitted flag inside
+  // emitCliBanner prevents double-emission from the route / preAction hooks.
+  const commandPath = getCommandPath(normalizedArgv, 2);
+  const hideBanner =
+    isTruthyEnvValue(process.env.IRONCLAW_HIDE_BANNER) ||
+    isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
+    commandPath[0] === "update" ||
+    commandPath[0] === "completion" ||
+    (commandPath[0] === "plugins" && commandPath[1] === "update");
+  if (!hideBanner) {
+    await emitCliBanner(VERSION, { argv: normalizedArgv });
+  }
+
   if (await tryRouteCli(normalizedArgv)) {
     return;
   }
@@ -48,7 +64,7 @@ export async function runCli(argv: string[] = process.argv) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
-    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    console.error("[ironclaw] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });
 

@@ -33,12 +33,13 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     }
     const commandPath = getCommandPath(argv, 2);
     const hideBanner =
+      isTruthyEnvValue(process.env.IRONCLAW_HIDE_BANNER) ||
       isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
       commandPath[0] === "update" ||
       commandPath[0] === "completion" ||
       (commandPath[0] === "plugins" && commandPath[1] === "update");
     if (!hideBanner) {
-      emitCliBanner(programVersion);
+      await emitCliBanner(programVersion);
     }
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);

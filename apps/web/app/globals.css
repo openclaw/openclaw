@@ -27,13 +27,16 @@ body {
 ::-webkit-scrollbar {
   width: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--color-border);
   border-radius: 3px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
 }
@@ -66,13 +69,20 @@ body {
   border-bottom: 1px solid var(--color-border);
   padding-bottom: 0.5rem;
 }
+
 .workspace-prose h2 {
   font-size: 1.375rem;
   border-bottom: 1px solid var(--color-border);
   padding-bottom: 0.4rem;
 }
-.workspace-prose h3 { font-size: 1.125rem; }
-.workspace-prose h4 { font-size: 1rem; }
+
+.workspace-prose h3 {
+  font-size: 1.125rem;
+}
+
+.workspace-prose h4 {
+  font-size: 1rem;
+}
 
 .workspace-prose p {
   margin-bottom: 1em;
@@ -83,6 +93,7 @@ body {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+
 .workspace-prose a:hover {
   color: #93bbfd;
 }
@@ -114,8 +125,8 @@ body {
   margin-bottom: 0.25em;
 }
 
-.workspace-prose li > ul,
-.workspace-prose li > ol {
+.workspace-prose li>ul,
+.workspace-prose li>ol {
   margin-top: 0.25em;
   margin-bottom: 0;
 }
@@ -305,7 +316,7 @@ body {
   transform: rotate(45deg);
 }
 
-.editor-content-area .tiptap ul[data-type="taskList"] li > div {
+.editor-content-area .tiptap ul[data-type="taskList"] li>div {
   flex: 1;
 }
 
