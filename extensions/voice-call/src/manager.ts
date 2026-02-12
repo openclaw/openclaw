@@ -858,18 +858,26 @@ export class CallManager {
       }
     }
 
-    // Only keep non-terminal calls
+    // Only keep non-terminal calls that haven't exceeded max duration
+    const maxAgeMs = this.config.maxDurationSeconds * 1000;
+    const now = Date.now();
     for (const [callId, call] of callMap) {
-      if (!TerminalStates.has(call.state)) {
-        this.activeCalls.set(callId, call);
-        // Populate providerCallId mapping for lookups
-        if (call.providerCallId) {
-          this.providerCallIdMap.set(call.providerCallId, callId);
-        }
-        // Populate processed event IDs
-        for (const eventId of call.processedEventIds) {
-          this.processedEventIds.add(eventId);
-        }
+      if (TerminalStates.has(call.state)) {
+        continue;
+      }
+      // Discard stale calls that outlived maxDurationSeconds (crash recovery).
+      // Also discard calls with future startedAt (clock skew / corrupted data).
+      if (call.startedAt > now || now - call.startedAt > maxAgeMs) {
+        continue;
+      }
+      this.activeCalls.set(callId, call);
+      // Populate providerCallId mapping for lookups
+      if (call.providerCallId) {
+        this.providerCallIdMap.set(call.providerCallId, callId);
+      }
+      // Populate processed event IDs
+      for (const eventId of call.processedEventIds) {
+        this.processedEventIds.add(eventId);
       }
     }
   }
