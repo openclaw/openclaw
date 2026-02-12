@@ -247,6 +247,28 @@ export async function runCronIsolatedAgentTurn(params: {
     cronSession.sessionEntry.label = `Cron: ${labelSuffix}`;
   }
 
+  // Respect session model override — check session.modelOverride before falling
+  // back to the default config model. This ensures /model changes are honoured
+  // by cron and isolated agent runs.
+  if (!modelOverride) {
+    const sessionModelOverride = cronSession.sessionEntry.modelOverride?.trim();
+    if (sessionModelOverride) {
+      const sessionProviderOverride =
+        cronSession.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
+      const resolvedSessionOverride = resolveAllowedModelRef({
+        cfg: cfgWithAgentDefaults,
+        catalog: await loadCatalog(),
+        raw: `${sessionProviderOverride}/${sessionModelOverride}`,
+        defaultProvider: resolvedDefault.provider,
+        defaultModel: resolvedDefault.model,
+      });
+      if (!("error" in resolvedSessionOverride)) {
+        provider = resolvedSessionOverride.ref.provider;
+        model = resolvedSessionOverride.ref.model;
+      }
+    }
+  }
+
   // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default
   const hooksGmailThinking = isGmailHook
     ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
