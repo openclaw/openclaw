@@ -230,8 +230,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         const last = state.chatMessages[state.chatMessages.length - 1] as
           | Record<string, unknown>
           | undefined;
-        const lastText =
-          last?.role === "assistant" ? extractText(last) : null;
+        const lastText = last?.role === "assistant" ? extractText(last) : null;
         if (lastText !== finalText) {
           state.chatMessages = [
             ...state.chatMessages,
