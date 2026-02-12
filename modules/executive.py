@@ -58,12 +58,19 @@ try:
     from PIL import Image
     import io
     import base64
-    from google import genai
+    import requests as _requests  # used for Ollama HTTP calls
     VISION_AVAILABLE = True
 except ImportError as e:
     VISION_AVAILABLE = False
     print(f"⚠️ Vision Loop dependencies not installed: {e}")
-    print("   Install with: pip install mss pillow google-genai")
+    print("   Install with: pip install mss pillow requests")
+
+# Gemini SDK is optional — only used as a cloud fallback
+try:
+    from google import genai
+    GEMINI_SDK_AVAILABLE = True
+except ImportError:
+    GEMINI_SDK_AVAILABLE = False
 
 
 class OrionExecutive:
@@ -94,24 +101,38 @@ class OrionExecutive:
             'git',  # Git operations
         ]
 
-        # Initialize Vision Loop client
-        self.vision_client = None
+        # Initialize Vision Loop — prefer local Ollama/llava, fall back to Gemini
+        self._ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        self._vision_backend = None  # "ollama" | "gemini" | None
+        self.vision_client = None    # Gemini client (only when backend == "gemini")
+
         if VISION_AVAILABLE:
-            try:
-                api_key = os.environ.get("GEMINI_API_KEY")
-                if api_key:
-                    self.vision_client = genai.Client(api_key=api_key)
-                else:
-                    print("⚠️ GEMINI_API_KEY not set. Vision analysis disabled.")
-            except Exception as e:
-                print(f"⚠️ Failed to initialize Gemini client: {e}")
+            # Try 1: Local Ollama with llava model (private, no cloud)
+            if self._check_ollama_vision():
+                self._vision_backend = "ollama"
+                print("✅ Vision backend: Ollama/llava (local)")
+            # Try 2: Cloud fallback — Gemini
+            elif GEMINI_SDK_AVAILABLE:
+                try:
+                    api_key = os.environ.get("GEMINI_API_KEY")
+                    if api_key:
+                        self.vision_client = genai.Client(api_key=api_key)
+                        self._vision_backend = "gemini"
+                        print("⚠️ Ollama unavailable — falling back to Gemini (cloud)")
+                    else:
+                        print("⚠️ Ollama unavailable and GEMINI_API_KEY not set. Vision disabled.")
+                except Exception as e:
+                    print(f"⚠️ Failed to initialize Gemini client: {e}")
+            else:
+                print("⚠️ Ollama unavailable and google-genai not installed. Vision disabled.")
 
         self._log("Executive initialized", {
             "os": self.os,
             "trust_mode": self.trust_mode,
             "gui_available": GUI_AVAILABLE,
             "playwright_available": PLAYWRIGHT_AVAILABLE,
-            "vision_available": VISION_AVAILABLE and self.vision_client is not None
+            "vision_available": self._vision_backend is not None,
+            "vision_backend": self._vision_backend
         })
 
     def _get_modifier_key(self) -> str:
@@ -177,6 +198,57 @@ class OrionExecutive:
         })
 
         return approved
+
+    # ── Ollama / llava helpers ───────────────────────────────────
+
+    def _check_ollama_vision(self) -> bool:
+        """
+        Verify that Ollama is running and the llava model is available.
+
+        Returns:
+            True if Ollama is reachable and llava is pulled, False otherwise.
+        """
+        try:
+            resp = _requests.get(f"{self._ollama_host}/api/tags", timeout=5)
+            if resp.status_code != 200:
+                return False
+            models = [m.get("name", "") for m in resp.json().get("models", [])]
+            # Accept any llava variant (llava, llava:13b, llava:latest, …)
+            return any(m.startswith("llava") for m in models)
+        except Exception:
+            return False
+
+    def _analyze_with_ollama(
+        self, prompt: str, image_base64: str
+    ) -> Optional[str]:
+        """
+        Send an image + prompt to the local Ollama llava model.
+
+        Args:
+            prompt: The vision analysis prompt.
+            image_base64: Base64-encoded PNG image data.
+
+        Returns:
+            The model's text response, or None on failure.
+        """
+        try:
+            resp = _requests.post(
+                f"{self._ollama_host}/api/generate",
+                json={
+                    "model": "llava",
+                    "prompt": prompt,
+                    "images": [image_base64],
+                    "stream": False,
+                },
+                timeout=120,
+            )
+            if resp.status_code == 200:
+                return resp.json().get("response", "")
+            print(f"⚠️ Ollama llava request failed: HTTP {resp.status_code}")
+            return None
+        except Exception as e:
+            print(f"⚠️ Ollama llava error: {e}")
+            return None
 
     def gui_control(
         self,
@@ -429,7 +501,10 @@ class OrionExecutive:
         screenshot_data: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
-        Analyze a screenshot using Gemini Vision to find UI elements.
+        Analyze a screenshot to find UI elements.
+
+        Prioritizes the local Ollama/llava model for privacy.
+        Falls back to Gemini only if Ollama is unreachable.
 
         Args:
             query: What to find (e.g., "Find the Start button coordinates")
@@ -438,7 +513,7 @@ class OrionExecutive:
         Returns:
             Dict with analysis results including coordinates if found
         """
-        if not VISION_AVAILABLE or not self.vision_client:
+        if not VISION_AVAILABLE or self._vision_backend is None:
             return {"success": False, "error": "Vision analysis not available"}
 
         try:
@@ -462,22 +537,23 @@ COORDINATES: [
 
 Be precise with pixel coordinates. The top-left corner is (0, 0)."""
 
-            # Upload image to Gemini
             image_path = screenshot_data["path"]
+            image_b64 = screenshot_data["image_base64"]
+            analysis_text = None
 
-            # Use Gemini 2.0 Flash with vision
-            response = self.vision_client.models.generate_content(
-                model="gemini-2.0-flash-exp",
-                contents=[
-                    vision_prompt,
-                    {
-                        "mime_type": "image/png",
-                        "data": screenshot_data["image_base64"]
-                    }
-                ]
-            )
+            # Route to the active vision backend
+            if self._vision_backend == "ollama":
+                analysis_text = self._analyze_with_ollama(vision_prompt, image_b64)
+                # If Ollama failed mid-session, try Gemini fallback
+                if analysis_text is None and self.vision_client is not None:
+                    print("⚠️ Ollama failed — falling back to Gemini for this request")
+                    analysis_text = self._analyze_with_gemini(vision_prompt, image_b64)
 
-            analysis_text = response.text
+            elif self._vision_backend == "gemini":
+                analysis_text = self._analyze_with_gemini(vision_prompt, image_b64)
+
+            if analysis_text is None:
+                return {"success": False, "error": "Vision backend returned no response"}
 
             # Parse coordinates from response
             coordinates = self._parse_coordinates(analysis_text)
@@ -485,6 +561,7 @@ Be precise with pixel coordinates. The top-left corner is (0, 0)."""
             self._log("screen_analyzed", {
                 "query": query,
                 "screenshot": image_path,
+                "backend": self._vision_backend,
                 "coordinates_found": len(coordinates) > 0
             })
 
@@ -498,6 +575,37 @@ Be precise with pixel coordinates. The top-left corner is (0, 0)."""
         except Exception as e:
             self._log("analysis_error", {"error": str(e)})
             return {"success": False, "error": str(e)}
+
+    def _analyze_with_gemini(
+        self, prompt: str, image_base64: str
+    ) -> Optional[str]:
+        """
+        Send an image + prompt to Gemini Vision (cloud fallback).
+
+        Args:
+            prompt: The vision analysis prompt.
+            image_base64: Base64-encoded PNG image data.
+
+        Returns:
+            The model's text response, or None on failure.
+        """
+        if self.vision_client is None:
+            return None
+        try:
+            response = self.vision_client.models.generate_content(
+                model="gemini-2.0-flash-exp",
+                contents=[
+                    prompt,
+                    {
+                        "mime_type": "image/png",
+                        "data": image_base64,
+                    },
+                ],
+            )
+            return response.text
+        except Exception as e:
+            print(f"⚠️ Gemini vision error: {e}")
+            return None
 
     def _parse_coordinates(self, text: str) -> List[Dict[str, Any]]:
         """
@@ -551,7 +659,7 @@ Be precise with pixel coordinates. The top-left corner is (0, 0)."""
         Returns:
             Dict with execution results
         """
-        if not VISION_AVAILABLE or not self.vision_client:
+        if not VISION_AVAILABLE or self._vision_backend is None:
             return {"success": False, "error": "Vision Loop not available"}
 
         if not GUI_AVAILABLE:
@@ -660,7 +768,8 @@ Be precise with pixel coordinates. The top-left corner is (0, 0)."""
             "trust_mode": self.trust_mode,
             "gui_available": GUI_AVAILABLE,
             "playwright_available": PLAYWRIGHT_AVAILABLE,
-            "vision_available": VISION_AVAILABLE and self.vision_client is not None,
+            "vision_available": self._vision_backend is not None,
+            "vision_backend": self._vision_backend,
             "log_file": str(LOG_FILE)
         }
 
@@ -717,5 +826,6 @@ if __name__ == "__main__":
     print("=" * 70)
 
     print("\n✅ O.R.I.O.N. EXECUTIVE MODULE - All systems operational!")
-    if VISION_AVAILABLE and exec_module.vision_client:
-        print("🔮 VISION LOOP ENABLED - Ready for visual desktop automation!")
+    if exec_module._vision_backend:
+        backend_label = "Ollama/llava (local)" if exec_module._vision_backend == "ollama" else "Gemini (cloud)"
+        print(f"🔮 VISION LOOP ENABLED via {backend_label} - Ready for visual desktop automation!")
