@@ -1,6 +1,7 @@
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig, CONFIG_PATH } from "../config/config.js";
@@ -101,6 +102,173 @@ export function checkPnpmVersion(): {
   }
 }
 
+/**
+ * Parse .env.example file and extract required variable names
+ * Returns array of variable names (only keys, not values)
+ */
+export function parseEnvExample(content: string): string[] {
+  const variables: string[] = [];
+  const lines = content.split("\n");
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Skip empty lines and comments
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    // Parse KEY=VALUE format
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)/);
+    if (match) {
+      variables.push(match[1]);
+    }
+  }
+
+  return variables;
+}
+
+/**
+ * Parse .env file and extract variable names that have values
+ */
+export function parseEnvFile(content: string): string[] {
+  const variables: string[] = [];
+  const lines = content.split("\n");
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Skip empty lines and comments
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    // Parse KEY=VALUE format
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (match) {
+      const key = match[1];
+      const value = match[2];
+      // Only consider it present if value is not empty (ignoring comments after value)
+      const valueWithoutComment = value.split("#")[0].trim();
+      if (valueWithoutComment) {
+        variables.push(key);
+      }
+    }
+  }
+
+  return variables;
+}
+
+/**
+ * Check if .env file exists in the project root
+ */
+export function checkEnvFileExists(cwd: string = process.cwd()): {
+  ok: boolean;
+  path: string;
+} {
+  const envPath = path.join(cwd, ".env");
+  return {
+    ok: fs.existsSync(envPath),
+    path: envPath,
+  };
+}
+
+/**
+ * Check if .env.example file exists and can be read
+ */
+export function checkEnvExampleExists(cwd: string = process.cwd()): {
+  ok: boolean;
+  path: string;
+} {
+  const examplePath = path.join(cwd, ".env.example");
+  return {
+    ok: fs.existsSync(examplePath),
+    path: examplePath,
+  };
+}
+
+/**
+ * Validate .env file against .env.example
+ * Returns list of missing variables
+ */
+export function validateEnvFile(cwd: string = process.cwd()): {
+  ok: boolean;
+  envExists: boolean;
+  exampleExists: boolean;
+  missing: string[];
+  envPath: string;
+  examplePath: string;
+} {
+  const envPath = path.join(cwd, ".env");
+  const examplePath = path.join(cwd, ".env.example");
+
+  const envExists = fs.existsSync(envPath);
+  const exampleExists = fs.existsSync(examplePath);
+
+  // If neither file exists, we can't validate
+  if (!envExists && !exampleExists) {
+    return {
+      ok: false,
+      envExists: false,
+      exampleExists: false,
+      missing: [],
+      envPath,
+      examplePath,
+    };
+  }
+
+  // If .env.example doesn't exist, we can't validate
+  if (!exampleExists) {
+    return {
+      ok: true, // Not a failure - just can't check
+      envExists,
+      exampleExists: false,
+      missing: [],
+      envPath,
+      examplePath,
+    };
+  }
+
+  // If .env doesn't exist, all required vars are missing
+  if (!envExists) {
+    const exampleContent = fs.readFileSync(examplePath, "utf-8");
+    const requiredVars = parseEnvExample(exampleContent);
+    return {
+      ok: false,
+      envExists: false,
+      exampleExists: true,
+      missing: requiredVars,
+      envPath,
+      examplePath,
+    };
+  }
+
+  // Both exist - validate
+  try {
+    const exampleContent = fs.readFileSync(examplePath, "utf-8");
+    const envContent = fs.readFileSync(envPath, "utf-8");
+
+    const requiredVars = parseEnvExample(exampleContent);
+    const presentVars = parseEnvFile(envContent);
+
+    const missing = requiredVars.filter((v) => !presentVars.includes(v));
+
+    return {
+      ok: missing.length === 0,
+      envExists: true,
+      exampleExists: true,
+      missing,
+      envPath,
+      examplePath,
+    };
+  } catch {
+    return {
+      ok: false,
+      envExists,
+      exampleExists,
+      missing: [],
+      envPath,
+      examplePath,
+    };
+  }
+}
+
 export interface CheckOptions {
   /** Run without interactive prompts */
   nonInteractive?: boolean;
@@ -156,7 +324,41 @@ async function runInstallationChecks(): Promise<CheckResult> {
         : `pnpm ${pnpmVersionCheck.current} installed, but ${pnpmVersionCheck.required} or higher is required`,
   });
 
-  // Check 3: Config file exists
+  // Check 3: Environment file exists
+  const envExistsCheck = checkEnvFileExists();
+  checks.push({
+    id: "env-exists",
+    name: "Environment file (.env) exists",
+    ok: envExistsCheck.ok,
+    message: envExistsCheck.ok
+      ? undefined
+      : `No .env file found. Copy .env.example to .env and configure your settings`,
+  });
+
+  // Check 4: Environment variables are valid
+  const envValidCheck = validateEnvFile();
+  checks.push({
+    id: "env-valid",
+    name: "Environment variables are configured",
+    ok: envValidCheck.ok,
+    message: (() => {
+      if (envValidCheck.ok) {
+        return undefined;
+      }
+      if (!envValidCheck.exampleExists) {
+        return "No .env.example found to validate against";
+      }
+      if (!envValidCheck.envExists) {
+        return ".env file is missing";
+      }
+      if (envValidCheck.missing.length > 0) {
+        return `Missing variables: ${envValidCheck.missing.join(", ")}`;
+      }
+      return "Failed to validate environment file";
+    })(),
+  });
+
+  // Check 5: Config file exists
   const configExists = fs.existsSync(CONFIG_PATH);
   checks.push({
     id: "config-exists",
@@ -167,7 +369,7 @@ async function runInstallationChecks(): Promise<CheckResult> {
       : `Run ${formatCliCommand("openclaw setup")} to create a config file`,
   });
 
-  // Check 2: Config is valid (if exists)
+  // Check 6: Config is valid (if exists)
   let configValid = false;
   if (configExists) {
     try {
@@ -184,7 +386,7 @@ async function runInstallationChecks(): Promise<CheckResult> {
     message: configValid ? undefined : "Configuration file has errors",
   });
 
-  // Check 3: Gateway mode is configured
+  // Check 7: Gateway mode is configured
   let gatewayModeConfigured = false;
   if (configValid) {
     try {
@@ -203,7 +405,7 @@ async function runInstallationChecks(): Promise<CheckResult> {
       : `Run ${formatCliCommand("openclaw config set gateway.mode local")} or configure via ${formatCliCommand("openclaw configure")}`,
   });
 
-  // Check 4: Package root is accessible
+  // Check 8: Package root is accessible
   let packageRootAccessible = false;
   try {
     const root = await resolveOpenClawPackageRoot({

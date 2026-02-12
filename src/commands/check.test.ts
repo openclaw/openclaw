@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it, expect } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -6,6 +9,11 @@ import {
   checkPnpmVersion,
   parseVersion,
   compareVersions,
+  parseEnvExample,
+  parseEnvFile,
+  checkEnvFileExists,
+  checkEnvExampleExists,
+  validateEnvFile,
 } from "./check.js";
 
 describe("check command", () => {
@@ -35,6 +43,8 @@ describe("check command", () => {
     const checkIds = result.checks.map((c: { id: string }) => c.id);
     expect(checkIds).toContain("node-version");
     expect(checkIds).toContain("pnpm-version");
+    expect(checkIds).toContain("env-exists");
+    expect(checkIds).toContain("env-valid");
     expect(checkIds).toContain("config-exists");
     expect(checkIds).toContain("config-valid");
     expect(checkIds).toContain("gateway-mode");
@@ -144,5 +154,200 @@ describe("checkPnpmVersion", () => {
       expect(result.current).toBeTruthy();
       expect(typeof result.current).toBe("string");
     }
+  });
+});
+
+describe("parseEnvExample", () => {
+  it("should parse variable names from .env.example content", () => {
+    const content = `
+# This is a comment
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Another comment
+TELEGRAM_BOT_TOKEN=123456:ABC
+`;
+    const result = parseEnvExample(content);
+    expect(result).toEqual(["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN"]);
+  });
+
+  it("should handle empty content", () => {
+    expect(parseEnvExample("")).toEqual([]);
+  });
+
+  it("should handle content with only comments", () => {
+    const content = `
+# Comment 1
+# Comment 2
+`;
+    expect(parseEnvExample(content)).toEqual([]);
+  });
+
+  it("should handle variable without value", () => {
+    const content = `OPENAI_API_KEY=`;
+    expect(parseEnvExample(content)).toEqual(["OPENAI_API_KEY"]);
+  });
+});
+
+describe("parseEnvFile", () => {
+  it("should parse variable names that have values", () => {
+    const content = `
+# This is a comment
+OPENAI_API_KEY=sk-abc123
+ANTHROPIC_API_KEY=sk-ant-xyz
+TELEGRAM_BOT_TOKEN=
+`;
+    const result = parseEnvFile(content);
+    expect(result).toEqual(["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]);
+  });
+
+  it("should not include variables with empty values", () => {
+    const content = `
+OPENAI_API_KEY=sk-abc123
+EMPTY_VAR=
+`;
+    const result = parseEnvFile(content);
+    expect(result).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("should handle inline comments", () => {
+    const content = `
+OPENAI_API_KEY=sk-abc123 # this is the key
+`;
+    const result = parseEnvFile(content);
+    expect(result).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("should handle empty content", () => {
+    expect(parseEnvFile("")).toEqual([]);
+  });
+});
+
+describe("checkEnvFileExists", () => {
+  it("should return false when .env does not exist", () => {
+    const result = checkEnvFileExists("/nonexistent/path");
+    expect(result.ok).toBe(false);
+    expect(result.path).toBe("/nonexistent/path/.env");
+  });
+
+  it("should return true when .env exists", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-test-"));
+    fs.writeFileSync(path.join(tmpDir, ".env"), "TEST=value\n");
+
+    const result = checkEnvFileExists(tmpDir);
+    expect(result.ok).toBe(true);
+    expect(result.path).toBe(path.join(tmpDir, ".env"));
+
+    fs.unlinkSync(path.join(tmpDir, ".env"));
+    fs.rmdirSync(tmpDir);
+  });
+});
+
+describe("checkEnvExampleExists", () => {
+  it("should return false when .env.example does not exist", () => {
+    const result = checkEnvExampleExists("/nonexistent/path");
+    expect(result.ok).toBe(false);
+    expect(result.path).toBe("/nonexistent/path/.env.example");
+  });
+
+  it("should return true when .env.example exists", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-test-"));
+    fs.writeFileSync(path.join(tmpDir, ".env.example"), "TEST=\n");
+
+    const result = checkEnvExampleExists(tmpDir);
+    expect(result.ok).toBe(true);
+    expect(result.path).toBe(path.join(tmpDir, ".env.example"));
+
+    fs.unlinkSync(path.join(tmpDir, ".env.example"));
+    fs.rmdirSync(tmpDir);
+  });
+});
+
+describe("validateEnvFile", () => {
+  it("should return ok=true when both files are missing", () => {
+    const result = validateEnvFile("/nonexistent/path");
+    expect(result.ok).toBe(false);
+    expect(result.envExists).toBe(false);
+    expect(result.exampleExists).toBe(false);
+  });
+
+  it("should return ok=true when .env.example is missing", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-test-"));
+    fs.writeFileSync(path.join(tmpDir, ".env"), "TEST=value\n");
+
+    const result = validateEnvFile(tmpDir);
+    expect(result.ok).toBe(true); // Not a failure - can't validate without example
+    expect(result.envExists).toBe(true);
+    expect(result.exampleExists).toBe(false);
+
+    fs.unlinkSync(path.join(tmpDir, ".env"));
+    fs.rmdirSync(tmpDir);
+  });
+
+  it("should return ok=false when .env is missing but .env.example exists", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-test-"));
+    fs.writeFileSync(path.join(tmpDir, ".env.example"), "OPENAI_API_KEY=\nANTHROPIC_API_KEY=\n");
+
+    const result = validateEnvFile(tmpDir);
+    expect(result.ok).toBe(false);
+    expect(result.envExists).toBe(false);
+    expect(result.exampleExists).toBe(true);
+    expect(result.missing).toContain("OPENAI_API_KEY");
+    expect(result.missing).toContain("ANTHROPIC_API_KEY");
+
+    fs.unlinkSync(path.join(tmpDir, ".env.example"));
+    fs.rmdirSync(tmpDir);
+  });
+
+  it("should return ok=true when all required variables are present", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-test-"));
+    fs.writeFileSync(path.join(tmpDir, ".env.example"), "OPENAI_API_KEY=\nANTHROPIC_API_KEY=\n");
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      "OPENAI_API_KEY=sk-abc123\nANTHROPIC_API_KEY=sk-ant-xyz\n",
+    );
+
+    const result = validateEnvFile(tmpDir);
+    expect(result.ok).toBe(true);
+    expect(result.envExists).toBe(true);
+    expect(result.exampleExists).toBe(true);
+    expect(result.missing).toEqual([]);
+
+    fs.unlinkSync(path.join(tmpDir, ".env"));
+    fs.unlinkSync(path.join(tmpDir, ".env.example"));
+    fs.rmdirSync(tmpDir);
+  });
+
+  it("should report missing variables when some are not set", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-test-"));
+    fs.writeFileSync(
+      path.join(tmpDir, ".env.example"),
+      "OPENAI_API_KEY=\nANTHROPIC_API_KEY=\nTELEGRAM_TOKEN=\n",
+    );
+    fs.writeFileSync(path.join(tmpDir, ".env"), "OPENAI_API_KEY=sk-abc123\n");
+
+    const result = validateEnvFile(tmpDir);
+    expect(result.ok).toBe(false);
+    expect(result.missing).toContain("ANTHROPIC_API_KEY");
+    expect(result.missing).toContain("TELEGRAM_TOKEN");
+    expect(result.missing).not.toContain("OPENAI_API_KEY");
+
+    fs.unlinkSync(path.join(tmpDir, ".env"));
+    fs.unlinkSync(path.join(tmpDir, ".env.example"));
+    fs.rmdirSync(tmpDir);
+  });
+
+  it("should not count variables with empty values as present", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-test-"));
+    fs.writeFileSync(path.join(tmpDir, ".env.example"), "OPENAI_API_KEY=\n");
+    fs.writeFileSync(path.join(tmpDir, ".env"), "OPENAI_API_KEY=\n");
+
+    const result = validateEnvFile(tmpDir);
+    expect(result.ok).toBe(false);
+    expect(result.missing).toContain("OPENAI_API_KEY");
+
+    fs.unlinkSync(path.join(tmpDir, ".env"));
+    fs.unlinkSync(path.join(tmpDir, ".env.example"));
+    fs.rmdirSync(tmpDir);
   });
 });

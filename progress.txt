@@ -30,3 +30,23 @@ Started: Thursday, February 12th, 2026 — 5:32 PM
 - Version comparison uses numeric array comparison with padded zeros for different lengths
 
 ---
+
+## 2026-02-12 - US-003: Implement environment file validation
+- Added parseEnvExample() to extract variable names from .env.example
+- Added parseEnvFile() to extract variable names with values from .env
+- Added checkEnvFileExists() and checkEnvExampleExists() functions
+- Added validateEnvFile() to validate .env against .env.example
+- Integrated env-exists and env-valid checks into runInstallationChecks
+- Added comprehensive unit tests for all new functions (9 new test cases)
+- Build passes, all 29 tests pass
+
+**Files changed:**
+- `src/commands/check.ts` - Added env validation functions and checks
+- `src/commands/check.test.ts` - Added tests for env validation functions
+
+**Learnings:**
+- parseEnvFile only considers variables with non-empty values as "present"
+- Environment validation handles missing .env.example gracefully (returns ok=true)
+- When .env is missing but .env.example exists, all required vars are reported as missing
+
+---
