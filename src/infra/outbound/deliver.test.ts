@@ -422,6 +422,77 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({ text: "report.pdf" }),
     );
   });
+
+  it("suppresses NO_REPLY sentinel text and never delivers to channel", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { botToken: "tok-1" } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "NO_REPLY" }],
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+
+  it("suppresses NO_REPLY with surrounding whitespace", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {};
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "  NO_REPLY  " }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+
+  it("delivers NO_REPLY text when media is attached (not a pure sentinel)", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { botToken: "tok-1" } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "NO_REPLY", mediaUrl: "https://x.test/img.jpg" }],
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(1);
+  });
+
+  it("suppresses only NO_REPLY payloads while delivering others in the same batch", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { botToken: "tok-1" } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "NO_REPLY" }, { text: "Hello world" }],
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expect(sendTelegram).toHaveBeenCalledWith("123", "Hello world", expect.anything());
+    expect(results).toHaveLength(1);
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);

@@ -14,6 +14,7 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "../../auto-reply/chunk.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
@@ -343,6 +344,15 @@ export async function deliverOutboundPayloads(params: {
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
       channelData: payload.channelData,
     };
+    // Safety net: suppress NO_REPLY sentinel tokens that should never reach a channel.
+    // HEARTBEAT_OK is intentionally exempt — it may be delivered when showOk is enabled.
+    if (
+      payloadSummary.mediaUrls.length === 0 &&
+      !payloadSummary.channelData &&
+      isSilentReplyText(payloadSummary.text, SILENT_REPLY_TOKEN)
+    ) {
+      continue;
+    }
     try {
       throwIfAborted(abortSignal);
       params.onPayload?.(payloadSummary);
