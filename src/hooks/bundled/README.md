@@ -32,21 +32,6 @@ Logs all command events to a centralized audit file.
 openclaw hooks enable command-logger
 ```
 
-### 😈 soul-evil
-
-Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance.
-
-**Events**: `agent:bootstrap`
-**What it does**: Overrides the injected SOUL content before the system prompt is built.
-**Output**: No files written; swaps happen in-memory only.
-**Docs**: https://docs.openclaw.ai/hooks/soul-evil
-
-**Enable**:
-
-```bash
-openclaw hooks enable soul-evil
-```
-
 ### 🚀 boot-md
 
 Runs `BOOT.md` whenever the gateway starts (after channels start).
