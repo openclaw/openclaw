@@ -65,12 +65,37 @@ function mergeDecayConfig(
 }
 
 /**
+ * Enforce graduated decay ordering: stripping must happen AFTER individual summarization.
+ * If strip <= summarize, summaries would be generated but never displayed (wasted API calls).
+ * Auto-clamps stripToolResultsAfterTurns to summarizeToolResultsAfterTurns + 1.
+ * Mutates the config in-place and returns it for chaining.
+ */
+function enforceDecayOrdering(config: ContextDecayConfig): ContextDecayConfig {
+  const summarize = config.summarizeToolResultsAfterTurns;
+  const strip = config.stripToolResultsAfterTurns;
+
+  if (typeof strip === "number" && typeof summarize === "number" && strip <= summarize) {
+    const clamped = summarize + 1;
+    config.stripToolResultsAfterTurns = clamped;
+    log.info(
+      `context-decay: stripToolResultsAfterTurns ${strip} -> ${clamped} (must be > summarizeToolResultsAfterTurns=${summarize})`,
+    );
+  }
+
+  return config;
+}
+
+/**
  * Resolve the effective ContextDecayConfig for a session by walking the config hierarchy.
  *
  * Resolution order (most specific wins per field):
  * 1. Per-DM: channels.<provider>.dms.<userId>.contextDecay
  * 2. Per-account/channel: channels.<provider>.contextDecay
  * 3. Global: agents.defaults.contextDecay
+ *
+ * After resolution, enforces graduated decay ordering: stripToolResultsAfterTurns is
+ * auto-clamped to be > summarizeToolResultsAfterTurns so that summarization always
+ * has a chance to run before stripping.
  */
 export function resolveContextDecayConfig(
   sessionKey: string | undefined,
@@ -78,8 +103,12 @@ export function resolveContextDecayConfig(
 ): ContextDecayConfig | undefined {
   const globalDecay = config?.agents?.defaults?.contextDecay;
 
+  /** Return global-only config with decay ordering enforced, or undefined. */
+  const globalOnly = (): ContextDecayConfig | undefined =>
+    globalDecay ? enforceDecayOrdering({ ...globalDecay }) : undefined;
+
   if (!sessionKey || !config) {
-    return globalDecay ?? undefined;
+    return globalOnly();
   }
 
   // Parse session key: "agent:<agentId>:<provider>:<kind>:<userId>" or "<provider>:<kind>:<userId>"
@@ -88,7 +117,7 @@ export function resolveContextDecayConfig(
 
   const provider = providerParts[0]?.toLowerCase();
   if (!provider) {
-    return globalDecay ?? undefined;
+    return globalOnly();
   }
 
   const kind = providerParts[1]?.toLowerCase();
@@ -98,12 +127,12 @@ export function resolveContextDecayConfig(
   // Resolve provider config from channels
   const channels = config.channels;
   if (!channels || typeof channels !== "object") {
-    return globalDecay ?? undefined;
+    return globalOnly();
   }
 
   const providerConfig = (channels as Record<string, unknown>)[provider];
   if (!providerConfig || typeof providerConfig !== "object" || Array.isArray(providerConfig)) {
-    return globalDecay ?? undefined;
+    return globalOnly();
   }
 
   const pc = providerConfig as Record<string, unknown>;
@@ -123,18 +152,7 @@ export function resolveContextDecayConfig(
   effective = mergeDecayConfig(effective, accountDecay);
   effective = mergeDecayConfig(effective, dmDecay);
 
-  // Validate graduated decay ordering
-  if (effective) {
-    const summarize = effective.summarizeToolResultsAfterTurns;
-    const strip = effective.stripToolResultsAfterTurns;
-    if (typeof summarize === "number" && typeof strip === "number" && summarize >= strip) {
-      log.warn(
-        `context-decay: summarizeToolResultsAfterTurns (${summarize}) >= stripToolResultsAfterTurns (${strip}); summarization will be skipped`,
-      );
-    }
-  }
-
-  return effective;
+  return effective ? enforceDecayOrdering(effective) : undefined;
 }
 
 /**
