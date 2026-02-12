@@ -1,20 +1,18 @@
-import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions.js";
 import { deriveSessionTotalTokens, type NormalizedUsage } from "../../agents/usage.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 
-export async function persistRunSessionUsage(params: {
-  storePath?: string;
-  sessionKey?: string;
-  usage?: NormalizedUsage;
+type PersistRunSessionUsageParams = Parameters<typeof persistSessionUsageUpdate>[0];
+
+type IncrementRunCompactionCountParams = Omit<
+  Parameters<typeof incrementCompactionCount>[0],
+  "tokensAfter"
+> & {
   lastCallUsage?: NormalizedUsage;
-  modelUsed?: string;
-  providerUsed?: string;
   contextTokensUsed?: number;
-  systemPromptReport?: SessionSystemPromptReport;
-  cliSessionId?: string;
-  logLabel?: string;
-}): Promise<void> {
+};
+
+export async function persistRunSessionUsage(params: PersistRunSessionUsageParams): Promise<void> {
   await persistSessionUsageUpdate({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
@@ -29,14 +27,9 @@ export async function persistRunSessionUsage(params: {
   });
 }
 
-export async function incrementRunCompactionCount(params: {
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-  lastCallUsage?: NormalizedUsage;
-  contextTokensUsed?: number;
-}): Promise<number | undefined> {
+export async function incrementRunCompactionCount(
+  params: IncrementRunCompactionCountParams,
+): Promise<number | undefined> {
   const tokensAfterCompaction = params.lastCallUsage
     ? deriveSessionTotalTokens({
         usage: params.lastCallUsage,
