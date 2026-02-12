@@ -918,15 +918,25 @@ export async function runEmbeddedAttempt(
           .toReversed()
           .find((m) => m.role === "user");
 
+        // Regex to strip metadata blocks from user messages
+        const metadataRegex =
+          /(?:Conversation info|Sender|Thread starter|Replied message|Forwarded message context|Chat history since last reply) \(untrusted(?: metadata|,\s+for\s+context)\):\n```json\n[\s\S]*?\n```\n*/g;
+
         if (lastUserMsg && typeof lastUserMsg.content === "string") {
-          logEntry += `\n## [${timestamp}] User\n${lastUserMsg.content}\n`;
+          const cleanText = lastUserMsg.content.replace(metadataRegex, "").trim();
+          if (cleanText) {
+            logEntry += `\n## [${timestamp}] User\n${cleanText}\n`;
+          }
         } else if (lastUserMsg && Array.isArray(lastUserMsg.content)) {
           const textParts = lastUserMsg.content
             .filter((c): c is { type: "text"; text: string } => c.type === "text")
             .map((c) => c.text)
             .join("\n");
           if (textParts) {
-            logEntry += `\n## [${timestamp}] User\n${textParts}\n`;
+            const cleanText = textParts.replace(metadataRegex, "").trim();
+            if (cleanText) {
+              logEntry += `\n## [${timestamp}] User\n${cleanText}\n`;
+            }
           }
         }
 
