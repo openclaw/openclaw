@@ -258,13 +258,15 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
     } catch (err: any) {
       if (abortSignal.aborted) break;
 
-      // Handle soft logout
+      // Handle token invalidation (soft or hard logout)
       if (err instanceof MatrixApiError && err.errcode === "M_UNKNOWN_TOKEN") {
-        await handleTokenError(err, opts, log);
-        if (err.softLogout) {
-          continue; // Re-auth succeeded, retry sync
-        } else {
-          break; // Hard logout — stop
+        try {
+          await handleTokenError(err, opts, log);
+          // Soft re-auth succeeded — resume sync
+          continue;
+        } catch {
+          // Hard logout or re-auth failure — handleTokenError already logged details
+          break;
         }
       }
 
