@@ -100,6 +100,8 @@ export type ChatRunState = {
   lastBlockTexts: Map<string, string>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
+  /** Delete all buffer/delta state for a run (buffers, blockBases, lastBlockTexts, deltaSentAt). */
+  deleteRunBufferState: (clientRunId: string) => void;
   clear: () => void;
 };
 
@@ -110,6 +112,13 @@ export function createChatRunState(): ChatRunState {
   const lastBlockTexts = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+
+  const deleteRunBufferState = (clientRunId: string) => {
+    buffers.delete(clientRunId);
+    blockBases.delete(clientRunId);
+    lastBlockTexts.delete(clientRunId);
+    deltaSentAt.delete(clientRunId);
+  };
 
   const clear = () => {
     registry.clear();
@@ -127,6 +136,7 @@ export function createChatRunState(): ChatRunState {
     lastBlockTexts,
     deltaSentAt,
     abortedRuns,
+    deleteRunBufferState,
     clear,
   };
 }
@@ -245,6 +255,8 @@ export function createAgentEventHandler({
     // Detect new text block: when the incoming text doesn't continue from the
     // previous block's text, a tool call happened in between and the agent
     // started a fresh text block.  Finalize the previous block into the base.
+    // Safety: the agent runner guarantees monotonic prefix growth within a block
+    // (non-prefix updates are suppressed in pi-embedded-subscribe.handlers.messages.ts).
     const lastBlock = chatRunState.lastBlockTexts.get(clientRunId);
     if (lastBlock !== undefined && !text.startsWith(lastBlock)) {
       const base = chatRunState.blockBases.get(clientRunId) ?? "";
@@ -289,10 +301,7 @@ export function createAgentEventHandler({
   ) => {
     const text = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
     const shouldSuppressSilent = isSilentReplyText(text, SILENT_REPLY_TOKEN);
-    chatRunState.buffers.delete(clientRunId);
-    chatRunState.blockBases.delete(clientRunId);
-    chatRunState.lastBlockTexts.delete(clientRunId);
-    chatRunState.deltaSentAt.delete(clientRunId);
+    chatRunState.deleteRunBufferState(clientRunId);
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -433,10 +442,7 @@ export function createAgentEventHandler({
       } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         chatRunState.abortedRuns.delete(clientRunId);
         chatRunState.abortedRuns.delete(evt.runId);
-        chatRunState.buffers.delete(clientRunId);
-        chatRunState.blockBases.delete(clientRunId);
-        chatRunState.lastBlockTexts.delete(clientRunId);
-        chatRunState.deltaSentAt.delete(clientRunId);
+        chatRunState.deleteRunBufferState(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }

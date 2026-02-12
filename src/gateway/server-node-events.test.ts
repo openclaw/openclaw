@@ -31,6 +31,7 @@ function buildCtx(): NodeEventContext {
     chatAbortedRuns: new Map(),
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
+    deleteRunBufferState: () => {},
     dedupe: new Map(),
     agentRunSeq: new Map(),
     getHealthCache: () => null,
