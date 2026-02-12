@@ -54,4 +54,60 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("recovers when runOnce throws an unexpected error", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("compaction failed"))
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // First tick: runOnce throws — scheduler should survive.
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Second tick: runOnce succeeds — proves the timer was rescheduled.
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
+  it("reschedules timer when runOnce returns requests-in-flight", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // First tick: returns requests-in-flight — timer should still be rescheduled.
+    // The agent remains due, so the next wake re-runs it immediately.
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+
+    // Verify the runner keeps firing (timer wasn't stranded).
+    const countBefore = runSpy.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy.mock.calls.length).toBeGreaterThan(countBefore);
+
+    runner.stop();
+  });
 });

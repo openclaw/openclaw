@@ -897,14 +897,27 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
 
-      const res = await runOnce({
-        cfg: state.cfg,
-        agentId: agent.agentId,
-        heartbeat: agent.heartbeat,
-        reason,
-        deps: { runtime: state.runtime },
-      });
+      let res: HeartbeatRunResult;
+      try {
+        res = await runOnce({
+          cfg: state.cfg,
+          agentId: agent.agentId,
+          heartbeat: agent.heartbeat,
+          reason,
+          deps: { runtime: state.runtime },
+        });
+      } catch (runErr) {
+        // Catch unexpected errors so the scheduler loop keeps running
+        // and scheduleNext() is always reached.
+        const msg = runErr instanceof Error ? runErr.message : String(runErr);
+        log.error(`heartbeat runOnce threw: ${msg}`, { agentId: agent.agentId, error: msg });
+        agent.lastRunMs = now;
+        agent.nextDueMs = now + agent.intervalMs;
+        continue;
+      }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
+        // Reschedule before returning so the timer isn't stranded.
+        scheduleNext();
         return res;
       }
       if (res.status !== "skipped" || res.reason !== "disabled") {
