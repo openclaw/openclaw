@@ -820,11 +820,18 @@ export async function runEmbeddedPiAgent(
           }
 
           const usage = toNormalizedUsage(usageAccumulator);
+          // Extract the last individual API call's usage for context-window
+          // utilization display. The accumulated `usage` sums input tokens
+          // across all calls (tool-use loops, compaction retries), which
+          // overstates the actual context size. `lastCallUsage` reflects only
+          // the final call, giving an accurate snapshot of current context.
+          const lastCallUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,
             model: lastAssistant?.model ?? model.id,
             usage,
+            lastCallUsage: lastCallUsage ?? undefined,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
 

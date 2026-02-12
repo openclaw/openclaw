@@ -15,6 +15,13 @@ export async function persistSessionUsageUpdate(params: {
   storePath?: string;
   sessionKey?: string;
   usage?: NormalizedUsage;
+  /**
+   * Usage from the last individual API call (not accumulated). When provided,
+   * this is used for `totalTokens` instead of the accumulated `usage` so that
+   * context-window utilization reflects the actual current context size rather
+   * than the sum of input tokens across all API calls in the run.
+   */
+  lastCallUsage?: NormalizedUsage;
   modelUsed?: string;
   providerUsed?: string;
   contextTokensUsed?: number;
@@ -37,12 +44,17 @@ export async function persistSessionUsageUpdate(params: {
           const input = params.usage?.input ?? 0;
           const output = params.usage?.output ?? 0;
           const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
+          // Use last-call usage for totalTokens when available. The accumulated
+          // `usage.input` sums input tokens from every API call in the run
+          // (tool-use loops, compaction retries), overstating actual context.
+          // `lastCallUsage` reflects only the final API call — the true context.
+          const usageForContext = params.lastCallUsage ?? params.usage;
           const patch: Partial<SessionEntry> = {
             inputTokens: input,
             outputTokens: output,
             totalTokens:
               deriveSessionTotalTokens({
-                usage: params.usage,
+                usage: usageForContext,
                 contextTokens: resolvedContextTokens,
               }) ?? input,
             modelProvider: params.providerUsed ?? entry.modelProvider,
