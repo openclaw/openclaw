@@ -137,7 +137,6 @@ type PerplexitySearchResponse = {
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
 
-
 function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
@@ -156,6 +155,9 @@ function extractGrokContent(data: GrokSearchResponse): {
         return { text: block.text, annotationCitations: [...new Set(urls)] };
       }
     }
+  }
+  return { text: undefined, annotationCitations: [] };
+}
 
 type GeminiConfig = {
   apiKey?: string;
@@ -197,7 +199,6 @@ function extractGrokContent(data: GrokSearchResponse): string | undefined {
   const fromResponses = data.output?.[0]?.content?.[0]?.text;
   if (typeof fromResponses === "string" && fromResponses) {
     return fromResponses;
-
   }
   // Fallback: deprecated output_text field
   const text = typeof data.output_text === "string" ? data.output_text : undefined;
