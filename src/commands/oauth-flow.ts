@@ -40,7 +40,9 @@ export function createVpsAwareOAuthHandlers(params: {
       params.runtime.log(`Open: ${url}`);
     },
     onPrompt: async (prompt) => {
-      if (manualCodePromise) return manualCodePromise;
+      if (manualCodePromise) {
+        return manualCodePromise;
+      }
       const code = await params.prompter.text({
         message: prompt.message,
         placeholder: prompt.placeholder,

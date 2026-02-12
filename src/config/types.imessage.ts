@@ -23,7 +23,7 @@ export type IMessageAccountConfig = {
   cliPath?: string;
   /** Optional Messages db path override. */
   dbPath?: string;
-  /** Remote host for SCP when attachments live on a different machine (e.g., moltbot@192.168.64.3). */
+  /** Remote host for SCP when attachments live on a different machine (e.g., openclaw@192.168.64.3). */
   remoteHost?: string;
   /** Optional default send service (imessage|sms|auto). */
   service?: "imessage" | "sms" | "auto";
@@ -52,6 +52,8 @@ export type IMessageAccountConfig = {
   includeAttachments?: boolean;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /** Timeout for probe/RPC operations in milliseconds (default: 10000). */
+  probeTimeoutMs?: number;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
@@ -69,6 +71,8 @@ export type IMessageAccountConfig = {
   >;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };
 
 export type IMessageConfig = {

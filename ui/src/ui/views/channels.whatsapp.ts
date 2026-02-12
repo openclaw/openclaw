@@ -1,10 +1,8 @@
 import { html, nothing } from "lit";
-
-import { formatAgo } from "../format";
-import type { WhatsAppStatus } from "../types";
-import type { ChannelsProps } from "./channels.types";
-import { renderChannelConfigSection } from "./channels.config";
-import { formatDuration } from "./channels.shared";
+import type { WhatsAppStatus } from "../types.ts";
+import type { ChannelsProps } from "./channels.types.ts";
+import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
 
 export function renderWhatsAppCard(params: {
   props: ChannelsProps;
@@ -39,44 +37,46 @@ export function renderWhatsAppCard(params: {
         <div>
           <span class="label">Last connect</span>
           <span>
-            ${whatsapp?.lastConnectedAt
-              ? formatAgo(whatsapp.lastConnectedAt)
-              : "n/a"}
+            ${whatsapp?.lastConnectedAt ? formatRelativeTimestamp(whatsapp.lastConnectedAt) : "n/a"}
           </span>
         </div>
         <div>
           <span class="label">Last message</span>
           <span>
-            ${whatsapp?.lastMessageAt ? formatAgo(whatsapp.lastMessageAt) : "n/a"}
+            ${whatsapp?.lastMessageAt ? formatRelativeTimestamp(whatsapp.lastMessageAt) : "n/a"}
           </span>
         </div>
         <div>
           <span class="label">Auth age</span>
           <span>
-            ${whatsapp?.authAgeMs != null
-              ? formatDuration(whatsapp.authAgeMs)
-              : "n/a"}
+            ${whatsapp?.authAgeMs != null ? formatDurationHuman(whatsapp.authAgeMs) : "n/a"}
           </span>
         </div>
       </div>
 
-      ${whatsapp?.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">
+      ${
+        whatsapp?.lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">
             ${whatsapp.lastError}
           </div>`
-        : nothing}
+          : nothing
+      }
 
-      ${props.whatsappMessage
-        ? html`<div class="callout" style="margin-top: 12px;">
+      ${
+        props.whatsappMessage
+          ? html`<div class="callout" style="margin-top: 12px;">
             ${props.whatsappMessage}
           </div>`
-        : nothing}
+          : nothing
+      }
 
-      ${props.whatsappQrDataUrl
-        ? html`<div class="qr-wrap">
+      ${
+        props.whatsappQrDataUrl
+          ? html`<div class="qr-wrap">
             <img src=${props.whatsappQrDataUrl} alt="WhatsApp QR" />
           </div>`
-        : nothing}
+          : nothing
+      }
 
       <div class="row" style="margin-top: 14px; flex-wrap: wrap;">
         <button

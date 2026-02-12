@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
-
 import type { CliDeps } from "../../cli/deps.js";
+import type { CronJob } from "../../cron/types.js";
+import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { HookMessageChannel, HooksConfigResolved } from "../hooks.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
-import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { HookMessageChannel, HooksConfigResolved } from "../hooks.js";
 import { createHooksRequestHandler } from "../server-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -33,6 +32,7 @@ export function createGatewayHooksRequestHandler(params: {
   const dispatchAgentHook = (value: {
     message: string;
     name: string;
+    agentId?: string;
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
@@ -49,11 +49,12 @@ export function createGatewayHooksRequestHandler(params: {
     const now = Date.now();
     const job: CronJob = {
       id: jobId,
+      agentId: value.agentId,
       name: value.name,
       enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
-      schedule: { kind: "at", atMs: now },
+      schedule: { kind: "at", at: new Date(now).toISOString() },
       sessionTarget: "isolated",
       wakeMode: value.wakeMode,
       payload: {

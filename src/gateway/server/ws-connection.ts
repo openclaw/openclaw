@@ -1,20 +1,18 @@
-import { randomUUID } from "node:crypto";
-
 import type { WebSocket, WebSocketServer } from "ws";
+import { randomUUID } from "node:crypto";
+import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ResolvedGatewayAuth } from "../auth.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
+import type { GatewayWsClient } from "./ws-types.js";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
 import { listSystemPresence, upsertPresence } from "../../infra/system-presence.js";
-import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
-
-import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
 import { getHandshakeTimeoutMs } from "../server-constants.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
 import { getHealthVersion, getPresenceVersion, incrementPresenceVersion } from "./health-state.js";
 import { attachGatewayWsMessageHandler } from "./ws-connection/message-handler.js";
-import type { GatewayWsClient } from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -95,7 +93,9 @@ export function attachGatewayWsConnectionHandler(params: {
     let lastFrameId: string | undefined;
 
     const setCloseCause = (cause: string, meta?: Record<string, unknown>) => {
-      if (!closeCause) closeCause = cause;
+      if (!closeCause) {
+        closeCause = cause;
+      }
       if (meta && Object.keys(meta).length > 0) {
         closeMeta = { ...closeMeta, ...meta };
       }
@@ -125,10 +125,14 @@ export function attachGatewayWsConnectionHandler(params: {
     });
 
     const close = (code = 1000, reason?: string) => {
-      if (closed) return;
+      if (closed) {
+        return;
+      }
       closed = true;
       clearTimeout(handshakeTimer);
-      if (client) clients.delete(client);
+      if (client) {
+        clients.delete(client);
+      }
       try {
         socket.close(code, reason);
       } catch {

@@ -1,19 +1,19 @@
-import type { MoltbotConfig, WizardPrompter } from "clawdbot/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
+import type { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 
 type PromptAccountIdParams = {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prompter: WizardPrompter;
   label: string;
   currentId?: string;
-  listAccountIds: (cfg: MoltbotConfig) => string[];
+  listAccountIds: (cfg: OpenClawConfig) => string[];
   defaultAccountId: string;
 };
 
 export async function promptAccountId(params: PromptAccountIdParams): Promise<string> {
   const existingIds = params.listAccountIds(params.cfg);
   const initial = params.currentId?.trim() || params.defaultAccountId || DEFAULT_ACCOUNT_ID;
-  const choice = (await params.prompter.select({
+  const choice = await params.prompter.select({
     message: `${params.label} account`,
     options: [
       ...existingIds.map((id) => ({
@@ -23,9 +23,11 @@ export async function promptAccountId(params: PromptAccountIdParams): Promise<st
       { value: "__new__", label: "Add a new account" },
     ],
     initialValue: initial,
-  })) as string;
+  });
 
-  if (choice !== "__new__") return normalizeAccountId(choice);
+  if (choice !== "__new__") {
+    return normalizeAccountId(choice);
+  }
 
   const entered = await params.prompter.text({
     message: `New ${params.label} account id`,

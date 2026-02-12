@@ -15,6 +15,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
 
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { sleep } from "../utils.js";
 import { monitorWebChannel } from "./auto-reply.js";
 import { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
@@ -33,7 +34,7 @@ const rmDirWithRetries = async (dir: string): Promise<void> => {
           ? String((err as { code?: unknown }).code)
           : null;
       if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-        await new Promise((resolve) => setTimeout(resolve, 25));
+        await sleep(25);
         continue;
       }
       throw err;
@@ -46,7 +47,7 @@ const rmDirWithRetries = async (dir: string): Promise<void> => {
 beforeEach(async () => {
   resetInboundDedupe();
   previousHome = process.env.HOME;
-  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-web-home-"));
+  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-"));
   process.env.HOME = tempHome;
 });
 
@@ -61,7 +62,7 @@ afterEach(async () => {
 const _makeSessionStore = async (
   entries: Record<string, unknown> = {},
 ): Promise<{ storePath: string; cleanup: () => Promise<void> }> => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-session-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
   const storePath = path.join(dir, "sessions.json");
   await fs.writeFile(storePath, JSON.stringify(entries));
   const cleanup = async () => {
@@ -200,7 +201,7 @@ describe("web auto-reply", () => {
           groups: { "*": { requireMention: false } },
         },
       },
-      messages: { groupChat: { mentionPatterns: ["@clawd"] } },
+      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
     }));
 
     let capturedOnMessage:
@@ -248,7 +249,7 @@ describe("web auto-reply", () => {
           groups: { "999@g.us": { requireMention: false } },
         },
       },
-      messages: { groupChat: { mentionPatterns: ["@clawd"] } },
+      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
     }));
 
     let capturedOnMessage:
@@ -265,7 +266,7 @@ describe("web auto-reply", () => {
     expect(capturedOnMessage).toBeDefined();
 
     await capturedOnMessage?.({
-      body: "@clawd hello",
+      body: "@openclaw hello",
       from: "123@g.us",
       conversationId: "123@g.us",
       chatId: "123@g.us",
@@ -301,7 +302,7 @@ describe("web auto-reply", () => {
           },
         },
       },
-      messages: { groupChat: { mentionPatterns: ["@clawd"] } },
+      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
     }));
 
     let capturedOnMessage:

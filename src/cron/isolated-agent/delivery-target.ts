@@ -1,20 +1,20 @@
 import type { ChannelId } from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
-import type { MoltbotConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveAgentMainSessionKey,
   resolveStorePath,
 } from "../../config/sessions.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
 
 export async function resolveDeliveryTarget(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   agentId: string,
   jobPayload: {
     channel?: "last" | ChannelId;
@@ -24,11 +24,13 @@ export async function resolveDeliveryTarget(
   channel: Exclude<OutboundChannel, "none">;
   to?: string;
   accountId?: string;
+  threadId?: string | number;
   mode: "explicit" | "implicit";
   error?: Error;
 }> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
@@ -40,7 +42,7 @@ export async function resolveDeliveryTarget(
     entry: main,
     requestedChannel,
     explicitTo,
-    allowMismatchedLastTo: true,
+    allowMismatchedLastTo,
   });
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
@@ -59,7 +61,7 @@ export async function resolveDeliveryTarget(
         requestedChannel,
         explicitTo,
         fallbackChannel,
-        allowMismatchedLastTo: true,
+        allowMismatchedLastTo,
         mode: preliminary.mode,
       })
     : preliminary;
@@ -68,8 +70,23 @@ export async function resolveDeliveryTarget(
   const mode = resolved.mode as "explicit" | "implicit";
   const toCandidate = resolved.to;
 
+  // Only carry threadId when delivering to the same recipient as the session's
+  // last conversation. This prevents stale thread IDs (e.g. from a Telegram
+  // supergroup topic) from being sent to a different target (e.g. a private
+  // chat) where they would cause API errors.
+  const threadId =
+    resolved.threadId && resolved.to && resolved.to === resolved.lastTo
+      ? resolved.threadId
+      : undefined;
+
   if (!toCandidate) {
-    return { channel, to: undefined, accountId: resolved.accountId, mode };
+    return {
+      channel,
+      to: undefined,
+      accountId: resolved.accountId,
+      threadId,
+      mode,
+    };
   }
 
   const docked = resolveOutboundTarget({
@@ -83,6 +100,7 @@ export async function resolveDeliveryTarget(
     channel,
     to: docked.ok ? docked.to : undefined,
     accountId: resolved.accountId,
+    threadId,
     mode,
     error: docked.ok ? undefined : docked.error,
   };

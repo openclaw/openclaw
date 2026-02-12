@@ -1,28 +1,25 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
-import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
+import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   buildInboundDedupeKey,
   resetInboundDedupe,
   shouldSkipDuplicateInbound,
 } from "./reply/inbound-dedupe.js";
-import { formatInboundBodyWithSenderMeta } from "./reply/inbound-sender-meta.js";
 import { normalizeInboundTextNewlines } from "./reply/inbound-text.js";
-import { resolveGroupRequireMention } from "./reply/groups.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
   normalizeMentionText,
 } from "./reply/mentions.js";
 import { initSessionState } from "./reply/session.js";
+import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
 
 describe("applyTemplate", () => {
   it("renders primitive values", () => {
@@ -82,7 +79,8 @@ describe("finalizeInboundContext", () => {
     const out = finalizeInboundContext(ctx);
     expect(out.Body).toBe("a\nb\nc");
     expect(out.RawBody).toBe("raw\nline");
-    expect(out.BodyForAgent).toBe("a\nb\nc");
+    // Prefer clean text over legacy envelope-shaped Body when RawBody is present.
+    expect(out.BodyForAgent).toBe("raw\nline");
     expect(out.BodyForCommands).toBe("raw\nline");
     expect(out.CommandAuthorized).toBe(false);
     expect(out.ChatType).toBe("channel");
@@ -100,58 +98,6 @@ describe("finalizeInboundContext", () => {
 
     finalizeInboundContext(ctx, { forceBodyForCommands: true });
     expect(ctx.BodyForCommands).toBe("say hi");
-  });
-});
-
-describe("formatInboundBodyWithSenderMeta", () => {
-  it("does nothing for direct messages", () => {
-    const ctx: MsgContext = { ChatType: "direct", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi" })).toBe("[X] hi");
-  });
-
-  it("appends a sender meta line for non-direct messages", () => {
-    const ctx: MsgContext = { ChatType: "group", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi" })).toBe(
-      "[X] hi\n[from: Alice (A1)]",
-    );
-  });
-
-  it("prefers SenderE164 in the label when present", () => {
-    const ctx: MsgContext = {
-      ChatType: "group",
-      SenderName: "Bob",
-      SenderId: "bob@s.whatsapp.net",
-      SenderE164: "+222",
-    };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi" })).toBe(
-      "[X] hi\n[from: Bob (+222)]",
-    );
-  });
-
-  it("appends with a real newline even if the body contains literal \\n", () => {
-    const ctx: MsgContext = { ChatType: "group", SenderName: "Bob", SenderId: "+222" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] one\\n[X] two" })).toBe(
-      "[X] one\\n[X] two\n[from: Bob (+222)]",
-    );
-  });
-
-  it("does not duplicate a sender meta line when one is already present", () => {
-    const ctx: MsgContext = { ChatType: "group", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi\n[from: Alice (A1)]" })).toBe(
-      "[X] hi\n[from: Alice (A1)]",
-    );
-  });
-
-  it("does not append when the body already includes a sender prefix", () => {
-    const ctx: MsgContext = { ChatType: "group", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "Alice (A1): hi" })).toBe("Alice (A1): hi");
-  });
-
-  it("does not append when the sender prefix follows an envelope header", () => {
-    const ctx: MsgContext = { ChatType: "group", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[Signal Group] Alice (A1): hi" })).toBe(
-      "[Signal Group] Alice (A1): hi",
-    );
   });
 });
 
@@ -258,15 +204,16 @@ describe("createInboundDebouncer", () => {
   });
 });
 
-describe("initSessionState sender meta", () => {
-  it("injects sender meta into BodyStripped for group chats", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sender-meta-"));
+describe("initSessionState BodyStripped", () => {
+  it("prefers BodyForAgent over Body for group chats", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sender-meta-"));
     const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as MoltbotConfig;
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
 
     const result = await initSessionState({
       ctx: {
         Body: "[WhatsApp 123@g.us] ping",
+        BodyForAgent: "ping",
         ChatType: "group",
         SenderName: "Bob",
         SenderE164: "+222",
@@ -277,17 +224,18 @@ describe("initSessionState sender meta", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionCtx.BodyStripped).toBe("[WhatsApp 123@g.us] ping\n[from: Bob (+222)]");
+    expect(result.sessionCtx.BodyStripped).toBe("ping");
   });
 
-  it("does not inject sender meta for direct chats", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sender-meta-direct-"));
+  it("prefers BodyForAgent over Body for direct chats", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sender-meta-direct-"));
     const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as MoltbotConfig;
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
 
     const result = await initSessionState({
       ctx: {
         Body: "[WhatsApp +1] ping",
+        BodyForAgent: "ping",
         ChatType: "direct",
         SenderName: "Bob",
         SenderE164: "+222",
@@ -297,7 +245,7 @@ describe("initSessionState sender meta", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionCtx.BodyStripped).toBe("[WhatsApp +1] ping");
+    expect(result.sessionCtx.BodyStripped).toBe("ping");
   });
 });
 
@@ -305,22 +253,22 @@ describe("mention helpers", () => {
   it("builds regexes and skips invalid patterns", () => {
     const regexes = buildMentionRegexes({
       messages: {
-        groupChat: { mentionPatterns: ["\\bclawd\\b", "(invalid"] },
+        groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(invalid"] },
       },
     });
     expect(regexes).toHaveLength(1);
-    expect(regexes[0]?.test("clawd")).toBe(true);
+    expect(regexes[0]?.test("openclaw")).toBe(true);
   });
 
   it("normalizes zero-width characters", () => {
-    expect(normalizeMentionText("cl\u200bawd")).toBe("clawd");
+    expect(normalizeMentionText("open\u200bclaw")).toBe("openclaw");
   });
 
   it("matches patterns case-insensitively", () => {
     const regexes = buildMentionRegexes({
-      messages: { groupChat: { mentionPatterns: ["\\bclawd\\b"] } },
+      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
     });
-    expect(matchesMentionPatterns("CLAWD: hi", regexes)).toBe(true);
+    expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
   });
 
   it("uses per-agent mention patterns when configured", () => {
@@ -347,7 +295,7 @@ describe("mention helpers", () => {
 
 describe("resolveGroupRequireMention", () => {
   it("respects Discord guild/channel requireMention settings", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       channels: {
         discord: {
           guilds: {
@@ -377,7 +325,7 @@ describe("resolveGroupRequireMention", () => {
   });
 
   it("respects Slack channel requireMention settings", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       channels: {
         slack: {
           channels: {

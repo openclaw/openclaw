@@ -1,5 +1,4 @@
 import type { WebClient } from "@slack/web-api";
-
 import { createSlackWebClient } from "./client.js";
 
 export type SlackChannelLookup = {
@@ -29,7 +28,9 @@ type SlackListResponse = {
 
 function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   const trimmed = raw.trim();
-  if (!trimmed) return {};
+  if (!trimmed) {
+    return {};
+  }
   const mention = trimmed.match(/^<#([A-Z0-9]+)(?:\|([^>]+))?>$/i);
   if (mention) {
     const id = mention[1]?.toUpperCase();
@@ -37,7 +38,9 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
     return { id, name };
   }
   const prefixed = trimmed.replace(/^(slack:|channel:)/i, "");
-  if (/^[CG][A-Z0-9]+$/i.test(prefixed)) return { id: prefixed.toUpperCase() };
+  if (/^[CG][A-Z0-9]+$/i.test(prefixed)) {
+    return { id: prefixed.toUpperCase() };
+  }
   const name = prefixed.replace(/^#/, "").trim();
   return name ? { name } : {};
 }
@@ -55,7 +58,9 @@ async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[
     for (const channel of res.channels ?? []) {
       const id = channel.id?.trim();
       const name = channel.name?.trim();
-      if (!id || !name) continue;
+      if (!id || !name) {
+        continue;
+      }
       channels.push({
         id,
         name,
@@ -74,9 +79,13 @@ function resolveByName(
   channels: SlackChannelLookup[],
 ): SlackChannelLookup | undefined {
   const target = name.trim().toLowerCase();
-  if (!target) return undefined;
+  if (!target) {
+    return undefined;
+  }
   const matches = channels.filter((channel) => channel.name.toLowerCase() === target);
-  if (matches.length === 0) return undefined;
+  if (matches.length === 0) {
+    return undefined;
+  }
   const active = matches.find((channel) => !channel.archived);
   return active ?? matches[0];
 }

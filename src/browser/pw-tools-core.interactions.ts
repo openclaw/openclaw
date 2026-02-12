@@ -1,6 +1,7 @@
 import type { BrowserFormField } from "./client-actions-core.js";
 import {
   ensurePageState,
+  forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   refLocator,
   restoreRoleRefsForTarget,
@@ -88,7 +89,9 @@ export async function dragViaPlaywright(opts: {
 }): Promise<void> {
   const startRef = requireRef(opts.startRef);
   const endRef = requireRef(opts.endRef);
-  if (!startRef || !endRef) throw new Error("startRef and endRef are required");
+  if (!startRef || !endRef) {
+    throw new Error("startRef and endRef are required");
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -109,7 +112,9 @@ export async function selectOptionViaPlaywright(opts: {
   timeoutMs?: number;
 }): Promise<void> {
   const ref = requireRef(opts.ref);
-  if (!opts.values?.length) throw new Error("values are required");
+  if (!opts.values?.length) {
+    throw new Error("values are required");
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -129,7 +134,9 @@ export async function pressKeyViaPlaywright(opts: {
   delayMs?: number;
 }): Promise<void> {
   const key = String(opts.key ?? "").trim();
-  if (!key) throw new Error("key is required");
+  if (!key) {
+    throw new Error("key is required");
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   await page.keyboard.press(key, {
@@ -188,7 +195,9 @@ export async function fillFormViaPlaywright(opts: {
         : typeof rawValue === "number" || typeof rawValue === "boolean"
           ? String(rawValue)
           : "";
-    if (!ref || !type) continue;
+    if (!ref || !type) {
+      continue;
+    }
     const locator = refLocator(page, ref);
     if (type === "checkbox" || type === "radio") {
       const checked =
@@ -213,48 +222,149 @@ export async function evaluateViaPlaywright(opts: {
   targetId?: string;
   fn: string;
   ref?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<unknown> {
   const fnText = String(opts.fn ?? "").trim();
-  if (!fnText) throw new Error("function is required");
+  if (!fnText) {
+    throw new Error("function is required");
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  if (opts.ref) {
-    const locator = refLocator(page, opts.ref);
-    // Use Function constructor at runtime to avoid esbuild adding __name helper
-    // which doesn't exist in the browser context
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
-    const elementEvaluator = new Function(
-      "el",
-      "fnBody",
-      `
-      "use strict";
-      try {
-        var candidate = eval("(" + fnBody + ")");
-        return typeof candidate === "function" ? candidate(el) : candidate;
-      } catch (err) {
-        throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
-      }
-      `,
-    ) as (el: Element, fnBody: string) => unknown;
-    return await locator.evaluate(elementEvaluator, fnText);
+  // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
+  // Without this, a long-running async evaluate blocks all subsequent page operations
+  // because Playwright serializes CDP commands per page.
+  //
+  // NOTE: Playwright's { timeout } on evaluate only applies to installing the function,
+  // NOT to its execution time. We must inject a Promise.race timeout into the browser
+  // context itself so async functions are bounded.
+  const outerTimeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
+  // Leave headroom for routing/serialization overhead so the outer request timeout
+  // doesn't fire first and strand a long-running evaluate.
+  let evaluateTimeout = Math.max(1000, Math.min(120_000, outerTimeout - 500));
+  evaluateTimeout = Math.min(evaluateTimeout, outerTimeout);
+
+  const signal = opts.signal;
+  let abortListener: (() => void) | undefined;
+  let abortReject: ((reason: unknown) => void) | undefined;
+  let abortPromise: Promise<never> | undefined;
+  if (signal) {
+    abortPromise = new Promise((_, reject) => {
+      abortReject = reject;
+    });
+    // Ensure the abort promise never becomes an unhandled rejection if we throw early.
+    void abortPromise.catch(() => {});
   }
-  // Use Function constructor at runtime to avoid esbuild adding __name helper
-  // which doesn't exist in the browser context
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
-  const browserEvaluator = new Function(
-    "fnBody",
-    `
-    "use strict";
-    try {
-      var candidate = eval("(" + fnBody + ")");
-      return typeof candidate === "function" ? candidate() : candidate;
-    } catch (err) {
-      throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
+  if (signal) {
+    const disconnect = () => {
+      void forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        reason: "evaluate aborted",
+      }).catch(() => {});
+    };
+    if (signal.aborted) {
+      disconnect();
+      throw signal.reason ?? new Error("aborted");
     }
-    `,
-  ) as (fnBody: string) => unknown;
-  return await page.evaluate(browserEvaluator, fnText);
+    abortListener = () => {
+      disconnect();
+      abortReject?.(signal.reason ?? new Error("aborted"));
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+    // If the signal aborted between the initial check and listener registration, handle it.
+    if (signal.aborted) {
+      abortListener();
+      throw signal.reason ?? new Error("aborted");
+    }
+  }
+
+  try {
+    if (opts.ref) {
+      const locator = refLocator(page, opts.ref);
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
+      const elementEvaluator = new Function(
+        "el",
+        "args",
+        `
+        "use strict";
+        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+        try {
+          var candidate = eval("(" + fnBody + ")");
+          var result = typeof candidate === "function" ? candidate(el) : candidate;
+          if (result && typeof result.then === "function") {
+            return Promise.race([
+              result,
+              new Promise(function(_, reject) {
+                setTimeout(function() { reject(new Error("evaluate timed out after " + timeoutMs + "ms")); }, timeoutMs);
+              })
+            ]);
+          }
+          return result;
+        } catch (err) {
+          throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
+        }
+        `,
+      ) as (el: Element, args: { fnBody: string; timeoutMs: number }) => unknown;
+      const evalPromise = locator.evaluate(elementEvaluator, {
+        fnBody: fnText,
+        timeoutMs: evaluateTimeout,
+      });
+      if (!abortPromise) {
+        return await evalPromise;
+      }
+      try {
+        return await Promise.race([evalPromise, abortPromise]);
+      } catch (err) {
+        // If abort wins the race, the underlying evaluate may reject later; ensure we don't
+        // surface it as an unhandled rejection.
+        void evalPromise.catch(() => {});
+        throw err;
+      }
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
+    const browserEvaluator = new Function(
+      "args",
+      `
+        "use strict";
+        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+        try {
+          var candidate = eval("(" + fnBody + ")");
+          var result = typeof candidate === "function" ? candidate() : candidate;
+          if (result && typeof result.then === "function") {
+            return Promise.race([
+              result,
+              new Promise(function(_, reject) {
+                setTimeout(function() { reject(new Error("evaluate timed out after " + timeoutMs + "ms")); }, timeoutMs);
+              })
+            ]);
+          }
+          return result;
+        } catch (err) {
+          throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
+        }
+      `,
+    ) as (args: { fnBody: string; timeoutMs: number }) => unknown;
+    const evalPromise = page.evaluate(browserEvaluator, {
+      fnBody: fnText,
+      timeoutMs: evaluateTimeout,
+    });
+    if (!abortPromise) {
+      return await evalPromise;
+    }
+    try {
+      return await Promise.race([evalPromise, abortPromise]);
+    } catch (err) {
+      void evalPromise.catch(() => {});
+      throw err;
+    }
+  } finally {
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
 }
 
 export async function scrollIntoViewViaPlaywright(opts: {
@@ -344,13 +454,17 @@ export async function takeScreenshotViaPlaywright(opts: {
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const type = opts.type ?? "png";
   if (opts.ref) {
-    if (opts.fullPage) throw new Error("fullPage is not supported for element screenshots");
+    if (opts.fullPage) {
+      throw new Error("fullPage is not supported for element screenshots");
+    }
     const locator = refLocator(page, opts.ref);
     const buffer = await locator.screenshot({ type });
     return { buffer };
   }
   if (opts.element) {
-    if (opts.fullPage) throw new Error("fullPage is not supported for element screenshots");
+    if (opts.fullPage) {
+      throw new Error("fullPage is not supported for element screenshots");
+    }
     const locator = page.locator(opts.element).first();
     const buffer = await locator.screenshot({ type });
     return { buffer };
@@ -427,11 +541,11 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   try {
     if (boxes.length > 0) {
       await page.evaluate((labels) => {
-        const existing = document.querySelectorAll("[data-moltbot-labels]");
+        const existing = document.querySelectorAll("[data-openclaw-labels]");
         existing.forEach((el) => el.remove());
 
         const root = document.createElement("div");
-        root.setAttribute("data-moltbot-labels", "1");
+        root.setAttribute("data-openclaw-labels", "1");
         root.style.position = "fixed";
         root.style.left = "0";
         root.style.top = "0";
@@ -445,7 +559,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
 
         for (const label of labels) {
           const box = document.createElement("div");
-          box.setAttribute("data-moltbot-labels", "1");
+          box.setAttribute("data-openclaw-labels", "1");
           box.style.position = "absolute";
           box.style.left = `${label.x}px`;
           box.style.top = `${label.y}px`;
@@ -455,7 +569,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
           box.style.boxSizing = "border-box";
 
           const tag = document.createElement("div");
-          tag.setAttribute("data-moltbot-labels", "1");
+          tag.setAttribute("data-openclaw-labels", "1");
           tag.textContent = label.ref;
           tag.style.position = "absolute";
           tag.style.left = `${label.x}px`;
@@ -482,7 +596,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   } finally {
     await page
       .evaluate(() => {
-        const existing = document.querySelectorAll("[data-moltbot-labels]");
+        const existing = document.querySelectorAll("[data-openclaw-labels]");
         existing.forEach((el) => el.remove());
       })
       .catch(() => {});
@@ -499,7 +613,9 @@ export async function setInputFilesViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  if (!opts.paths.length) throw new Error("paths are required");
+  if (!opts.paths.length) {
+    throw new Error("paths are required");
+  }
   const inputRef = typeof opts.inputRef === "string" ? opts.inputRef.trim() : "";
   const element = typeof opts.element === "string" ? opts.element.trim() : "";
   if (inputRef && element) {

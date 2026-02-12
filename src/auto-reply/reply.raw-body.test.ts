@@ -24,10 +24,10 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     },
     {
       env: {
-        CLAWDBOT_AGENT_DIR: (home) => path.join(home, ".clawdbot", "agent"),
-        PI_CODING_AGENT_DIR: (home) => path.join(home, ".clawdbot", "agent"),
+        OPENCLAW_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
+        PI_CODING_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
       },
-      prefix: "moltbot-rawbody-",
+      prefix: "openclaw-rawbody-",
     },
   );
 }
@@ -64,7 +64,7 @@ describe("RawBody directive parsing", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "clawd"),
+              workspace: path.join(home, "openclaw"),
             },
           },
           channels: { whatsapp: { allowFrom: ["*"] } },
@@ -98,7 +98,7 @@ describe("RawBody directive parsing", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "clawd"),
+              workspace: path.join(home, "openclaw"),
               models: {
                 "anthropic/claude-opus-4-5": {},
               },
@@ -135,7 +135,7 @@ describe("RawBody directive parsing", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "clawd"),
+              workspace: path.join(home, "openclaw"),
             },
           },
           channels: { whatsapp: { allowFrom: ["*"] } },
@@ -173,7 +173,7 @@ describe("RawBody directive parsing", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "clawd"),
+              workspace: path.join(home, "openclaw"),
             },
           },
           channels: { whatsapp: { allowFrom: ["+1222"] } },
@@ -199,18 +199,16 @@ describe("RawBody directive parsing", () => {
       });
 
       const groupMessageCtx = {
-        Body: [
-          "[Chat messages since your last reply - for context]",
-          "[WhatsApp ...] Peter: hello",
-          "",
-          "[Current message - respond to this]",
-          "[WhatsApp ...] Jake: /think:high status please",
-          "[from: Jake McInteer (+6421807830)]",
-        ].join("\n"),
+        Body: "/think:high status please",
+        BodyForAgent: "/think:high status please",
         RawBody: "/think:high status please",
+        InboundHistory: [{ sender: "Peter", body: "hello", timestamp: 1700000000000 }],
         From: "+1222",
         To: "+1222",
         ChatType: "group",
+        GroupSubject: "Ops",
+        SenderName: "Jake McInteer",
+        SenderE164: "+6421807830",
         CommandAuthorized: true,
       };
 
@@ -221,7 +219,7 @@ describe("RawBody directive parsing", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "clawd"),
+              workspace: path.join(home, "openclaw"),
             },
           },
           channels: { whatsapp: { allowFrom: ["*"] } },
@@ -233,8 +231,9 @@ describe("RawBody directive parsing", () => {
       expect(text).toBe("ok");
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
       const prompt = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
-      expect(prompt).toContain("[Chat messages since your last reply - for context]");
-      expect(prompt).toContain("Peter: hello");
+      expect(prompt).toContain("Chat history since last reply (untrusted, for context):");
+      expect(prompt).toContain('"sender": "Peter"');
+      expect(prompt).toContain('"body": "hello"');
       expect(prompt).toContain("status please");
       expect(prompt).not.toContain("/think:high");
     });

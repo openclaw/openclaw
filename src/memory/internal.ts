@@ -30,47 +30,103 @@ export function normalizeRelPath(value: string): string {
   return trimmed.replace(/\\/g, "/");
 }
 
-export function isMemoryPath(relPath: string): boolean {
-  const normalized = normalizeRelPath(relPath);
-  if (!normalized) return false;
-  if (normalized === "MEMORY.md" || normalized === "memory.md") return true;
-  return normalized.startsWith("memory/");
+export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: string[]): string[] {
+  if (!extraPaths?.length) {
+    return [];
+  }
+  const resolved = extraPaths
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) =>
+      path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value),
+    );
+  return Array.from(new Set(resolved));
 }
 
-async function exists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
+export function isMemoryPath(relPath: string): boolean {
+  const normalized = normalizeRelPath(relPath);
+  if (!normalized) {
     return false;
   }
+  if (normalized === "MEMORY.md" || normalized === "memory.md") {
+    return true;
+  }
+  return normalized.startsWith("memory/");
 }
 
 async function walkDir(dir: string, files: string[]) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
     if (entry.isDirectory()) {
       await walkDir(full, files);
       continue;
     }
-    if (!entry.isFile()) continue;
-    if (!entry.name.endsWith(".md")) continue;
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (!entry.name.endsWith(".md")) {
+      continue;
+    }
     files.push(full);
   }
 }
 
-export async function listMemoryFiles(workspaceDir: string): Promise<string[]> {
+export async function listMemoryFiles(
+  workspaceDir: string,
+  extraPaths?: string[],
+): Promise<string[]> {
   const result: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
   const altMemoryFile = path.join(workspaceDir, "memory.md");
-  if (await exists(memoryFile)) result.push(memoryFile);
-  if (await exists(altMemoryFile)) result.push(altMemoryFile);
   const memoryDir = path.join(workspaceDir, "memory");
-  if (await exists(memoryDir)) {
-    await walkDir(memoryDir, result);
+
+  const addMarkdownFile = async (absPath: string) => {
+    try {
+      const stat = await fs.lstat(absPath);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        return;
+      }
+      if (!absPath.endsWith(".md")) {
+        return;
+      }
+      result.push(absPath);
+    } catch {}
+  };
+
+  await addMarkdownFile(memoryFile);
+  await addMarkdownFile(altMemoryFile);
+  try {
+    const dirStat = await fs.lstat(memoryDir);
+    if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
+      await walkDir(memoryDir, result);
+    }
+  } catch {}
+
+  const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
+  if (normalizedExtraPaths.length > 0) {
+    for (const inputPath of normalizedExtraPaths) {
+      try {
+        const stat = await fs.lstat(inputPath);
+        if (stat.isSymbolicLink()) {
+          continue;
+        }
+        if (stat.isDirectory()) {
+          await walkDir(inputPath, result);
+          continue;
+        }
+        if (stat.isFile() && inputPath.endsWith(".md")) {
+          result.push(inputPath);
+        }
+      } catch {}
+    }
   }
-  if (result.length <= 1) return result;
+  if (result.length <= 1) {
+    return result;
+  }
   const seen = new Set<string>();
   const deduped: string[] = [];
   for (const entry of result) {
@@ -78,7 +134,9 @@ export async function listMemoryFiles(workspaceDir: string): Promise<string[]> {
     try {
       key = await fs.realpath(entry);
     } catch {}
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      continue;
+    }
     seen.add(key);
     deduped.push(entry);
   }
@@ -110,7 +168,9 @@ export function chunkMarkdown(
   chunking: { tokens: number; overlap: number },
 ): MemoryChunk[] {
   const lines = content.split("\n");
-  if (lines.length === 0) return [];
+  if (lines.length === 0) {
+    return [];
+  }
   const maxChars = Math.max(32, chunking.tokens * 4);
   const overlapChars = Math.max(0, chunking.overlap * 4);
   const chunks: MemoryChunk[] = [];
@@ -119,10 +179,14 @@ export function chunkMarkdown(
   let currentChars = 0;
 
   const flush = () => {
-    if (current.length === 0) return;
+    if (current.length === 0) {
+      return;
+    }
     const firstEntry = current[0];
     const lastEntry = current[current.length - 1];
-    if (!firstEntry || !lastEntry) return;
+    if (!firstEntry || !lastEntry) {
+      return;
+    }
     const text = current.map((entry) => entry.line).join("\n");
     const startLine = firstEntry.lineNo;
     const endLine = lastEntry.lineNo;
@@ -144,10 +208,14 @@ export function chunkMarkdown(
     const kept: Array<{ line: string; lineNo: number }> = [];
     for (let i = current.length - 1; i >= 0; i -= 1) {
       const entry = current[i];
-      if (!entry) continue;
+      if (!entry) {
+        continue;
+      }
       acc += entry.line.length + 1;
       kept.unshift(entry);
-      if (acc >= overlapChars) break;
+      if (acc >= overlapChars) {
+        break;
+      }
     }
     current = kept;
     currentChars = kept.reduce((sum, entry) => sum + entry.line.length + 1, 0);
@@ -178,6 +246,27 @@ export function chunkMarkdown(
   return chunks;
 }
 
+/**
+ * Remap chunk startLine/endLine from content-relative positions to original
+ * source file positions using a lineMap.  Each entry in lineMap gives the
+ * 1-indexed source line for the corresponding 0-indexed content line.
+ *
+ * This is used for session JSONL files where buildSessionEntry() flattens
+ * messages into a plain-text string before chunking.  Without remapping the
+ * stored line numbers would reference positions in the flattened text rather
+ * than the original JSONL file.
+ */
+export function remapChunkLines(chunks: MemoryChunk[], lineMap: number[] | undefined): void {
+  if (!lineMap || lineMap.length === 0) {
+    return;
+  }
+  for (const chunk of chunks) {
+    // startLine/endLine are 1-indexed; lineMap is 0-indexed by content line
+    chunk.startLine = lineMap[chunk.startLine - 1] ?? chunk.startLine;
+    chunk.endLine = lineMap[chunk.endLine - 1] ?? chunk.endLine;
+  }
+}
+
 export function parseEmbedding(raw: string): number[] {
   try {
     const parsed = JSON.parse(raw) as number[];
@@ -188,7 +277,9 @@ export function parseEmbedding(raw: string): number[] {
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length === 0 || b.length === 0) return 0;
+  if (a.length === 0 || b.length === 0) {
+    return 0;
+  }
   const len = Math.min(a.length, b.length);
   let dot = 0;
   let normA = 0;
@@ -200,6 +291,46 @@ export function cosineSimilarity(a: number[], b: number[]): number {
     normA += av * av;
     normB += bv * bv;
   }
-  if (normA === 0 || normB === 0) return 0;
+  if (normA === 0 || normB === 0) {
+    return 0;
+  }
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+export async function runWithConcurrency<T>(
+  tasks: Array<() => Promise<T>>,
+  limit: number,
+): Promise<T[]> {
+  if (tasks.length === 0) {
+    return [];
+  }
+  const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
+  const results: T[] = Array.from({ length: tasks.length });
+  let next = 0;
+  let firstError: unknown = null;
+
+  const workers = Array.from({ length: resolvedLimit }, async () => {
+    while (true) {
+      if (firstError) {
+        return;
+      }
+      const index = next;
+      next += 1;
+      if (index >= tasks.length) {
+        return;
+      }
+      try {
+        results[index] = await tasks[index]();
+      } catch (err) {
+        firstError = err;
+        return;
+      }
+    }
+  });
+
+  await Promise.allSettled(workers);
+  if (firstError) {
+    throw firstError;
+  }
+  return results;
 }

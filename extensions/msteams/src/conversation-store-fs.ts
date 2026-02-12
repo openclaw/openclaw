@@ -16,9 +16,13 @@ const MAX_CONVERSATIONS = 1000;
 const CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
 function parseTimestamp(value: string | undefined): number | null {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
   const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return null;
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
   return parsed;
 }
 
@@ -26,7 +30,9 @@ function pruneToLimit(
   conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>,
 ) {
   const entries = Object.entries(conversations);
-  if (entries.length <= MAX_CONVERSATIONS) return conversations;
+  if (entries.length <= MAX_CONVERSATIONS) {
+    return conversations;
+  }
 
   entries.sort((a, b) => {
     const aTs = parseTimestamp(a[1].lastSeenAt) ?? 0;
@@ -109,7 +115,9 @@ export function createMSTeamsConversationStoreFs(params?: {
 
   const findByUserId = async (id: string): Promise<MSTeamsConversationStoreEntry | null> => {
     const target = id.trim();
-    if (!target) return null;
+    if (!target) {
+      return null;
+    }
     for (const entry of await list()) {
       const { conversationId, reference } = entry;
       if (reference.user?.aadObjectId === target) {
@@ -144,7 +152,9 @@ export function createMSTeamsConversationStoreFs(params?: {
     const normalizedId = normalizeConversationId(conversationId);
     return await withFileLock(filePath, empty, async () => {
       const store = await readStore();
-      if (!(normalizedId in store.conversations)) return false;
+      if (!(normalizedId in store.conversations)) {
+        return false;
+      }
       delete store.conversations[normalizedId];
       await writeJsonFile(filePath, store);
       return true;

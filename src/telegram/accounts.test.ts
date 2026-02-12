@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveTelegramAccount } from "./accounts.js";
 
 describe("resolveTelegramAccount", () => {
@@ -8,7 +7,7 @@ describe("resolveTelegramAccount", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "";
     try {
-      const cfg: MoltbotConfig = {
+      const cfg: OpenClawConfig = {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },
@@ -31,7 +30,7 @@ describe("resolveTelegramAccount", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "tok-env";
     try {
-      const cfg: MoltbotConfig = {
+      const cfg: OpenClawConfig = {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },
@@ -54,7 +53,7 @@ describe("resolveTelegramAccount", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "tok-env";
     try {
-      const cfg: MoltbotConfig = {
+      const cfg: OpenClawConfig = {
         channels: {
           telegram: { botToken: "tok-config" },
         },
@@ -77,7 +76,7 @@ describe("resolveTelegramAccount", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "";
     try {
-      const cfg: MoltbotConfig = {
+      const cfg: OpenClawConfig = {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },

@@ -1,10 +1,11 @@
-import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
   provider: string;
   model: string;
+  compactionCount?: number;
   usage?: {
     input?: number;
     output?: number;
@@ -20,7 +21,7 @@ export type EmbeddedPiRunMeta = {
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   error?: {
-    kind: "context_overflow" | "compaction_failure" | "role_ordering";
+    kind: "context_overflow" | "compaction_failure" | "role_ordering" | "image_size";
     message: string;
   };
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */

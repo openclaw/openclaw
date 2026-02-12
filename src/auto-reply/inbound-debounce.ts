@@ -1,8 +1,10 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { InboundDebounceByProvider } from "../config/types.messages.js";
 
 const resolveMs = (value: unknown): number | undefined => {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
   return Math.max(0, Math.trunc(value));
 };
 
@@ -10,12 +12,14 @@ const resolveChannelOverride = (params: {
   byChannel?: InboundDebounceByProvider;
   channel: string;
 }): number | undefined => {
-  if (!params.byChannel) return undefined;
+  if (!params.byChannel) {
+    return undefined;
+  }
   return resolveMs(params.byChannel[params.channel]);
 };
 
 export function resolveInboundDebounceMs(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel: string;
   overrideMs?: number;
 }): number {
@@ -50,7 +54,9 @@ export function createInboundDebouncer<T>(params: {
       clearTimeout(buffer.timeout);
       buffer.timeout = null;
     }
-    if (buffer.items.length === 0) return;
+    if (buffer.items.length === 0) {
+      return;
+    }
     try {
       await params.onFlush(buffer.items);
     } catch (err) {
@@ -60,12 +66,16 @@ export function createInboundDebouncer<T>(params: {
 
   const flushKey = async (key: string) => {
     const buffer = buffers.get(key);
-    if (!buffer) return;
+    if (!buffer) {
+      return;
+    }
     await flushBuffer(key, buffer);
   };
 
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
-    if (buffer.timeout) clearTimeout(buffer.timeout);
+    if (buffer.timeout) {
+      clearTimeout(buffer.timeout);
+    }
     buffer.timeout = setTimeout(() => {
       void flushBuffer(key, buffer);
     }, debounceMs);

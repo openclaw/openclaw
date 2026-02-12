@@ -1,6 +1,5 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
 import { parseScreenRecordPayload, screenRecordTempPath } from "./nodes-screen.js";
 
 describe("nodes screen helpers", () => {
@@ -33,6 +32,6 @@ describe("nodes screen helpers", () => {
       tmpDir: "/tmp",
       id: "id1",
     });
-    expect(p).toBe(path.join("/tmp", "moltbot-screen-record-id1.mp4"));
+    expect(p).toBe(path.join("/tmp", "openclaw-screen-record-id1.mp4"));
   });
 });

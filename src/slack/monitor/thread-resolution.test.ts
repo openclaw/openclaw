@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
 
@@ -9,6 +8,7 @@ describe("createSlackThreadTsResolver", () => {
       messages: [{ ts: "1", thread_ts: "9" }],
     });
     const resolver = createSlackThreadTsResolver({
+      // oxlint-disable-next-line typescript/no-explicit-any
       client: { conversations: { history: historyMock } } as any,
       cacheTtlMs: 60_000,
       maxSize: 5,

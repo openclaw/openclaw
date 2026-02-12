@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { buildGatewayAuthConfig } from "./configure.js";
 
 describe("buildGatewayAuthConfig", () => {

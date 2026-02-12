@@ -1,13 +1,16 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
-const toolCallMessage = {
+type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
+
+const asAppendMessage = (message: unknown) => message as AppendMessage;
+
+const toolCallMessage = asAppendMessage({
   role: "assistant",
   content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-} satisfies AgentMessage;
+});
 
 describe("installSessionToolResultGuard", () => {
   it("inserts synthetic toolResult before non-tool message when pending", () => {
@@ -15,11 +18,13 @@ describe("installSessionToolResultGuard", () => {
     installSessionToolResultGuard(sm);
 
     sm.appendMessage(toolCallMessage);
-    sm.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "error" }],
-      stopReason: "error",
-    } as AgentMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "error" }],
+        stopReason: "error",
+      }),
+    );
 
     const entries = sm
       .getEntries()
@@ -57,12 +62,14 @@ describe("installSessionToolResultGuard", () => {
     installSessionToolResultGuard(sm);
 
     sm.appendMessage(toolCallMessage);
-    sm.appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      content: [{ type: "text", text: "ok" }],
-      isError: false,
-    } as AgentMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      }),
+    );
 
     const messages = sm
       .getEntries()
@@ -76,23 +83,29 @@ describe("installSessionToolResultGuard", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm);
 
-    sm.appendMessage({
-      role: "assistant",
-      content: [
-        { type: "toolCall", id: "call_a", name: "one", arguments: {} },
-        { type: "toolUse", id: "call_b", name: "two", arguments: {} },
-      ],
-    } as AgentMessage);
-    sm.appendMessage({
-      role: "toolResult",
-      toolUseId: "call_a",
-      content: [{ type: "text", text: "a" }],
-      isError: false,
-    } as AgentMessage);
-    sm.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "after tools" }],
-    } as AgentMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_a", name: "one", arguments: {} },
+          { type: "toolUse", id: "call_b", name: "two", arguments: {} },
+        ],
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolUseId: "call_a",
+        content: [{ type: "text", text: "a" }],
+        isError: false,
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "after tools" }],
+      }),
+    );
 
     const messages = sm
       .getEntries()
@@ -114,11 +127,13 @@ describe("installSessionToolResultGuard", () => {
     const guard = installSessionToolResultGuard(sm);
 
     sm.appendMessage(toolCallMessage);
-    sm.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "hard error" }],
-      stopReason: "error",
-    } as AgentMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "hard error" }],
+        stopReason: "error",
+      }),
+    );
     expect(guard.getPendingIds()).toEqual([]);
   });
 
@@ -126,20 +141,132 @@ describe("installSessionToolResultGuard", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
 
-    sm.appendMessage({
-      role: "assistant",
-      content: [{ type: "toolUse", id: "use_1", name: "f", arguments: {} }],
-    } as AgentMessage);
-    sm.appendMessage({
-      role: "toolResult",
-      toolUseId: "use_1",
-      content: [{ type: "text", text: "ok" }],
-    } as AgentMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolUse", id: "use_1", name: "f", arguments: {} }],
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolUseId: "use_1",
+        content: [{ type: "text", text: "ok" }],
+      }),
+    );
 
     const messages = sm
       .getEntries()
       .filter((e) => e.type === "message")
       .map((e) => (e as { message: AgentMessage }).message);
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+  });
+
+  it("drops malformed tool calls missing input before persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read" }],
+      }),
+    );
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  it("flushes pending tool results when a sanitized assistant message is dropped", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      }),
+    );
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_2", name: "read" }],
+      }),
+    );
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+  });
+
+  it("caps oversized tool result text during persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "x".repeat(500_000) }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const entries = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    const toolResult = entries.find((m) => m.role === "toolResult") as {
+      content: Array<{ type: string; text: string }>;
+    };
+    expect(toolResult).toBeDefined();
+    const textBlock = toolResult.content.find((b: { type: string }) => b.type === "text") as {
+      text: string;
+    };
+    expect(textBlock.text.length).toBeLessThan(500_000);
+    expect(textBlock.text).toContain("truncated");
+  });
+
+  it("does not truncate tool results under the limit", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    const originalText = "small tool result";
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: originalText }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const entries = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    const toolResult = entries.find((m) => m.role === "toolResult") as {
+      content: Array<{ type: string; text: string }>;
+    };
+    const textBlock = toolResult.content.find((b: { type: string }) => b.type === "text") as {
+      text: string;
+    };
+    expect(textBlock.text).toBe(originalText);
   });
 });

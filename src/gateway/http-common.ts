@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-
 import { readJsonBody } from "./hooks.js";
 
 export function sendJson(res: ServerResponse, status: number, body: unknown) {

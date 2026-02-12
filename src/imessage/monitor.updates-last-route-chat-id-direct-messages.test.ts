@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { monitorIMessageProvider } from "./monitor.js";
 
 const requestMock = vi.fn();
@@ -36,7 +35,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/moltbot-sessions.json"),
+  resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
   updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
   readSessionUpdatedAt: vi.fn(() => undefined),
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
@@ -64,7 +63,9 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function waitForSubscribe() {
   for (let i = 0; i < 5; i += 1) {
-    if (requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) return;
+    if (requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) {
+      return;
+    }
     await flush();
   }
 }
@@ -80,11 +81,13 @@ beforeEach(() => {
     },
     session: { mainKey: "main" },
     messages: {
-      groupChat: { mentionPatterns: ["@clawd"] },
+      groupChat: { mentionPatterns: ["@openclaw"] },
     },
   };
   requestMock.mockReset().mockImplementation((method: string) => {
-    if (method === "watch.subscribe") return Promise.resolve({ subscription: 1 });
+    if (method === "watch.subscribe") {
+      return Promise.resolve({ subscription: 1 });
+    }
     return Promise.resolve({});
   });
   stopMock.mockReset().mockResolvedValue(undefined);
@@ -133,8 +136,12 @@ describe("monitorIMessageProvider", () => {
 
   it("does not trigger unhandledRejection when aborting during shutdown", async () => {
     requestMock.mockImplementation((method: string) => {
-      if (method === "watch.subscribe") return Promise.resolve({ subscription: 1 });
-      if (method === "watch.unsubscribe") return Promise.reject(new Error("imsg rpc closed"));
+      if (method === "watch.subscribe") {
+        return Promise.resolve({ subscription: 1 });
+      }
+      if (method === "watch.unsubscribe") {
+        return Promise.reject(new Error("imsg rpc closed"));
+      }
       return Promise.resolve({});
     });
 

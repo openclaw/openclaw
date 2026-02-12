@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
 describe("sanitizeTextContent", () => {
@@ -30,5 +29,15 @@ describe("extractAssistantText", () => {
       ],
     };
     expect(extractAssistantText(message)).toBe("Hi there");
+  });
+
+  it("rewrites error-ish assistant text only when the transcript marks it as an error", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "500 Internal Server Error",
+      content: [{ type: "text", text: "500 Internal Server Error" }],
+    };
+    expect(extractAssistantText(message)).toBe("HTTP 500: Internal Server Error");
   });
 });

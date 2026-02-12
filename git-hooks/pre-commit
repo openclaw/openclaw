@@ -1,4 +1,9 @@
 #!/bin/sh
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-[ -z "$ROOT" ] && exit 0
-node "$ROOT/scripts/format-staged.js"
+FILES=$(git diff --cached --name-only --diff-filter=ACMR | sed 's| |\\ |g')
+[ -z "$FILES" ] && exit 0
+
+echo "$FILES" | xargs pnpm lint --fix
+echo "$FILES" | xargs pnpm format --no-error-on-unmatched-pattern
+echo "$FILES" | xargs git add
+
+exit 0

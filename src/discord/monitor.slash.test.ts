@@ -3,24 +3,19 @@ import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispa
 
 const dispatchMock = vi.fn();
 
-vi.mock("@buape/carbon", () => ({
-  ChannelType: { DM: "dm", GroupDM: "group" },
-  MessageType: {
-    ChatInputCommand: 1,
-    ContextMenuCommand: 2,
-    Default: 0,
-  },
-  Button: class {},
-  Command: class {},
-  Client: class {},
-  MessageCreateListener: class {},
-  MessageReactionAddListener: class {},
-  MessageReactionRemoveListener: class {},
-  PresenceUpdateListener: class {},
-  Row: class {
-    constructor(_components: unknown[]) {}
-  },
-}));
+vi.mock("@buape/carbon", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@buape/carbon")>();
+  return {
+    ...actual,
+    ChannelType: { DM: "dm", GroupDM: "group" },
+    MessageType: {
+      ChatInputCommand: 1,
+      ContextMenuCommand: 2,
+      Default: 0,
+    },
+    Client: class {},
+  };
+});
 
 vi.mock("../auto-reply/dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../auto-reply/dispatch.js")>();
@@ -61,10 +56,10 @@ describe("discord native commands", () => {
         defaults: {
           model: "anthropic/claude-opus-4-5",
           humanDelay: { mode: "off" },
-          workspace: "/tmp/clawd",
+          workspace: "/tmp/openclaw",
         },
       },
-      session: { store: "/tmp/moltbot-sessions.json" },
+      session: { store: "/tmp/openclaw-sessions.json" },
       discord: { dm: { enabled: true, policy: "open" } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 

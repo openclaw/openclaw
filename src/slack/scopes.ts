@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-
+import { isRecord } from "../utils.js";
 import { createSlackWebClient } from "./client.js";
 
 export type SlackScopesResult = {
@@ -11,28 +11,34 @@ export type SlackScopesResult = {
 
 type SlackScopesSource = "auth.scopes" | "apps.permissions.info";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function collectScopes(value: unknown, into: string[]) {
-  if (!value) return;
+  if (!value) {
+    return;
+  }
   if (Array.isArray(value)) {
     for (const entry of value) {
-      if (typeof entry === "string" && entry.trim()) into.push(entry.trim());
+      if (typeof entry === "string" && entry.trim()) {
+        into.push(entry.trim());
+      }
     }
     return;
   }
   if (typeof value === "string") {
     const raw = value.trim();
-    if (!raw) return;
+    if (!raw) {
+      return;
+    }
     const parts = raw.split(/[,\s]+/).map((part) => part.trim());
     for (const part of parts) {
-      if (part) into.push(part);
+      if (part) {
+        into.push(part);
+      }
     }
     return;
   }
-  if (!isRecord(value)) return;
+  if (!isRecord(value)) {
+    return;
+  }
   for (const entry of Object.values(value)) {
     if (Array.isArray(entry) || typeof entry === "string") {
       collectScopes(entry, into);
@@ -41,11 +47,13 @@ function collectScopes(value: unknown, into: string[]) {
 }
 
 function normalizeScopes(scopes: string[]) {
-  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean))).sort();
+  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean))).toSorted();
 }
 
 function extractScopes(payload: unknown): string[] {
-  if (!isRecord(payload)) return [];
+  if (!isRecord(payload)) {
+    return [];
+  }
   const scopes: string[] = [];
   collectScopes(payload.scopes, scopes);
   collectScopes(payload.scope, scopes);
@@ -59,7 +67,9 @@ function extractScopes(payload: unknown): string[] {
 }
 
 function readError(payload: unknown): string | undefined {
-  if (!isRecord(payload)) return undefined;
+  if (!isRecord(payload)) {
+    return undefined;
+  }
   const error = payload.error;
   return typeof error === "string" && error.trim() ? error.trim() : undefined;
 }
@@ -94,7 +104,9 @@ export async function fetchSlackScopes(
       return { ok: true, scopes, source: method };
     }
     const error = readError(result);
-    if (error) errors.push(`${method}: ${error}`);
+    if (error) {
+      errors.push(`${method}: ${error}`);
+    }
   }
 
   return {

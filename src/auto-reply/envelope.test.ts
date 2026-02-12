@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   formatAgentEnvelope,
   formatInboundEnvelope,
@@ -24,7 +23,7 @@ describe("formatAgentEnvelope", () => {
 
     process.env.TZ = originalTz;
 
-    expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 2025-01-02T03:04Z] hello");
+    expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 Thu 2025-01-02T03:04Z] hello");
   });
 
   it("formats timestamps in local timezone by default", () => {
@@ -40,7 +39,7 @@ describe("formatAgentEnvelope", () => {
 
     process.env.TZ = originalTz;
 
-    expect(body).toMatch(/\[WebChat 2025-01-01 19:04 [^\]]+\] hello/);
+    expect(body).toMatch(/\[WebChat Wed 2025-01-01 19:04 [^\]]+\] hello/);
   });
 
   it("formats timestamps in UTC when configured", () => {
@@ -57,7 +56,7 @@ describe("formatAgentEnvelope", () => {
 
     process.env.TZ = originalTz;
 
-    expect(body).toBe("[WebChat 2025-01-02T03:04Z] hello");
+    expect(body).toBe("[WebChat Thu 2025-01-02T03:04Z] hello");
   });
 
   it("formats timestamps in user timezone when configured", () => {
@@ -69,7 +68,7 @@ describe("formatAgentEnvelope", () => {
       body: "hello",
     });
 
-    expect(body).toMatch(/\[WebChat 2025-01-02 04:04 [^\]]+\] hello/);
+    expect(body).toMatch(/\[WebChat Thu 2025-01-02 04:04 [^\]]+\] hello/);
   });
 
   it("omits timestamps when configured", () => {

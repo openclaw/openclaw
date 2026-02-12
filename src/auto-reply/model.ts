@@ -1,6 +1,4 @@
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+import { escapeRegExp } from "../utils.js";
 
 export function extractModelDirective(
   body?: string,
@@ -11,7 +9,9 @@ export function extractModelDirective(
   rawProfile?: string;
   hasDirective: boolean;
 } {
-  if (!body) return { cleaned: "", hasDirective: false };
+  if (!body) {
+    return { cleaned: "", hasDirective: false };
+  }
 
   const modelMatch = body.match(
     /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?/i,

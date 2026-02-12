@@ -1,10 +1,9 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
-
 import type { ResolvedBrowserConfig } from "./config.js";
-import { registerBrowserRoutes } from "./routes/index.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
+import { registerBrowserRoutes } from "./routes/index.js";
 import {
   type BrowserServerState,
   createBrowserRouteContext,
@@ -29,13 +28,28 @@ export async function startBrowserBridgeServer(params: {
   const port = params.port ?? 0;
 
   const app = express();
+  app.use((req, res, next) => {
+    const ctrl = new AbortController();
+    const abort = () => ctrl.abort(new Error("request aborted"));
+    req.once("aborted", abort);
+    res.once("close", () => {
+      if (!res.writableEnded) {
+        abort();
+      }
+    });
+    // Make the signal available to browser route handlers (best-effort).
+    (req as unknown as { signal?: AbortSignal }).signal = ctrl.signal;
+    next();
+  });
   app.use(express.json({ limit: "1mb" }));
 
   const authToken = params.authToken?.trim();
   if (authToken) {
     app.use((req, res, next) => {
       const auth = String(req.headers.authorization ?? "").trim();
-      if (auth === `Bearer ${authToken}`) return next();
+      if (auth === `Bearer ${authToken}`) {
+        return next();
+      }
       res.status(401).send("Unauthorized");
     });
   }

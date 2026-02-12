@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { computeNextRunAtMs } from "./schedule.js";
 
 describe("cron schedule", () => {
@@ -33,5 +32,39 @@ describe("cron schedule", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
     const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000, anchorMs: anchor }, anchor);
     expect(next).toBe(anchor + 30_000);
+  });
+
+  describe("cron with specific seconds (6-field pattern)", () => {
+    // Pattern: fire at exactly second 0 of minute 0 of hour 12 every day
+    const dailyNoon = { kind: "cron" as const, expr: "0 0 12 * * *", tz: "UTC" };
+    const noonMs = Date.parse("2026-02-08T12:00:00.000Z");
+
+    it("advances past current second when nowMs is exactly at the match", () => {
+      // Fix #14164: must NOT return the current second — that caused infinite
+      // re-fires when multiple jobs triggered simultaneously.
+      const next = computeNextRunAtMs(dailyNoon, noonMs);
+      expect(next).toBe(noonMs + 86_400_000); // next day
+    });
+
+    it("advances past current second when nowMs is mid-second (.500) within the match", () => {
+      // Fix #14164: returning the current second caused rapid duplicate fires.
+      const next = computeNextRunAtMs(dailyNoon, noonMs + 500);
+      expect(next).toBe(noonMs + 86_400_000); // next day
+    });
+
+    it("advances past current second when nowMs is late in the matching second (.999)", () => {
+      const next = computeNextRunAtMs(dailyNoon, noonMs + 999);
+      expect(next).toBe(noonMs + 86_400_000); // next day
+    });
+
+    it("advances to next day once the matching second is fully past", () => {
+      const next = computeNextRunAtMs(dailyNoon, noonMs + 1000);
+      expect(next).toBe(noonMs + 86_400_000); // next day
+    });
+
+    it("returns today when nowMs is before the match", () => {
+      const next = computeNextRunAtMs(dailyNoon, noonMs - 500);
+      expect(next).toBe(noonMs);
+    });
   });
 });

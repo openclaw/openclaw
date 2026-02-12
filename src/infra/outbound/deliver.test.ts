@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
-import { markdownToSignalTextChunks } from "../../signal/format.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { markdownToSignalTextChunks } from "../../signal/format.js";
 import {
   createIMessageTestPlugin,
   createOutboundTestPlugin,
@@ -38,7 +37,7 @@ describe("deliverOutboundPayloads", () => {
   });
   it("chunks telegram markdown and passes through accountId", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
     };
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -71,7 +70,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("passes explicit accountId to sendTelegram", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
     };
 
@@ -93,7 +92,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("uses signal media maxBytes from config", async () => {
     const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
-    const cfg: MoltbotConfig = { channels: { signal: { mediaMaxMb: 2 } } };
+    const cfg: OpenClawConfig = { channels: { signal: { mediaMaxMb: 2 } } };
 
     const results = await deliverOutboundPayloads({
       cfg,
@@ -118,7 +117,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("chunks Signal markdown using the format-first chunker", async () => {
     const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       channels: { signal: { textChunkLimit: 20 } },
     };
     const text = `Intro\\n\\n\`\`\`\`md\\n${"y".repeat(60)}\\n\`\`\`\\n\\nOutro`;
@@ -152,7 +151,7 @@ describe("deliverOutboundPayloads", () => {
       .fn()
       .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
       .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       channels: { whatsapp: { textChunkLimit: 2 } },
     };
 
@@ -170,7 +169,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("respects newline chunk mode for WhatsApp", async () => {
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       channels: { whatsapp: { textChunkLimit: 4000, chunkMode: "newline" } },
     };
 
@@ -194,6 +193,73 @@ describe("deliverOutboundPayloads", () => {
       "+1555",
       "Line two",
       expect.objectContaining({ verbose: false }),
+    );
+  });
+
+  it("strips leading blank lines for WhatsApp text payloads", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 4000 } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "\n\nHello from WhatsApp" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "Hello from WhatsApp",
+      expect.objectContaining({ verbose: false }),
+    );
+  });
+
+  it("drops whitespace-only WhatsApp text payloads when no media is attached", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 4000 } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "   \n\t   " }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+
+  it("keeps WhatsApp media payloads but clears whitespace-only captions", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 4000 } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: " \n\t ", mediaUrl: "https://example.com/photo.png" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/photo.png",
+        verbose: false,
+      }),
     );
   });
 
@@ -229,7 +295,7 @@ describe("deliverOutboundPayloads", () => {
       ]),
     );
 
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       channels: { matrix: { textChunkLimit: 4000, chunkMode: "newline" } },
     };
     const text = "```js\nconst a = 1;\nconst b = 2;\n```\nAfter";
@@ -256,7 +322,7 @@ describe("deliverOutboundPayloads", () => {
         },
       ]),
     );
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: { defaults: { mediaMaxMb: 3 } },
     };
 
@@ -293,7 +359,7 @@ describe("deliverOutboundPayloads", () => {
       .mockRejectedValueOnce(new Error("fail"))
       .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
     const onError = vi.fn();
-    const cfg: MoltbotConfig = {};
+    const cfg: OpenClawConfig = {};
 
     const results = await deliverOutboundPayloads({
       cfg,
@@ -313,7 +379,7 @@ describe("deliverOutboundPayloads", () => {
   it("passes normalized payload to onError", async () => {
     const sendWhatsApp = vi.fn().mockRejectedValue(new Error("boom"));
     const onError = vi.fn();
-    const cfg: MoltbotConfig = {};
+    const cfg: OpenClawConfig = {};
 
     await deliverOutboundPayloads({
       cfg,
@@ -334,7 +400,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("mirrors delivered output when mirror options are provided", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
     };
     mocks.appendAssistantMessageToSessionTranscript.mockClear();

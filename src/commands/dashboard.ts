@@ -1,6 +1,6 @@
+import type { RuntimeEnv } from "../runtime.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   detectBrowserOpenSupport,
@@ -23,7 +23,7 @@ export async function dashboardCommand(
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;
   const customBindHost = cfg.gateway?.customBindHost;
-  const token = cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN ?? "";
+  const token = cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
 
   const links = resolveControlUiLinks({
     port,
@@ -31,11 +31,14 @@ export async function dashboardCommand(
     customBindHost,
     basePath,
   });
-  const authedUrl = token ? `${links.httpUrl}?token=${encodeURIComponent(token)}` : links.httpUrl;
+  // Prefer URL fragment to avoid leaking auth tokens via query params.
+  const dashboardUrl = token
+    ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
+    : links.httpUrl;
 
-  runtime.log(`Dashboard URL: ${authedUrl}`);
+  runtime.log(`Dashboard URL: ${dashboardUrl}`);
 
-  const copied = await copyToClipboard(authedUrl).catch(() => false);
+  const copied = await copyToClipboard(dashboardUrl).catch(() => false);
   runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
 
   let opened = false;
@@ -43,7 +46,7 @@ export async function dashboardCommand(
   if (!options.noOpen) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      opened = await openUrl(authedUrl);
+      opened = await openUrl(dashboardUrl);
     }
     if (!opened) {
       hint = formatControlUiSshHint({
@@ -57,7 +60,7 @@ export async function dashboardCommand(
   }
 
   if (opened) {
-    runtime.log("Opened in your browser. Keep that tab to control Moltbot.");
+    runtime.log("Opened in your browser. Keep that tab to control OpenClaw.");
   } else if (hint) {
     runtime.log(hint);
   }

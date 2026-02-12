@@ -1,10 +1,9 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
 import JSON5 from "json5";
-import { CONFIG_DIR } from "../utils.js";
+import fs from "node:fs";
+import path from "node:path";
 import type { CronStoreFile } from "./types.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
+import { CONFIG_DIR } from "../utils.js";
 
 export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
 export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
@@ -12,7 +11,9 @@ export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
 export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
     const raw = storePath.trim();
-    if (raw.startsWith("~")) return path.resolve(raw.replace("~", os.homedir()));
+    if (raw.startsWith("~")) {
+      return path.resolve(expandHomePrefix(raw));
+    }
     return path.resolve(raw);
   }
   return DEFAULT_CRON_STORE_PATH;
@@ -21,14 +22,28 @@ export function resolveCronStorePath(storePath?: string) {
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   try {
     const raw = await fs.promises.readFile(storePath, "utf-8");
-    const parsed = JSON5.parse(raw) as Partial<CronStoreFile> | null;
-    const jobs = Array.isArray(parsed?.jobs) ? (parsed?.jobs as never[]) : [];
+    let parsed: unknown;
+    try {
+      parsed = JSON5.parse(raw);
+    } catch (err) {
+      throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
+        cause: err,
+      });
+    }
+    const parsedRecord =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
     return {
       version: 1,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
     };
-  } catch {
-    return { version: 1, jobs: [] };
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return { version: 1, jobs: [] };
+    }
+    throw err;
   }
 }
 

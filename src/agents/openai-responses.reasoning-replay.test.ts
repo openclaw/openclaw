@@ -25,12 +25,19 @@ function installFailingFetchCapture() {
   const fetchImpl: typeof fetch = async (_input, init) => {
     const rawBody = init?.body;
     const bodyText = (() => {
-      if (!rawBody) return "";
-      if (typeof rawBody === "string") return rawBody;
-      if (rawBody instanceof Uint8Array) return Buffer.from(rawBody).toString("utf8");
-      if (rawBody instanceof ArrayBuffer)
+      if (!rawBody) {
+        return "";
+      }
+      if (typeof rawBody === "string") {
+        return rawBody;
+      }
+      if (rawBody instanceof Uint8Array) {
+        return Buffer.from(rawBody).toString("utf8");
+      }
+      if (rawBody instanceof ArrayBuffer) {
         return Buffer.from(new Uint8Array(rawBody)).toString("utf8");
-      return String(rawBody);
+      }
+      return null;
     })();
     lastBody = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;
     throw new Error("intentional fetch abort (test)");

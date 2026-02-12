@@ -76,7 +76,7 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("does not sanitize tool call ids for non-Google APIs", async () => {
+  it("sanitizes tool call ids for Anthropic APIs", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     await sanitizeSessionHistory({
@@ -90,7 +90,7 @@ describe("sanitizeSessionHistory", () => {
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
       "session:history",
-      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: false }),
+      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: true }),
     );
   });
 
@@ -160,6 +160,26 @@ describe("sanitizeSessionHistory", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]?.role).toBe("assistant");
+  });
+
+  it("drops malformed tool calls missing input or arguments", async () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read" }],
+      },
+      { role: "user", content: "hello" },
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result.map((msg) => msg.role)).toEqual(["user"]);
   });
 
   it("does not downgrade openai reasoning when the model has not changed", async () => {

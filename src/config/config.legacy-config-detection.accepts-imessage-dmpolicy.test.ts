@@ -176,7 +176,7 @@ describe("legacy config detection", () => {
   });
   it("flags legacy config in snapshot", async () => {
     await withTempHome(async (home) => {
-      const configPath = path.join(home, ".clawdbot", "moltbot.json");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
@@ -200,9 +200,27 @@ describe("legacy config detection", () => {
       expect(parsed.channels).toBeUndefined();
     });
   });
+  it("flags top-level memorySearch as legacy in snapshot", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ memorySearch: { provider: "local", fallback: "none" } }),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+    });
+  });
   it("does not auto-migrate claude-cli auth profile mode on load", async () => {
     await withTempHome(async (home) => {
-      const configPath = path.join(home, ".clawdbot", "moltbot.json");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
@@ -234,7 +252,7 @@ describe("legacy config detection", () => {
   });
   it("flags legacy provider sections in snapshot", async () => {
     await withTempHome(async (home) => {
-      const configPath = path.join(home, ".clawdbot", "moltbot.json");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
@@ -260,7 +278,7 @@ describe("legacy config detection", () => {
   });
   it("flags routing.allowFrom in snapshot", async () => {
     await withTempHome(async (home) => {
-      const configPath = path.join(home, ".clawdbot", "moltbot.json");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
@@ -286,7 +304,7 @@ describe("legacy config detection", () => {
   });
   it("rejects bindings[].match.provider on load", async () => {
     await withTempHome(async (home) => {
-      const configPath = path.join(home, ".clawdbot", "moltbot.json");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
@@ -316,7 +334,7 @@ describe("legacy config detection", () => {
   });
   it("rejects bindings[].match.accountID on load", async () => {
     await withTempHome(async (home) => {
-      const configPath = path.join(home, ".clawdbot", "moltbot.json");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
@@ -346,7 +364,7 @@ describe("legacy config detection", () => {
   });
   it("rejects session.sendPolicy.rules[].match.provider on load", async () => {
     await withTempHome(async (home) => {
-      const configPath = path.join(home, ".clawdbot", "moltbot.json");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
@@ -380,7 +398,7 @@ describe("legacy config detection", () => {
   });
   it("rejects messages.queue.byProvider on load", async () => {
     await withTempHome(async (home) => {
-      const configPath = path.join(home, ".clawdbot", "moltbot.json");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,

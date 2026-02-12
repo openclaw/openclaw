@@ -1,9 +1,9 @@
 import type { Command } from "commander";
+import type { NodesRpcOpts } from "./types.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodesRpcOpts } from "./types.js";
 
 export function registerNodesLocationCommands(nodes: Command) {
   const location = nodes.command("location").description("Fetch location from a paired node");
@@ -53,7 +53,7 @@ export function registerNodesLocationCommands(nodes: Command) {
             invokeParams.timeoutMs = invokeTimeoutMs;
           }
 
-          const raw = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload =
             res.payload && typeof res.payload === "object"

@@ -18,7 +18,9 @@ export function parseSlackTarget(
   options: SlackTargetParseOptions = {},
 ): SlackTarget | undefined {
   const trimmed = raw.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const mentionMatch = trimmed.match(/^<@([A-Z0-9]+)>$/i);
   if (mentionMatch) {
     return buildMessagingTarget("user", mentionMatch[1], trimmed);

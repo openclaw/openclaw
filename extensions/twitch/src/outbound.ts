@@ -5,13 +5,13 @@
  * Supports text and media (URL) sending with markdown stripping and chunking.
  */
 
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
-import { sendMessageTwitchInternal } from "./send.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   OutboundDeliveryResult,
 } from "./types.js";
+import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
+import { sendMessageTwitchInternal } from "./send.js";
 import { chunkTextForTwitch } from "./utils/markdown.js";
 import { missingTargetError, normalizeTwitchChannel } from "./utils/twitch.js";
 
@@ -64,8 +64,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
           return { ok: true, to: normalizedTo };
         }
         // Fallback to first allowFrom entry
-        // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
-        return { ok: true, to: allowList[0]! };
+        return { ok: true, to: allowList[0] };
       }
 
       // For explicit mode, accept any valid channel name
@@ -74,8 +73,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
 
     // No target provided, use allowFrom fallback
     if (allowList.length > 0) {
-      // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
-      return { ok: true, to: allowList[0]! };
+      return { ok: true, to: allowList[0] };
     }
 
     // No target and no allowFrom - error
@@ -99,14 +97,15 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    *
    * @example
    * const result = await twitchOutbound.sendText({
-   *   cfg: moltbotConfig,
+   *   cfg: openclawConfig,
    *   to: "#mychannel",
    *   text: "Hello Twitch!",
    *   accountId: "default",
    * });
    */
   sendText: async (params: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {
-    const { cfg, to, text, accountId, signal } = params;
+    const { cfg, to, text, accountId } = params;
+    const signal = (params as { signal?: AbortSignal }).signal;
 
     if (signal?.aborted) {
       throw new Error("Outbound delivery aborted");
@@ -144,7 +143,6 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       channel: "twitch",
       messageId: result.messageId,
       timestamp: Date.now(),
-      to: normalizeTwitchChannel(channel),
     };
   },
 
@@ -159,7 +157,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    *
    * @example
    * const result = await twitchOutbound.sendMedia({
-   *   cfg: moltbotConfig,
+   *   cfg: openclawConfig,
    *   to: "#mychannel",
    *   text: "Check this out!",
    *   mediaUrl: "https://example.com/image.png",
@@ -167,7 +165,8 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    * });
    */
   sendMedia: async (params: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {
-    const { text, mediaUrl, signal } = params;
+    const { text, mediaUrl } = params;
+    const signal = (params as { signal?: AbortSignal }).signal;
 
     if (signal?.aborted) {
       throw new Error("Outbound delivery aborted");

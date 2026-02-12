@@ -1,5 +1,5 @@
-import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
+import { setTimeout as delay } from "node:timers/promises";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -26,6 +26,7 @@ type LogsCliOptions = {
   json?: boolean;
   plain?: boolean;
   color?: boolean;
+  localTime?: boolean;
   url?: string;
   token?: string;
   timeout?: string;
@@ -33,7 +34,9 @@ type LogsCliOptions = {
 };
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
+  if (!value) {
+    return fallback;
+  }
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
@@ -57,12 +60,30 @@ async function fetchLogs(
   return payload as LogsTailPayload;
 }
 
-function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain") {
-  if (!value) return "";
+export function formatLogTimestamp(
+  value?: string,
+  mode: "pretty" | "plain" = "plain",
+  localTime = false,
+) {
+  if (!value) {
+    return "";
+  }
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  if (mode === "pretty") return parsed.toISOString().slice(11, 19);
-  return parsed.toISOString();
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  let timeString: string;
+  if (localTime) {
+    const tzoffset = parsed.getTimezoneOffset() * 60000; // offset in milliseconds
+    const localISOTime = new Date(parsed.getTime() - tzoffset).toISOString().slice(0, -1);
+    timeString = localISOTime;
+  } else {
+    timeString = parsed.toISOString();
+  }
+  if (mode === "pretty") {
+    return timeString.slice(11, 19);
+  }
+  return timeString;
 }
 
 function formatLogLine(
@@ -70,12 +91,15 @@ function formatLogLine(
   opts: {
     pretty: boolean;
     rich: boolean;
+    localTime: boolean;
   },
 ): string {
   const parsed = parseLogLine(raw);
-  if (!parsed) return raw;
+  if (!parsed) {
+    return raw;
+  }
   const label = parsed.subsystem ?? parsed.module ?? "";
-  const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain");
+  const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
   const level = parsed.level ?? "";
   const levelLabel = level.padEnd(5).trim();
   const message = parsed.message || parsed.raw;
@@ -113,7 +137,7 @@ function createLogWriters() {
     onBrokenPipe: (err, stream) => {
       const code = err.code ?? "EPIPE";
       const target = stream === process.stdout ? "stdout" : "stderr";
-      const message = `moltbot logs: output ${target} closed (${code}). Stopping tail.`;
+      const message = `openclaw logs: output ${target} closed (${code}). Stopping tail.`;
       try {
         clearActiveProgressLine();
         process.stderr.write(`${message}\n`);
@@ -141,7 +165,7 @@ function emitGatewayError(
 ) {
   const details = buildGatewayConnectionDetails({ url: opts.url });
   const message = "Gateway not reachable. Is it running and accessible?";
-  const hint = `Hint: run \`${formatCliCommand("moltbot doctor")}\`.`;
+  const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = err instanceof Error ? err.message : String(err);
 
   if (mode === "json") {
@@ -162,8 +186,12 @@ function emitGatewayError(
     return;
   }
 
-  if (!errorLine(colorize(rich, theme.error, message))) return;
-  if (!errorLine(details.message)) return;
+  if (!errorLine(colorize(rich, theme.error, message))) {
+    return;
+  }
+  if (!errorLine(details.message)) {
+    return;
+  }
   errorLine(colorize(rich, theme.muted, hint));
 }
 
@@ -178,9 +206,11 @@ export function registerLogsCli(program: Command) {
     .option("--json", "Emit JSON log lines", false)
     .option("--plain", "Plain text output (no ANSI styling)", false)
     .option("--no-color", "Disable ANSI colors")
+    .option("--local-time", "Display timestamps in local timezone", false)
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/logs", "docs.molt.bot/cli/logs")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/logs", "docs.openclaw.ai/cli/logs")}\n`,
     );
 
   addGatewayClientOptions(logs);
@@ -193,6 +223,7 @@ export function registerLogsCli(program: Command) {
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
     const rich = isRich() && opts.color !== false;
+    const localTime = Boolean(opts.localTime);
 
     while (true) {
       let payload: LogsTailPayload;
@@ -264,6 +295,7 @@ export function registerLogsCli(program: Command) {
               formatLogLine(line, {
                 pretty,
                 rich,
+                localTime,
               }),
             )
           ) {
@@ -287,7 +319,9 @@ export function registerLogsCli(program: Command) {
           : cursor;
       first = false;
 
-      if (!opts.follow) return;
+      if (!opts.follow) {
+        return;
+      }
       await delay(interval);
     }
   });

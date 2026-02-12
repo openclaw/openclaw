@@ -1,18 +1,13 @@
 import { describe, expect, it } from "vitest";
-
 import { isSenderAllowed } from "./monitor.js";
 
 describe("isSenderAllowed", () => {
   it("matches allowlist entries with users/<email>", () => {
-    expect(
-      isSenderAllowed("users/123", "Jane@Example.com", ["users/jane@example.com"]),
-    ).toBe(true);
+    expect(isSenderAllowed("users/123", "Jane@Example.com", ["users/jane@example.com"])).toBe(true);
   });
 
   it("matches allowlist entries with raw email", () => {
-    expect(isSenderAllowed("users/123", "Jane@Example.com", ["jane@example.com"])).toBe(
-      true,
-    );
+    expect(isSenderAllowed("users/123", "Jane@Example.com", ["jane@example.com"])).toBe(true);
   });
 
   it("still matches user id entries", () => {

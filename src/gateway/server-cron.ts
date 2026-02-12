@@ -1,7 +1,8 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
@@ -26,7 +27,7 @@ export function buildGatewayCronService(params: {
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const cronEnabled = process.env.CLAWDBOT_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const resolveCronAgent = (requested?: string | null) => {
     const runtimeConfig = loadConfig();
@@ -43,9 +44,20 @@ export function buildGatewayCronService(params: {
     return { agentId, cfg: runtimeConfig };
   };
 
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const resolveSessionStorePath = (agentId?: string) =>
+    resolveStorePath(params.cfg.session?.store, {
+      agentId: agentId ?? defaultAgentId,
+    });
+  const sessionStorePath = resolveSessionStorePath(defaultAgentId);
+
   const cron = new CronService({
     storePath,
     cronEnabled,
+    cronConfig: params.cfg.cron,
+    defaultAgentId,
+    resolveSessionStorePath,
+    sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
       const sessionKey = resolveAgentMainSessionKey({
@@ -57,9 +69,11 @@ export function buildGatewayCronService(params: {
     requestHeartbeatNow,
     runHeartbeatOnce: async (opts) => {
       const runtimeConfig = loadConfig();
+      const agentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         reason: opts?.reason,
+        agentId,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
@@ -90,6 +104,8 @@ export function buildGatewayCronService(params: {
           status: evt.status,
           error: evt.error,
           summary: evt.summary,
+          sessionId: evt.sessionId,
+          sessionKey: evt.sessionKey,
           runAtMs: evt.runAtMs,
           durationMs: evt.durationMs,
           nextRunAtMs: evt.nextRunAtMs,

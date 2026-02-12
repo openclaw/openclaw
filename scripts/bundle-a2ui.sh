@@ -11,13 +11,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HASH_FILE="$ROOT_DIR/src/canvas-host/a2ui/.bundle.hash"
 OUTPUT_FILE="$ROOT_DIR/src/canvas-host/a2ui/a2ui.bundle.js"
 A2UI_RENDERER_DIR="$ROOT_DIR/vendor/a2ui/renderers/lit"
-A2UI_APP_DIR="$ROOT_DIR/apps/shared/ClawdbotKit/Tools/CanvasA2UI"
+A2UI_APP_DIR="$ROOT_DIR/apps/shared/OpenClawKit/Tools/CanvasA2UI"
 
 # Docker builds exclude vendor/apps via .dockerignore.
-# In that environment we must keep the prebuilt bundle.
+# In that environment we can keep a prebuilt bundle only if it exists.
 if [[ ! -d "$A2UI_RENDERER_DIR" || ! -d "$A2UI_APP_DIR" ]]; then
-  echo "A2UI sources missing; keeping prebuilt bundle."
-  exit 0
+  if [[ -f "$OUTPUT_FILE" ]]; then
+    echo "A2UI sources missing; keeping prebuilt bundle."
+    exit 0
+  fi
+  echo "A2UI sources missing and no prebuilt bundle found at: $OUTPUT_FILE" >&2
+  exit 1
 fi
 
 INPUT_PATHS=(

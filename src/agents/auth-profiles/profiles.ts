@@ -1,10 +1,11 @@
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
+import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
 export async function setAuthProfileOrder(params: {
   agentDir?: string;
@@ -19,7 +20,9 @@ export async function setAuthProfileOrder(params: {
 
   const deduped: string[] = [];
   for (const entry of sanitized) {
-    if (!deduped.includes(entry)) deduped.push(entry);
+    if (!deduped.includes(entry)) {
+      deduped.push(entry);
+    }
   }
 
   return await updateAuthProfileStoreWithLock({
@@ -27,7 +30,9 @@ export async function setAuthProfileOrder(params: {
     updater: (store) => {
       store.order = store.order ?? {};
       if (deduped.length === 0) {
-        if (!store.order[providerKey]) return false;
+        if (!store.order[providerKey]) {
+          return false;
+        }
         delete store.order[providerKey];
         if (Object.keys(store.order).length === 0) {
           store.order = undefined;
@@ -45,8 +50,19 @@ export function upsertAuthProfile(params: {
   credential: AuthProfileCredential;
   agentDir?: string;
 }): void {
+  const credential =
+    params.credential.type === "api_key"
+      ? {
+          ...params.credential,
+          ...(typeof params.credential.key === "string"
+            ? { key: normalizeSecretInput(params.credential.key) }
+            : {}),
+        }
+      : params.credential.type === "token"
+        ? { ...params.credential, token: normalizeSecretInput(params.credential.token) }
+        : params.credential;
   const store = ensureAuthProfileStore(params.agentDir);
-  store.profiles[params.profileId] = params.credential;
+  store.profiles[params.profileId] = credential;
   saveAuthProfileStore(store, params.agentDir);
 }
 
@@ -68,7 +84,9 @@ export async function markAuthProfileGood(params: {
     agentDir,
     updater: (freshStore) => {
       const profile = freshStore.profiles[profileId];
-      if (!profile || profile.provider !== provider) return false;
+      if (!profile || profile.provider !== provider) {
+        return false;
+      }
       freshStore.lastGood = { ...freshStore.lastGood, [provider]: profileId };
       return true;
     },
@@ -78,7 +96,9 @@ export async function markAuthProfileGood(params: {
     return;
   }
   const profile = store.profiles[profileId];
-  if (!profile || profile.provider !== provider) return;
+  if (!profile || profile.provider !== provider) {
+    return;
+  }
   store.lastGood = { ...store.lastGood, [provider]: profileId };
   saveAuthProfileStore(store, agentDir);
 }

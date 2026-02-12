@@ -21,11 +21,11 @@ This document describes how the OpenProse VM tracks execution state using a **SQ
 
 **Requires:** The `sqlite3` command-line tool must be available in your PATH.
 
-| Platform | Installation |
-|----------|--------------|
-| macOS | Pre-installed |
-| Linux | `apt install sqlite3` / `dnf install sqlite3` / etc. |
-| Windows | `winget install SQLite.SQLite` or download from sqlite.org |
+| Platform | Installation                                               |
+| -------- | ---------------------------------------------------------- |
+| macOS    | Pre-installed                                              |
+| Linux    | `apt install sqlite3` / `dnf install sqlite3` / etc.       |
+| Windows  | `winget install SQLite.SQLite` or download from sqlite.org |
 
 If `sqlite3` is not available, the VM will fall back to filesystem state and warn the user.
 
@@ -93,17 +93,17 @@ This section defines **who does what**. This is the contract between the VM and 
 
 The VM (the orchestrating agent running the .prose program) is responsible for:
 
-| Responsibility | Description |
-|----------------|-------------|
-| **Database creation** | Create `state.db` and initialize core tables at run start |
-| **Program registration** | Store the program source and metadata |
-| **Execution tracking** | Update position, status, and timing as statements execute |
-| **Subagent spawning** | Spawn sessions via Task tool with database path and instructions |
-| **Parallel coordination** | Track branch status, implement join strategies |
-| **Loop management** | Track iteration counts, evaluate conditions |
-| **Error aggregation** | Record failures, manage retry state |
-| **Context preservation** | Maintain sufficient narration in the main conversation thread so execution can be understood and resumed |
-| **Completion detection** | Mark the run as complete when finished |
+| Responsibility            | Description                                                                                              |
+| ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Database creation**     | Create `state.db` and initialize core tables at run start                                                |
+| **Program registration**  | Store the program source and metadata                                                                    |
+| **Execution tracking**    | Update position, status, and timing as statements execute                                                |
+| **Subagent spawning**     | Spawn sessions via Task tool with database path and instructions                                         |
+| **Parallel coordination** | Track branch status, implement join strategies                                                           |
+| **Loop management**       | Track iteration counts, evaluate conditions                                                              |
+| **Error aggregation**     | Record failures, manage retry state                                                                      |
+| **Context preservation**  | Maintain sufficient narration in the main conversation thread so execution can be understood and resumed |
+| **Completion detection**  | Mark the run as complete when finished                                                                   |
 
 **Critical:** The VM must preserve enough context in its own conversation to understand execution state without re-reading the entire database. The database is for coordination and persistence, not a replacement for working memory.
 
@@ -111,13 +111,13 @@ The VM (the orchestrating agent running the .prose program) is responsible for:
 
 Subagents (sessions spawned by the VM) are responsible for:
 
-| Responsibility | Description |
-|----------------|-------------|
-| **Writing own outputs** | Insert/update their binding in the `bindings` table |
-| **Memory management** | For persistent agents: read and update their memory record |
-| **Segment recording** | For persistent agents: append segment history |
+| Responsibility          | Description                                                       |
+| ----------------------- | ----------------------------------------------------------------- |
+| **Writing own outputs** | Insert/update their binding in the `bindings` table               |
+| **Memory management**   | For persistent agents: read and update their memory record        |
+| **Segment recording**   | For persistent agents: append segment history                     |
 | **Attachment handling** | Write large outputs to `attachments/` directory, store path in DB |
-| **Atomic writes** | Use transactions when updating multiple related records |
+| **Atomic writes**       | Use transactions when updating multiple related records           |
 
 **Critical:** Subagents write ONLY to `bindings`, `agents`, and `agent_segments` tables. The VM owns the `execution` table entirely. Completion signaling happens through the substrate (Task tool return), not database updates.
 
@@ -126,6 +126,7 @@ Subagents (sessions spawned by the VM) are responsible for:
 **What subagents return to the VM:** A confirmation message with the binding location—not the full content:
 
 **Root scope:**
+
 ```
 Binding written: research
 Location: .prose/runs/20260116-143052-a7b3c9/state.db (bindings table, name='research', execution_id=NULL)
@@ -133,6 +134,7 @@ Summary: AI safety research covering alignment, robustness, and interpretability
 ```
 
 **Inside block invocation:**
+
 ```
 Binding written: result
 Location: .prose/runs/20260116-143052-a7b3c9/state.db (bindings table, name='result', execution_id=43)
@@ -144,12 +146,12 @@ The VM tracks locations, not values. This keeps the VM's context lean and enable
 
 ### Shared Concerns
 
-| Concern | Who Handles |
-|---------|-------------|
+| Concern          | Who Handles                                                        |
+| ---------------- | ------------------------------------------------------------------ |
 | Schema evolution | Either (use `CREATE TABLE IF NOT EXISTS`, `ALTER TABLE` as needed) |
-| Custom tables | Either (prefix with `x_` for extensions) |
-| Indexing | Either (add indexes for frequently-queried columns) |
-| Cleanup | VM (at run end, optionally vacuum) |
+| Custom tables    | Either (prefix with `x_` for extensions)                           |
+| Indexing         | Either (add indexes for frequently-queried columns)                |
+| Cleanup          | VM (at run end, optionally vacuum)                                 |
 
 ---
 
@@ -390,12 +392,12 @@ Even with SQLite state, the VM should narrate key events in its conversation:
 
 ### Why Both?
 
-| Purpose | Mechanism |
-|---------|-----------|
-| **Working memory** | Conversation narration (what the VM "remembers" without re-querying) |
-| **Durable state** | SQLite database (survives context limits, enables resumption) |
-| **Subagent coordination** | SQLite database (shared access point) |
-| **Debugging/inspection** | SQLite database (queryable history) |
+| Purpose                   | Mechanism                                                            |
+| ------------------------- | -------------------------------------------------------------------- |
+| **Working memory**        | Conversation narration (what the VM "remembers" without re-querying) |
+| **Durable state**         | SQLite database (survives context limits, enables resumption)        |
+| **Subagent coordination** | SQLite database (shared access point)                                |
+| **Debugging/inspection**  | SQLite database (queryable history)                                  |
 
 The narration is the VM's "mental model" of execution. The database is the "source of truth" for resumption and inspection.
 
@@ -544,16 +546,16 @@ The database is your workspace. Use it.
 
 ## Comparison with Other Modes
 
-| Aspect | filesystem.md | in-context.md | sqlite.md |
-|--------|---------------|---------------|-----------|
-| **State location** | `.prose/runs/{id}/` files | Conversation history | `.prose/runs/{id}/state.db` |
-| **Queryable** | Via file reads | No | Yes (SQL) |
-| **Atomic updates** | No | N/A | Yes (transactions) |
-| **Schema flexibility** | Rigid file structure | N/A | Flexible (add tables/columns) |
-| **Resumption** | Read state.md | Re-read conversation | Query database |
-| **Complexity ceiling** | High | Low (<30 statements) | High |
-| **Dependency** | None | None | sqlite3 CLI |
-| **Status** | Stable | Stable | **Experimental** |
+| Aspect                 | filesystem.md             | in-context.md        | sqlite.md                     |
+| ---------------------- | ------------------------- | -------------------- | ----------------------------- |
+| **State location**     | `.prose/runs/{id}/` files | Conversation history | `.prose/runs/{id}/state.db`   |
+| **Queryable**          | Via file reads            | No                   | Yes (SQL)                     |
+| **Atomic updates**     | No                        | N/A                  | Yes (transactions)            |
+| **Schema flexibility** | Rigid file structure      | N/A                  | Flexible (add tables/columns) |
+| **Resumption**         | Read state.md             | Re-read conversation | Query database                |
+| **Complexity ceiling** | High                      | Low (<30 statements) | High                          |
+| **Dependency**         | None                      | None                 | sqlite3 CLI                   |
+| **Status**             | Stable                    | Stable               | **Experimental**              |
 
 ---
 

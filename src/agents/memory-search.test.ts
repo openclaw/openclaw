@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { resolveMemorySearchConfig } from "./memory-search.js";
 
 describe("memory search config", () => {
@@ -82,6 +81,29 @@ describe("memory search config", () => {
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
   });
 
+  it("merges extra memory paths from defaults and overrides", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            extraPaths: ["/shared/notes", " docs "],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              extraPaths: ["/shared/notes", "../team-notes"],
+            },
+          },
+        ],
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.extraPaths).toEqual(["/shared/notes", "docs", "../team-notes"]);
+  });
+
   it("includes batch defaults for openai without remote overrides", () => {
     const cfg = {
       agents: {
@@ -94,7 +116,7 @@ describe("memory search config", () => {
     };
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.remote?.batch).toEqual({
-      enabled: true,
+      enabled: false,
       wait: true,
       concurrency: 2,
       pollIntervalMs: 2000,
@@ -128,7 +150,7 @@ describe("memory search config", () => {
     };
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.remote?.batch).toEqual({
-      enabled: true,
+      enabled: false,
       wait: true,
       concurrency: 2,
       pollIntervalMs: 2000,
@@ -185,7 +207,7 @@ describe("memory search config", () => {
       apiKey: "default-key",
       headers: { "X-Default": "on" },
       batch: {
-        enabled: true,
+        enabled: false,
         wait: true,
         concurrency: 2,
         pollIntervalMs: 2000,

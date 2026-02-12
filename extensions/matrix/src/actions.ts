@@ -6,15 +6,17 @@ import {
   type ChannelMessageActionContext,
   type ChannelMessageActionName,
   type ChannelToolSend,
-} from "clawdbot/plugin-sdk";
+} from "openclaw/plugin-sdk";
+import type { CoreConfig } from "./types.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { handleMatrixAction } from "./tool-actions.js";
-import type { CoreConfig } from "./types.js";
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
     const account = resolveMatrixAccount({ cfg: cfg as CoreConfig });
-    if (!account.enabled || !account.configured) return [];
+    if (!account.enabled || !account.configured) {
+      return [];
+    }
     const gate = createActionGate((cfg as CoreConfig).channels?.matrix?.actions);
     const actions = new Set<ChannelMessageActionName>(["send", "poll"]);
     if (gate("reactions")) {
@@ -31,16 +33,24 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       actions.add("unpin");
       actions.add("list-pins");
     }
-    if (gate("memberInfo")) actions.add("member-info");
-    if (gate("channelInfo")) actions.add("channel-info");
+    if (gate("memberInfo")) {
+      actions.add("member-info");
+    }
+    if (gate("channelInfo")) {
+      actions.add("channel-info");
+    }
     return Array.from(actions);
   },
   supportsAction: ({ action }) => action !== "poll",
   extractToolSend: ({ args }): ChannelToolSend | null => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") return null;
+    if (action !== "sendMessage") {
+      return null;
+    }
     const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) return null;
+    if (!to) {
+      return null;
+    }
     return { to };
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
@@ -68,7 +78,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           replyToId: replyTo ?? undefined,
           threadId: threadId ?? undefined,
         },
-        cfg,
+        cfg as CoreConfig,
       );
     }
 
@@ -84,7 +94,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           emoji,
           remove,
         },
-        cfg,
+        cfg as CoreConfig,
       );
     }
 
@@ -98,7 +108,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           messageId,
           limit,
         },
-        cfg,
+        cfg as CoreConfig,
       );
     }
 
@@ -112,7 +122,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           before: readStringParam(params, "before"),
           after: readStringParam(params, "after"),
         },
-        cfg,
+        cfg as CoreConfig,
       );
     }
 
@@ -126,7 +136,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           messageId,
           content,
         },
-        cfg,
+        cfg as CoreConfig,
       );
     }
 
@@ -138,7 +148,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           roomId: resolveRoomId(),
           messageId,
         },
-        cfg,
+        cfg as CoreConfig,
       );
     }
 
@@ -154,7 +164,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           roomId: resolveRoomId(),
           messageId,
         },
-        cfg,
+        cfg as CoreConfig,
       );
     }
 
@@ -166,7 +176,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           userId,
           roomId: readStringParam(params, "roomId") ?? readStringParam(params, "channelId"),
         },
-        cfg,
+        cfg as CoreConfig,
       );
     }
 
@@ -176,7 +186,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           action: "channelInfo",
           roomId: resolveRoomId(),
         },
-        cfg,
+        cfg as CoreConfig,
       );
     }
 

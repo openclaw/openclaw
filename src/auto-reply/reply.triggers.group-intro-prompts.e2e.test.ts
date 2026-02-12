@@ -64,12 +64,12 @@ vi.mock("../web/session.js", () => webMocks);
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
     async (home) => {
-      await mkdir(join(home, ".clawdbot", "agents", "main", "sessions"), { recursive: true });
+      await mkdir(join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
       vi.mocked(runEmbeddedPiAgent).mockClear();
       vi.mocked(abortEmbeddedPiRun).mockClear();
       return await fn(home);
     },
-    { prefix: "moltbot-triggers-" },
+    { prefix: "openclaw-triggers-" },
   );
 }
 
@@ -78,7 +78,7 @@ function makeCfg(home: string) {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-5",
-        workspace: join(home, "clawd"),
+        workspace: join(home, "openclaw"),
       },
     },
     channels: {
@@ -126,7 +126,7 @@ describe("group intro prompts", () => {
       const extraSystemPrompt =
         vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toBe(
-        `You are replying inside the Discord group "Release Squad". Group members: Alice, Bob. Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
+        `You are replying inside a Discord group chat. Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
       );
     });
   });
@@ -157,7 +157,7 @@ describe("group intro prompts", () => {
       const extraSystemPrompt =
         vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toBe(
-        `You are replying inside the WhatsApp group "Ops". Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). WhatsApp IDs: SenderId is the participant JID; [message_id: ...] is the message id for reactions (use SenderId as participant). ${groupParticipationNote} Address the specific sender noted in the message context.`,
+        `You are replying inside a WhatsApp group chat. Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). WhatsApp IDs: SenderId is the participant JID (group participant id). ${groupParticipationNote} Address the specific sender noted in the message context.`,
       );
     });
   });
@@ -188,7 +188,7 @@ describe("group intro prompts", () => {
       const extraSystemPrompt =
         vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toBe(
-        `You are replying inside the Telegram group "Dev Chat". Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
+        `You are replying inside a Telegram group chat. Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
       );
     });
   });

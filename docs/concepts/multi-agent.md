@@ -7,7 +7,7 @@ status: active
 
 # Multi-Agent Routing
 
-Goal: multiple *isolated* agents (separate workspace + `agentDir` + sessions), plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
+Goal: multiple _isolated_ agents (separate workspace + `agentDir` + sessions), plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
 
 ## What is “one agent”?
 
@@ -15,12 +15,12 @@ An **agent** is a fully scoped brain with its own:
 
 - **Workspace** (files, AGENTS.md/SOUL.md/USER.md, local notes, persona rules).
 - **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
-- **Session store** (chat history + routing state) under `~/.clawdbot/agents/<agentId>/sessions`.
+- **Session store** (chat history + routing state) under `~/.openclaw/agents/<agentId>/sessions`.
 
 Auth profiles are **per-agent**. Each agent reads from its own:
 
 ```
-~/.clawdbot/agents/<agentId>/agent/auth-profiles.json
+~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
 Main agent credentials are **not** shared automatically. Never reuse `agentDir`
@@ -28,7 +28,7 @@ across agents (it causes auth/session collisions). If you want to share creds,
 copy `auth-profiles.json` into the other agent's `agentDir`.
 
 Skills are per-agent via each workspace’s `skills/` folder, with shared skills
-available from `~/.clawdbot/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
+available from `~/.openclaw/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
 
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 
@@ -39,27 +39,27 @@ reach other host locations unless sandboxing is enabled. See
 
 ## Paths (quick map)
 
-- Config: `~/.clawdbot/moltbot.json` (or `CLAWDBOT_CONFIG_PATH`)
-- State dir: `~/.clawdbot` (or `CLAWDBOT_STATE_DIR`)
-- Workspace: `~/clawd` (or `~/clawd-<agentId>`)
-- Agent dir: `~/.clawdbot/agents/<agentId>/agent` (or `agents.list[].agentDir`)
-- Sessions: `~/.clawdbot/agents/<agentId>/sessions`
+- Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
+- State dir: `~/.openclaw` (or `OPENCLAW_STATE_DIR`)
+- Workspace: `~/.openclaw/workspace` (or `~/.openclaw/workspace-<agentId>`)
+- Agent dir: `~/.openclaw/agents/<agentId>/agent` (or `agents.list[].agentDir`)
+- Sessions: `~/.openclaw/agents/<agentId>/sessions`
 
 ### Single-agent mode (default)
 
-If you do nothing, Moltbot runs a single agent:
+If you do nothing, OpenClaw runs a single agent:
 
 - `agentId` defaults to **`main`**.
 - Sessions are keyed as `agent:main:<mainKey>`.
-- Workspace defaults to `~/clawd` (or `~/clawd-<profile>` when `CLAWDBOT_PROFILE` is set).
-- State defaults to `~/.clawdbot/agents/main/agent`.
+- Workspace defaults to `~/.openclaw/workspace` (or `~/.openclaw/workspace-<profile>` when `OPENCLAW_PROFILE` is set).
+- State defaults to `~/.openclaw/agents/main/agent`.
 
 ## Agent helper
 
 Use the agent wizard to add a new isolated agent:
 
 ```bash
-moltbot agents add work
+openclaw agents add work
 ```
 
 Then add `bindings` (or let the wizard do it) to route inbound messages.
@@ -67,7 +67,7 @@ Then add `bindings` (or let the wizard do it) to route inbound messages.
 Verify with:
 
 ```bash
-moltbot agents list --bindings
+openclaw agents list --bindings
 ```
 
 ## Multiple agents = multiple people, multiple personalities
@@ -82,7 +82,7 @@ This lets **multiple people** share one Gateway server while keeping their AI �
 
 ## One WhatsApp number, multiple people (DM split)
 
-You can route **different WhatsApp DMs** to different agents while staying on **one WhatsApp account**. Match on sender E.164 (like `+15551234567`) with `peer.kind: "dm"`. Replies still come from the same WhatsApp number (no per‑agent sender identity).
+You can route **different WhatsApp DMs** to different agents while staying on **one WhatsApp account**. Match on sender E.164 (like `+15551234567`) with `peer.kind: "direct"`. Replies still come from the same WhatsApp number (no per‑agent sender identity).
 
 Important detail: direct chats collapse to the agent’s **main session key**, so true isolation requires **one agent per person**.
 
@@ -92,26 +92,33 @@ Example:
 {
   agents: {
     list: [
-      { id: "alex", workspace: "~/clawd-alex" },
-      { id: "mia", workspace: "~/clawd-mia" }
-    ]
+      { id: "alex", workspace: "~/.openclaw/workspace-alex" },
+      { id: "mia", workspace: "~/.openclaw/workspace-mia" },
+    ],
   },
   bindings: [
-    { agentId: "alex", match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551230001" } } },
-    { agentId: "mia",  match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551230002" } } }
+    {
+      agentId: "alex",
+      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551230001" } },
+    },
+    {
+      agentId: "mia",
+      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551230002" } },
+    },
   ],
   channels: {
     whatsapp: {
       dmPolicy: "allowlist",
-      allowFrom: ["+15551230001", "+15551230002"]
-    }
-  }
+      allowFrom: ["+15551230001", "+15551230002"],
+    },
+  },
 }
 ```
 
 Notes:
+
 - DM access control is **global per WhatsApp account** (pairing/allowlist), not per agent.
-- For shared groups, bind the group to one agent or use [Broadcast groups](/broadcast-groups).
+- For shared groups, bind the group to one agent or use [Broadcast groups](/channels/broadcast-groups).
 
 ## Routing rules (how messages pick an agent)
 
@@ -139,7 +146,7 @@ multiple phone numbers without mixing sessions.
 
 ## Example: two WhatsApps → two agents
 
-`~/.clawdbot/moltbot.json` (JSON5):
+`~/.openclaw/openclaw.json` (JSON5):
 
 ```js
 {
@@ -149,14 +156,14 @@ multiple phone numbers without mixing sessions.
         id: "home",
         default: true,
         name: "Home",
-        workspace: "~/clawd-home",
-        agentDir: "~/.clawdbot/agents/home/agent",
+        workspace: "~/.openclaw/workspace-home",
+        agentDir: "~/.openclaw/agents/home/agent",
       },
       {
         id: "work",
         name: "Work",
-        workspace: "~/clawd-work",
-        agentDir: "~/.clawdbot/agents/work/agent",
+        workspace: "~/.openclaw/workspace-work",
+        agentDir: "~/.openclaw/agents/work/agent",
       },
     ],
   },
@@ -189,12 +196,12 @@ multiple phone numbers without mixing sessions.
     whatsapp: {
       accounts: {
         personal: {
-          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/personal
-          // authDir: "~/.clawdbot/credentials/whatsapp/personal",
+          // Optional override. Default: ~/.openclaw/credentials/whatsapp/personal
+          // authDir: "~/.openclaw/credentials/whatsapp/personal",
         },
         biz: {
-          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/biz
-          // authDir: "~/.clawdbot/credentials/whatsapp/biz",
+          // Optional override. Default: ~/.openclaw/credentials/whatsapp/biz
+          // authDir: "~/.openclaw/credentials/whatsapp/biz",
         },
       },
     },
@@ -213,25 +220,26 @@ Split by channel: route WhatsApp to a fast everyday agent and Telegram to an Opu
       {
         id: "chat",
         name: "Everyday",
-        workspace: "~/clawd-chat",
-        model: "anthropic/claude-sonnet-4-5"
+        workspace: "~/.openclaw/workspace-chat",
+        model: "anthropic/claude-sonnet-4-5",
       },
       {
         id: "opus",
         name: "Deep Work",
-        workspace: "~/clawd-opus",
-        model: "anthropic/claude-opus-4-5"
-      }
-    ]
+        workspace: "~/.openclaw/workspace-opus",
+        model: "anthropic/claude-opus-4-6",
+      },
+    ],
   },
   bindings: [
     { agentId: "chat", match: { channel: "whatsapp" } },
-    { agentId: "opus", match: { channel: "telegram" } }
-  ]
+    { agentId: "opus", match: { channel: "telegram" } },
+  ],
 }
 ```
 
 Notes:
+
 - If you have multiple accounts for a channel, add `accountId` to the binding (for example `{ channel: "whatsapp", accountId: "personal" }`).
 - To route a single DM/group to Opus while keeping the rest on chat, add a `match.peer` binding for that peer; peer matches always win over channel-wide rules.
 
@@ -243,14 +251,27 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
 {
   agents: {
     list: [
-      { id: "chat", name: "Everyday", workspace: "~/clawd-chat", model: "anthropic/claude-sonnet-4-5" },
-      { id: "opus", name: "Deep Work", workspace: "~/clawd-opus", model: "anthropic/claude-opus-4-5" }
-    ]
+      {
+        id: "chat",
+        name: "Everyday",
+        workspace: "~/.openclaw/workspace-chat",
+        model: "anthropic/claude-sonnet-4-5",
+      },
+      {
+        id: "opus",
+        name: "Deep Work",
+        workspace: "~/.openclaw/workspace-opus",
+        model: "anthropic/claude-opus-4-6",
+      },
+    ],
   },
   bindings: [
-    { agentId: "opus", match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551234567" } } },
-    { agentId: "chat", match: { channel: "whatsapp" } }
-  ]
+    {
+      agentId: "opus",
+      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551234567" } },
+    },
+    { agentId: "chat", match: { channel: "whatsapp" } },
+  ],
 }
 ```
 
@@ -268,35 +289,44 @@ and a tighter tool policy:
       {
         id: "family",
         name: "Family",
-        workspace: "~/clawd-family",
+        workspace: "~/.openclaw/workspace-family",
         identity: { name: "Family Bot" },
         groupChat: {
-          mentionPatterns: ["@family", "@familybot", "@Family Bot"]
+          mentionPatterns: ["@family", "@familybot", "@Family Bot"],
         },
         sandbox: {
           mode: "all",
-          scope: "agent"
+          scope: "agent",
         },
         tools: {
-          allow: ["exec", "read", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status"],
-          deny: ["write", "edit", "apply_patch", "browser", "canvas", "nodes", "cron"]
-        }
-      }
-    ]
+          allow: [
+            "exec",
+            "read",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send",
+            "sessions_spawn",
+            "session_status",
+          ],
+          deny: ["write", "edit", "apply_patch", "browser", "canvas", "nodes", "cron"],
+        },
+      },
+    ],
   },
   bindings: [
     {
       agentId: "family",
       match: {
         channel: "whatsapp",
-        peer: { kind: "group", id: "120363999999999999@g.us" }
-      }
-    }
-  ]
+        peer: { kind: "group", id: "120363999999999999@g.us" },
+      },
+    },
+  ],
 }
 ```
 
 Notes:
+
 - Tool allow/deny lists are **tools**, not skills. If a skill needs to run a
   binary, ensure `exec` is allowed and the binary exists in the sandbox.
 - For stricter gating, set `agents.list[].groupChat.mentionPatterns` and keep
@@ -312,7 +342,7 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
     list: [
       {
         id: "personal",
-        workspace: "~/clawd-personal",
+        workspace: "~/.openclaw/workspace-personal",
         sandbox: {
           mode: "off",  // No sandbox for personal agent
         },
@@ -320,7 +350,7 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
       },
       {
         id: "family",
-        workspace: "~/clawd-family",
+        workspace: "~/.openclaw/workspace-family",
         sandbox: {
           mode: "all",     // Always sandboxed
           scope: "agent",  // One container per agent
@@ -343,6 +373,7 @@ Note: `setupCommand` lives under `sandbox.docker` and runs once on container cre
 Per-agent `sandbox.docker.*` overrides are ignored when the resolved scope is `"shared"`.
 
 **Benefits:**
+
 - **Security isolation**: Restrict tools for untrusted agents
 - **Resource control**: Sandbox specific agents while keeping others on host
 - **Flexible policies**: Different permissions per agent
@@ -351,4 +382,4 @@ Note: `tools.elevated` is **global** and sender-based; it is not configurable pe
 If you need per-agent boundaries, use `agents.list[].tools` to deny `exec`.
 For group targeting, use `agents.list[].groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
 
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for detailed examples.
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for detailed examples.

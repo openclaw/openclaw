@@ -10,12 +10,10 @@ export function shortenPath(p: string): string {
 }
 
 export function shortenMeta(meta: string): string {
-  if (!meta) return meta;
-  const colonIdx = meta.indexOf(":");
-  if (colonIdx === -1) return shortenHomeInString(meta);
-  const base = meta.slice(0, colonIdx);
-  const rest = meta.slice(colonIdx);
-  return `${shortenHomeInString(base)}${rest}`;
+  if (!meta) {
+    return meta;
+  }
+  return shortenHomeInString(meta);
 }
 
 export function formatToolAggregate(
@@ -26,7 +24,9 @@ export function formatToolAggregate(
   const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
   const display = resolveToolDisplay({ name: toolName });
   const prefix = `${display.emoji} ${display.label}`;
-  if (!filtered.length) return prefix;
+  if (!filtered.length) {
+    return prefix;
+  }
 
   const rawSegments: string[] = [];
   // Group by directory and brace-collapse filenames
@@ -44,17 +44,23 @@ export function formatToolAggregate(
     if (parts.length > 1) {
       const dir = parts.slice(0, -1).join("/");
       const base = parts.at(-1) ?? m;
-      if (!grouped[dir]) grouped[dir] = [];
+      if (!grouped[dir]) {
+        grouped[dir] = [];
+      }
       grouped[dir].push(base);
     } else {
-      if (!grouped["."]) grouped["."] = [];
+      if (!grouped["."]) {
+        grouped["."] = [];
+      }
       grouped["."].push(m);
     }
   }
 
   const segments = Object.entries(grouped).map(([dir, files]) => {
     const brace = files.length > 1 ? `{${files.join(", ")}}` : files[0];
-    if (dir === ".") return brace;
+    if (dir === ".") {
+      return brace;
+    }
     return `${dir}/${brace}`;
   });
 
@@ -78,7 +84,9 @@ function formatMetaForDisplay(
   if (normalized === "exec" || normalized === "bash") {
     const { flags, body } = splitExecFlags(meta);
     if (flags.length > 0) {
-      if (!body) return flags.join(" · ");
+      if (!body) {
+        return flags.join(" · ");
+      }
       return `${flags.join(" · ")} · ${maybeWrapMarkdown(body, markdown)}`;
     }
   }
@@ -90,7 +98,9 @@ function splitExecFlags(meta: string): { flags: string[]; body: string } {
     .split(" · ")
     .map((part) => part.trim())
     .filter(Boolean);
-  if (parts.length === 0) return { flags: [], body: "" };
+  if (parts.length === 0) {
+    return { flags: [], body: "" };
+  }
   const flags: string[] = [];
   const bodyParts: string[] = [];
   for (const part of parts) {
@@ -104,16 +114,30 @@ function splitExecFlags(meta: string): { flags: string[]; body: string } {
 }
 
 function isPathLike(value: string): boolean {
-  if (!value) return false;
-  if (value.includes(" ")) return false;
-  if (value.includes("://")) return false;
-  if (value.includes("·")) return false;
-  if (value.includes("&&") || value.includes("||")) return false;
+  if (!value) {
+    return false;
+  }
+  if (value.includes(" ")) {
+    return false;
+  }
+  if (value.includes("://")) {
+    return false;
+  }
+  if (value.includes("·")) {
+    return false;
+  }
+  if (value.includes("&&") || value.includes("||")) {
+    return false;
+  }
   return /^~?(\/[^\s]+)+$/.test(value);
 }
 
 function maybeWrapMarkdown(value: string, markdown?: boolean): string {
-  if (!markdown) return value;
-  if (value.includes("`")) return value;
+  if (!markdown) {
+    return value;
+  }
+  if (value.includes("`")) {
+    return value;
+  }
   return `\`${value}\``;
 }

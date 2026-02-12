@@ -1,11 +1,10 @@
-import { LogService } from "@vector-im/matrix-bot-sdk";
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-
-import type { CoreConfig } from "../types.js";
-import { createMatrixClient } from "./create-client.js";
-import { resolveMatrixAuth } from "./config.js";
-import { DEFAULT_ACCOUNT_KEY } from "./storage.js";
+import { LogService } from "@vector-im/matrix-bot-sdk";
+import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "./types.js";
+import { resolveMatrixAuth } from "./config.js";
+import { createMatrixClient } from "./create-client.js";
+import { DEFAULT_ACCOUNT_KEY } from "./storage.js";
 
 type SharedMatrixClientState = {
   client: MatrixClient;
@@ -55,7 +54,9 @@ async function ensureSharedClientStarted(params: {
   initialSyncLimit?: number;
   encryption?: boolean;
 }): Promise<void> {
-  if (params.state.started) return;
+  if (params.state.started) {
+    return;
+  }
   if (sharedClientStartPromise) {
     await sharedClientStartPromise;
     return;
@@ -68,7 +69,9 @@ async function ensureSharedClientStarted(params: {
       try {
         const joinedRooms = await client.getJoinedRooms();
         if (client.crypto) {
-          await client.crypto.prepare(joinedRooms);
+          await (client.crypto as { prepare: (rooms?: string[]) => Promise<void> }).prepare(
+            joinedRooms,
+          );
           params.state.cryptoReady = true;
         }
       } catch (err) {

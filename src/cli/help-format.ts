@@ -7,7 +7,9 @@ export function formatHelpExample(command: string, description: string): string 
 }
 
 export function formatHelpExampleLine(command: string, description: string): string {
-  if (!description) return `  ${theme.command(command)}`;
+  if (!description) {
+    return `  ${theme.command(command)}`;
+  }
   return `  ${theme.command(command)} ${theme.muted(`# ${description}`)}`;
 }
 

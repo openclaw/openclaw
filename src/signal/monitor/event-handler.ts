@@ -1,5 +1,7 @@
+import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
+import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   formatInboundEnvelope,
   formatInboundFromLabel,
@@ -9,17 +11,21 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  recordPendingHistoryEntryIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
+import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
-import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
+import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
+import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
+import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -31,7 +37,6 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { normalizeE164 } from "../../utils.js";
-import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -42,8 +47,6 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
@@ -62,6 +65,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaPath?: string;
     mediaType?: string;
     commandAuthorized: boolean;
+    wasMentioned?: boolean;
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -78,7 +82,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       channel: "signal",
       accountId: deps.accountId,
       peer: {
-        kind: entry.isGroup ? "group" : "dm",
+        kind: entry.isGroup ? "group" : "direct",
         id: entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId,
       },
     });
@@ -123,8 +127,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     }
     const signalTo = entry.isGroup ? `group:${entry.groupId}` : `signal:${entry.senderRecipient}`;
+    const inboundHistory =
+      entry.isGroup && historyKey && deps.historyLimit > 0
+        ? (deps.groupHistories.get(historyKey) ?? []).map((historyEntry) => ({
+            sender: historyEntry.sender,
+            body: historyEntry.body,
+            timestamp: historyEntry.timestamp,
+          }))
+        : undefined;
     const ctxPayload = finalizeInboundContext({
       Body: combinedBody,
+      BodyForAgent: entry.bodyText,
+      InboundHistory: inboundHistory,
       RawBody: entry.bodyText,
       CommandBody: entry.bodyText,
       From: entry.isGroup
@@ -145,6 +159,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaPath: entry.mediaPath,
       MediaType: entry.mediaType,
       MediaUrl: entry.mediaPath,
+      WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
@@ -172,11 +187,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
-    const prefixContext = createReplyPrefixContext({ cfg: deps.cfg, agentId: route.agentId });
+    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      cfg: deps.cfg,
+      agentId: route.agentId,
+      channel: "signal",
+      accountId: route.accountId,
+    });
 
     const typingCallbacks = createTypingCallbacks({
       start: async () => {
-        if (!ctxPayload.To) return;
+        if (!ctxPayload.To) {
+          return;
+        }
         await sendTypingSignal(ctxPayload.To, {
           baseUrl: deps.baseUrl,
           account: deps.account,
@@ -194,8 +216,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       deliver: async (payload) => {
         await deps.deliverReplies({
@@ -223,9 +244,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ...replyOptions,
         disableBlockStreaming:
           typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
-        onModelSelected: (ctx) => {
-          prefixContext.onModelSelected(ctx);
-        },
+        onModelSelected,
       },
     });
     markDispatchIdle();
@@ -252,17 +271,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     debounceMs: inboundDebounceMs,
     buildKey: (entry) => {
       const conversationId = entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId;
-      if (!conversationId || !entry.senderPeerId) return null;
+      if (!conversationId || !entry.senderPeerId) {
+        return null;
+      }
       return `signal:${deps.accountId}:${conversationId}:${entry.senderPeerId}`;
     },
     shouldDebounce: (entry) => {
-      if (!entry.bodyText.trim()) return false;
-      if (entry.mediaPath || entry.mediaType) return false;
+      if (!entry.bodyText.trim()) {
+        return false;
+      }
+      if (entry.mediaPath || entry.mediaType) {
+        return false;
+      }
       return !hasControlCommand(entry.bodyText, deps.cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
-      if (!last) return;
+      if (!last) {
+        return;
+      }
       if (entries.length === 1) {
         await handleSignalInboundMessage(last);
         return;
@@ -271,7 +298,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .map((entry) => entry.bodyText)
         .filter(Boolean)
         .join("\\n");
-      if (!combinedText.trim()) return;
+      if (!combinedText.trim()) {
+        return;
+      }
       await handleSignalInboundMessage({
         ...last,
         bodyText: combinedText,
@@ -285,7 +314,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   });
 
   return async (event: { event?: string; data?: string }) => {
-    if (event.event !== "receive" || !event.data) return;
+    if (event.event !== "receive" || !event.data) {
+      return;
+    }
 
     let payload: SignalReceivePayload | null = null;
     try {
@@ -298,13 +329,21 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       deps.runtime.error?.(`receive exception: ${payload.exception.message}`);
     }
     const envelope = payload?.envelope;
-    if (!envelope) return;
-    if (envelope.syncMessage) return;
+    if (!envelope) {
+      return;
+    }
+    if (envelope.syncMessage) {
+      return;
+    }
 
     const sender = resolveSignalSender(envelope);
-    if (!sender) return;
+    if (!sender) {
+      return;
+    }
     if (deps.account && sender.kind === "phone") {
-      if (sender.e164 === normalizeE164(deps.account)) return;
+      if (sender.e164 === normalizeE164(deps.account)) {
+        return;
+      }
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
@@ -319,7 +358,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
 
     if (reaction && !hasBodyContent) {
-      if (reaction.isRemove) return; // Ignore reaction removals
+      if (reaction.isRemove) {
+        return;
+      } // Ignore reaction removals
       const emojiLabel = reaction.emoji?.trim() || "emoji";
       const senderDisplay = formatSignalSenderDisplay(sender);
       const senderName = envelope.sourceName ?? senderDisplay;
@@ -332,7 +373,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         sender,
         allowlist: deps.reactionAllowlist,
       });
-      if (!shouldNotify) return;
+      if (!shouldNotify) {
+        return;
+      }
 
       const groupId = reaction.groupInfo?.groupId ?? undefined;
       const groupName = reaction.groupInfo?.groupName ?? undefined;
@@ -343,7 +386,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         channel: "signal",
         accountId: deps.accountId,
         peer: {
-          kind: isGroup ? "group" : "dm",
+          kind: isGroup ? "group" : "direct",
           id: isGroup ? (groupId ?? "unknown") : senderPeerId,
         },
       });
@@ -373,13 +416,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
       return;
     }
-    if (!dataMessage) return;
+    if (!dataMessage) {
+      return;
+    }
 
     const senderDisplay = formatSignalSenderDisplay(sender);
     const senderRecipient = resolveSignalRecipient(sender);
     const senderPeerId = resolveSignalPeerId(sender);
     const senderAllowId = formatSignalSenderId(sender);
-    if (!senderRecipient) return;
+    if (!senderRecipient) {
+      return;
+    }
     const senderIdLine = formatSignalPairingIdLine(sender);
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
@@ -391,7 +438,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       deps.dmPolicy === "open" ? true : isSignalSenderAllowed(sender, effectiveDmAllow);
 
     if (!isGroup) {
-      if (deps.dmPolicy === "disabled") return;
+      if (deps.dmPolicy === "disabled") {
+        return;
+      }
       if (!dmAllowed) {
         if (deps.dmPolicy === "pairing") {
           const senderId = senderAllowId;
@@ -466,6 +515,76 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
+    const route = resolveAgentRoute({
+      cfg: deps.cfg,
+      channel: "signal",
+      accountId: deps.accountId,
+      peer: {
+        kind: isGroup ? "group" : "direct",
+        id: isGroup ? (groupId ?? "unknown") : senderPeerId,
+      },
+    });
+    const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
+    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const requireMention =
+      isGroup &&
+      resolveChannelGroupRequireMention({
+        cfg: deps.cfg,
+        channel: "signal",
+        groupId,
+        accountId: deps.accountId,
+      });
+    const canDetectMention = mentionRegexes.length > 0;
+    const mentionGate = resolveMentionGatingWithBypass({
+      isGroup,
+      requireMention: Boolean(requireMention),
+      canDetectMention,
+      wasMentioned,
+      implicitMention: false,
+      hasAnyMention: false,
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
+      commandAuthorized,
+    });
+    const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+    if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "signal",
+        reason: "no mention",
+        target: senderDisplay,
+      });
+      const quoteText = dataMessage.quote?.text?.trim() || "";
+      const pendingPlaceholder = (() => {
+        if (!dataMessage.attachments?.length) {
+          return "";
+        }
+        // When we're skipping a message we intentionally avoid downloading attachments.
+        // Still record a useful placeholder for pending-history context.
+        if (deps.ignoreAttachments) {
+          return "<media:attachment>";
+        }
+        const firstContentType = dataMessage.attachments?.[0]?.contentType;
+        const pendingKind = mediaKindFromMime(firstContentType ?? undefined);
+        return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
+      })();
+      const pendingBodyText = messageText || pendingPlaceholder || quoteText;
+      const historyKey = groupId ?? "unknown";
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: deps.groupHistories,
+        historyKey,
+        limit: deps.historyLimit,
+        entry: {
+          sender: envelope.sourceName ?? senderDisplay,
+          body: pendingBodyText,
+          timestamp: envelope.timestamp ?? undefined,
+          messageId:
+            typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+        },
+      });
+      return;
+    }
+
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
     let placeholder = "";
@@ -490,11 +609,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const kind = mediaKindFromMime(mediaType ?? undefined);
-    if (kind) placeholder = `<media:${kind}>`;
-    else if (dataMessage.attachments?.length) placeholder = "<media:attachment>";
+    if (kind) {
+      placeholder = `<media:${kind}>`;
+    } else if (dataMessage.attachments?.length) {
+      placeholder = "<media:attachment>";
+    }
 
     const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
-    if (!bodyText) return;
+    if (!bodyText) {
+      return;
+    }
 
     const receiptTimestamp =
       typeof envelope.timestamp === "number"
@@ -538,6 +662,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaPath,
       mediaType,
       commandAuthorized,
+      wasMentioned: effectiveWasMentioned,
     });
   };
 }

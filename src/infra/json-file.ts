@@ -3,7 +3,9 @@ import path from "node:path";
 
 export function loadJsonFile(pathname: string): unknown {
   try {
-    if (!fs.existsSync(pathname)) return undefined;
+    if (!fs.existsSync(pathname)) {
+      return undefined;
+    }
     const raw = fs.readFileSync(pathname, "utf8");
     return JSON.parse(raw) as unknown;
   } catch {

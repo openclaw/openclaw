@@ -19,6 +19,8 @@ const DISCORD_ADAPTER: ChannelMessageAdapter = {
 };
 
 export function getChannelMessageAdapter(channel: ChannelId): ChannelMessageAdapter {
-  if (channel === "discord") return DISCORD_ADAPTER;
+  if (channel === "discord") {
+    return DISCORD_ADAPTER;
+  }
   return DEFAULT_ADAPTER;
 }

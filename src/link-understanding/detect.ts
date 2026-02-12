@@ -18,8 +18,12 @@ function resolveMaxLinks(value?: number): number {
 function isAllowedUrl(raw: string): boolean {
   try {
     const parsed = new URL(raw);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    if (parsed.hostname === "127.0.0.1") return false;
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return false;
+    }
+    if (parsed.hostname === "127.0.0.1") {
+      return false;
+    }
     return true;
   } catch {
     return false;
@@ -28,7 +32,9 @@ function isAllowedUrl(raw: string): boolean {
 
 export function extractLinksFromMessage(message: string, opts?: { maxLinks?: number }): string[] {
   const source = message?.trim();
-  if (!source) return [];
+  if (!source) {
+    return [];
+  }
 
   const maxLinks = resolveMaxLinks(opts?.maxLinks);
   const sanitized = stripMarkdownLinks(source);
@@ -37,12 +43,20 @@ export function extractLinksFromMessage(message: string, opts?: { maxLinks?: num
 
   for (const match of sanitized.matchAll(BARE_LINK_RE)) {
     const raw = match[0]?.trim();
-    if (!raw) continue;
-    if (!isAllowedUrl(raw)) continue;
-    if (seen.has(raw)) continue;
+    if (!raw) {
+      continue;
+    }
+    if (!isAllowedUrl(raw)) {
+      continue;
+    }
+    if (seen.has(raw)) {
+      continue;
+    }
     seen.add(raw);
     results.push(raw);
-    if (results.length >= maxLinks) break;
+    if (results.length >= maxLinks) {
+      break;
+    }
   }
 
   return results;

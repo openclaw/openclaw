@@ -1,12 +1,18 @@
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { normalizeReplyPayload } from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
+import { sleep } from "../../utils.js";
+import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
 type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
+
+type ReplyDispatchSkipHandler = (
+  payload: ReplyPayload,
+  info: { kind: ReplyDispatchKind; reason: NormalizeReplySkipReason },
+) => void;
 
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
@@ -19,17 +25,18 @@ const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
 /** Generate a random delay within the configured range. */
 function getHumanDelay(config: HumanDelayConfig | undefined): number {
   const mode = config?.mode ?? "off";
-  if (mode === "off") return 0;
+  if (mode === "off") {
+    return 0;
+  }
   const min =
     mode === "custom" ? (config?.minMs ?? DEFAULT_HUMAN_DELAY_MIN_MS) : DEFAULT_HUMAN_DELAY_MIN_MS;
   const max =
     mode === "custom" ? (config?.maxMs ?? DEFAULT_HUMAN_DELAY_MAX_MS) : DEFAULT_HUMAN_DELAY_MAX_MS;
-  if (max <= min) return min;
+  if (max <= min) {
+    return min;
+  }
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
-
-/** Sleep for a given number of milliseconds. */
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
@@ -42,6 +49,8 @@ export type ReplyDispatcherOptions = {
   onHeartbeatStrip?: () => void;
   onIdle?: () => void;
   onError?: ReplyDispatchErrorHandler;
+  // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
+  onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
 };
@@ -49,11 +58,13 @@ export type ReplyDispatcherOptions = {
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
   onReplyStart?: () => Promise<void> | void;
   onIdle?: () => void;
+  /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
+  onCleanup?: () => void;
 };
 
 type ReplyDispatcherWithTypingResult = {
   dispatcher: ReplyDispatcher;
-  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController">;
+  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup">;
   markDispatchIdle: () => void;
 };
 
@@ -65,15 +76,16 @@ export type ReplyDispatcher = {
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
 };
 
+type NormalizeReplyPayloadInternalOptions = Pick<
+  ReplyDispatcherOptions,
+  "responsePrefix" | "responsePrefixContext" | "responsePrefixContextProvider" | "onHeartbeatStrip"
+> & {
+  onSkip?: (reason: NormalizeReplySkipReason) => void;
+};
+
 function normalizeReplyPayloadInternal(
   payload: ReplyPayload,
-  opts: Pick<
-    ReplyDispatcherOptions,
-    | "responsePrefix"
-    | "responsePrefixContext"
-    | "responsePrefixContextProvider"
-    | "onHeartbeatStrip"
-  >,
+  opts: NormalizeReplyPayloadInternalOptions,
 ): ReplyPayload | null {
   // Prefer dynamic context provider over static context
   const prefixContext = opts.responsePrefixContextProvider?.() ?? opts.responsePrefixContext;
@@ -82,6 +94,7 @@ function normalizeReplyPayloadInternal(
     responsePrefix: opts.responsePrefix,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
+    onSkip: opts.onSkip,
   });
 }
 
@@ -99,21 +112,33 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   };
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
-    const normalized = normalizeReplyPayloadInternal(payload, options);
-    if (!normalized) return false;
+    const normalized = normalizeReplyPayloadInternal(payload, {
+      responsePrefix: options.responsePrefix,
+      responsePrefixContext: options.responsePrefixContext,
+      responsePrefixContextProvider: options.responsePrefixContextProvider,
+      onHeartbeatStrip: options.onHeartbeatStrip,
+      onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
+    });
+    if (!normalized) {
+      return false;
+    }
     queuedCounts[kind] += 1;
     pending += 1;
 
     // Determine if we should add human-like delay (only for block replies after the first).
     const shouldDelay = kind === "block" && sentFirstBlock;
-    if (kind === "block") sentFirstBlock = true;
+    if (kind === "block") {
+      sentFirstBlock = true;
+    }
 
     sendChain = sendChain
       .then(async () => {
         // Add human-like delay between block replies for natural rhythm.
         if (shouldDelay) {
           const delayMs = getHumanDelay(options.humanDelay);
-          if (delayMs > 0) await sleep(delayMs);
+          if (delayMs > 0) {
+            await sleep(delayMs);
+          }
         }
         await options.deliver(normalized, { kind });
       })
@@ -141,7 +166,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
-  const { onReplyStart, onIdle, ...dispatcherOptions } = options;
+  const { onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
   let typingController: TypingController | undefined;
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
@@ -155,6 +180,7 @@ export function createReplyDispatcherWithTyping(
     dispatcher,
     replyOptions: {
       onReplyStart,
+      onTypingCleanup: onCleanup,
       onTypingController: (typing) => {
         typingController = typing;
       },

@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
 
-const baseConfig = {} as MoltbotConfig;
+const baseConfig = {} as OpenClawConfig;
 
 describe("resolveOutboundSessionRoute", () => {
   it("builds Slack thread session keys", async () => {
@@ -36,7 +35,7 @@ describe("resolveOutboundSessionRoute", () => {
   });
 
   it("treats Telegram usernames as DMs when unresolved", async () => {
-    const cfg = { session: { dmScope: "per-channel-peer" } } as MoltbotConfig;
+    const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
     const route = await resolveOutboundSessionRoute({
       cfg,
       channel: "telegram",
@@ -44,7 +43,7 @@ describe("resolveOutboundSessionRoute", () => {
       target: "@alice",
     });
 
-    expect(route?.sessionKey).toBe("agent:main:telegram:dm:@alice");
+    expect(route?.sessionKey).toBe("agent:main:telegram:direct:@alice");
     expect(route?.chatType).toBe("direct");
   });
 
@@ -56,7 +55,7 @@ describe("resolveOutboundSessionRoute", () => {
           alice: ["discord:123"],
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const route = await resolveOutboundSessionRoute({
       cfg,
@@ -65,7 +64,7 @@ describe("resolveOutboundSessionRoute", () => {
       target: "user:123",
     });
 
-    expect(route?.sessionKey).toBe("agent:main:dm:alice");
+    expect(route?.sessionKey).toBe("agent:main:direct:alice");
   });
 
   it("strips chat_* prefixes for BlueBubbles group session keys", async () => {
@@ -81,7 +80,7 @@ describe("resolveOutboundSessionRoute", () => {
   });
 
   it("treats Zalo Personal DM targets as direct sessions", async () => {
-    const cfg = { session: { dmScope: "per-channel-peer" } } as MoltbotConfig;
+    const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
     const route = await resolveOutboundSessionRoute({
       cfg,
       channel: "zalouser",
@@ -89,7 +88,7 @@ describe("resolveOutboundSessionRoute", () => {
       target: "123456",
     });
 
-    expect(route?.sessionKey).toBe("agent:main:zalouser:dm:123456");
+    expect(route?.sessionKey).toBe("agent:main:zalouser:direct:123456");
     expect(route?.chatType).toBe("direct");
   });
 
@@ -102,7 +101,7 @@ describe("resolveOutboundSessionRoute", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const route = await resolveOutboundSessionRoute({
       cfg,

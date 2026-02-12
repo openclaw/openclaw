@@ -1,18 +1,18 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-
-import { danger } from "../../../globals.js";
-import { enqueueSystemEvent } from "../../../infra/system-events.js";
-
-import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackPinEvent } from "../types.js";
+import { danger } from "../../../globals.js";
+import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { resolveSlackChannelLabel } from "../channel-config.js";
 
 export function registerSlackPinEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
 
   ctx.app.event("pin_added", async ({ event, body }: SlackEventMiddlewareArgs<"pin_added">) => {
     try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+      if (ctx.shouldDropMismatchedSlackEvent(body)) {
+        return;
+      }
 
       const payload = event as SlackPinEvent;
       const channelId = payload.channel_id;
@@ -49,7 +49,9 @@ export function registerSlackPinEvents(params: { ctx: SlackMonitorContext }) {
 
   ctx.app.event("pin_removed", async ({ event, body }: SlackEventMiddlewareArgs<"pin_removed">) => {
     try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+      if (ctx.shouldDropMismatchedSlackEvent(body)) {
+        return;
+      }
 
       const payload = event as SlackPinEvent;
       const channelId = payload.channel_id;

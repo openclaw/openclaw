@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   clackIntro: vi.fn(),
@@ -30,7 +29,7 @@ vi.mock("@clack/prompts", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  CONFIG_PATH: "~/.clawdbot/moltbot.json",
+  CONFIG_PATH: "~/.openclaw/openclaw.json",
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   writeConfigFile: mocks.writeConfigFile,
   resolveGatewayPort: mocks.resolveGatewayPort,
@@ -49,8 +48,8 @@ vi.mock("../terminal/note.js", () => ({
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
-  DEFAULT_WORKSPACE: "~/.clawdbot/workspace",
-  applyWizardMetadata: (cfg: MoltbotConfig) => cfg,
+  DEFAULT_WORKSPACE: "~/.openclaw/workspace",
+  applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
   ensureWorkspaceAndSessions: vi.fn(),
   guardCancel: <T>(value: T) => value,
   printWizardHeader: mocks.printWizardHeader,
@@ -96,6 +95,7 @@ vi.mock("./onboard-channels.js", () => ({
   setupChannels: vi.fn(),
 }));
 
+import { WizardCancelledError } from "../wizard/prompts.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
 describe("runConfigureWizard", () => {
@@ -133,5 +133,29 @@ describe("runConfigureWizard", () => {
         gateway: expect.objectContaining({ mode: "local" }),
       }),
     );
+  });
+
+  it("exits with code 1 when configure wizard is cancelled", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+    mocks.clackSelect.mockRejectedValueOnce(new WizardCancelledError());
+
+    await runConfigureWizard({ command: "configure" }, runtime);
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

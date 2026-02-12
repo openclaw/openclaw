@@ -6,21 +6,21 @@ Core programs that ship with OpenProse. Production-quality, well-tested programs
 
 ### Evaluation & Improvement
 
-| Program | Description |
-|---------|-------------|
-| `inspector.prose` | Post-run analysis for runtime fidelity and task effectiveness |
-| `vm-improver.prose` | Analyzes inspections and proposes PRs to improve the VM |
+| Program                  | Description                                                    |
+| ------------------------ | -------------------------------------------------------------- |
+| `inspector.prose`        | Post-run analysis for runtime fidelity and task effectiveness  |
+| `vm-improver.prose`      | Analyzes inspections and proposes PRs to improve the VM        |
 | `program-improver.prose` | Analyzes inspections and proposes PRs to improve .prose source |
-| `cost-analyzer.prose` | Token usage and cost pattern analysis |
-| `calibrator.prose` | Validates light evaluations against deep evaluations |
-| `error-forensics.prose` | Root cause analysis for failed runs |
+| `cost-analyzer.prose`    | Token usage and cost pattern analysis                          |
+| `calibrator.prose`       | Validates light evaluations against deep evaluations           |
+| `error-forensics.prose`  | Root cause analysis for failed runs                            |
 
 ### Memory
 
-| Program | Description |
-|---------|-------------|
-| `user-memory.prose` | Cross-project persistent personal memory |
-| `project-memory.prose` | Project-scoped institutional memory |
+| Program                | Description                              |
+| ---------------------- | ---------------------------------------- |
+| `user-memory.prose`    | Cross-project persistent personal memory |
+| `project-memory.prose` | Project-scoped institutional memory      |
 
 ## The Improvement Loop
 
@@ -40,6 +40,7 @@ The evaluation programs form a recursive improvement cycle:
 ```
 
 Supporting analysis:
+
 - **cost-analyzer** — Where does the money go? Optimization opportunities.
 - **calibrator** — Are cheap evaluations reliable proxies for expensive ones?
 - **error-forensics** — Why did a run fail? Root cause analysis.
@@ -84,11 +85,13 @@ prose run lib/project-memory.prose --backend sqlite+
 The memory programs use persistent agents to accumulate knowledge:
 
 **user-memory** (`persist: user`)
+
 - Learns your preferences, decisions, patterns across all projects
 - Remembers mistakes and lessons learned
 - Answers questions from accumulated knowledge
 
 **project-memory** (`persist: project`)
+
 - Understands this project's architecture and decisions
 - Tracks why things are the way they are
 - Answers questions with project-specific context

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_NAME="moltbot-onboard-e2e"
+IMAGE_NAME="openclaw-onboard-e2e"
 
 echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
@@ -10,14 +10,25 @@ docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 echo "Running onboarding E2E..."
 docker run --rm -t "$IMAGE_NAME" bash -lc '
   set -euo pipefail
-  trap "" PIPE
-  export TERM=xterm-256color
-  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
+	  trap "" PIPE
+	  export TERM=xterm-256color
+	  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
+	  # tsdown may emit dist/index.js or dist/index.mjs depending on runtime/bundler.
+	  if [ -f dist/index.mjs ]; then
+	    OPENCLAW_ENTRY="dist/index.mjs"
+	  elif [ -f dist/index.js ]; then
+	    OPENCLAW_ENTRY="dist/index.js"
+	  else
+	    echo "Missing dist/index.(m)js (build output):"
+	    ls -la dist || true
+	    exit 1
+	  fi
+	  export OPENCLAW_ENTRY
 
   # Provide a minimal trash shim to avoid noisy "missing trash" logs in containers.
-  export PATH="/tmp/moltbot-bin:$PATH"
-  mkdir -p /tmp/moltbot-bin
-  cat > /tmp/moltbot-bin/trash <<'"'"'TRASH'"'"'
+  export PATH="/tmp/openclaw-bin:$PATH"
+  mkdir -p /tmp/openclaw-bin
+  cat > /tmp/openclaw-bin/trash <<'"'"'TRASH'"'"'
 #!/usr/bin/env bash
 set -euo pipefail
 trash_dir="$HOME/.Trash"
@@ -32,7 +43,7 @@ for target in "$@"; do
   mv "$target" "$dest"
 done
 TRASH
-  chmod +x /tmp/moltbot-bin/trash
+  chmod +x /tmp/openclaw-bin/trash
 
   send() {
     local payload="$1"
@@ -82,10 +93,10 @@ TRASH
     done
   }
 
-  start_gateway() {
-    node dist/index.js gateway --port 18789 --bind loopback --allow-unconfigured > /tmp/gateway-e2e.log 2>&1 &
-    GATEWAY_PID="$!"
-  }
+	  start_gateway() {
+	    node "$OPENCLAW_ENTRY" gateway --port 18789 --bind loopback --allow-unconfigured > /tmp/gateway-e2e.log 2>&1 &
+	    GATEWAY_PID="$!"
+	  }
 
   wait_for_gateway() {
     for _ in $(seq 1 20); do
@@ -140,9 +151,9 @@ TRASH
     export HOME="$home_dir"
     mkdir -p "$HOME"
 
-    input_fifo="$(mktemp -u "/tmp/moltbot-onboard-${case_name}.XXXXXX")"
+    input_fifo="$(mktemp -u "/tmp/openclaw-onboard-${case_name}.XXXXXX")"
     mkfifo "$input_fifo"
-    local log_path="/tmp/moltbot-onboard-${case_name}.log"
+    local log_path="/tmp/openclaw-onboard-${case_name}.log"
     WIZARD_LOG_PATH="$log_path"
     export WIZARD_LOG_PATH
     # Run under script to keep an interactive TTY for clack prompts.
@@ -184,12 +195,12 @@ TRASH
     local send_fn="$3"
     local validate_fn="${4:-}"
 
-    # Default onboarding command wrapper.
-    run_wizard_cmd "$case_name" "$home_dir" "node dist/index.js onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
-  }
+	    # Default onboarding command wrapper.
+	    run_wizard_cmd "$case_name" "$home_dir" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
+	  }
 
   make_home() {
-    mktemp -d "/tmp/moltbot-e2e-$1.XXXXXX"
+    mktemp -d "/tmp/openclaw-e2e-$1.XXXXXX"
   }
 
   assert_file() {
@@ -263,14 +274,14 @@ TRASH
     send "" 1.0
   }
 
-  run_case_local_basic() {
-    local home_dir
-    home_dir="$(make_home local-basic)"
-    export HOME="$home_dir"
-    mkdir -p "$HOME"
-    node dist/index.js onboard \
-      --non-interactive \
-      --accept-risk \
+	  run_case_local_basic() {
+	    local home_dir
+	    home_dir="$(make_home local-basic)"
+	    export HOME="$home_dir"
+	    mkdir -p "$HOME"
+	    node "$OPENCLAW_ENTRY" onboard \
+	      --non-interactive \
+	      --accept-risk \
       --flow quickstart \
       --mode local \
       --skip-channels \
@@ -280,9 +291,9 @@ TRASH
       --skip-health
 
     # Assert config + workspace scaffolding.
-    workspace_dir="$HOME/clawd"
-    config_path="$HOME/.clawdbot/moltbot.json"
-    sessions_dir="$HOME/.clawdbot/agents/main/sessions"
+    workspace_dir="$HOME/.openclaw/workspace"
+    config_path="$HOME/.openclaw/openclaw.json"
+    sessions_dir="$HOME/.openclaw/agents/main/sessions"
 
     assert_file "$config_path"
     assert_dir "$sessions_dir"
@@ -343,16 +354,16 @@ NODE
     local home_dir
     home_dir="$(make_home remote-non-interactive)"
     export HOME="$home_dir"
-    mkdir -p "$HOME"
-    # Smoke test non-interactive remote config write.
-    node dist/index.js onboard --non-interactive --accept-risk \
-      --mode remote \
-      --remote-url ws://gateway.local:18789 \
+	    mkdir -p "$HOME"
+	    # Smoke test non-interactive remote config write.
+	    node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
+	      --mode remote \
+	      --remote-url ws://gateway.local:18789 \
       --remote-token remote-token \
       --skip-skills \
       --skip-health
 
-    config_path="$HOME/.clawdbot/moltbot.json"
+    config_path="$HOME/.openclaw/openclaw.json"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -386,9 +397,9 @@ NODE
     local home_dir
     home_dir="$(make_home reset-config)"
     export HOME="$home_dir"
-    mkdir -p "$HOME/.clawdbot"
+    mkdir -p "$HOME/.openclaw"
     # Seed a remote config to exercise reset path.
-    cat > "$HOME/.clawdbot/moltbot.json" <<'"'"'JSON'"'"'
+	    cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
 {
   "agents": { "defaults": { "workspace": "/root/old" } },
   "gateway": {
@@ -398,9 +409,9 @@ NODE
 }
 JSON
 
-    node dist/index.js onboard \
-      --non-interactive \
-      --accept-risk \
+	    node "$OPENCLAW_ENTRY" onboard \
+	      --non-interactive \
+	      --accept-risk \
       --flow quickstart \
       --mode local \
       --reset \
@@ -410,7 +421,7 @@ JSON
       --skip-ui \
       --skip-health
 
-    config_path="$HOME/.clawdbot/moltbot.json"
+    config_path="$HOME/.openclaw/openclaw.json"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -438,12 +449,12 @@ NODE
   }
 
   run_case_channels() {
-    local home_dir
-    home_dir="$(make_home channels)"
-    # Channels-only configure flow.
-    run_wizard_cmd channels "$home_dir" "node dist/index.js configure --section channels" send_channels_flow
+	    local home_dir
+	    home_dir="$(make_home channels)"
+	    # Channels-only configure flow.
+	    run_wizard_cmd channels "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
 
-    config_path="$HOME/.clawdbot/moltbot.json"
+    config_path="$HOME/.openclaw/openclaw.json"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -481,9 +492,9 @@ NODE
     local home_dir
     home_dir="$(make_home skills)"
     export HOME="$home_dir"
-    mkdir -p "$HOME/.clawdbot"
+    mkdir -p "$HOME/.openclaw"
     # Seed skills config to ensure it survives the wizard.
-    cat > "$HOME/.clawdbot/moltbot.json" <<'"'"'JSON'"'"'
+	    cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
 {
   "skills": {
     "allowBundled": ["__none__"],
@@ -492,9 +503,9 @@ NODE
 }
 JSON
 
-    run_wizard_cmd skills "$home_dir" "node dist/index.js configure --section skills" send_skills_flow
+	    run_wizard_cmd skills "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section skills" send_skills_flow
 
-    config_path="$HOME/.clawdbot/moltbot.json"
+    config_path="$HOME/.openclaw/openclaw.json"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { normalizeChatType } from "./chat-type.js";
 
 describe("normalizeChatType", () => {
@@ -15,5 +14,14 @@ describe("normalizeChatType", () => {
     expect(normalizeChatType("")).toBeUndefined();
     expect(normalizeChatType("nope")).toBeUndefined();
     expect(normalizeChatType("room")).toBeUndefined();
+  });
+
+  describe("backward compatibility", () => {
+    it("accepts legacy 'dm' value and normalizes to 'direct'", () => {
+      // Legacy config/input may use "dm" - ensure smooth upgrade path
+      expect(normalizeChatType("dm")).toBe("direct");
+      expect(normalizeChatType("DM")).toBe("direct");
+      expect(normalizeChatType(" dm ")).toBe("direct");
+    });
   });
 });

@@ -1,7 +1,6 @@
-import crypto from "node:crypto";
-
 import type { Skill } from "@mariozechner/pi-coding-agent";
-import type { NormalizedChatType } from "../../channels/chat-type.js";
+import crypto from "node:crypto";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -10,7 +9,7 @@ export type SessionScope = "per-sender" | "global";
 
 export type SessionChannelId = ChannelId | "webchat";
 
-export type SessionChatType = NormalizedChatType;
+export type SessionChatType = ChatType;
 
 export type SessionOrigin = {
   label?: string;
@@ -102,7 +101,9 @@ export function mergeSessionEntry(
 ): SessionEntry {
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
-  if (!existing) return { ...patch, sessionId, updatedAt };
+  if (!existing) {
+    return { ...patch, sessionId, updatedAt };
+  }
   return { ...existing, ...patch, sessionId, updatedAt };
 }
 

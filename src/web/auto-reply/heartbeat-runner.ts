@@ -1,11 +1,12 @@
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import { appendCronStyleCurrentTimeLine } from "../../agents/current-time.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   resolveHeartbeatPrompt,
   stripHeartbeatToken,
 } from "../../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import { getReplyFromConfig } from "../../auto-reply/reply.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
+import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveWhatsAppHeartbeatRecipients } from "../../channels/plugins/whatsapp-heartbeat.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -28,11 +29,17 @@ import { elide } from "./util.js";
 function resolveHeartbeatReplyPayload(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload | undefined {
-  if (!replyResult) return undefined;
-  if (!Array.isArray(replyResult)) return replyResult;
+  if (!replyResult) {
+    return undefined;
+  }
+  if (!Array.isArray(replyResult)) {
+    return replyResult;
+  }
   for (let idx = replyResult.length - 1; idx >= 0; idx -= 1) {
     const payload = replyResult[idx];
-    if (!payload) continue;
+    if (!payload) {
+      continue;
+    }
     if (payload.text || payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0)) {
       return payload;
     }
@@ -153,7 +160,11 @@ export async function runWebHeartbeatOnce(opts: {
 
     const replyResult = await replyResolver(
       {
-        Body: resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt),
+        Body: appendCronStyleCurrentTimeLine(
+          resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt),
+          cfg,
+          Date.now(),
+        ),
         From: to,
         To: to,
         MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,
@@ -221,7 +232,9 @@ export async function runWebHeartbeatOnce(opts: {
         store[sessionSnapshot.key].updatedAt = sessionSnapshot.entry.updatedAt;
         await updateSessionStore(storePath, (nextStore) => {
           const nextEntry = nextStore[sessionSnapshot.key];
-          if (!nextEntry) return;
+          if (!nextEntry) {
+            return;
+          }
           nextStore[sessionSnapshot.key] = {
             ...nextEntry,
             updatedAt: sessionSnapshot.entry.updatedAt,

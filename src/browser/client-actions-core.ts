@@ -11,7 +11,9 @@ function buildProfileQuery(profile?: string): string {
 
 function withBaseUrl(baseUrl: string | undefined, path: string): string {
   const trimmed = baseUrl?.trim();
-  if (!trimmed) return path;
+  if (!trimmed) {
+    return path;
+  }
   return `${trimmed.replace(/\/$/, "")}${path}`;
 }
 
@@ -81,7 +83,7 @@ export type BrowserActRequest =
       targetId?: string;
       timeoutMs?: number;
     }
-  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string }
+  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string; timeoutMs?: number }
   | { kind: "close"; targetId?: string };
 
 export type BrowserActResponse = {

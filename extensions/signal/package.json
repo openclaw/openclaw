@@ -1,9 +1,13 @@
 {
-  "name": "@moltbot/signal",
-  "version": "2026.1.26",
+  "name": "@openclaw/signal",
+  "version": "2026.2.10",
+  "private": true,
+  "description": "OpenClaw Signal channel plugin",
   "type": "module",
-  "description": "Moltbot Signal channel plugin",
-  "moltbot": {
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ]

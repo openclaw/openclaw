@@ -9,9 +9,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-
 import { WebSocket, WebSocketServer } from "ws";
-
 import type {
   OpenAIRealtimeSTTProvider,
   RealtimeSTTSession,
@@ -23,6 +21,8 @@ import type {
 export interface MediaStreamConfig {
   /** STT provider for transcription */
   sttProvider: OpenAIRealtimeSTTProvider;
+  /** Validate whether to accept a media stream for the given call ID */
+  shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
   /** Callback when transcript is received */
   onTranscript?: (callId: string, transcript: string) => void;
   /** Callback for partial transcripts (streaming UI) */
@@ -87,11 +87,9 @@ export class MediaStreamHandler {
   /**
    * Handle new WebSocket connection from Twilio.
    */
-  private async handleConnection(
-    ws: WebSocket,
-    _request: IncomingMessage,
-  ): Promise<void> {
+  private async handleConnection(ws: WebSocket, _request: IncomingMessage): Promise<void> {
     let session: StreamSession | null = null;
+    const streamToken = this.getStreamToken(_request);
 
     ws.on("message", async (data: Buffer) => {
       try {
@@ -103,7 +101,7 @@ export class MediaStreamHandler {
             break;
 
           case "start":
-            session = await this.handleStart(ws, message);
+            session = await this.handleStart(ws, message, streamToken);
             break;
 
           case "media":
@@ -143,13 +141,25 @@ export class MediaStreamHandler {
   private async handleStart(
     ws: WebSocket,
     message: TwilioMediaMessage,
-  ): Promise<StreamSession> {
+    streamToken?: string,
+  ): Promise<StreamSession | null> {
     const streamSid = message.streamSid || "";
     const callSid = message.start?.callSid || "";
 
-    console.log(
-      `[MediaStream] Stream started: ${streamSid} (call: ${callSid})`,
-    );
+    console.log(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
+    if (!callSid) {
+      console.warn("[MediaStream] Missing callSid; closing stream");
+      ws.close(1008, "Missing callSid");
+      return null;
+    }
+    if (
+      this.config.shouldAcceptStream &&
+      !this.config.shouldAcceptStream({ callId: callSid, streamSid, token: streamToken })
+    ) {
+      console.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
+      ws.close(1008, "Unknown call");
+      return null;
+    }
 
     // Create STT session
     const sttSession = this.config.sttProvider.createSession();
@@ -181,10 +191,7 @@ export class MediaStreamHandler {
 
     // Connect to OpenAI STT (non-blocking, log errors but don't fail the call)
     sttSession.connect().catch((err) => {
-      console.warn(
-        `[MediaStream] STT connection failed (TTS still works):`,
-        err.message,
-      );
+      console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
     });
 
     return session;
@@ -200,6 +207,18 @@ export class MediaStreamHandler {
     session.sttSession.close();
     this.sessions.delete(session.streamSid);
     this.config.onDisconnect?.(session.callId);
+  }
+
+  private getStreamToken(request: IncomingMessage): string | undefined {
+    if (!request.url || !request.headers.host) {
+      return undefined;
+    }
+    try {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      return url.searchParams.get("token") ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -252,10 +271,7 @@ export class MediaStreamHandler {
    * Queue a TTS operation for sequential playback.
    * Only one TTS operation plays at a time per stream to prevent overlap.
    */
-  async queueTts(
-    streamSid: string,
-    playFn: (signal: AbortSignal) => Promise<void>,
-  ): Promise<void> {
+  async queueTts(streamSid: string, playFn: (signal: AbortSignal) => Promise<void>): Promise<void> {
     const queue = this.getTtsQueue(streamSid);
     let resolveEntry: () => void;
     let rejectEntry: (error: unknown) => void;
@@ -292,9 +308,7 @@ export class MediaStreamHandler {
    * Get active session by call ID.
    */
   getSessionByCallId(callId: string): StreamSession | undefined {
-    return [...this.sessions.values()].find(
-      (session) => session.callId === callId,
-    );
+    return [...this.sessions.values()].find((session) => session.callId === callId);
   }
 
   /**
@@ -311,7 +325,9 @@ export class MediaStreamHandler {
 
   private getTtsQueue(streamSid: string): TtsQueueEntry[] {
     const existing = this.ttsQueues.get(streamSid);
-    if (existing) return existing;
+    if (existing) {
+      return existing;
+    }
     const queue: TtsQueueEntry[] = [];
     this.ttsQueues.set(streamSid, queue);
     return queue;
@@ -355,7 +371,9 @@ export class MediaStreamHandler {
 
   private clearTtsState(streamSid: string): void {
     const queue = this.ttsQueues.get(streamSid);
-    if (queue) queue.length = 0;
+    if (queue) {
+      queue.length = 0;
+    }
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.ttsActiveControllers.delete(streamSid);
     this.ttsPlaying.delete(streamSid);

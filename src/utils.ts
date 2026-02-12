@@ -3,9 +3,26 @@ import os from "node:os";
 import path from "node:path";
 import { resolveOAuthDir } from "./config/paths.js";
 import { logVerbose, shouldLogVerbose } from "./globals.js";
+import {
+  expandHomePrefix,
+  resolveEffectiveHomeDir,
+  resolveRequiredHomeDir,
+} from "./infra/home-dir.js";
 
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
+}
+
+/**
+ * Check if a file or directory exists at the given path.
+ */
+export async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function clampNumber(value: number, min: number, max: number): number {
@@ -14,6 +31,48 @@ export function clampNumber(value: number, min: number, max: number): number {
 
 export function clampInt(value: number, min: number, max: number): number {
   return clampNumber(Math.floor(value), min, max);
+}
+
+/** Alias for clampNumber (shorter, more common name) */
+export const clamp = clampNumber;
+
+/**
+ * Escapes special regex characters in a string so it can be used in a RegExp constructor.
+ */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Safely parse JSON, returning null on error instead of throwing.
+ */
+export function safeParseJson<T>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Type guard for plain objects (not arrays, null, Date, RegExp, etc.).
+ * Uses Object.prototype.toString for maximum safety.
+ */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]"
+  );
+}
+
+/**
+ * Type guard for Record<string, unknown> (less strict than isPlainObject).
+ * Accepts any non-null object that isn't an array.
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export type WebChannel = "web";
@@ -25,7 +84,9 @@ export function assertWebChannel(input: string): asserts input is WebChannel {
 }
 
 export function normalizePath(p: string): string {
-  if (!p.startsWith("/")) return `/${p}`;
+  if (!p.startsWith("/")) {
+    return `/${p}`;
+  }
   return p;
 }
 
@@ -36,7 +97,9 @@ export function withWhatsAppPrefix(number: string): string {
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^whatsapp:/, "").trim();
   const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) return `+${digits.slice(1)}`;
+  if (digits.startsWith("+")) {
+    return `+${digits.slice(1)}`;
+  }
   return `+${digits}`;
 }
 
@@ -49,11 +112,17 @@ export function isSelfChatMode(
   selfE164: string | null | undefined,
   allowFrom?: Array<string | number> | null,
 ): boolean {
-  if (!selfE164) return false;
-  if (!Array.isArray(allowFrom) || allowFrom.length === 0) return false;
+  if (!selfE164) {
+    return false;
+  }
+  if (!Array.isArray(allowFrom) || allowFrom.length === 0) {
+    return false;
+  }
   const normalizedSelf = normalizeE164(selfE164);
   return allowFrom.some((n) => {
-    if (n === "*") return false;
+    if (n === "*") {
+      return false;
+    }
     try {
       return normalizeE164(String(n)) === normalizedSelf;
     } catch {
@@ -64,7 +133,9 @@ export function isSelfChatMode(
 
 export function toWhatsappJid(number: string): string {
   const withoutPrefix = number.replace(/^whatsapp:/, "").trim();
-  if (withoutPrefix.includes("@")) return withoutPrefix;
+  if (withoutPrefix.includes("@")) {
+    return withoutPrefix;
+  }
   const e164 = normalizeE164(withoutPrefix);
   const digits = e164.replace(/\D/g, "");
   return `${digits}@s.whatsapp.net`;
@@ -83,11 +154,15 @@ type LidLookup = {
 function resolveLidMappingDirs(opts?: JidToE164Options): string[] {
   const dirs = new Set<string>();
   const addDir = (dir?: string | null) => {
-    if (!dir) return;
+    if (!dir) {
+      return;
+    }
     dirs.add(resolveUserPath(dir));
   };
   addDir(opts?.authDir);
-  for (const dir of opts?.lidMappingDirs ?? []) addDir(dir);
+  for (const dir of opts?.lidMappingDirs ?? []) {
+    addDir(dir);
+  }
   addDir(resolveOAuthDir());
   addDir(path.join(CONFIG_DIR, "credentials"));
   return [...dirs];
@@ -101,7 +176,9 @@ function readLidReverseMapping(lid: string, opts?: JidToE164Options): string | n
     try {
       const data = fs.readFileSync(mappingPath, "utf8");
       const phone = JSON.parse(data) as string | number | null;
-      if (phone === null || phone === undefined) continue;
+      if (phone === null || phone === undefined) {
+        continue;
+      }
       return normalizeE164(String(phone));
     } catch {
       // Try the next location.
@@ -123,7 +200,9 @@ export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
   if (lidMatch) {
     const lid = lidMatch[1];
     const phone = readLidReverseMapping(lid, opts);
-    if (phone) return phone;
+    if (phone) {
+      return phone;
+    }
     const shouldLog = opts?.logMissing ?? shouldLogVerbose();
     if (shouldLog) {
       logVerbose(`LID mapping not found for ${lid}; skipping inbound message`);
@@ -137,14 +216,24 @@ export async function resolveJidToE164(
   jid: string | null | undefined,
   opts?: JidToE164Options & { lidLookup?: LidLookup },
 ): Promise<string | null> {
-  if (!jid) return null;
+  if (!jid) {
+    return null;
+  }
   const direct = jidToE164(jid, opts);
-  if (direct) return direct;
-  if (!/(@lid|@hosted\.lid)$/.test(jid)) return null;
-  if (!opts?.lidLookup?.getPNForLID) return null;
+  if (direct) {
+    return direct;
+  }
+  if (!/(@lid|@hosted\.lid)$/.test(jid)) {
+    return null;
+  }
+  if (!opts?.lidLookup?.getPNForLID) {
+    return null;
+  }
   try {
     const pnJid = await opts.lidLookup.getPNForLID(jid);
-    if (!pnJid) return null;
+    if (!pnJid) {
+      return null;
+    }
     return jidToE164(pnJid, opts);
   } catch (err) {
     if (shouldLogVerbose()) {
@@ -197,15 +286,23 @@ export function sliceUtf16Safe(input: string, start: number, end?: number): stri
 
 export function truncateUtf16Safe(input: string, maxLen: number): string {
   const limit = Math.max(0, Math.floor(maxLen));
-  if (input.length <= limit) return input;
+  if (input.length <= limit) {
+    return input;
+  }
   return sliceUtf16Safe(input, 0, limit);
 }
 
 export function resolveUserPath(input: string): string {
   const trimmed = input.trim();
-  if (!trimmed) return trimmed;
+  if (!trimmed) {
+    return trimmed;
+  }
   if (trimmed.startsWith("~")) {
-    const expanded = trimmed.replace(/^~(?=$|[\\/])/, os.homedir());
+    const expanded = expandHomePrefix(trimmed, {
+      home: resolveRequiredHomeDir(process.env, os.homedir),
+      env: process.env,
+      homedir: os.homedir,
+    });
     return path.resolve(expanded);
   }
   return path.resolve(trimmed);
@@ -215,38 +312,65 @@ export function resolveConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override = env.CLAWDBOT_STATE_DIR?.trim();
-  if (override) return resolveUserPath(override);
-  return path.join(homedir(), ".clawdbot");
+  const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  if (override) {
+    return resolveUserPath(override);
+  }
+  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+  try {
+    const hasNew = fs.existsSync(newDir);
+    if (hasNew) {
+      return newDir;
+    }
+  } catch {
+    // best-effort
+  }
+  return newDir;
 }
 
 export function resolveHomeDir(): string | undefined {
-  const envHome = process.env.HOME?.trim();
-  if (envHome) return envHome;
-  const envProfile = process.env.USERPROFILE?.trim();
-  if (envProfile) return envProfile;
-  try {
-    const home = os.homedir();
-    return home?.trim() ? home : undefined;
-  } catch {
+  return resolveEffectiveHomeDir(process.env, os.homedir);
+}
+
+function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefined {
+  const home = resolveHomeDir();
+  if (!home) {
     return undefined;
   }
+  const explicitHome = process.env.OPENCLAW_HOME?.trim();
+  if (explicitHome) {
+    return { home, prefix: "$OPENCLAW_HOME" };
+  }
+  return { home, prefix: "~" };
 }
 
 export function shortenHomePath(input: string): string {
-  if (!input) return input;
-  const home = resolveHomeDir();
-  if (!home) return input;
-  if (input === home) return "~";
-  if (input.startsWith(`${home}/`)) return `~${input.slice(home.length)}`;
+  if (!input) {
+    return input;
+  }
+  const display = resolveHomeDisplayPrefix();
+  if (!display) {
+    return input;
+  }
+  const { home, prefix } = display;
+  if (input === home) {
+    return prefix;
+  }
+  if (input.startsWith(`${home}/`) || input.startsWith(`${home}\\`)) {
+    return `${prefix}${input.slice(home.length)}`;
+  }
   return input;
 }
 
 export function shortenHomeInString(input: string): string {
-  if (!input) return input;
-  const home = resolveHomeDir();
-  if (!home) return input;
-  return input.split(home).join("~");
+  if (!input) {
+    return input;
+  }
+  const display = resolveHomeDisplayPrefix();
+  if (!display) {
+    return input;
+  }
+  return input.split(display.home).join(display.prefix);
 }
 
 export function displayPath(input: string): string {
@@ -273,5 +397,5 @@ export function formatTerminalLink(
   return `\u001b]8;;${safeUrl}\u0007${safeLabel}\u001b]8;;\u0007`;
 }
 
-// Configuration root; can be overridden via CLAWDBOT_STATE_DIR.
+// Configuration root; can be overridden via OPENCLAW_STATE_DIR.
 export const CONFIG_DIR = resolveConfigDir();

@@ -1,33 +1,46 @@
-import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { type FSWatcher } from "chokidar";
-
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type {
+  MemoryEmbeddingProbeResult,
+  MemoryProviderStatus,
+  MemorySearchManager,
+  MemorySearchResult,
+  MemorySource,
+  MemorySyncProgressUpdate,
+} from "./types.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import type { MoltbotConfig } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
+import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
+import {
+  OPENAI_BATCH_ENDPOINT,
+  type OpenAiBatchRequest,
+  runOpenAiEmbeddingBatches,
+} from "./batch-openai.js";
+import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
+import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
+import { estimateUtf8Bytes } from "./embedding-input-limits.js";
+import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
+import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
   type OpenAiEmbeddingClient,
+  type VoyageEmbeddingClient,
 } from "./embeddings.js";
-import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
-import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
-import {
-  OPENAI_BATCH_ENDPOINT,
-  type OpenAiBatchRequest,
-  runOpenAiEmbeddingBatches,
-} from "./batch-openai.js";
-import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
+import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import {
   buildFileEntry,
   chunkMarkdown,
@@ -35,27 +48,23 @@ import {
   hashText,
   isMemoryPath,
   listMemoryFiles,
+  normalizeExtraMemoryPaths,
   type MemoryChunk,
   type MemoryFileEntry,
-  normalizeRelPath,
   parseEmbedding,
+  remapChunkLines,
+  runWithConcurrency,
 } from "./internal.js";
-import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
-import { requireNodeSqlite } from "./sqlite.js";
+import {
+  buildSessionEntry,
+  listSessionFilesForAgent,
+  sessionPathForFile,
+  type SessionFileEntry,
+} from "./session-files.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
-
-type MemorySource = "memory" | "sessions";
-
-export type MemorySearchResult = {
-  path: string;
-  startLine: number;
-  endLine: number;
-  score: number;
-  snippet: string;
-  source: MemorySource;
-};
+import { requireNodeSqlite } from "./sqlite.js";
 
 type MemoryIndexMeta = {
   model: string;
@@ -64,21 +73,6 @@ type MemoryIndexMeta = {
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
-};
-
-type SessionFileEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  content: string;
-};
-
-type MemorySyncProgressUpdate = {
-  completed: number;
-  total: number;
-  label?: string;
 };
 
 type MemorySyncProgressState = {
@@ -95,7 +89,6 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_APPROX_CHARS_PER_TOKEN = 1;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
@@ -115,18 +108,19 @@ const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const vectorToBlob = (embedding: number[]): Buffer =>
   Buffer.from(new Float32Array(embedding).buffer);
 
-export class MemoryIndexManager {
+export class MemoryIndexManager implements MemorySearchManager {
   private readonly cacheKey: string;
-  private readonly cfg: MoltbotConfig;
+  private readonly cfg: OpenClawConfig;
   private readonly agentId: string;
   private readonly workspaceDir: string;
   private readonly settings: ResolvedMemorySearchConfig;
   private provider: EmbeddingProvider;
-  private readonly requestedProvider: "openai" | "local" | "gemini" | "auto";
-  private fallbackFrom?: "openai" | "local" | "gemini";
+  private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "auto";
+  private fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
   private fallbackReason?: string;
   private openAi?: OpenAiEmbeddingClient;
   private gemini?: GeminiEmbeddingClient;
+  private voyage?: VoyageEmbeddingClient;
   private batch: {
     enabled: boolean;
     wait: boolean;
@@ -173,16 +167,20 @@ export class MemoryIndexManager {
   private syncing: Promise<void> | null = null;
 
   static async get(params: {
-    cfg: MoltbotConfig;
+    cfg: OpenClawConfig;
     agentId: string;
   }): Promise<MemoryIndexManager | null> {
     const { cfg, agentId } = params;
     const settings = resolveMemorySearchConfig(cfg, agentId);
-    if (!settings) return null;
+    if (!settings) {
+      return null;
+    }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
     const existing = INDEX_CACHE.get(key);
-    if (existing) return existing;
+    if (existing) {
+      return existing;
+    }
     const providerResult = await createEmbeddingProvider({
       config: cfg,
       agentDir: resolveAgentDir(cfg, agentId),
@@ -206,7 +204,7 @@ export class MemoryIndexManager {
 
   private constructor(params: {
     cacheKey: string;
-    cfg: MoltbotConfig;
+    cfg: OpenClawConfig;
     agentId: string;
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
@@ -223,6 +221,7 @@ export class MemoryIndexManager {
     this.fallbackReason = params.providerResult.fallbackReason;
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
+    this.voyage = params.providerResult.voyage;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
@@ -249,13 +248,19 @@ export class MemoryIndexManager {
   }
 
   async warmSession(sessionKey?: string): Promise<void> {
-    if (!this.settings.sync.onSessionStart) return;
+    if (!this.settings.sync.onSessionStart) {
+      return;
+    }
     const key = sessionKey?.trim() || "";
-    if (key && this.sessionWarm.has(key)) return;
+    if (key && this.sessionWarm.has(key)) {
+      return;
+    }
     void this.sync({ reason: "session-start" }).catch((err) => {
       log.warn(`memory sync failed (session-start): ${String(err)}`);
     });
-    if (key) this.sessionWarm.add(key);
+    if (key) {
+      this.sessionWarm.add(key);
+    }
   }
 
   async search(
@@ -273,7 +278,9 @@ export class MemoryIndexManager {
       });
     }
     const cleaned = query.trim();
-    if (!cleaned) return [];
+    if (!cleaned) {
+      return [];
+    }
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const hybrid = this.settings.query.hybrid;
@@ -332,7 +339,9 @@ export class MemoryIndexManager {
     query: string,
     limit: number,
   ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
-    if (!this.fts.enabled || !this.fts.available) return [];
+    if (!this.fts.enabled || !this.fts.available) {
+      return [];
+    }
     const sourceFilter = this.buildSourceFilter();
     const results = await searchKeyword({
       db: this.db,
@@ -384,7 +393,9 @@ export class MemoryIndexManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
-    if (this.syncing) return this.syncing;
+    if (this.syncing) {
+      return this.syncing;
+    }
     this.syncing = this.runSync(params).finally(() => {
       this.syncing = null;
     });
@@ -396,13 +407,54 @@ export class MemoryIndexManager {
     from?: number;
     lines?: number;
   }): Promise<{ text: string; path: string }> {
-    const relPath = normalizeRelPath(params.relPath);
-    if (!relPath || !isMemoryPath(relPath)) {
+    const rawPath = params.relPath.trim();
+    if (!rawPath) {
       throw new Error("path required");
     }
-    const absPath = path.resolve(this.workspaceDir, relPath);
-    if (!absPath.startsWith(this.workspaceDir)) {
-      throw new Error("path escapes workspace");
+    const absPath = path.isAbsolute(rawPath)
+      ? path.resolve(rawPath)
+      : path.resolve(this.workspaceDir, rawPath);
+    const relPath = path.relative(this.workspaceDir, absPath).replace(/\\/g, "/");
+    const inWorkspace =
+      relPath.length > 0 && !relPath.startsWith("..") && !path.isAbsolute(relPath);
+    const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
+    let allowedAdditional = false;
+    if (!allowedWorkspace && this.settings.extraPaths.length > 0) {
+      const additionalPaths = normalizeExtraMemoryPaths(
+        this.workspaceDir,
+        this.settings.extraPaths,
+      );
+      for (const additionalPath of additionalPaths) {
+        try {
+          const stat = await fs.lstat(additionalPath);
+          if (stat.isSymbolicLink()) {
+            continue;
+          }
+          if (stat.isDirectory()) {
+            if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
+              allowedAdditional = true;
+              break;
+            }
+            continue;
+          }
+          if (stat.isFile()) {
+            if (absPath === additionalPath && absPath.endsWith(".md")) {
+              allowedAdditional = true;
+              break;
+            }
+          }
+        } catch {}
+      }
+    }
+    if (!allowedWorkspace && !allowedAdditional) {
+      throw new Error("path required");
+    }
+    if (!absPath.endsWith(".md")) {
+      throw new Error("path required");
+    }
+    const stat = await fs.lstat(absPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error("path required");
     }
     const content = await fs.readFile(absPath, "utf-8");
     if (!params.from && !params.lines) {
@@ -415,39 +467,7 @@ export class MemoryIndexManager {
     return { text: slice.join("\n"), path: relPath };
   }
 
-  status(): {
-    files: number;
-    chunks: number;
-    dirty: boolean;
-    workspaceDir: string;
-    dbPath: string;
-    provider: string;
-    model: string;
-    requestedProvider: string;
-    sources: MemorySource[];
-    sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }>;
-    cache?: { enabled: boolean; entries?: number; maxEntries?: number };
-    fts?: { enabled: boolean; available: boolean; error?: string };
-    fallback?: { from: string; reason?: string };
-    vector?: {
-      enabled: boolean;
-      available?: boolean;
-      extensionPath?: string;
-      loadError?: string;
-      dims?: number;
-    };
-    batch?: {
-      enabled: boolean;
-      failures: number;
-      limit: number;
-      wait: boolean;
-      concurrency: number;
-      pollIntervalMs: number;
-      timeoutMs: number;
-      lastError?: string;
-      lastProvider?: string;
-    };
-  } {
+  status(): MemoryProviderStatus {
     const sourceFilter = this.buildSourceFilter();
     const files = this.db
       .prepare(`SELECT COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql}`)
@@ -461,7 +481,9 @@ export class MemoryIndexManager {
     };
     const sourceCounts = (() => {
       const sources = Array.from(this.sources);
-      if (sources.length === 0) return [];
+      if (sources.length === 0) {
+        return [];
+      }
       const bySource = new Map<MemorySource, { files: number; chunks: number }>();
       for (const source of sources) {
         bySource.set(source, { files: 0, chunks: 0 });
@@ -486,18 +508,20 @@ export class MemoryIndexManager {
         entry.chunks = row.c ?? 0;
         bySource.set(row.source, entry);
       }
-      return sources.map((source) => ({ source, ...bySource.get(source)! }));
+      return sources.map((source) => Object.assign({ source }, bySource.get(source)!));
     })();
     return {
+      backend: "builtin",
       files: files?.c ?? 0,
       chunks: chunks?.c ?? 0,
-      dirty: this.dirty,
+      dirty: this.dirty || this.sessionsDirty,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.path,
       provider: this.provider.id,
       model: this.provider.model,
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
+      extraPaths: this.settings.extraPaths,
       sourceCounts,
       cache: this.cache.enabled
         ? {
@@ -541,11 +565,13 @@ export class MemoryIndexManager {
   }
 
   async probeVectorAvailability(): Promise<boolean> {
-    if (!this.vector.enabled) return false;
+    if (!this.vector.enabled) {
+      return false;
+    }
     return this.ensureVectorReady();
   }
 
-  async probeEmbeddingAvailability(): Promise<{ ok: boolean; error?: string }> {
+  async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
     try {
       await this.embedBatchWithRetry(["ping"]);
       return { ok: true };
@@ -556,7 +582,9 @@ export class MemoryIndexManager {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
+    if (this.closed) {
+      return;
+    }
     this.closed = true;
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
@@ -583,7 +611,9 @@ export class MemoryIndexManager {
   }
 
   private async ensureVectorReady(dimensions?: number): Promise<boolean> {
-    if (!this.vector.enabled) return false;
+    if (!this.vector.enabled) {
+      return false;
+    }
     if (!this.vectorReady) {
       this.vectorReady = this.withTimeout(
         this.loadVectorExtension(),
@@ -609,7 +639,9 @@ export class MemoryIndexManager {
   }
 
   private async loadVectorExtension(): Promise<boolean> {
-    if (this.vector.available !== null) return this.vector.available;
+    if (this.vector.available !== null) {
+      return this.vector.available;
+    }
     if (!this.vector.enabled) {
       this.vector.available = false;
       return false;
@@ -619,7 +651,9 @@ export class MemoryIndexManager {
         ? resolveUserPath(this.vector.extensionPath)
         : undefined;
       const loaded = await loadSqliteVecExtension({ db: this.db, extensionPath: resolvedPath });
-      if (!loaded.ok) throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+      if (!loaded.ok) {
+        throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+      }
       this.vector.extensionPath = loaded.extensionPath;
       this.vector.available = true;
       return true;
@@ -633,7 +667,9 @@ export class MemoryIndexManager {
   }
 
   private ensureVectorTable(dimensions: number): void {
-    if (this.vector.dims === dimensions) return;
+    if (this.vector.dims === dimensions) {
+      return;
+    }
     if (this.vector.dims && this.vector.dims !== dimensions) {
       this.dropVectorTable();
     }
@@ -657,7 +693,9 @@ export class MemoryIndexManager {
 
   private buildSourceFilter(alias?: string): { sql: string; params: MemorySource[] } {
     const sources = Array.from(this.sources);
-    if (sources.length === 0) return { sql: "", params: [] };
+    if (sources.length === 0) {
+      return { sql: "", params: [] };
+    }
     const column = alias ? `${alias}.source` : "source";
     const placeholders = sources.map(() => "?").join(", ");
     return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
@@ -676,7 +714,9 @@ export class MemoryIndexManager {
   }
 
   private seedEmbeddingCache(sourceDb: DatabaseSync): void {
-    if (!this.cache.enabled) return;
+    if (!this.cache.enabled) {
+      return;
+    }
     try {
       const rows = sourceDb
         .prepare(
@@ -691,7 +731,9 @@ export class MemoryIndexManager {
         dims: number | null;
         updated_at: number;
       }>;
-      if (!rows.length) return;
+      if (!rows.length) {
+        return;
+      }
       const insert = this.db.prepare(
         `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -768,12 +810,26 @@ export class MemoryIndexManager {
   }
 
   private ensureWatcher() {
-    if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) return;
-    const watchPaths = [
+    if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) {
+      return;
+    }
+    const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths)
+      .map((entry) => {
+        try {
+          const stat = fsSync.lstatSync(entry);
+          return stat.isSymbolicLink() ? null : entry;
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry): entry is string => Boolean(entry));
+    const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
+      path.join(this.workspaceDir, "memory.md"),
       path.join(this.workspaceDir, "memory"),
-    ];
-    this.watcher = chokidar.watch(watchPaths, {
+      ...additionalPaths,
+    ]);
+    this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
@@ -790,18 +846,26 @@ export class MemoryIndexManager {
   }
 
   private ensureSessionListener() {
-    if (!this.sources.has("sessions") || this.sessionUnsubscribe) return;
+    if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
+      return;
+    }
     this.sessionUnsubscribe = onSessionTranscriptUpdate((update) => {
-      if (this.closed) return;
+      if (this.closed) {
+        return;
+      }
       const sessionFile = update.sessionFile;
-      if (!this.isSessionFileForAgent(sessionFile)) return;
+      if (!this.isSessionFileForAgent(sessionFile)) {
+        return;
+      }
       this.scheduleSessionDirty(sessionFile);
     });
   }
 
   private scheduleSessionDirty(sessionFile: string) {
     this.sessionPendingFiles.add(sessionFile);
-    if (this.sessionWatchTimer) return;
+    if (this.sessionWatchTimer) {
+      return;
+    }
     this.sessionWatchTimer = setTimeout(() => {
       this.sessionWatchTimer = null;
       void this.processSessionDeltaBatch().catch((err) => {
@@ -811,13 +875,17 @@ export class MemoryIndexManager {
   }
 
   private async processSessionDeltaBatch(): Promise<void> {
-    if (this.sessionPendingFiles.size === 0) return;
+    if (this.sessionPendingFiles.size === 0) {
+      return;
+    }
     const pending = Array.from(this.sessionPendingFiles);
     this.sessionPendingFiles.clear();
     let shouldSync = false;
     for (const sessionFile of pending) {
       const delta = await this.updateSessionDelta(sessionFile);
-      if (!delta) continue;
+      if (!delta) {
+        continue;
+      }
       const bytesThreshold = delta.deltaBytes;
       const messagesThreshold = delta.deltaMessages;
       const bytesHit =
@@ -826,7 +894,9 @@ export class MemoryIndexManager {
         messagesThreshold <= 0
           ? delta.pendingMessages > 0
           : delta.pendingMessages >= messagesThreshold;
-      if (!bytesHit && !messagesHit) continue;
+      if (!bytesHit && !messagesHit) {
+        continue;
+      }
       this.sessionsDirtyFiles.add(sessionFile);
       this.sessionsDirty = true;
       delta.pendingBytes =
@@ -849,7 +919,9 @@ export class MemoryIndexManager {
     pendingMessages: number;
   } | null> {
     const thresholds = this.settings.sync.sessions;
-    if (!thresholds) return null;
+    if (!thresholds) {
+      return null;
+    }
     let stat: { size: number };
     try {
       stat = await fs.stat(sessionFile);
@@ -900,7 +972,9 @@ export class MemoryIndexManager {
   }
 
   private async countNewlines(absPath: string, start: number, end: number): Promise<number> {
-    if (end <= start) return 0;
+    if (end <= start) {
+      return 0;
+    }
     const handle = await fs.open(absPath, "r");
     try {
       let offset = start;
@@ -909,9 +983,13 @@ export class MemoryIndexManager {
       while (offset < end) {
         const toRead = Math.min(buffer.length, end - offset);
         const { bytesRead } = await handle.read(buffer, 0, toRead, offset);
-        if (bytesRead <= 0) break;
+        if (bytesRead <= 0) {
+          break;
+        }
         for (let i = 0; i < bytesRead; i += 1) {
-          if (buffer[i] === 10) count += 1;
+          if (buffer[i] === 10) {
+            count += 1;
+          }
         }
         offset += bytesRead;
       }
@@ -923,14 +1001,18 @@ export class MemoryIndexManager {
 
   private resetSessionDelta(absPath: string, size: number): void {
     const state = this.sessionDeltas.get(absPath);
-    if (!state) return;
+    if (!state) {
+      return;
+    }
     state.lastSize = size;
     state.pendingBytes = 0;
     state.pendingMessages = 0;
   }
 
   private isSessionFileForAgent(sessionFile: string): boolean {
-    if (!sessionFile) return false;
+    if (!sessionFile) {
+      return false;
+    }
     const sessionsDir = resolveSessionTranscriptsDirForAgent(this.agentId);
     const resolvedFile = path.resolve(sessionFile);
     const resolvedDir = path.resolve(sessionsDir);
@@ -939,7 +1021,9 @@ export class MemoryIndexManager {
 
   private ensureIntervalSync() {
     const minutes = this.settings.sync.intervalMinutes;
-    if (!minutes || minutes <= 0 || this.intervalTimer) return;
+    if (!minutes || minutes <= 0 || this.intervalTimer) {
+      return;
+    }
     const ms = minutes * 60 * 1000;
     this.intervalTimer = setInterval(() => {
       void this.sync({ reason: "interval" }).catch((err) => {
@@ -949,8 +1033,12 @@ export class MemoryIndexManager {
   }
 
   private scheduleWatchSync() {
-    if (!this.sources.has("memory") || !this.settings.sync.watch) return;
-    if (this.watchTimer) clearTimeout(this.watchTimer);
+    if (!this.sources.has("memory") || !this.settings.sync.watch) {
+      return;
+    }
+    if (this.watchTimer) {
+      clearTimeout(this.watchTimer);
+    }
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
       void this.sync({ reason: "watch" }).catch((err) => {
@@ -963,11 +1051,19 @@ export class MemoryIndexManager {
     params?: { reason?: string; force?: boolean },
     needsFullReindex = false,
   ) {
-    if (!this.sources.has("sessions")) return false;
-    if (params?.force) return true;
+    if (!this.sources.has("sessions")) {
+      return false;
+    }
+    if (params?.force) {
+      return true;
+    }
     const reason = params?.reason;
-    if (reason === "session-start" || reason === "watch") return false;
-    if (needsFullReindex) return true;
+    if (reason === "session-start" || reason === "watch") {
+      return false;
+    }
+    if (needsFullReindex) {
+      return true;
+    }
     return this.sessionsDirty && this.sessionsDirtyFiles.size > 0;
   }
 
@@ -975,7 +1071,7 @@ export class MemoryIndexManager {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    const files = await listMemoryFiles(this.workspaceDir);
+    const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
     const fileEntries = await Promise.all(
       files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
     );
@@ -1018,13 +1114,15 @@ export class MemoryIndexManager {
         });
       }
     });
-    await this.runWithConcurrency(tasks, this.getIndexConcurrency());
+    await runWithConcurrency(tasks, this.getIndexConcurrency());
 
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
       .all("memory") as Array<{ path: string }>;
     for (const stale of staleRows) {
-      if (activePaths.has(stale.path)) continue;
+      if (activePaths.has(stale.path)) {
+        continue;
+      }
       this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stale.path, "memory");
       try {
         this.db
@@ -1048,8 +1146,8 @@ export class MemoryIndexManager {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    const files = await this.listSessionFiles();
-    const activePaths = new Set(files.map((file) => this.sessionPathForFile(file)));
+    const files = await listSessionFilesForAgent(this.agentId);
+    const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
     const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
     log.debug("memory sync: indexing session files", {
       files: files.length,
@@ -1078,7 +1176,7 @@ export class MemoryIndexManager {
         }
         return;
       }
-      const entry = await this.buildSessionEntry(absPath);
+      const entry = await buildSessionEntry(absPath);
       if (!entry) {
         if (params.progress) {
           params.progress.completed += 1;
@@ -1113,13 +1211,15 @@ export class MemoryIndexManager {
         });
       }
     });
-    await this.runWithConcurrency(tasks, this.getIndexConcurrency());
+    await runWithConcurrency(tasks, this.getIndexConcurrency());
 
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
       .all("sessions") as Array<{ path: string }>;
     for (const stale of staleRows) {
-      if (activePaths.has(stale.path)) continue;
+      if (activePaths.has(stale.path)) {
+        continue;
+      }
       this.db
         .prepare(`DELETE FROM files WHERE path = ? AND source = ?`)
         .run(stale.path, "sessions");
@@ -1151,7 +1251,9 @@ export class MemoryIndexManager {
       total: 0,
       label: undefined,
       report: (update) => {
-        if (update.label) state.label = update.label;
+        if (update.label) {
+          state.label = update.label;
+        }
         const label =
           update.total > 0 && state.label
             ? `${state.label} ${update.completed}/${update.total}`
@@ -1249,7 +1351,8 @@ export class MemoryIndexManager {
     const enabled = Boolean(
       batch?.enabled &&
       ((this.openAi && this.provider.id === "openai") ||
-        (this.gemini && this.provider.id === "gemini")),
+        (this.gemini && this.provider.id === "gemini") ||
+        (this.voyage && this.provider.id === "voyage")),
     );
     return {
       enabled,
@@ -1262,16 +1365,22 @@ export class MemoryIndexManager {
 
   private async activateFallbackProvider(reason: string): Promise<boolean> {
     const fallback = this.settings.fallback;
-    if (!fallback || fallback === "none" || fallback === this.provider.id) return false;
-    if (this.fallbackFrom) return false;
-    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local";
+    if (!fallback || fallback === "none" || fallback === this.provider.id) {
+      return false;
+    }
+    if (this.fallbackFrom) {
+      return false;
+    }
+    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local" | "voyage";
 
     const fallbackModel =
       fallback === "gemini"
         ? DEFAULT_GEMINI_EMBEDDING_MODEL
         : fallback === "openai"
           ? DEFAULT_OPENAI_EMBEDDING_MODEL
-          : this.settings.model;
+          : fallback === "voyage"
+            ? DEFAULT_VOYAGE_EMBEDDING_MODEL
+            : this.settings.model;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
@@ -1288,6 +1397,7 @@ export class MemoryIndexManager {
     this.provider = fallbackResult.provider;
     this.openAi = fallbackResult.openAi;
     this.gemini = fallbackResult.gemini;
+    this.voyage = fallbackResult.voyage;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
@@ -1415,7 +1525,9 @@ export class MemoryIndexManager {
     const row = this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(META_KEY) as
       | { value: string }
       | undefined;
-    if (!row?.value) return null;
+    if (!row?.value) {
+      return null;
+    }
     try {
       return JSON.parse(row.value) as MemoryIndexMeta;
     } catch {
@@ -1432,107 +1544,13 @@ export class MemoryIndexManager {
       .run(META_KEY, value);
   }
 
-  private async listSessionFiles(): Promise<string[]> {
-    const dir = resolveSessionTranscriptsDirForAgent(this.agentId);
-    try {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
-      return entries
-        .filter((entry) => entry.isFile())
-        .map((entry) => entry.name)
-        .filter((name) => name.endsWith(".jsonl"))
-        .map((name) => path.join(dir, name));
-    } catch {
-      return [];
-    }
-  }
-
-  private sessionPathForFile(absPath: string): string {
-    return path.join("sessions", path.basename(absPath)).replace(/\\/g, "/");
-  }
-
-  private normalizeSessionText(value: string): string {
-    return value
-      .replace(/\s*\n+\s*/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  private extractSessionText(content: unknown): string | null {
-    if (typeof content === "string") {
-      const normalized = this.normalizeSessionText(content);
-      return normalized ? normalized : null;
-    }
-    if (!Array.isArray(content)) return null;
-    const parts: string[] = [];
-    for (const block of content) {
-      if (!block || typeof block !== "object") continue;
-      const record = block as { type?: unknown; text?: unknown };
-      if (record.type !== "text" || typeof record.text !== "string") continue;
-      const normalized = this.normalizeSessionText(record.text);
-      if (normalized) parts.push(normalized);
-    }
-    if (parts.length === 0) return null;
-    return parts.join(" ");
-  }
-
-  private async buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
-    try {
-      const stat = await fs.stat(absPath);
-      const raw = await fs.readFile(absPath, "utf-8");
-      const lines = raw.split("\n");
-      const collected: string[] = [];
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let record: unknown;
-        try {
-          record = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (
-          !record ||
-          typeof record !== "object" ||
-          (record as { type?: unknown }).type !== "message"
-        ) {
-          continue;
-        }
-        const message = (record as { message?: unknown }).message as
-          | { role?: unknown; content?: unknown }
-          | undefined;
-        if (!message || typeof message.role !== "string") continue;
-        if (message.role !== "user" && message.role !== "assistant") continue;
-        const text = this.extractSessionText(message.content);
-        if (!text) continue;
-        const label = message.role === "user" ? "User" : "Assistant";
-        collected.push(`${label}: ${text}`);
-      }
-      const content = collected.join("\n");
-      return {
-        path: this.sessionPathForFile(absPath),
-        absPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-        hash: hashText(content),
-        content,
-      };
-    } catch (err) {
-      log.debug(`Failed reading session file ${absPath}: ${String(err)}`);
-      return null;
-    }
-  }
-
-  private estimateEmbeddingTokens(text: string): number {
-    if (!text) return 0;
-    return Math.ceil(text.length / EMBEDDING_APPROX_CHARS_PER_TOKEN);
-  }
-
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
     const batches: MemoryChunk[][] = [];
     let current: MemoryChunk[] = [];
     let currentTokens = 0;
 
     for (const chunk of chunks) {
-      const estimate = this.estimateEmbeddingTokens(chunk.text);
+      const estimate = estimateUtf8Bytes(chunk.text);
       const wouldExceed =
         current.length > 0 && currentTokens + estimate > EMBEDDING_BATCH_MAX_TOKENS;
       if (wouldExceed) {
@@ -1555,17 +1573,27 @@ export class MemoryIndexManager {
   }
 
   private loadEmbeddingCache(hashes: string[]): Map<string, number[]> {
-    if (!this.cache.enabled) return new Map();
-    if (hashes.length === 0) return new Map();
+    if (!this.cache.enabled) {
+      return new Map();
+    }
+    if (hashes.length === 0) {
+      return new Map();
+    }
     const unique: string[] = [];
     const seen = new Set<string>();
     for (const hash of hashes) {
-      if (!hash) continue;
-      if (seen.has(hash)) continue;
+      if (!hash) {
+        continue;
+      }
+      if (seen.has(hash)) {
+        continue;
+      }
       seen.add(hash);
       unique.push(hash);
     }
-    if (unique.length === 0) return new Map();
+    if (unique.length === 0) {
+      return new Map();
+    }
 
     const out = new Map<string, number[]>();
     const baseParams = [this.provider.id, this.provider.model, this.providerKey];
@@ -1587,8 +1615,12 @@ export class MemoryIndexManager {
   }
 
   private upsertEmbeddingCache(entries: Array<{ hash: string; embedding: number[] }>): void {
-    if (!this.cache.enabled) return;
-    if (entries.length === 0) return;
+    if (!this.cache.enabled) {
+      return;
+    }
+    if (entries.length === 0) {
+      return;
+    }
     const now = Date.now();
     const stmt = this.db.prepare(
       `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)\n` +
@@ -1613,14 +1645,20 @@ export class MemoryIndexManager {
   }
 
   private pruneEmbeddingCacheIfNeeded(): void {
-    if (!this.cache.enabled) return;
+    if (!this.cache.enabled) {
+      return;
+    }
     const max = this.cache.maxEntries;
-    if (!max || max <= 0) return;
+    if (!max || max <= 0) {
+      return;
+    }
     const row = this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
       | { c: number }
       | undefined;
     const count = row?.c ?? 0;
-    if (count <= max) return;
+    if (count <= max) {
+      return;
+    }
     const excess = count - max;
     this.db
       .prepare(
@@ -1635,7 +1673,9 @@ export class MemoryIndexManager {
   }
 
   private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
-    if (chunks.length === 0) return [];
+    if (chunks.length === 0) {
+      return [];
+    }
     const cached = this.loadEmbeddingCache(chunks.map((chunk) => chunk.hash));
     const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
     const missing: Array<{ index: number; chunk: MemoryChunk }> = [];
@@ -1650,7 +1690,9 @@ export class MemoryIndexManager {
       }
     }
 
-    if (missing.length === 0) return embeddings;
+    if (missing.length === 0) {
+      return embeddings;
+    }
 
     const missingChunks = missing.map((m) => m.chunk);
     const batches = this.buildEmbeddingBatches(missingChunks);
@@ -1676,7 +1718,7 @@ export class MemoryIndexManager {
     if (this.provider.id === "openai" && this.openAi) {
       const entries = Object.entries(this.openAi.headers)
         .filter(([key]) => key.toLowerCase() !== "authorization")
-        .sort(([a], [b]) => a.localeCompare(b))
+        .toSorted(([a], [b]) => a.localeCompare(b))
         .map(([key, value]) => [key, value]);
       return hashText(
         JSON.stringify({
@@ -1693,7 +1735,7 @@ export class MemoryIndexManager {
           const lower = key.toLowerCase();
           return lower !== "authorization" && lower !== "x-goog-api-key";
         })
-        .sort(([a], [b]) => a.localeCompare(b))
+        .toSorted(([a], [b]) => a.localeCompare(b))
         .map(([key, value]) => [key, value]);
       return hashText(
         JSON.stringify({
@@ -1718,19 +1760,24 @@ export class MemoryIndexManager {
     if (this.provider.id === "gemini" && this.gemini) {
       return this.embedChunksWithGeminiBatch(chunks, entry, source);
     }
+    if (this.provider.id === "voyage" && this.voyage) {
+      return this.embedChunksWithVoyageBatch(chunks, entry, source);
+    }
     return this.embedChunksInBatches(chunks);
   }
 
-  private async embedChunksWithOpenAiBatch(
+  private async embedChunksWithVoyageBatch(
     chunks: MemoryChunk[],
     entry: MemoryFileEntry | SessionFileEntry,
     source: MemorySource,
   ): Promise<number[][]> {
-    const openAi = this.openAi;
-    if (!openAi) {
+    const voyage = this.voyage;
+    if (!voyage) {
       return this.embedChunksInBatches(chunks);
     }
-    if (chunks.length === 0) return [];
+    if (chunks.length === 0) {
+      return [];
+    }
     const cached = this.loadEmbeddingCache(chunks.map((chunk) => chunk.hash));
     const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
     const missing: Array<{ index: number; chunk: MemoryChunk }> = [];
@@ -1745,7 +1792,87 @@ export class MemoryIndexManager {
       }
     }
 
-    if (missing.length === 0) return embeddings;
+    if (missing.length === 0) {
+      return embeddings;
+    }
+
+    const requests: VoyageBatchRequest[] = [];
+    const mapping = new Map<string, { index: number; hash: string }>();
+    for (const item of missing) {
+      const chunk = item.chunk;
+      const customId = hashText(
+        `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${item.index}`,
+      );
+      mapping.set(customId, { index: item.index, hash: chunk.hash });
+      requests.push({
+        custom_id: customId,
+        body: {
+          input: chunk.text,
+        },
+      });
+    }
+    const batchResult = await this.runBatchWithFallback({
+      provider: "voyage",
+      run: async () =>
+        await runVoyageEmbeddingBatches({
+          client: voyage,
+          agentId: this.agentId,
+          requests,
+          wait: this.batch.wait,
+          concurrency: this.batch.concurrency,
+          pollIntervalMs: this.batch.pollIntervalMs,
+          timeoutMs: this.batch.timeoutMs,
+          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+        }),
+      fallback: async () => await this.embedChunksInBatches(chunks),
+    });
+    if (Array.isArray(batchResult)) {
+      return batchResult;
+    }
+    const byCustomId = batchResult;
+
+    const toCache: Array<{ hash: string; embedding: number[] }> = [];
+    for (const [customId, embedding] of byCustomId.entries()) {
+      const mapped = mapping.get(customId);
+      if (!mapped) {
+        continue;
+      }
+      embeddings[mapped.index] = embedding;
+      toCache.push({ hash: mapped.hash, embedding });
+    }
+    this.upsertEmbeddingCache(toCache);
+    return embeddings;
+  }
+
+  private async embedChunksWithOpenAiBatch(
+    chunks: MemoryChunk[],
+    entry: MemoryFileEntry | SessionFileEntry,
+    source: MemorySource,
+  ): Promise<number[][]> {
+    const openAi = this.openAi;
+    if (!openAi) {
+      return this.embedChunksInBatches(chunks);
+    }
+    if (chunks.length === 0) {
+      return [];
+    }
+    const cached = this.loadEmbeddingCache(chunks.map((chunk) => chunk.hash));
+    const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
+    const missing: Array<{ index: number; chunk: MemoryChunk }> = [];
+
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i];
+      const hit = chunk?.hash ? cached.get(chunk.hash) : undefined;
+      if (hit && hit.length > 0) {
+        embeddings[i] = hit;
+      } else if (chunk) {
+        missing.push({ index: i, chunk });
+      }
+    }
+
+    if (missing.length === 0) {
+      return embeddings;
+    }
 
     const requests: OpenAiBatchRequest[] = [];
     const mapping = new Map<string, { index: number; hash: string }>();
@@ -1780,13 +1907,17 @@ export class MemoryIndexManager {
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
-    if (Array.isArray(batchResult)) return batchResult;
+    if (Array.isArray(batchResult)) {
+      return batchResult;
+    }
     const byCustomId = batchResult;
 
     const toCache: Array<{ hash: string; embedding: number[] }> = [];
     for (const [customId, embedding] of byCustomId.entries()) {
       const mapped = mapping.get(customId);
-      if (!mapped) continue;
+      if (!mapped) {
+        continue;
+      }
       embeddings[mapped.index] = embedding;
       toCache.push({ hash: mapped.hash, embedding });
     }
@@ -1803,7 +1934,9 @@ export class MemoryIndexManager {
     if (!gemini) {
       return this.embedChunksInBatches(chunks);
     }
-    if (chunks.length === 0) return [];
+    if (chunks.length === 0) {
+      return [];
+    }
     const cached = this.loadEmbeddingCache(chunks.map((chunk) => chunk.hash));
     const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
     const missing: Array<{ index: number; chunk: MemoryChunk }> = [];
@@ -1818,7 +1951,9 @@ export class MemoryIndexManager {
       }
     }
 
-    if (missing.length === 0) return embeddings;
+    if (missing.length === 0) {
+      return embeddings;
+    }
 
     const requests: GeminiBatchRequest[] = [];
     const mapping = new Map<string, { index: number; hash: string }>();
@@ -1850,13 +1985,17 @@ export class MemoryIndexManager {
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
-    if (Array.isArray(batchResult)) return batchResult;
+    if (Array.isArray(batchResult)) {
+      return batchResult;
+    }
     const byCustomId = batchResult;
 
     const toCache: Array<{ hash: string; embedding: number[] }> = [];
     for (const [customId, embedding] of byCustomId.entries()) {
       const mapped = mapping.get(customId);
-      if (!mapped) continue;
+      if (!mapped) {
+        continue;
+      }
       embeddings[mapped.index] = embedding;
       toCache.push({ hash: mapped.hash, embedding });
     }
@@ -1865,7 +2004,9 @@ export class MemoryIndexManager {
   }
 
   private async embedBatchWithRetry(texts: string[]): Promise<number[][]> {
-    if (texts.length === 0) return [];
+    if (texts.length === 0) {
+      return [];
+    }
     let attempt = 0;
     let delayMs = EMBEDDING_RETRY_BASE_DELAY_MS;
     while (true) {
@@ -1927,7 +2068,9 @@ export class MemoryIndexManager {
     timeoutMs: number,
     message: string,
   ): Promise<T> {
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return await promise;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return await promise;
+    }
     let timer: NodeJS.Timeout | null = null;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error(message)), timeoutMs);
@@ -1935,35 +2078,10 @@ export class MemoryIndexManager {
     try {
       return (await Promise.race([promise, timeoutPromise])) as T;
     } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
-  private async runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
-    if (tasks.length === 0) return [];
-    const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
-    const results: T[] = Array.from({ length: tasks.length });
-    let next = 0;
-    let firstError: unknown = null;
-
-    const workers = Array.from({ length: resolvedLimit }, async () => {
-      while (true) {
-        if (firstError) return;
-        const index = next;
-        next += 1;
-        if (index >= tasks.length) return;
-        try {
-          results[index] = await tasks[index]();
-        } catch (err) {
-          firstError = err;
-          return;
-        }
+      if (timer) {
+        clearTimeout(timer);
       }
-    });
-
-    await Promise.allSettled(workers);
-    if (firstError) throw firstError;
-    return results;
+    }
   }
 
   private async withBatchFailureLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -2082,9 +2200,15 @@ export class MemoryIndexManager {
     options: { source: MemorySource; content?: string },
   ) {
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-    const chunks = chunkMarkdown(content, this.settings.chunking).filter(
-      (chunk) => chunk.text.trim().length > 0,
+    const chunks = enforceEmbeddingMaxInputTokens(
+      this.provider,
+      chunkMarkdown(content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
+      ),
     );
+    if (options.source === "sessions" && "lineMap" in entry) {
+      remapChunkLines(chunks, entry.lineMap);
+    }
     const embeddings = this.batch.enabled
       ? await this.embedChunksWithBatch(chunks, entry, options.source)
       : await this.embedChunksInBatches(chunks);

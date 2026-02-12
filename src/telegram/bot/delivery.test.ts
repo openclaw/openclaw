@@ -1,7 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { Bot } from "grammy";
-
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deliverReplies } from "./delivery.js";
 
 const loadWebMedia = vi.fn();
@@ -140,6 +138,34 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("keeps message_thread_id=1 when allowed", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 4,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "Hello" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      thread: { id: 1, scope: "dm" },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        message_thread_id: 1,
+      }),
+    );
+  });
+
   it("does not include link_preview_options when linkPreview is true", async () => {
     const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({
@@ -164,6 +190,41 @@ describe("deliverReplies", () => {
       expect.any(String),
       expect.not.objectContaining({
         link_preview_options: expect.anything(),
+      }),
+    );
+  });
+
+  it("uses reply_to_message_id when quote text is provided", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "all",
+      textLimit: 4000,
+      replyQuoteText: "quoted text",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        reply_to_message_id: 500,
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.not.objectContaining({
+        reply_parameters: expect.anything(),
       }),
     );
   });

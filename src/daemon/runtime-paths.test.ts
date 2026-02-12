@@ -24,11 +24,14 @@ describe("resolvePreferredNodePath", () => {
 
   it("uses system node when it meets the minimum version", async () => {
     fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) return;
+      if (target === darwinNode) {
+        return;
+      }
       throw new Error("missing");
     });
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.1.0\n", stderr: "" });
+    // Node 22.12.0+ is the minimum required version
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -43,11 +46,14 @@ describe("resolvePreferredNodePath", () => {
 
   it("skips system node when it is too old", async () => {
     fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) return;
+      if (target === darwinNode) {
+        return;
+      }
       throw new Error("missing");
     });
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "18.19.0\n", stderr: "" });
+    // Node 22.11.x is below minimum 22.12.0
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.11.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -82,11 +88,14 @@ describe("resolveSystemNodeInfo", () => {
 
   it("returns supported info when version is new enough", async () => {
     fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) return;
+      if (target === darwinNode) {
+        return;
+      }
       throw new Error("missing");
     });
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.0.0\n", stderr: "" });
+    // Node 22.12.0+ is the minimum required version
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
 
     const result = await resolveSystemNodeInfo({
       env: {},
@@ -96,7 +105,7 @@ describe("resolveSystemNodeInfo", () => {
 
     expect(result).toEqual({
       path: darwinNode,
-      version: "22.0.0",
+      version: "22.12.0",
       supported: true,
     });
   });

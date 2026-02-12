@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 
 describe("memory hybrid helpers", () => {

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import type { DiscordActionConfig } from "../../config/config.js";
 import { handleDiscordGuildAction } from "./discord-actions-guild.js";
 import { handleDiscordMessagingAction } from "./discord-actions-messaging.js";
@@ -234,6 +233,25 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.results?.messages?.[0]?.[0]?.timestampUtc).toBe(
       new Date(expectedMs).toISOString(),
     );
+  });
+
+  it("forwards optional thread content", async () => {
+    createThreadDiscord.mockClear();
+    await handleDiscordMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "Forum thread",
+        content: "Initial forum post body",
+      },
+      enableAllActions,
+    );
+    expect(createThreadDiscord).toHaveBeenCalledWith("C1", {
+      name: "Forum thread",
+      messageId: undefined,
+      autoArchiveMinutes: undefined,
+      content: "Initial forum post body",
+    });
   });
 });
 

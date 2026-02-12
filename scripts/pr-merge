@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+
+usage() {
+  cat <<USAGE
+Usage:
+  scripts/pr-merge <PR>          # verify only (backward compatible)
+  scripts/pr-merge verify <PR>   # verify only
+  scripts/pr-merge run <PR>      # verify + merge + post-merge checks + cleanup
+USAGE
+}
+
+if [ "$#" -eq 1 ]; then
+  exec "$script_dir/pr" merge-verify "$1"
+fi
+
+if [ "$#" -eq 2 ]; then
+  mode="$1"
+  pr="$2"
+  case "$mode" in
+    verify)
+      exec "$script_dir/pr" merge-verify "$pr"
+      ;;
+    run)
+      exec "$script_dir/pr" merge-run "$pr"
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+fi
+
+usage
+exit 2

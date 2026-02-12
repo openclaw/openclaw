@@ -1,82 +1,4 @@
-import { deflateSync } from "node:zlib";
-
-const CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i += 1) {
-    let c = i;
-    for (let k = 0; k < 8; k += 1) {
-      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(buf: Buffer) {
-  let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i += 1) {
-    crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function pngChunk(type: string, data: Buffer) {
-  const typeBuf = Buffer.from(type, "ascii");
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const crc = crc32(Buffer.concat([typeBuf, data]));
-  const crcBuf = Buffer.alloc(4);
-  crcBuf.writeUInt32BE(crc, 0);
-  return Buffer.concat([len, typeBuf, data, crcBuf]);
-}
-
-function encodePngRgba(buffer: Buffer, width: number, height: number) {
-  const stride = width * 4;
-  const raw = Buffer.alloc((stride + 1) * height);
-  for (let row = 0; row < height; row += 1) {
-    const rawOffset = row * (stride + 1);
-    raw[rawOffset] = 0; // filter: none
-    buffer.copy(raw, rawOffset + 1, row * stride, row * stride + stride);
-  }
-  const compressed = deflateSync(raw);
-
-  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // color type RGBA
-  ihdr[10] = 0; // compression
-  ihdr[11] = 0; // filter
-  ihdr[12] = 0; // interlace
-
-  return Buffer.concat([
-    signature,
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", compressed),
-    pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
-function fillPixel(
-  buf: Buffer,
-  x: number,
-  y: number,
-  width: number,
-  r: number,
-  g: number,
-  b: number,
-  a = 255,
-) {
-  if (x < 0 || y < 0) return;
-  if (x >= width) return;
-  const idx = (y * width + x) * 4;
-  if (idx < 0 || idx + 3 >= buf.length) return;
-  buf[idx] = r;
-  buf[idx + 1] = g;
-  buf[idx + 2] = b;
-  buf[idx + 3] = a;
-}
+import { encodePngRgba, fillPixel } from "../media/png-encode.js";
 
 const GLYPH_ROWS_5X7: Record<string, number[]> = {
   "0": [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
@@ -109,12 +31,16 @@ function drawGlyph5x7(params: {
   color: { r: number; g: number; b: number; a?: number };
 }) {
   const rows = GLYPH_ROWS_5X7[params.char];
-  if (!rows) return;
+  if (!rows) {
+    return;
+  }
   for (let row = 0; row < 7; row += 1) {
     const bits = rows[row] ?? 0;
     for (let col = 0; col < 5; col += 1) {
       const on = (bits & (1 << (4 - col))) !== 0;
-      if (!on) continue;
+      if (!on) {
+        continue;
+      }
       for (let dy = 0; dy < params.scale; dy += 1) {
         for (let dx = 0; dx < params.scale; dx += 1) {
           fillPixel(
