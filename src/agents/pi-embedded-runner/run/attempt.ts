@@ -95,6 +95,10 @@ import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { detectAndLoadPromptImages } from "./images.js";
 
+/**
+ * Inject detected images into their original message positions in the conversation history.
+ * Mutates messages in-place by appending ImageContent blocks. Returns true if any mutations occurred.
+ */
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
   historyImagesByIndex: Map<number, ImageContent[]>,
@@ -206,6 +210,11 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+/**
+ * Execute a single embedded agent run (one LLM prompt/response cycle).
+ * Handles session setup, system prompt construction, model invocation with tools,
+ * and post-delivery tasks (context decay summarization, hooks) as fire-and-forget.
+ */
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
