@@ -3,6 +3,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentCompaction } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -67,8 +68,9 @@ function buildContextPruningExtension(params: {
   };
 }
 
-function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
-  return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
+function resolveCompactionMode(cfg?: OpenClawConfig, agentId?: string): "default" | "safeguard" {
+  const compaction = cfg ? resolveAgentCompaction(cfg, agentId) : undefined;
+  return compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
 export function buildEmbeddedExtensionPaths(params: {
@@ -77,10 +79,13 @@ export function buildEmbeddedExtensionPaths(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  agentId?: string;
 }): string[] {
   const paths: string[] = [];
-  if (resolveCompactionMode(params.cfg) === "safeguard") {
-    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  if (resolveCompactionMode(params.cfg, params.agentId) === "safeguard") {
+    const compactionCfg = params.cfg
+      ? resolveAgentCompaction(params.cfg, params.agentId)
+      : undefined;
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
       provider: params.provider,
