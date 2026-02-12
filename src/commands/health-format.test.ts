@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { stripAnsi } from "../terminal/ansi.js";
 import { formatHealthCheckFailure } from "./health-format.js";
-
-const ansiEscape = String.fromCharCode(27);
-const ansiRegex = new RegExp(`${ansiEscape}\\[[0-9;]*m`, "g");
-const stripAnsi = (input: string) => input.replace(ansiRegex, "");
 
 describe("formatHealthCheckFailure", () => {
   it("keeps non-rich output stable", () => {

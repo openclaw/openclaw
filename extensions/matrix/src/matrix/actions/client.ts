@@ -1,4 +1,4 @@
-import type { CoreConfig } from "../types.js";
+import type { CoreConfig } from "../../types.js";
 import type { MatrixActionClient, MatrixActionClientOpts } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { getActiveMatrixClient } from "../active-client.js";
@@ -47,7 +47,9 @@ export async function resolveActionClient(
   if (auth.encryption && client.crypto) {
     try {
       const joinedRooms = await client.getJoinedRooms();
-      await client.crypto.prepare(joinedRooms);
+      await (client.crypto as { prepare: (rooms?: string[]) => Promise<void> }).prepare(
+        joinedRooms,
+      );
     } catch {
       // Ignore crypto prep failures for one-off actions.
     }

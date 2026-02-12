@@ -14,14 +14,18 @@ import {
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  recordPendingHistoryEntryIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
+import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
+import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -61,6 +65,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaPath?: string;
     mediaType?: string;
     commandAuthorized: boolean;
+    wasMentioned?: boolean;
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -122,8 +127,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     }
     const signalTo = entry.isGroup ? `group:${entry.groupId}` : `signal:${entry.senderRecipient}`;
+    const inboundHistory =
+      entry.isGroup && historyKey && deps.historyLimit > 0
+        ? (deps.groupHistories.get(historyKey) ?? []).map((historyEntry) => ({
+            sender: historyEntry.sender,
+            body: historyEntry.body,
+            timestamp: historyEntry.timestamp,
+          }))
+        : undefined;
     const ctxPayload = finalizeInboundContext({
       Body: combinedBody,
+      BodyForAgent: entry.bodyText,
+      InboundHistory: inboundHistory,
       RawBody: entry.bodyText,
       CommandBody: entry.bodyText,
       From: entry.isGroup
@@ -144,6 +159,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaPath: entry.mediaPath,
       MediaType: entry.mediaType,
       MediaUrl: entry.mediaPath,
+      WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
@@ -499,6 +515,76 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
+    const route = resolveAgentRoute({
+      cfg: deps.cfg,
+      channel: "signal",
+      accountId: deps.accountId,
+      peer: {
+        kind: isGroup ? "group" : "direct",
+        id: isGroup ? (groupId ?? "unknown") : senderPeerId,
+      },
+    });
+    const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
+    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const requireMention =
+      isGroup &&
+      resolveChannelGroupRequireMention({
+        cfg: deps.cfg,
+        channel: "signal",
+        groupId,
+        accountId: deps.accountId,
+      });
+    const canDetectMention = mentionRegexes.length > 0;
+    const mentionGate = resolveMentionGatingWithBypass({
+      isGroup,
+      requireMention: Boolean(requireMention),
+      canDetectMention,
+      wasMentioned,
+      implicitMention: false,
+      hasAnyMention: false,
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
+      commandAuthorized,
+    });
+    const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+    if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "signal",
+        reason: "no mention",
+        target: senderDisplay,
+      });
+      const quoteText = dataMessage.quote?.text?.trim() || "";
+      const pendingPlaceholder = (() => {
+        if (!dataMessage.attachments?.length) {
+          return "";
+        }
+        // When we're skipping a message we intentionally avoid downloading attachments.
+        // Still record a useful placeholder for pending-history context.
+        if (deps.ignoreAttachments) {
+          return "<media:attachment>";
+        }
+        const firstContentType = dataMessage.attachments?.[0]?.contentType;
+        const pendingKind = mediaKindFromMime(firstContentType ?? undefined);
+        return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
+      })();
+      const pendingBodyText = messageText || pendingPlaceholder || quoteText;
+      const historyKey = groupId ?? "unknown";
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: deps.groupHistories,
+        historyKey,
+        limit: deps.historyLimit,
+        entry: {
+          sender: envelope.sourceName ?? senderDisplay,
+          body: pendingBodyText,
+          timestamp: envelope.timestamp ?? undefined,
+          messageId:
+            typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+        },
+      });
+      return;
+    }
+
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
     let placeholder = "";
@@ -576,6 +662,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaPath,
       mediaType,
       commandAuthorized,
+      wasMentioned: effectiveWasMentioned,
     });
   };
 }

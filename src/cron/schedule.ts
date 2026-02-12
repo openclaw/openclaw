@@ -49,13 +49,19 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  // Use a tiny lookback (1ms) so croner doesn't skip the current second
-  // boundary. Without this, a job updated at exactly its cron time would
-  // be scheduled for the *next* matching time (e.g. 24h later for daily).
-  const next = cron.nextRun(new Date(nowMs - 1));
+  // Cron operates at second granularity, so floor nowMs to the start of the
+  // current second.  We ask croner for the next occurrence strictly *after*
+  // nowSecondMs so that a job whose schedule matches the current second is
+  // never re-scheduled into the same (already-elapsed) second.
+  //
+  // Previous code used `nowSecondMs - 1` which caused croner to return the
+  // current second as a valid next-run, leading to rapid duplicate fires when
+  // multiple jobs triggered simultaneously (see #14164).
+  const nowSecondMs = Math.floor(nowMs / 1000) * 1000;
+  const next = cron.nextRun(new Date(nowSecondMs));
   if (!next) {
     return undefined;
   }
   const nextMs = next.getTime();
-  return Number.isFinite(nextMs) && nextMs >= nowMs ? nextMs : undefined;
+  return Number.isFinite(nextMs) && nextMs > nowSecondMs ? nextMs : undefined;
 }

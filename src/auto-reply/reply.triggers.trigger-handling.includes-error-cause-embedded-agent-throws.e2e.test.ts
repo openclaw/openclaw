@@ -127,6 +127,18 @@ describe("trigger handling", () => {
       });
 
       const cfg = makeCfg(home);
+      await fs.writeFile(
+        join(home, "sessions.json"),
+        JSON.stringify({
+          [_MAIN_SESSION_KEY]: {
+            sessionId: "main",
+            updatedAt: Date.now(),
+            providerOverride: "openai",
+            modelOverride: "gpt-5.2",
+          },
+        }),
+        "utf-8",
+      );
       cfg.agents = {
         ...cfg.agents,
         defaults: {
@@ -148,6 +160,44 @@ describe("trigger handling", () => {
       const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
       expect(call?.provider).toBe("anthropic");
       expect(call?.model).toBe("claude-haiku-4-5-20251001");
+    });
+  });
+  it("keeps stored model override for heartbeat runs when heartbeat model is not configured", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      await fs.writeFile(
+        join(home, "sessions.json"),
+        JSON.stringify({
+          [_MAIN_SESSION_KEY]: {
+            sessionId: "main",
+            updatedAt: Date.now(),
+            providerOverride: "openai",
+            modelOverride: "gpt-5.2",
+          },
+        }),
+        "utf-8",
+      );
+
+      await getReplyFromConfig(
+        {
+          Body: "hello",
+          From: "+1002",
+          To: "+2000",
+        },
+        { isHeartbeat: true },
+        makeCfg(home),
+      );
+
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(call?.provider).toBe("openai");
+      expect(call?.model).toBe("gpt-5.2");
     });
   });
   it("suppresses HEARTBEAT_OK replies outside heartbeat runs", async () => {

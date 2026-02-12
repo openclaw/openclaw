@@ -18,7 +18,8 @@ There are two related systems:
   - Directives are stripped from the message before the model sees it.
   - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
-  - Directives are only applied for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
+  - Directives are only applied for **authorized senders**. If `commands.allowFrom` is set, it is the only
+    allowlist used; otherwise authorization comes from channel allowlists/pairing plus `commands.useAccessGroups`.
     Unauthorized senders see directives treated as plain text.
 
 There are also a few **inline shortcuts** (allowlisted/authorized senders only): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
@@ -37,6 +38,10 @@ They run immediately, are stripped before the model sees the message, and the re
     config: false,
     debug: false,
     restart: false,
+    allowFrom: {
+      "*": ["user1"],
+      discord: ["user:123"],
+    },
     useAccessGroups: true,
   },
 }
@@ -55,7 +60,10 @@ They run immediately, are stripped before the model sees the message, and the re
 - `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
 - `commands.config` (default `false`) enables `/config` (reads/writes `openclaw.json`).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
-- `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands.
+- `commands.allowFrom` (optional) sets a per-provider allowlist for command authorization. When configured, it is the
+  only authorization source for commands and directives (channel allowlists/pairing and `commands.useAccessGroups`
+  are ignored). Use `"*"` for a global default; provider-specific keys override it.
+- `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands when `commands.allowFrom` is not set.
 
 ## Command list
 

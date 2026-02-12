@@ -321,6 +321,109 @@ describe("cron tool", () => {
     });
   });
 
+  // ── Flat-params recovery (issue #11310) ──────────────────────────────
+
+  it("recovers flat params when job is missing", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-flat", {
+      action: "add",
+      name: "flat-job",
+      schedule: { kind: "at", at: new Date(123).toISOString() },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "do stuff" },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { name?: string; sessionTarget?: string; payload?: { kind?: string } };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.name).toBe("flat-job");
+    expect(call.params?.sessionTarget).toBe("isolated");
+    expect(call.params?.payload?.kind).toBe("agentTurn");
+  });
+
+  it("recovers flat params when job is empty object", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-empty-job", {
+      action: "add",
+      job: {},
+      name: "empty-job",
+      schedule: { kind: "cron", expr: "0 9 * * *" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "wake up" },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { name?: string; sessionTarget?: string; payload?: { text?: string } };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.name).toBe("empty-job");
+    expect(call.params?.sessionTarget).toBe("main");
+    expect(call.params?.payload?.text).toBe("wake up");
+  });
+
+  it("recovers flat message shorthand as agentTurn payload", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-msg-shorthand", {
+      action: "add",
+      schedule: { kind: "at", at: new Date(456).toISOString() },
+      message: "do stuff",
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { payload?: { kind?: string; message?: string }; sessionTarget?: string };
+    };
+    expect(call.method).toBe("cron.add");
+    // normalizeCronJobCreate infers agentTurn from message and isolated from agentTurn
+    expect(call.params?.payload?.kind).toBe("agentTurn");
+    expect(call.params?.payload?.message).toBe("do stuff");
+    expect(call.params?.sessionTarget).toBe("isolated");
+  });
+
+  it("does not recover flat params when no meaningful job field is present", async () => {
+    const tool = createCronTool();
+    await expect(
+      tool.execute("call-no-signal", {
+        action: "add",
+        name: "orphan-name",
+        enabled: true,
+      }),
+    ).rejects.toThrow("job required");
+  });
+
+  it("prefers existing non-empty job over flat params", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-nested-wins", {
+      action: "add",
+      job: {
+        name: "nested-job",
+        schedule: { kind: "at", at: new Date(123).toISOString() },
+        payload: { kind: "systemEvent", text: "from nested" },
+      },
+      name: "flat-name-should-be-ignored",
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { name?: string; payload?: { text?: string } };
+    };
+    expect(call?.params?.name).toBe("nested-job");
+    expect(call?.params?.payload?.text).toBe("from nested");
+  });
+
   it("does not infer delivery when mode is none", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 

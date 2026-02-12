@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.2.6-3",
+  "version": "2026.2.10",
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "@vector-im/matrix-bot-sdk": "0.8.0-element.3",
-    "markdown-it": "14.1.0",
+    "markdown-it": "14.1.1",
     "music-metadata": "^11.12.0",
     "zod": "^4.3.6"
   },
