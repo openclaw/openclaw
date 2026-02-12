@@ -165,4 +165,71 @@ describe("agents_list", () => {
     const research = agents?.find((agent) => agent.id === "research");
     expect(research?.configured).toBe(false);
   });
+
+  it("refreshes allowAgents for existing session tools after config changes", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: [],
+            },
+          },
+          {
+            id: "product-analyst",
+            name: "Product Analyst",
+          },
+        ],
+      },
+    };
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "main",
+    }).find((candidate) => candidate.name === "agents_list");
+    if (!tool) {
+      throw new Error("missing agents_list tool");
+    }
+
+    const first = await tool.execute("call5", {});
+    const firstAgents = (
+      first.details as {
+        agents?: Array<{ id: string }>;
+      }
+    ).agents;
+    expect(firstAgents?.map((agent) => agent.id)).toEqual(["main"]);
+
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["product-analyst"],
+            },
+          },
+          {
+            id: "product-analyst",
+            name: "Product Analyst",
+          },
+        ],
+      },
+    };
+
+    const second = await tool.execute("call6", {});
+    const secondAgents = (
+      second.details as {
+        agents?: Array<{ id: string }>;
+      }
+    ).agents;
+    expect(secondAgents?.map((agent) => agent.id)).toEqual(["main", "product-analyst"]);
+  });
 });

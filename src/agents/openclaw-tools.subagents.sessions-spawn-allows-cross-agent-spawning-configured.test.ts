@@ -141,4 +141,89 @@ describe("openclaw-tools: subagents", () => {
     });
     expect(childSessionKey?.startsWith("agent:beta:subagent:")).toBe(true);
   });
+
+  it("sessions_spawn reloads allowAgents for existing session tools", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: [],
+            },
+          },
+          {
+            id: "beta",
+          },
+        ],
+      },
+    };
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
+
+    const denied = await tool.execute("call9", {
+      task: "do thing",
+      agentId: "beta",
+    });
+    expect(denied.details).toMatchObject({
+      status: "forbidden",
+    });
+
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["beta"],
+            },
+          },
+          {
+            id: "beta",
+          },
+        ],
+      },
+    };
+
+    let childSessionKey: string | undefined;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        childSessionKey = params?.sessionKey;
+        return { runId: "run-2", status: "accepted", acceptedAt: 5200 };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      return {};
+    });
+
+    const allowed = await tool.execute("call10", {
+      task: "do thing",
+      agentId: "beta",
+    });
+    expect(allowed.details).toMatchObject({
+      status: "accepted",
+      runId: "run-2",
+    });
+    expect(childSessionKey?.startsWith("agent:beta:subagent:")).toBe(true);
+  });
 });
