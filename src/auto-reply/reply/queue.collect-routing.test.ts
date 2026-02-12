@@ -9,7 +9,7 @@ function createRun(params: {
   originatingChannel?: FollowupRun["originatingChannel"];
   originatingTo?: string;
   originatingAccountId?: string;
-  originatingThreadId?: number;
+  originatingThreadId?: string | number;
 }): FollowupRun {
   return {
     prompt: params.prompt,
@@ -282,5 +282,87 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
+  });
+
+  it("collects Slack messages in same thread and preserves string thread id", async () => {
+    const key = `test-collect-slack-thread-same-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "1706000000.000001",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "1706000000.000001",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
+  });
+
+  it("does not collect Slack messages when thread ids differ", async () => {
+    const key = `test-collect-slack-thread-diff-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "1706000000.000001",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "1706000000.000002",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await expect.poll(() => calls.length).toBe(2);
+    expect(calls[0]?.prompt).toBe("one");
+    expect(calls[1]?.prompt).toBe("two");
+    expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
+    expect(calls[1]?.originatingThreadId).toBe("1706000000.000002");
   });
 });

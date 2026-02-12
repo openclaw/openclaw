@@ -44,13 +44,13 @@ export function scheduleFollowupDrain(
             const to = item.originatingTo;
             const accountId = item.originatingAccountId;
             const threadId = item.originatingThreadId;
-            if (!channel && !to && !accountId && typeof threadId !== "number") {
+            if (!channel && !to && !accountId && threadId == null) {
               return {};
             }
             if (!isRoutableChannel(channel) || !to) {
               return { cross: true };
             }
-            const threadKey = typeof threadId === "number" ? String(threadId) : "";
+            const threadKey = threadId != null ? String(threadId) : "";
             return {
               key: [channel, to, accountId || "", threadKey].join("|"),
             };
@@ -80,7 +80,7 @@ export function scheduleFollowupDrain(
             (i) => i.originatingAccountId,
           )?.originatingAccountId;
           const originatingThreadId = items.find(
-            (i) => typeof i.originatingThreadId === "number",
+            (i) => i.originatingThreadId != null,
           )?.originatingThreadId;
 
           const prompt = buildCollectPrompt({
