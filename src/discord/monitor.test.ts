@@ -889,7 +889,7 @@ describe("discord DM reaction handling", () => {
 
     expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
     const routeArgs = resolveAgentRouteMock.mock.calls[0][0];
-    expect(routeArgs.peer).toEqual({ kind: "dm", id: "user-42" });
+    expect(routeArgs.peer).toEqual({ kind: "direct", id: "user-42" });
   });
 
   it("routes group DM reactions with peer kind 'group'", async () => {
