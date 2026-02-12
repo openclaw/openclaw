@@ -80,6 +80,9 @@ function cleanBlocksForInsert(blocks: any[]): { cleaned: any[]; skipped: string[
 
 // ============ Core Functions ============
 
+/** Max blocks per documentBlockChildren.create request */
+const MAX_BLOCKS_PER_INSERT = 50;
+
 async function convertMarkdown(client: Lark.Client, markdown: string) {
   const res = await client.docx.document.convert({
     data: { content_type: "markdown", content: markdown },
@@ -124,6 +127,61 @@ async function insertBlocks(
     throw new Error(res.msg);
   }
   return { children: res.data?.children ?? [], skipped };
+}
+
+/** Split markdown into chunks at top-level headings (# or ##) to stay within API content limits */
+function splitMarkdownByHeadings(markdown: string): string[] {
+  const lines = markdown.split("\n");
+  const chunks: string[] = [];
+  let current: string[] = [];
+
+  for (const line of lines) {
+    if (/^#{1,2}\s/.test(line) && current.length > 0) {
+      chunks.push(current.join("\n"));
+      current = [];
+    }
+    current.push(line);
+  }
+  if (current.length > 0) {
+    chunks.push(current.join("\n"));
+  }
+  return chunks;
+}
+
+/** Convert markdown in chunks to avoid document.convert content size limits */
+async function chunkedConvertMarkdown(client: Lark.Client, markdown: string) {
+  const chunks = splitMarkdownByHeadings(markdown);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
+  const allBlocks: any[] = [];
+  for (const chunk of chunks) {
+    const { blocks, firstLevelBlockIds } = await convertMarkdown(client, chunk);
+    const sorted = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
+    allBlocks.push(...sorted);
+  }
+  return allBlocks;
+}
+
+/** Insert blocks in batches of MAX_BLOCKS_PER_INSERT to avoid API 400 errors */
+/* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
+async function chunkedInsertBlocks(
+  client: Lark.Client,
+  docToken: string,
+  blocks: any[],
+  parentBlockId?: string,
+): Promise<{ children: any[]; skipped: string[] }> {
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
+  const allChildren: any[] = [];
+  const allSkipped: string[] = [];
+
+  for (let i = 0; i < blocks.length; i += MAX_BLOCKS_PER_INSERT) {
+    const batch = blocks.slice(i, i + MAX_BLOCKS_PER_INSERT);
+    const { children, skipped } = await insertBlocks(client, docToken, batch, parentBlockId);
+    allChildren.push(...children);
+    allSkipped.push(...skipped);
+  }
+
+  return { children: allChildren, skipped: allSkipped };
 }
 
 async function clearDocumentContent(client: Lark.Client, docToken: string) {
@@ -286,13 +344,12 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
 async function writeDoc(client: Lark.Client, docToken: string, markdown: string, maxBytes: number) {
   const deleted = await clearDocumentContent(client, docToken);
 
-  const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
+  const blocks = await chunkedConvertMarkdown(client, markdown);
   if (blocks.length === 0) {
     return { success: true, blocks_deleted: deleted, blocks_added: 0, images_processed: 0 };
   }
-  const sortedBlocks = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
 
-  const { children: inserted, skipped } = await insertBlocks(client, docToken, sortedBlocks);
+  const { children: inserted, skipped } = await chunkedInsertBlocks(client, docToken, blocks);
   const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
 
   return {
@@ -312,13 +369,12 @@ async function appendDoc(
   markdown: string,
   maxBytes: number,
 ) {
-  const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
+  const blocks = await chunkedConvertMarkdown(client, markdown);
   if (blocks.length === 0) {
     throw new Error("Content is empty");
   }
-  const sortedBlocks = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
 
-  const { children: inserted, skipped } = await insertBlocks(client, docToken, sortedBlocks);
+  const { children: inserted, skipped } = await chunkedInsertBlocks(client, docToken, blocks);
   const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
 
   return {
