@@ -59,7 +59,7 @@ function isValidAntigravitySignature(value: unknown): value is string {
   return ANTIGRAVITY_SIGNATURE_RE.test(trimmed);
 }
 
-function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const msg of messages) {

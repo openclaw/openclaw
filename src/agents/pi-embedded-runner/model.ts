@@ -114,6 +114,41 @@ function resolveAnthropicOpus46ForwardCompatModel(
   return undefined;
 }
 
+// google-antigravity's model catalog in pi-ai can lag behind the actual platform.
+// When a google-antigravity model ID contains "opus-4-6" (or "opus-4.6") but isn't
+// in the registry yet, clone the opus-4-5 template so the correct api
+// ("google-gemini-cli") and baseUrl are preserved.
+const ANTIGRAVITY_OPUS_46_STEMS = ["claude-opus-4-6", "claude-opus-4.6"] as const;
+const ANTIGRAVITY_OPUS_45_TEMPLATES = ["claude-opus-4-5-thinking", "claude-opus-4-5"] as const;
+
+function resolveAntigravityOpus46ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "google-antigravity") {
+    return undefined;
+  }
+  const lower = modelId.trim().toLowerCase();
+  const isOpus46 = ANTIGRAVITY_OPUS_46_STEMS.some(
+    (stem) => lower === stem || lower.startsWith(`${stem}-`),
+  );
+  if (!isOpus46) {
+    return undefined;
+  }
+  for (const templateId of ANTIGRAVITY_OPUS_45_TEMPLATES) {
+    const template = modelRegistry.find("google-antigravity", templateId) as Model<Api> | null;
+    if (template) {
+      return normalizeModelCompat({
+        ...template,
+        id: modelId.trim(),
+        name: modelId.trim(),
+      } as Model<Api>);
+    }
+  }
+  return undefined;
+}
+
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {
@@ -198,6 +233,14 @@ export function resolveModel(
     );
     if (anthropicForwardCompat) {
       return { model: anthropicForwardCompat, authStorage, modelRegistry };
+    }
+    const antigravityForwardCompat = resolveAntigravityOpus46ForwardCompatModel(
+      provider,
+      modelId,
+      modelRegistry,
+    );
+    if (antigravityForwardCompat) {
+      return { model: antigravityForwardCompat, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
