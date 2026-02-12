@@ -84,6 +84,12 @@ jobs:
             task: protocol
             command: pnpm protocol:check
           - runtime: node
+            task: router-enforcement-gates
+            command: |
+              bash scripts/check-llm-imports.sh
+              bash scripts/check-llm-entrypoints-inventory.sh
+              bash scripts/run-negative-proof.sh
+          - runtime: node
             task: format
             command: pnpm format
           - runtime: bun
