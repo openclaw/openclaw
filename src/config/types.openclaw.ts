@@ -92,10 +92,6 @@ export type OpenClawConfig = {
   channels?: ChannelsConfig;
   cron?: CronConfig;
   hooks?: HooksConfig;
-  slugGenerator?: {
-    /** Model to use for slug generation (provider/model or alias). */
-    model?: string;
-  };
   discovery?: DiscoveryConfig;
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
