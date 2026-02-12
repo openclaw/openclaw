@@ -546,6 +546,7 @@ export async function prepareSlackMessage(params: {
           channel: "slack",
           to: `user:${message.user}`,
           accountId: route.accountId,
+          threadId: threadContext.messageThreadId,
         }
       : undefined,
     onRecordError: (err) => {
