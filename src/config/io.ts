@@ -504,9 +504,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
         parseJson: (raw) => deps.json5.parse(raw),
       });
-      resolvedCfg = (resolved && typeof resolved === "object" && !Array.isArray(resolved))
-        ? resolved as OpenClawConfig
-        : cfg;
+      resolvedCfg =
+        resolved && typeof resolved === "object" && !Array.isArray(resolved)
+          ? (resolved as OpenClawConfig)
+          : cfg;
     } catch {
       // If include resolution fails (e.g. no $include keys, or missing files),
       // fall back to the original config object — validation will catch real issues.
