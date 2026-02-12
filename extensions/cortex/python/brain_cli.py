@@ -315,6 +315,125 @@ def cmd_export_synapse(args):
     _json_out(data)
 
 
+# ================================================================
+# SYNAPSE V2: Task delegation commands
+# ================================================================
+
+def cmd_delegate(args):
+    b = _brain()
+    msg = b.delegate_task(
+        from_agent=args.from_agent,
+        to_agent=args.to_agent,
+        subject=args.subject,
+        body=args.body,
+        context=args.context,
+        priority=args.priority,
+        expires_hours=args.expires,
+        thread_id=args.thread_id,
+    )
+    print(f"📋 Delegated: {msg['id']} (thread={msg['thread_id']})")
+    print(f"   From: {msg['from']} → To: {msg['to']}")
+    print(f"   Subject: {msg['subject']}")
+    print(f"   Status: {msg.get('task_status', 'pending')}")
+    if msg.get("expires_at"):
+        print(f"   Expires: {msg['expires_at']}")
+    if msg.get("context"):
+        print(f"   Context: {msg['context'][:120]}")
+
+
+def cmd_task_status(args):
+    b = _brain()
+    ok = b.update_task_status(args.message_id, args.status, result=args.result)
+    if ok:
+        print(f"✅ Task {args.message_id} → {args.status}")
+        if args.result:
+            print(f"   Result: {args.result[:200]}")
+    else:
+        print(f"❌ Message {args.message_id} not found")
+
+
+def cmd_tasks(args):
+    b = _brain()
+    tasks = b.get_delegated_tasks(
+        agent_id=args.agent,
+        status=args.status,
+        include_expired=args.include_expired,
+    )
+    if not tasks:
+        print("📭 No delegated tasks found")
+        return
+    for t in tasks:
+        status = t.get("task_status", "?")
+        emoji = {"pending": "⏳", "in_progress": "🔄", "complete": "✅", "failed": "❌"}.get(status, "❓")
+        subj = t.get("subject", "(no subject)")
+        frm = t.get("from_agent", "?")
+        to = t.get("to_agent", "?")
+        ts = t.get("created_at", "")[:19]
+        print(f"  {emoji} [{status}] {frm}→{to}: {subj} ({ts})")
+        if t.get("result"):
+            print(f"    Result: {t['result'][:120]}")
+        if t.get("context"):
+            print(f"    Context: {t['context'][:120]}")
+        if t.get("expires_at"):
+            print(f"    Expires: {t['expires_at'][:19]}")
+    print(f"\n{len(tasks)} tasks")
+
+
+# ================================================================
+# Working memory & categories
+# ================================================================
+
+def cmd_wm(args):
+    b = _brain()
+    items = b.get_working_memory()
+    if not items:
+        print("📌 Working memory is empty.")
+        return
+    for i, item in enumerate(items):
+        label = item.get("label", "(no label)")
+        content = item.get("content", "")[:120].replace("\n", " ")
+        pinned = item.get("pinned_at", "")[:19]
+        print(f"  [{i}] {label}: {content}")
+        print(f"       pinned: {pinned}  id: {item['id']}")
+    print(f"\n{len(items)} pinned items")
+
+
+def cmd_wm_pin(args):
+    b = _brain()
+    pin_id = b.pin_working_memory(args.label, args.content)
+    total = len(b.get_working_memory())
+    print(f"📌 Pinned: {pin_id} (label={args.label}, total={total})")
+
+
+def cmd_wm_unpin(args):
+    b = _brain()
+    ok = b.unpin_working_memory(args.index)
+    if ok:
+        print(f"✅ Unpinned item {args.index}")
+    else:
+        print(f"❌ Could not unpin {args.index} (not found)")
+
+
+def cmd_categories(args):
+    b = _brain()
+    cats = b.list_categories()
+    if not cats:
+        print("No categories defined.")
+        return
+    for cat in cats:
+        kws = ", ".join(cat.get("keywords", []))
+        print(f"  {cat['name']}: {cat.get('description', '')}")
+        if kws:
+            print(f"    keywords: {kws}")
+    print(f"\n{len(cats)} categories")
+
+
+def cmd_migrate_sidecars(args):
+    b = _brain()
+    result = b.migrate_sidecars()
+    print(f"✅ Migrated: {result['working_memory']} working memory pins, {result['categories']} categories")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified Brain CLI (SYNAPSE + Cortex)")
     sub = parser.add_subparsers(dest="command")
@@ -389,6 +508,41 @@ def main():
     # export
     sub.add_parser("export-synapse", help="Export messages as JSON (legacy compat)")
 
+    # --- SYNAPSE V2: Task delegation ---
+    p = sub.add_parser("delegate", help="Delegate a task to another agent")
+    p.add_argument("--from", dest="from_agent", required=True)
+    p.add_argument("--to", dest="to_agent", required=True)
+    p.add_argument("--subject", required=True)
+    p.add_argument("--body", required=True)
+    p.add_argument("--context", default=None, help="File paths or extra context data")
+    p.add_argument("--priority", default="action", choices=["info", "action", "urgent"])
+    p.add_argument("--expires", type=float, default=None, help="Hours until task expires")
+    p.add_argument("--thread", dest="thread_id", default=None)
+
+    p = sub.add_parser("task-status", help="Update task status")
+    p.add_argument("message_id", help="Message ID of the delegated task")
+    p.add_argument("status", choices=["pending", "in_progress", "complete", "failed"])
+    p.add_argument("--result", default=None, help="Deliverable content or result text")
+
+    p = sub.add_parser("tasks", help="List delegated tasks")
+    p.add_argument("--agent", default=None, help="Filter by agent (from or to)")
+    p.add_argument("--status", default=None, choices=["pending", "in_progress", "complete", "failed"])
+    p.add_argument("--include-expired", action="store_true", help="Include expired tasks")
+
+    # --- Working memory ---
+    sub.add_parser("wm", help="List pinned working memory items")
+    p = sub.add_parser("wm-pin", help="Pin item to working memory")
+    p.add_argument("label", help="Short label for the pin")
+    p.add_argument("content", help="Content to pin")
+    p = sub.add_parser("wm-unpin", help="Unpin item by index or ID")
+    p.add_argument("index", help="0-based index or pin ID")
+
+    # --- Categories ---
+    sub.add_parser("categories", help="List all categories")
+
+    # --- Migration ---
+    sub.add_parser("migrate-sidecars", help="Migrate JSON sidecars into brain.db")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -409,6 +563,14 @@ def main():
         "test": cmd_test,
         "embed": cmd_embed,
         "export-synapse": cmd_export_synapse,
+        "delegate": cmd_delegate,
+        "task-status": cmd_task_status,
+        "tasks": cmd_tasks,
+        "wm": cmd_wm,
+        "wm-pin": cmd_wm_pin,
+        "wm-unpin": cmd_wm_unpin,
+        "categories": cmd_categories,
+        "migrate-sidecars": cmd_migrate_sidecars,
     }
 
     func = cmd_map.get(args.command)

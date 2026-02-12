@@ -123,9 +123,25 @@ class UnifiedBrain:
                 body TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT,
-                metadata TEXT
+                metadata TEXT,
+                expires_at TEXT,
+                task_status TEXT,
+                result TEXT,
+                context TEXT
             )
         """)
+
+        # -- Migration: add SYNAPSE V2 columns to existing messages tables --
+        for col, coltype in [
+            ("expires_at", "TEXT"),
+            ("task_status", "TEXT"),
+            ("result", "TEXT"),
+            ("context", "TEXT"),
+        ]:
+            try:
+                c.execute(f"ALTER TABLE messages ADD COLUMN {col} {coltype}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS threads (
@@ -274,6 +290,8 @@ class UnifiedBrain:
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_agent, created_at)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_messages_expires ON messages(expires_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_messages_task_status ON messages(task_status)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_threads_status ON threads(status, last_message_at)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_stm_importance ON stm(importance DESC)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_stm_source ON stm(source_message_id)")
@@ -428,6 +446,141 @@ class UnifiedBrain:
                 source=f"synapse:{from_agent}",
                 source_message_id=msg_id,
             )
+
+    # -----------------------------------------------------------------------
+    # SYNAPSE V2: Task Delegation
+    # -----------------------------------------------------------------------
+
+    def delegate_task(
+        self,
+        from_agent: str,
+        to_agent: str,
+        subject: str,
+        body: str,
+        context: Optional[str] = None,
+        priority: str = "action",
+        expires_hours: Optional[float] = None,
+        thread_id: Optional[str] = None,
+    ) -> dict:
+        """Delegate a task to another agent. Returns the message dict with task metadata.
+
+        Sets task_status='pending'. Optionally sets expires_at from *expires_hours*.
+        """
+        from datetime import datetime, timedelta
+
+        msg = self.send(
+            from_agent=from_agent,
+            to_agent=to_agent,
+            subject=subject,
+            body=body,
+            priority=priority,
+            thread_id=thread_id,
+        )
+
+        now = _now()
+        expires_at: Optional[str] = None
+        if expires_hours is not None:
+            expires_at = (datetime.now() + timedelta(hours=expires_hours)).isoformat()
+
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        c.execute(
+            """UPDATE messages
+               SET task_status = 'pending',
+                   context = ?,
+                   expires_at = ?,
+                   updated_at = ?
+               WHERE id = ?""",
+            (context, expires_at, now, msg["id"]),
+        )
+        conn.commit()
+        conn.close()
+
+        msg["task_status"] = "pending"
+        msg["context"] = context
+        msg["expires_at"] = expires_at
+        return msg
+
+    def update_task_status(
+        self,
+        message_id: str,
+        status: str,
+        result: Optional[str] = None,
+    ) -> bool:
+        """Update the task_status and optional result of a delegated message.
+
+        Valid statuses: pending, in_progress, complete, failed.
+        Returns True if updated.
+        """
+        valid = {"pending", "in_progress", "complete", "failed"}
+        if status not in valid:
+            raise ValueError(f"Invalid task_status '{status}'. Must be one of {valid}")
+
+        now = _now()
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        c.execute(
+            """UPDATE messages
+               SET task_status = ?,
+                   result = ?,
+                   updated_at = ?
+               WHERE id = ?""",
+            (status, result, now, message_id),
+        )
+        updated = c.rowcount > 0
+        conn.commit()
+        conn.close()
+        return updated
+
+    def get_delegated_tasks(
+        self,
+        agent_id: Optional[str] = None,
+        status: Optional[str] = None,
+        include_expired: bool = False,
+    ) -> List[dict]:
+        """Retrieve tasks (messages with task_status set).
+
+        Optionally filter by agent (from or to) and status.
+        Expired tasks (past expires_at) are excluded by default.
+        """
+        conn = self._conn()
+        c = conn.cursor()
+
+        sql = "SELECT * FROM messages WHERE task_status IS NOT NULL"
+        params: list = []
+
+        if agent_id:
+            sql += " AND (from_agent = ? OR to_agent = ?)"
+            params.extend([agent_id, agent_id])
+
+        if status:
+            sql += " AND task_status = ?"
+            params.append(status)
+
+        if not include_expired:
+            sql += " AND (expires_at IS NULL OR expires_at > ?)"
+            params.append(_now())
+
+        sql += " ORDER BY created_at DESC"
+
+        c.execute(sql, params)
+        rows = c.fetchall()
+        conn.close()
+        return [self._msg_row_to_dict(r) for r in rows]
+
+    def cleanup_expired_messages(self) -> int:
+        """Delete messages past their expires_at. Returns count deleted."""
+        now = _now()
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        c.execute(
+            "DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < ?",
+            (now,),
+        )
+        count = c.rowcount
+        conn.commit()
+        conn.close()
+        return count
 
     def inbox(self, agent_id: str, include_read: bool = False) -> List[dict]:
         """Get messages for agent_id. Unread only by default."""

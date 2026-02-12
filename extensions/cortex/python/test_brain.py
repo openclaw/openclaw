@@ -626,3 +626,127 @@ class TestMigration:
         result = brain.migrate_sidecars()
         assert result["working_memory"] == 0  # Already migrated
         assert len(brain.get_working_memory()) == 1  # Still just one
+
+
+# ============================================================
+# SYNAPSE V2: Task Delegation
+# ============================================================
+
+class TestSynapseV2TaskDelegation:
+    def test_delegate_task_returns_dict(self, brain):
+        r = brain.delegate_task("helios", "nova", "Build feature", "Build the thing")
+        assert r["id"].startswith("syn_")
+        assert r["task_status"] == "pending"
+        assert r["from"] == "helios"
+        assert r["to"] == "nova"
+
+    def test_delegate_task_with_context(self, brain):
+        r = brain.delegate_task("helios", "nova", "Deploy", "Deploy it",
+                                context="/path/to/repo")
+        assert r["context"] == "/path/to/repo"
+
+    def test_delegate_task_with_expiry(self, brain):
+        r = brain.delegate_task("helios", "nova", "Urgent", "Do it now",
+                                expires_hours=2.0)
+        assert r["expires_at"] is not None
+        # Should be roughly 2 hours from now
+        from datetime import datetime
+        exp = datetime.fromisoformat(r["expires_at"])
+        assert exp > datetime.now()
+
+    def test_update_task_status_to_in_progress(self, brain):
+        r = brain.delegate_task("helios", "nova", "Task", "Body")
+        assert brain.update_task_status(r["id"], "in_progress") is True
+
+    def test_update_task_status_to_complete_with_result(self, brain):
+        r = brain.delegate_task("helios", "nova", "Task", "Body")
+        assert brain.update_task_status(r["id"], "complete",
+                                         result="Built and deployed") is True
+        # Verify the result is stored
+        tasks = brain.get_delegated_tasks(agent_id="nova")
+        found = [t for t in tasks if t["id"] == r["id"]]
+        assert len(found) == 1
+        assert found[0]["task_status"] == "complete"
+        assert found[0]["result"] == "Built and deployed"
+
+    def test_update_task_status_to_failed(self, brain):
+        r = brain.delegate_task("helios", "nova", "Task", "Body")
+        assert brain.update_task_status(r["id"], "failed",
+                                         result="Compilation error") is True
+
+    def test_update_task_status_invalid(self, brain):
+        r = brain.delegate_task("helios", "nova", "Task", "Body")
+        with pytest.raises(ValueError, match="Invalid task_status"):
+            brain.update_task_status(r["id"], "bogus")
+
+    def test_update_task_status_nonexistent(self, brain):
+        assert brain.update_task_status("syn_nonexistent", "complete") is False
+
+    def test_get_delegated_tasks_all(self, brain):
+        brain.delegate_task("helios", "nova", "T1", "B1")
+        brain.delegate_task("helios", "claude", "T2", "B2")
+        tasks = brain.get_delegated_tasks()
+        assert len(tasks) >= 2
+
+    def test_get_delegated_tasks_by_agent(self, brain):
+        brain.delegate_task("helios", "nova", "For Nova", "B1")
+        brain.delegate_task("helios", "claude", "For Claude", "B2")
+        tasks = brain.get_delegated_tasks(agent_id="nova")
+        assert all(
+            t["from_agent"] == "nova" or t["to_agent"] == "nova"
+            for t in tasks
+        )
+
+    def test_get_delegated_tasks_by_status(self, brain):
+        r1 = brain.delegate_task("helios", "nova", "T1", "B1")
+        r2 = brain.delegate_task("helios", "nova", "T2", "B2")
+        brain.update_task_status(r1["id"], "complete")
+        pending = brain.get_delegated_tasks(status="pending")
+        complete = brain.get_delegated_tasks(status="complete")
+        assert any(t["id"] == r2["id"] for t in pending)
+        assert any(t["id"] == r1["id"] for t in complete)
+
+    def test_expired_tasks_excluded_by_default(self, brain):
+        # Create a task that expires 1 hour ago (by directly setting expires_at)
+        r = brain.delegate_task("helios", "nova", "Expired", "Body",
+                                expires_hours=0.0001)  # ~0.36 seconds
+        import time
+        time.sleep(0.5)
+        tasks = brain.get_delegated_tasks()
+        # The task should be excluded since expires_at is past now
+        assert not any(t["id"] == r["id"] for t in tasks)
+
+    def test_expired_tasks_included_when_requested(self, brain):
+        r = brain.delegate_task("helios", "nova", "Expired", "Body",
+                                expires_hours=0.0001)
+        import time
+        time.sleep(0.5)
+        tasks = brain.get_delegated_tasks(include_expired=True)
+        assert any(t["id"] == r["id"] for t in tasks)
+
+    def test_cleanup_expired_messages(self, brain):
+        r = brain.delegate_task("helios", "nova", "Will Expire", "Body",
+                                expires_hours=0.0001)
+        import time
+        time.sleep(0.5)
+        count = brain.cleanup_expired_messages()
+        assert count >= 1
+
+    def test_messages_table_has_v2_columns(self, brain):
+        """Verify the V2 columns exist in the messages table schema."""
+        conn = sqlite3.connect(str(brain.db_path))
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()]
+        conn.close()
+        for col in ["expires_at", "task_status", "result", "context"]:
+            assert col in cols, f"Missing column: {col}"
+
+    def test_delegate_default_priority_is_action(self, brain):
+        r = brain.delegate_task("helios", "nova", "Task", "Body")
+        assert r["priority"] == "action"
+
+    def test_delegate_with_thread(self, brain):
+        r1 = brain.delegate_task("helios", "nova", "T1", "First task")
+        tid = r1["thread_id"]
+        r2 = brain.delegate_task("helios", "nova", "T2", "Follow-up",
+                                  thread_id=tid)
+        assert r2["thread_id"] == tid
