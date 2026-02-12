@@ -17,11 +17,16 @@
  * https://arxiv.org/abs/2512.07094
  */
 
-import type { ToolErrorCategory } from "./types.js";
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+export type ToolErrorCategory =
+  | "transient"
+  | "resource"
+  | "semantic"
+  | "permanent"
+  | "context_limit";
 
 export type HealthStatus = "healthy" | "degraded" | "critical";
 
