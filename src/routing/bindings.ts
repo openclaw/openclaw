@@ -2,7 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.agents.js";
-import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
 function normalizeBindingChannelId(raw?: string | null): string | null {
   const normalized = normalizeChatChannelId(raw);
@@ -42,6 +42,64 @@ function resolveNormalizedBindingMatch(binding: AgentBinding): {
     accountId: normalizeAccountId(accountId),
     channelId,
   };
+}
+
+function matchesBindingAccountId(match: string | undefined, actual: string): boolean {
+  const trimmed = (match ?? "").trim();
+  if (!trimmed) {
+    return actual === DEFAULT_ACCOUNT_ID;
+  }
+  if (trimmed === "*") {
+    return true;
+  }
+  return normalizeAccountId(trimmed) === actual;
+}
+
+export function listBoundAgentIds(params: {
+  cfg: OpenClawConfig;
+  channelId: string;
+  accountId?: string | null;
+  includeDefault?: boolean;
+}): string[] {
+  const normalizedChannel = normalizeBindingChannelId(params.channelId);
+  if (!normalizedChannel) {
+    if (params.includeDefault === false) {
+      return [];
+    }
+    return [normalizeAgentId(resolveDefaultAgentId(params.cfg))];
+  }
+  const normalizedAccount = normalizeAccountId(params.accountId);
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const binding of listBindings(params.cfg)) {
+    if (!binding || typeof binding !== "object") {
+      continue;
+    }
+    const match = binding.match;
+    if (!match || typeof match !== "object") {
+      continue;
+    }
+    const channel = normalizeBindingChannelId(match.channel);
+    if (!channel || channel !== normalizedChannel) {
+      continue;
+    }
+    if (!matchesBindingAccountId(match.accountId, normalizedAccount)) {
+      continue;
+    }
+    const agentId = normalizeAgentId(binding.agentId);
+    if (seen.has(agentId)) {
+      continue;
+    }
+    seen.add(agentId);
+    ids.push(agentId);
+  }
+  if (ids.length === 0 && params.includeDefault !== false) {
+    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
+    if (!seen.has(defaultAgentId)) {
+      ids.push(defaultAgentId);
+    }
+  }
+  return ids;
 }
 
 export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {

@@ -29,8 +29,9 @@ import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
+import { listBoundAgentIds } from "../../routing/bindings.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
@@ -394,9 +395,16 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
 
   const maxDiscordCommands = 100;
+  const commandAgentIds = listBoundAgentIds({
+    cfg,
+    channelId: "discord",
+    accountId: account.accountId,
+  });
   let skillCommands =
     nativeEnabled && nativeSkillsEnabled
-      ? dedupeSkillCommandsForDiscord(listSkillCommandsForAgents({ cfg }))
+      ? dedupeSkillCommandsForDiscord(
+          listSkillCommandsForAgents({ cfg, agentIds: commandAgentIds }),
+        )
       : [];
   let commandSpecs = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
