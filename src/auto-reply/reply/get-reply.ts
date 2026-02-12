@@ -78,6 +78,10 @@ export async function getReplyFromConfig(
   });
   let provider = defaultProvider;
   let model = defaultModel;
+  // Resolve the heartbeat-specific model when configured.  Track it so we can
+  // re-apply it after directive resolution — createModelSelectionState may
+  // overwrite it with a session-level modelOverride (e.g. from /model command).
+  let heartbeatModelOverride: { provider: string; model: string } | null = null;
   if (opts?.isHeartbeat) {
     const heartbeatRaw = agentCfg?.heartbeat?.model?.trim() ?? "";
     const heartbeatRef = heartbeatRaw
@@ -90,6 +94,7 @@ export async function getReplyFromConfig(
     if (heartbeatRef) {
       provider = heartbeatRef.ref.provider;
       model = heartbeatRef.ref.model;
+      heartbeatModelOverride = { provider: heartbeatRef.ref.provider, model: heartbeatRef.ref.model };
     }
   }
 
@@ -234,6 +239,14 @@ export async function getReplyFromConfig(
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
+
+  // Heartbeat runs must honour the configured heartbeat.model.  Directive
+  // resolution (createModelSelectionState) may have overwritten it with a
+  // session-level modelOverride stored from a prior /model command.
+  if (heartbeatModelOverride) {
+    provider = heartbeatModelOverride.provider;
+    model = heartbeatModelOverride.model;
+  }
 
   const inlineActionResult = await handleInlineActions({
     ctx,
