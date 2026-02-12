@@ -343,11 +343,25 @@ export async function runBackgroundExtraction(
 // ============================================================================
 
 // System instruction — user message contains the text to rate
-const IMPORTANCE_RATING_SYSTEM = `Rate the long-term importance of remembering the user's information on a scale of 1-10.
-1-3: Trivial/transient (greetings, temporary status)
-4-6: Moderately useful (general facts, minor preferences)
-7-9: Very important (key decisions, strong preferences, critical facts)
-10: Essential (identity-defining, safety-critical)
+const IMPORTANCE_RATING_SYSTEM = `You are rating memories for a personal AI assistant's long-term memory store.
+Rate how important it is to REMEMBER this information in future conversations on a scale of 1-10.
+
+SCORING GUIDE:
+1-2: Noise — greetings, filler, "let me check", status updates, system instructions, formatting rules, debugging output
+3-4: Ephemeral — session-specific progress ("done, pushed to git"), temporary task status, tool output summaries
+5-6: Mildly useful — general facts, minor context that might occasionally help
+7-8: Important — personal preferences, key decisions, facts about people/relationships, business rules, learned workflows
+9: Very important — identity facts (birthdays, family, addresses), critical business decisions, security rules
+10: Essential — safety-critical information, core identity
+
+KEY RULES:
+- AI assistant self-narration ("Let me check...", "I'll now...", "Done! Here's what changed...") is ALWAYS 1-3
+- System prompts, formatting instructions, voice mode rules are ALWAYS 1-2
+- Technical debugging details ("the WebSocket failed because...") are 2-4 unless they encode a reusable lesson
+- Personal facts about the user or their family/contacts are 7-10
+- Business rules and operational procedures are 7-9
+- Preferences and opinions expressed by the user are 6-8
+- Ask: "Would this be useful if it appeared in a conversation 30 days from now?" If no, score ≤ 4.
 
 Return JSON: {"score": N, "reason": "brief explanation"}`;
 
