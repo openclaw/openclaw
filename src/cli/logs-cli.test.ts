@@ -60,7 +60,7 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
 
-  it("wires --local-time through CLI parsing and emits local timestamps", async () => {
+  it("emits local timestamps in plain mode", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",
       lines: [
@@ -78,13 +78,15 @@ describe("logs cli", () => {
       return true;
     });
 
-    await runLogsCli(["logs", "--local-time", "--plain"]);
+    await runLogsCli(["logs", "--plain"]);
 
     const output = stdoutWrites.join("");
     expect(output).toContain("line one");
-    const timestamp = output.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z?/u)?.[0];
+    // Timestamps should be local ISO format (no trailing Z)
+    const timestamp = output.match(
+      /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}/u,
+    )?.[0];
     expect(timestamp).toBeTruthy();
-    expect(timestamp?.endsWith("Z")).toBe(false);
   });
 
   it("warns when the output pipe closes", async () => {
@@ -110,35 +112,16 @@ describe("logs cli", () => {
   });
 
   describe("formatLogTimestamp", () => {
-    it("formats UTC timestamp in plain mode by default", () => {
+    it("formats timestamp in local ISO format in plain mode", () => {
       const result = formatLogTimestamp("2025-01-01T12:00:00.000Z");
-      expect(result).toBe("2025-01-01T12:00:00.000Z");
-    });
-
-    it("formats UTC timestamp in pretty mode", () => {
-      const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "pretty");
-      expect(result).toBe("12:00:00");
-    });
-
-    it("formats local time in plain mode when localTime is true", () => {
-      const utcTime = "2025-01-01T12:00:00.000Z";
-      const result = formatLogTimestamp(utcTime, "plain", true);
-      // Should be local time with explicit timezone offset (not 'Z' suffix).
+      // Should be local ISO time with timezone offset, no trailing Z
+      expect(result).not.toContain("Z");
       expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
-      // The exact time depends on timezone, but should be different from UTC
-      expect(result).not.toBe(utcTime);
     });
 
-    it("formats local time in pretty mode when localTime is true", () => {
-      const utcTime = "2025-01-01T12:00:00.000Z";
-      const result = formatLogTimestamp(utcTime, "pretty", true);
-      // Should be HH:MM:SS format
+    it("formats timestamp in local HH:MM:SS in pretty mode", () => {
+      const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "pretty");
       expect(result).toMatch(/^\d{2}:\d{2}:\d{2}$/);
-      // Should be different from UTC time (12:00:00) if not in UTC timezone
-      const tzOffset = new Date(utcTime).getTimezoneOffset();
-      if (tzOffset !== 0) {
-        expect(result).not.toBe("12:00:00");
-      }
     });
 
     it.each([
