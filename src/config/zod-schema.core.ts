@@ -55,6 +55,10 @@ export const ModelProviderSchema = z
     api: ModelApiSchema.optional(),
     headers: z.record(z.string(), z.string()).optional(),
     authHeader: z.boolean().optional(),
+    /** Request timeout in milliseconds */
+    timeoutMs: z.number().int().positive().optional(),
+    /** @deprecated Use timeoutMs instead */
+    timeout: z.number().int().positive().optional(),
     models: z.array(ModelDefinitionSchema),
   })
   .strict();
