@@ -53,7 +53,6 @@ import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
@@ -278,13 +277,18 @@ export async function agentCommand(
       allowedModelCatalog = allowed.allowedCatalog;
     }
 
-    // Apply session model override if present. sessions.patch already validated
-    // the model against the catalog and allowlist, so we trust it here.
+    // Apply session model override if present and still allowed.
+    // Validate against allowlist because the configuration may have changed
+    // since the override was stored.
     const storedProviderOverride = sessionEntry?.providerOverride?.trim();
     const storedModelOverride = sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
-      provider = storedProviderOverride || defaultProvider;
-      model = storedModelOverride;
+      const overrideKey = modelKey(storedProviderOverride || defaultProvider, storedModelOverride);
+      // Only apply if no allowlist exists OR the override is in the allowlist
+      if (!hasAllowlist || allowedModelKeys.has(overrideKey)) {
+        provider = storedProviderOverride || defaultProvider;
+        model = storedModelOverride;
+      }
     }
     if (sessionEntry) {
       const authProfileId = sessionEntry.authProfileOverride;
