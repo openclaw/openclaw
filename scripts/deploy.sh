@@ -236,8 +236,8 @@ if [ "$RESTART" = true ] && [ "$DRY_RUN" = false ]; then
 
   # Verify the service started with the correct path
   sleep 2
-  LOADED_PATH=$(launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" 2>/dev/null | grep -A1 "arguments" | tail -1 | xargs)
-  if echo "$LOADED_PATH" | grep -q "$DEPLOY_DIR"; then
+  LOADED_PATH=$(launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" 2>/dev/null | grep -o "$DEPLOY_DIR[^ ]*" | head -1)
+  if [ -n "$LOADED_PATH" ]; then
     info "Gateway running from correct path ✓"
   else
     warn "Gateway path mismatch! Expected: $DEPLOY_DIR, Got: $LOADED_PATH"
