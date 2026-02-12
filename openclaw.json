@@ -1,5 +1,6 @@
 {
   "gateway": {
+    "port": 8080,
     "auth": {
       "token": "supersecret123"
     },
