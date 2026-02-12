@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { renderSignalMentions } from "./mentions.js";
 
 const PLACEHOLDER = "\uFFFC";
