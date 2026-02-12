@@ -278,11 +278,11 @@ review_artifacts_init() {
     cat > .local/review.md <<'EOF_MD'
 A) TL;DR recommendation
 
-B) What changed
+B) What changed and what is good?
 
-C) What is good
+C) Security findings
 
-D) Security findings
+D) What is the PR intent? Is this the most optimal implementation?
 
 E) Concerns or questions (actionable)
 
