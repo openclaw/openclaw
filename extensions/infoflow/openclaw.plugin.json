@@ -1,0 +1,44 @@
+{
+  "id": "infoflow",
+  "channels": ["infoflow"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiHost": { "type": "string" },
+      "enabled": { "type": "boolean" },
+      "name": { "type": "string" },
+      "check_token": { "type": "string" },
+      "encodingAESKey": { "type": "string" },
+      "appKey": { "type": "string" },
+      "appSecret": { "type": "string" },
+      "robotName": { "type": "string" },
+      "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist"] },
+      "allowFrom": { "type": "array", "items": { "type": "string" } },
+      "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
+      "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+      "requireMention": { "type": "boolean" },
+      "accounts": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "name": { "type": "string" },
+            "check_token": { "type": "string" },
+            "encodingAESKey": { "type": "string" },
+            "appKey": { "type": "string" },
+            "appSecret": { "type": "string" },
+            "robotName": { "type": "string" },
+            "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist"] },
+            "allowFrom": { "type": "array", "items": { "type": "string" } },
+            "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
+            "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+            "requireMention": { "type": "boolean" }
+          }
+        }
+      },
+      "defaultAccount": { "type": "string" }
+    }
+  }
+}
