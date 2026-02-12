@@ -1,4 +1,3 @@
-# Track workspace config files, ignore cloned repos
-AutifyME/
+# Ignore dependencies and temp files
 **/node_modules/
 tally_helper.ps1
