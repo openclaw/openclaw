@@ -194,17 +194,6 @@ type GeminiGroundingResponse = {
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
-function extractGrokContent(data: GrokSearchResponse): string | undefined {
-  // xAI Responses API format: output[0].content[0].text
-  const fromResponses = data.output?.[0]?.content?.[0]?.text;
-  if (typeof fromResponses === "string" && fromResponses) {
-    return fromResponses;
-  }
-  // Fallback: deprecated output_text field
-  const text = typeof data.output_text === "string" ? data.output_text : undefined;
-  return { text, annotationCitations: [] };
-}
-
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") {
