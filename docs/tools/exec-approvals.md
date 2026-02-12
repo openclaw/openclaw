@@ -155,7 +155,8 @@ approved request to the node host.
 
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
-timeout, the request is treated as an approval timeout and surfaced as a denial reason.
+timeout (configurable via `tools.exec.approvalTimeoutSec`, default 120 seconds), the request is
+treated as an approval timeout and surfaced as a denial reason.
 
 The confirmation dialog includes:
 

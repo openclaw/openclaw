@@ -51,6 +51,10 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import {
+  resolveApprovalRunningNoticeMs,
+  resolveApprovalTimeoutMs,
+} from "./exec-approval-timeouts.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -120,9 +124,6 @@ const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
 const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const DEFAULT_NOTIFY_TAIL_CHARS = 400;
-const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
-const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
-const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
 type PtyExitEvent = { exitCode: number; signal?: number };
@@ -173,6 +174,7 @@ export type ExecToolDefaults = {
   agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;
+  approvalTimeoutSec?: number;
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
@@ -397,16 +399,6 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
 
 function createApprovalSlug(id: string) {
   return id.slice(0, APPROVAL_SLUG_LENGTH);
-}
-
-function resolveApprovalRunningNoticeMs(value?: number) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_APPROVAL_RUNNING_NOTICE_MS;
-  }
-  if (value <= 0) {
-    return 0;
-  }
-  return Math.floor(value);
 }
 
 function emitExecSystemEvent(text: string, opts: { sessionKey?: string; contextKey?: string }) {
@@ -816,6 +808,8 @@ export function createExecTool(
   const safeBins = resolveSafeBins(defaults?.safeBins);
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
+  const approvalTimeoutMs = resolveApprovalTimeoutMs(defaults?.approvalTimeoutSec);
+  const approvalRequestTimeoutMs = approvalTimeoutMs + 10_000; // extra buffer for request round-trip
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -1125,7 +1119,7 @@ export function createExecTool(
         if (requiresAsk) {
           const approvalId = crypto.randomUUID();
           const approvalSlug = createApprovalSlug(approvalId);
-          const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+          const expiresAtMs = Date.now() + approvalTimeoutMs;
           const contextKey = `exec:${approvalId}`;
           const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
           const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
@@ -1135,7 +1129,7 @@ export function createExecTool(
             try {
               const decisionResult = await callGatewayTool<{ decision: string }>(
                 "exec.approval.request",
-                { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+                { timeoutMs: approvalRequestTimeoutMs },
                 {
                   id: approvalId,
                   command: commandText,
@@ -1146,7 +1140,7 @@ export function createExecTool(
                   agentId,
                   resolvedPath: undefined,
                   sessionKey: defaults?.sessionKey,
-                  timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+                  timeoutMs: approvalTimeoutMs,
                 },
               );
               const decisionValue =
@@ -1305,7 +1299,7 @@ export function createExecTool(
         if (requiresAsk) {
           const approvalId = crypto.randomUUID();
           const approvalSlug = createApprovalSlug(approvalId);
-          const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+          const expiresAtMs = Date.now() + approvalTimeoutMs;
           const contextKey = `exec:${approvalId}`;
           const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
           const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
@@ -1319,7 +1313,7 @@ export function createExecTool(
             try {
               const decisionResult = await callGatewayTool<{ decision: string }>(
                 "exec.approval.request",
-                { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+                { timeoutMs: approvalRequestTimeoutMs },
                 {
                   id: approvalId,
                   command: commandText,
@@ -1330,7 +1324,7 @@ export function createExecTool(
                   agentId,
                   resolvedPath,
                   sessionKey: defaults?.sessionKey,
-                  timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+                  timeoutMs: approvalTimeoutMs,
                 },
               );
               const decisionValue =
