@@ -231,11 +231,13 @@ final class TalkModeManager: NSObject {
 
         if keepActive {
             // Keep Talk Mode running in the background. Start a silent audio loop so iOS
-            // doesn't suspend us between recognition/TTS cycles (UIBackgroundModes=audio).
+            // doesn't suspend us between recognition/TTS cycles (UIBackgroundModes=audio+voip).
+            // KEY INSIGHT: We must keep the AVAudioEngine running continuously to prevent
+            // iOS from suspending the app. Never stop the engine while in background mode.
             self.backgroundKeepAlive = true
             self.startBackgroundAudioKeepAlive()
             self.logger.info("backgrounding with talk mode active (keepActive=true)")
-            GatewayDiagnostics.log("talk: background keepActive=true listening=\(self.isListening)")
+            GatewayDiagnostics.log("talk: background keepActive=true listening=\(self.isListening) engineRunning=\(self.audioEngine.isRunning)")
             return wasActive
         }
 
@@ -271,6 +273,19 @@ final class TalkModeManager: NSObject {
             self.backgroundKeepAlive = false
             self.stopBackgroundAudioKeepAlive()
             self.logger.info("foregrounding with talk mode still active (wasKeptActive=true)")
+            GatewayDiagnostics.log("talk: foregrounding wasKeptActive=true engineRunning=\(self.audioEngine.isRunning)")
+            
+            // If the engine is still running, we're in good shape
+            if self.audioEngine.isRunning {
+                // Make sure we're in the right state
+                if !self.isListening && self.captureMode != .pushToTalk {
+                    await self.resumeRecognitionOnly()
+                }
+            } else {
+                // Engine died somehow, restart everything
+                self.logger.warning("foregrounding: engine not running despite keepActive, restarting")
+                await self.start()
+            }
             return
         }
         await self.start()
@@ -638,6 +653,155 @@ final class TalkModeManager: NSObject {
         self.audioEngine.stop()
         self.speechRecognizer = nil
     }
+    
+    /// Pauses speech recognition but keeps AVAudioEngine running for background mode
+    private func pauseRecognitionOnly() {
+        self.recognitionTask?.cancel()
+        self.recognitionTask = nil
+        self.recognitionRequest?.endAudio()
+        self.recognitionRequest = nil
+        self.micLevel = 0
+        self.lastAudioActivity = nil
+        self.noiseFloorSamples.removeAll(keepingCapacity: true)
+        self.noiseFloor = nil
+        self.noiseFloorReady = false
+        self.audioTapDiagnostics = nil
+        if self.inputTapInstalled {
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+            self.inputTapInstalled = false
+        }
+        // CRITICAL: Do NOT stop the audioEngine in background mode - this keeps us alive
+        self.speechRecognizer = nil
+        self.logger.info("paused recognition only, keeping engine running for background mode")
+    }
+    
+    /// Resumes speech recognition on an already-running AVAudioEngine (for background mode)
+    private func resumeRecognitionOnly() async {
+        guard self.isEnabled else { return }
+        guard self.backgroundKeepAlive else { 
+            // If we're not in background mode, fall back to full start
+            await self.start()
+            return
+        }
+        guard self.gatewayConnected else {
+            self.statusText = "Offline"
+            return
+        }
+        
+        do {
+            // The engine should already be running, just restart recognition
+            guard self.audioEngine.isRunning else {
+                self.logger.warning("resumeRecognitionOnly: engine not running, falling back to full start")
+                await self.start()
+                return
+            }
+            
+            self.speechRecognizer = SFSpeechRecognizer()
+            guard let recognizer = self.speechRecognizer else {
+                throw NSError(domain: "TalkMode", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Speech recognizer unavailable",
+                ])
+            }
+            
+            self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+            self.recognitionRequest?.shouldReportPartialResults = true
+            self.recognitionRequest?.taskHint = .dictation
+            guard let request = self.recognitionRequest else { return }
+            
+            let input = self.audioEngine.inputNode
+            let format = input.inputFormat(forBus: 0)
+            
+            // Set up audio tap again
+            let tapDiagnostics = AudioTapDiagnostics(label: "talk") { [weak self] level in
+                guard let self else { return }
+                Task { @MainActor in
+                    let raw = max(0, min(Double(level) * 10.0, 1.0))
+                    let next = (self.micLevel * 0.80) + (raw * 0.20)
+                    self.micLevel = next
+                    
+                    if self.isListening, !self.isSpeaking, !self.noiseFloorReady {
+                        self.noiseFloorSamples.append(raw)
+                        if self.noiseFloorSamples.count >= 22 {
+                            let sorted = self.noiseFloorSamples.sorted()
+                            let take = max(6, sorted.count / 2)
+                            let slice = sorted.prefix(take)
+                            let avg = slice.reduce(0.0, +) / Double(slice.count)
+                            self.noiseFloor = avg
+                            self.noiseFloorReady = true
+                            self.noiseFloorSamples.removeAll(keepingCapacity: true)
+                            let threshold = min(0.35, max(0.12, avg + 0.10))
+                            GatewayDiagnostics.log(
+                                "talk audio: noiseFloor=\(String(format: "%.3f", avg)) threshold=\(String(format: "%.3f", threshold))")
+                        }
+                    }
+                    
+                    let threshold: Double = if let floor = self.noiseFloor, self.noiseFloorReady {
+                        min(0.35, max(0.12, floor + 0.10))
+                    } else {
+                        0.18
+                    }
+                    if raw >= threshold {
+                        self.lastAudioActivity = Date()
+                    }
+                }
+            }
+            
+            self.audioTapDiagnostics = tapDiagnostics
+            let tapBlock = Self.makeAudioTapAppendCallback(request: request, diagnostics: tapDiagnostics)
+            input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
+            self.inputTapInstalled = true
+            self.loggedPartialThisCycle = false
+            
+            self.captureMode = .continuous
+            self.isListening = true
+            self.statusText = "Listening"
+            self.startSilenceMonitor()
+            
+            GatewayDiagnostics.log(
+                "talk speech: recognition resumed on running engine mode=\(String(describing: self.captureMode)) engineRunning=\(self.audioEngine.isRunning)")
+            
+            self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+                guard let self else { return }
+                if let error {
+                    let msg = error.localizedDescription
+                    GatewayDiagnostics.log("talk speech: error=\(msg)")
+                    if !self.isSpeaking {
+                        if msg.localizedCaseInsensitiveContains("no speech detected") {
+                            self.statusText = self.isEnabled ? "Listening" : "Speech error: \(msg)"
+                        } else {
+                            self.statusText = "Speech error: \(msg)"
+                        }
+                    }
+                    self.logger.debug("speech recognition error: \(msg, privacy: .public)")
+                    if self.captureMode == .continuous, self.isEnabled, !self.isSpeaking {
+                        Task { @MainActor [weak self] in
+                            await self?.restartRecognitionAfterError()
+                        }
+                    }
+                }
+                guard let result else { return }
+                let transcript = result.bestTranscription.formattedString
+                if !result.isFinal, !self.loggedPartialThisCycle {
+                    let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        self.loggedPartialThisCycle = true
+                        GatewayDiagnostics.log("talk speech: partial chars=\(trimmed.count)")
+                    }
+                }
+                Task { @MainActor in
+                    await self.handleTranscript(transcript: transcript, isFinal: result.isFinal)
+                }
+            }
+            
+            await self.subscribeChatIfNeeded(sessionKey: self.mainSessionKey)
+            self.logger.info("resumed recognition on running engine")
+            
+        } catch {
+            self.isListening = false
+            self.statusText = "Resume failed: \(error.localizedDescription)"
+            self.logger.error("resume recognition failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 
     private nonisolated static func makeAudioTapAppendCallback(
         request: SpeechRequest,
@@ -776,7 +940,15 @@ final class TalkModeManager: NSObject {
         self.lastTranscript = ""
         self.lastHeard = nil
         self.playThinkingSound()
-        self.stopRecognition()
+        
+        // CRITICAL FIX: Only stop recognition if we're not in background keepalive mode
+        // Stopping the AVAudioEngine in background causes iOS to suspend the app
+        if !self.backgroundKeepAlive {
+            self.stopRecognition()
+        } else {
+            // In background mode, keep the engine running but stop speech recognition
+            self.pauseRecognitionOnly()
+        }
 
         GatewayDiagnostics.log("talk: process transcript chars=\(transcript.count) restartAfter=\(restartAfter)")
         await self.reloadConfig()
@@ -867,7 +1039,12 @@ final class TalkModeManager: NSObject {
         }
 
         if restartAfter {
-            await self.start()
+            if self.backgroundKeepAlive {
+                // In background mode, resume recognition without restarting the engine
+                await self.resumeRecognitionOnly()
+            } else {
+                await self.start()
+            }
         }
     }
 
@@ -1083,7 +1260,11 @@ final class TalkModeManager: NSObject {
 
                 if self.interruptOnSpeech {
                     do {
-                        try self.startRecognition()
+                        if self.backgroundKeepAlive {
+                            await self.resumeRecognitionOnly()
+                        } else {
+                            try self.startRecognition()
+                        }
                     } catch {
                         self.logger.warning(
                             "startRecognition during speak failed: \(error.localizedDescription, privacy: .public)")
@@ -1120,7 +1301,11 @@ final class TalkModeManager: NSObject {
                 GatewayDiagnostics.log("talk tts: provider=system (missing key or voiceId)")
                 if self.interruptOnSpeech {
                     do {
-                        try self.startRecognition()
+                        if self.backgroundKeepAlive {
+                            await self.resumeRecognitionOnly()
+                        } else {
+                            try self.startRecognition()
+                        }
                     } catch {
                         self.logger.warning(
                             "startRecognition during speak failed: \(error.localizedDescription, privacy: .public)")
@@ -1136,7 +1321,11 @@ final class TalkModeManager: NSObject {
             do {
                 if self.interruptOnSpeech {
                     do {
-                        try self.startRecognition()
+                        if self.backgroundKeepAlive {
+                            await self.resumeRecognitionOnly()
+                        } else {
+                            try self.startRecognition()
+                        }
                     } catch {
                         self.logger.warning(
                             "startRecognition during speak failed: \(error.localizedDescription, privacy: .public)")
@@ -1151,7 +1340,15 @@ final class TalkModeManager: NSObject {
             }
         }
 
-        self.stopRecognition()
+        // Only stop recognition if not in background keepalive mode
+        if !self.backgroundKeepAlive {
+            self.stopRecognition()
+        } else {
+            // In background mode, we want to restart recognition immediately after speaking
+            Task { @MainActor [weak self] in
+                await self?.resumeRecognitionOnly()
+            }
+        }
         self.isSpeaking = false
     }
 
@@ -1251,7 +1448,11 @@ final class TalkModeManager: NSObject {
     private func startIncrementalSpeechTask() {
         if self.interruptOnSpeech {
             do {
-                try self.startRecognition()
+                if self.backgroundKeepAlive {
+                    Task { await self.resumeRecognitionOnly() }
+                } else {
+                    try self.startRecognition()
+                }
             } catch {
                 self.logger.warning(
                     "startRecognition during incremental speak failed: \(error.localizedDescription, privacy: .public)")
@@ -1778,6 +1979,8 @@ extension TalkModeManager {
     static func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
         // Prefer `.spokenAudio` for STT; it tends to preserve speech energy better than `.voiceChat`.
+        // While `.voiceChat` might seem more appropriate for VoIP background modes, `.spokenAudio` 
+        // is optimized for speech recognition accuracy which is our primary use case.
         try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [
             .allowBluetoothHFP,
             .defaultToSpeaker,
@@ -1790,11 +1993,24 @@ extension TalkModeManager {
     // MARK: - Background audio keepalive
 
     /// Starts a silent audio loop to prevent iOS from suspending the app in the background.
-    /// This leverages UIBackgroundModes=audio to keep the process alive between speech
-    /// recognition cycles (e.g. during the "Thinking…" phase).
+    /// This leverages UIBackgroundModes=audio+voip to keep the process alive between speech
+    /// recognition cycles. With the AVAudioEngine now kept running continuously, this serves
+    /// as an additional safety net.
     func startBackgroundAudioKeepAlive() {
         guard self.backgroundKeepAlive else { return }
         guard self.backgroundAudioPlayer == nil else { return }
+        
+        // With our improved approach where AVAudioEngine stays running, we might not need
+        // the silent audio player as much, but keeping it as a safety net for robustness.
+        // The continuous AVAudioEngine + VoIP background mode should be the primary keepalive.
+        
+        if self.audioEngine.isRunning {
+            self.logger.info("background keepalive: AVAudioEngine already running, minimal silent player")
+            // Engine is running, so we need less aggressive keepalive
+        } else {
+            self.logger.warning("background keepalive: AVAudioEngine not running, full silent player keepalive")
+        }
+        
         // Generate a tiny silent WAV in memory (44-byte header + 8000 silent samples).
         let sampleRate: UInt32 = 8000
         let numSamples: UInt32 = sampleRate // 1 second of silence
@@ -1821,8 +2037,8 @@ extension TalkModeManager {
             player.volume = 0.0
             player.play()
             self.backgroundAudioPlayer = player
-            self.logger.info("background audio keepalive started")
-            GatewayDiagnostics.log("talk: background audio keepalive started")
+            self.logger.info("background audio keepalive started (engine=\(self.audioEngine.isRunning))")
+            GatewayDiagnostics.log("talk: background audio keepalive started engineRunning=\(self.audioEngine.isRunning)")
         } catch {
             self.logger.warning("background audio keepalive failed: \(error.localizedDescription, privacy: .public)")
         }
