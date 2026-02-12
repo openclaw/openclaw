@@ -284,6 +284,7 @@ class NodeRuntime(context: Context) {
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
+  val manualToken: StateFlow<String> = prefs.manualToken
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
 
@@ -358,7 +359,8 @@ class NodeRuntime(context: Context) {
           val port = manualPort.value
           if (host.isNotEmpty() && port in 1..65535) {
             didAutoConnect = true
-            connect(GatewayEndpoint.manual(host = host, port = port))
+            val token = manualToken.value.trim().takeIf { it.isNotEmpty() }
+            connect(GatewayEndpoint.manual(host = host, port = port), token)
           }
           return@collect
         }
@@ -426,6 +428,10 @@ class NodeRuntime(context: Context) {
 
   fun setManualTls(value: Boolean) {
     prefs.setManualTls(value)
+  }
+
+  fun setManualToken(value: String) {
+    prefs.setManualToken(value)
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
@@ -546,9 +552,18 @@ class NodeRuntime(context: Context) {
     )
   }
 
+  // Nullable token is intentional: gateway can fall back to password/device auth.
+  private fun resolveGatewayToken(preferManualToken: Boolean): String? {
+    val manualOverride = manualToken.value.trim().takeIf { it.isNotEmpty() }
+    if (preferManualToken && !manualOverride.isNullOrBlank()) {
+      return manualOverride
+    }
+    return prefs.loadGatewayToken()
+  }
+
   fun refreshGatewayConnection() {
     val endpoint = connectedEndpoint ?: return
-    val token = prefs.loadGatewayToken()
+    val token = resolveGatewayToken(preferManualToken = manualEnabled.value)
     val password = prefs.loadGatewayPassword()
     val tls = resolveTlsParams(endpoint)
     operatorSession.connect(endpoint, token, password, buildOperatorConnectOptions(), tls)
@@ -557,12 +572,24 @@ class NodeRuntime(context: Context) {
     nodeSession.reconnect()
   }
 
+  private fun connect(endpoint: GatewayEndpoint, tokenOverride: String?) {
+    connectedEndpoint = endpoint
+    operatorStatusText = "Connecting..."
+    nodeStatusText = "Connecting..."
+    updateStatus()
+    val token = tokenOverride?.takeIf { it.isNotEmpty() } ?: resolveGatewayToken(preferManualToken = false)
+    val password = prefs.loadGatewayPassword()
+    val tls = resolveTlsParams(endpoint)
+    operatorSession.connect(endpoint, token, password, buildOperatorConnectOptions(), tls)
+    nodeSession.connect(endpoint, token, password, buildNodeConnectOptions(), tls)
+  }
+
   fun connect(endpoint: GatewayEndpoint) {
     connectedEndpoint = endpoint
-    operatorStatusText = "Connecting…"
-    nodeStatusText = "Connecting…"
+    operatorStatusText = "Connecting..."
+    nodeStatusText = "Connecting..."
     updateStatus()
-    val token = prefs.loadGatewayToken()
+    val token = resolveGatewayToken(preferManualToken = false)
     val password = prefs.loadGatewayPassword()
     val tls = resolveTlsParams(endpoint)
     operatorSession.connect(endpoint, token, password, buildOperatorConnectOptions(), tls)
@@ -604,7 +631,8 @@ class NodeRuntime(context: Context) {
       _statusText.value = "Failed: invalid manual host/port"
       return
     }
-    connect(GatewayEndpoint.manual(host = host, port = port))
+    val token = manualToken.value.trim().takeIf { it.isNotEmpty() }
+    connect(GatewayEndpoint.manual(host = host, port = port), token)
   }
 
   fun disconnect() {
@@ -941,7 +969,7 @@ class NodeRuntime(context: Context) {
         GatewaySession.InvokeResult.ok(res)
       }
       OpenClawCameraCommand.Snap.rawValue -> {
-        showCameraHud(message = "Taking photo…", kind = CameraHudKind.Photo)
+        showCameraHud(message = "Taking photo...", kind = CameraHudKind.Photo)
         triggerCameraFlash()
         val res =
           try {
@@ -958,7 +986,7 @@ class NodeRuntime(context: Context) {
         val includeAudio = paramsJson?.contains("\"includeAudio\":true") != false
         if (includeAudio) externalAudioCaptureActive.value = true
         try {
-          showCameraHud(message = "Recording…", kind = CameraHudKind.Recording)
+          showCameraHud(message = "Recording...", kind = CameraHudKind.Recording)
           val res =
             try {
               camera.clip(paramsJson)

@@ -71,6 +71,9 @@ class SecurePrefs(context: Context) {
     MutableStateFlow(prefs.getBoolean("gateway.manual.tls", true))
   val manualTls: StateFlow<Boolean> = _manualTls
 
+  private val _manualToken = MutableStateFlow("")
+  val manualToken: StateFlow<String> = _manualToken
+
   private val _lastDiscoveredStableId =
     MutableStateFlow(
       prefs.getString("gateway.lastDiscoveredStableID", "") ?: "",
@@ -141,6 +144,11 @@ class SecurePrefs(context: Context) {
   fun setManualTls(value: Boolean) {
     prefs.edit { putBoolean("gateway.manual.tls", value) }
     _manualTls.value = value
+  }
+
+  fun setManualToken(value: String) {
+    // Not persisted - kept in memory only for security
+    _manualToken.value = value
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {

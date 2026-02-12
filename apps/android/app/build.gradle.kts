@@ -105,6 +105,9 @@ dependencies {
   implementation("androidx.exifinterface:exifinterface:1.4.2")
   implementation("com.squareup.okhttp3:okhttp:5.3.2")
 
+  // BouncyCastle for Ed25519 (Samsung ROMs may lack native provider)
+  implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+
   // CameraX (for node.invoke camera.* parity)
   implementation("androidx.camera:camera-core:1.5.2")
   implementation("androidx.camera:camera-camera2:1.5.2")
