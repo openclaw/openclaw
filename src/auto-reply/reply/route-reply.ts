@@ -99,7 +99,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   if (isSystemMessageChannel(channel)) {
     return {
       ok: false,
-      error: "Webchat routing not supported for queued replies",
+      error: "System channel routing not supported for queued replies",
     };
   }
 

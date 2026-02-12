@@ -8,7 +8,8 @@ const repoRoot = path.resolve(__dirname, "..");
 
 async function writeJsonSchema() {
   const definitions: Record<string, unknown> = {};
-  for (const [name, schema] of Object.entries(ProtocolSchemas)) {
+  const entries = Object.entries(ProtocolSchemas).toSorted(([a], [b]) => a.localeCompare(b));
+  for (const [name, schema] of entries) {
     definitions[name] = schema;
   }
 
@@ -36,9 +37,10 @@ async function writeJsonSchema() {
   const distDir = path.join(repoRoot, "dist");
   await fs.mkdir(distDir, { recursive: true });
   const jsonSchemaPath = path.join(distDir, "protocol.schema.json");
-  await fs.writeFile(jsonSchemaPath, JSON.stringify(rootSchema, null, 2));
+  const content = JSON.stringify(rootSchema, null, 2).replace(/\r\n/g, "\n");
+  await fs.writeFile(jsonSchemaPath, content, "utf8");
   console.log(`wrote ${jsonSchemaPath}`);
-  return { jsonSchemaPath, schemaString: JSON.stringify(rootSchema) };
+  return { jsonSchemaPath, schemaString: content };
 }
 
 async function main() {

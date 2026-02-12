@@ -208,7 +208,9 @@ function emitGatewayFrame(): string {
 }
 
 async function generate() {
-  const definitions = Object.entries(ProtocolSchemas) as Array<[string, JsonSchema]>;
+  const definitions = (Object.entries(ProtocolSchemas) as Array<[string, JsonSchema]>).toSorted(
+    ([a], [b]) => a.localeCompare(b),
+  );
 
   for (const [name, schema] of definitions) {
     schemaNameByObject.set(schema as object, name);
@@ -230,10 +232,10 @@ async function generate() {
   // Frame enum must come after payload structs
   parts.push(emitGatewayFrame());
 
-  const content = parts.join("\n");
+  const content = parts.join("\n").replace(/\r\n/g, "\n");
   for (const outPath of outPaths) {
     await fs.mkdir(path.dirname(outPath), { recursive: true });
-    await fs.writeFile(outPath, content);
+    await fs.writeFile(outPath, content, "utf8");
     console.log(`wrote ${outPath}`);
   }
 }
