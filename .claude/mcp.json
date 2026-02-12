@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "cortex": {
+      "command": "python3",
+      "args": ["/home/bonsaihorn/Projects/helios/extensions/cortex/python/mcp_server.py"],
+      "env": {
+        "CORTEX_DATA_DIR": "/home/bonsaihorn/.openclaw/workspace/memory"
+      }
+    }
+  }
+}
