@@ -580,7 +580,10 @@ const ERROR_PATTERNS = {
     "resource_exhausted",
     "usage limit",
   ],
-  overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
+  overloaded: [
+    /overloaded_error|"type"\s*:\s*"overloaded_error"|负载(?:已经)?达到上限/i,
+    "overloaded",
+  ],
   timeout: [
     "timeout",
     "timed out",
