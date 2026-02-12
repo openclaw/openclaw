@@ -12,6 +12,8 @@ export type PerformanceTier = "fast" | "balanced" | "powerful";
 
 export type CostTier = "free" | "cheap" | "moderate" | "expensive";
 
+export type PrimaryCapability = "coding" | "reasoning" | "vision" | "general";
+
 export type ModelCapabilities = {
   coding: boolean;
   reasoning: boolean;
@@ -21,6 +23,7 @@ export type ModelCapabilities = {
   creative: boolean;
   performanceTier: PerformanceTier;
   costTier: CostTier;
+  primary?: PrimaryCapability;
 };
 
 /**
@@ -37,6 +40,7 @@ export const MODEL_CAPABILITIES_REGISTRY: Record<string, Partial<ModelCapabiliti
     creative: true,
     performanceTier: "powerful",
     costTier: "expensive",
+    primary: "reasoning",
   },
   "claude-opus-4-5": {
     coding: true,
@@ -54,6 +58,7 @@ export const MODEL_CAPABILITIES_REGISTRY: Record<string, Partial<ModelCapabiliti
     general: true,
     performanceTier: "balanced",
     costTier: "moderate",
+    primary: "coding",
   },
   "claude-3-5-sonnet": {
     coding: true,
@@ -102,6 +107,45 @@ export const MODEL_CAPABILITIES_REGISTRY: Record<string, Partial<ModelCapabiliti
     fast: true,
     general: true,
     performanceTier: "fast",
+    costTier: "cheap",
+  },
+
+  // Future / Screenshot models
+
+  "claude-sonnet-4-5-thinking": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    general: true,
+    performanceTier: "balanced",
+    costTier: "moderate",
+  },
+  "claude-opus-4-5-thinking": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    general: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "claude-opus-4-6-thinking": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    general: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gpt-oss-120b": {
+    coding: true,
+    general: true,
+    performanceTier: "balanced",
+    costTier: "cheap", // Assuming cheaper due to OSS
+  },
+  "gpt-oss-120b-medium": {
+    coding: true,
+    general: true,
+    performanceTier: "balanced",
     costTier: "cheap",
   },
 
@@ -312,6 +356,22 @@ export const MODEL_CAPABILITIES_REGISTRY: Record<string, Partial<ModelCapabiliti
   },
 
   // Google
+  "gemini-3-pro": {
+    coding: true,
+    vision: true,
+    general: true,
+    reasoning: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gemini-3-flash": {
+    coding: true,
+    vision: true,
+    general: true,
+    fast: true,
+    performanceTier: "fast",
+    costTier: "cheap",
+  },
   "gemini-2.0-flash": {
     coding: true,
     fast: true,
@@ -373,6 +433,14 @@ export const MODEL_CAPABILITIES_REGISTRY: Record<string, Partial<ModelCapabiliti
     reasoning: true,
     performanceTier: "powerful",
     costTier: "expensive",
+  },
+  "gemini-2.0-pro-exp-02-05": {
+    coding: true,
+    vision: true,
+    general: true,
+    reasoning: true,
+    performanceTier: "powerful", // Pro is powerful tier
+    costTier: "moderate", // Currently free/preview, but tiered as moderate/expensive usually. Assuming moderate for preference over legacy.
   },
 
   // Groq (fast inference)
@@ -552,12 +620,14 @@ export function getModelCapabilities(modelId: string): ModelCapabilities {
       }
     }
   }
-  // Try prefix match for versioned models
+  // Try prefix match for versioned models (longest match wins)
   if (!base) {
+    let longestMatchLen = 0;
     for (const [key, value] of Object.entries(MODEL_CAPABILITIES_REGISTRY)) {
-      if (normalized.startsWith(key.toLowerCase())) {
+      const keyLower = key.toLowerCase();
+      if (normalized.startsWith(keyLower) && keyLower.length > longestMatchLen) {
         base = value;
-        break;
+        longestMatchLen = keyLower.length;
       }
     }
   }
@@ -576,6 +646,7 @@ export function getModelCapabilities(modelId: string): ModelCapabilities {
     creative: base.creative ?? false,
     performanceTier: base.performanceTier ?? "balanced",
     costTier: base.costTier ?? "moderate",
+    primary: base.primary,
   };
 }
 
@@ -586,13 +657,18 @@ export function getModelCapabilities(modelId: string): ModelCapabilities {
 export function getModelCapabilitiesFromCatalog(entry: ModelCatalogEntry): ModelCapabilities {
   const normalized = entry.id.trim().toLowerCase();
 
-  // Check if model is in the hardcoded registry
+  // Check if model is in the hardcoded registry (longest prefix wins)
   let inRegistry = Boolean(MODEL_CAPABILITIES_REGISTRY[entry.id]);
   if (!inRegistry) {
+    let longestMatchLen = 0;
     for (const key of Object.keys(MODEL_CAPABILITIES_REGISTRY)) {
-      if (key.toLowerCase() === normalized || normalized.startsWith(key.toLowerCase())) {
+      const keyLower = key.toLowerCase();
+      if (
+        keyLower === normalized ||
+        (normalized.startsWith(keyLower) && keyLower.length > longestMatchLen)
+      ) {
         inRegistry = true;
-        break;
+        longestMatchLen = keyLower.length;
       }
     }
   }
@@ -613,6 +689,9 @@ export function getModelCapabilitiesFromCatalog(entry: ModelCatalogEntry): Model
 
 /**
  * Filter catalog entries by a specific capability.
+ * When a model has a `primary` capability defined, it will only appear in the list
+ * for that primary capability (even if it supports other capabilities as secondary).
+ * This eliminates ambiguity for dual-purpose models.
  */
 export function filterByCapability(
   catalog: ModelCatalogEntry[],
@@ -620,6 +699,14 @@ export function filterByCapability(
 ): ModelCatalogEntry[] {
   return catalog.filter((entry) => {
     const caps = getModelCapabilitiesFromCatalog(entry);
+
+    // If the model has a primary capability defined
+    if (caps.primary) {
+      // Only include it if the requested capability matches the primary
+      return caps.primary === capability;
+    }
+
+    // Otherwise, use the boolean capability flag (backward compatibility)
     return caps[capability];
   });
 }
