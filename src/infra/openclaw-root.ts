@@ -60,6 +60,18 @@ function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
 function candidateDirsFromArgv1(argv1: string): string[] {
   const normalized = path.resolve(argv1);
   const candidates = [path.dirname(normalized)];
+
+  // Resolve symlinks for version managers (nvm, fnm, n, Homebrew/Linuxbrew)
+  // that create symlinks in bin/ pointing to the real package location.
+  try {
+    const resolved = fsSync.realpathSync(normalized);
+    if (resolved !== normalized) {
+      candidates.push(path.dirname(resolved));
+    }
+  } catch {
+    // realpathSync throws if path doesn't exist; keep original candidates
+  }
+
   const parts = normalized.split(path.sep);
   const binIndex = parts.lastIndexOf(".bin");
   if (binIndex > 0 && parts[binIndex - 1] === "node_modules") {
