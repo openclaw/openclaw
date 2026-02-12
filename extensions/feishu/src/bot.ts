@@ -216,7 +216,7 @@ function parseMessageContent(content: string, messageType: string): string {
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
   const mentions = event.message.mentions ?? [];
   if (mentions.length === 0) return false;
-  if (!botOpenId) return mentions.length > 0;
+  if (!botOpenId) return false;
   return mentions.some((m) => m.id.open_id === botOpenId);
 }
 
