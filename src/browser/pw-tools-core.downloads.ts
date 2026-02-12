@@ -17,10 +17,52 @@ import {
   toAIFriendlyError,
 } from "./pw-tools-core.shared.js";
 
+const DOWNLOADS_DIR = "/tmp/openclaw/downloads";
+
+/**
+ * Sanitize a suggested download filename to prevent path traversal.
+ * Strips directory components via path.basename(), removes null bytes,
+ * and rejects names that resolve to `.` or `..`.
+ * Preserves legitimate filenames containing `..` (e.g., `my..notes.txt`).
+ */
+export function sanitizeDownloadFilename(fileName: string): string {
+  // Normalize backslashes to forward slashes so path.basename handles Windows-style paths on all platforms
+  const normalized = fileName.replace(/\\/g, "/");
+  // Strip directory components — this is the primary traversal defense
+  let sanitized = path.basename(normalized).trim();
+
+  // Remove null bytes which can trick some filesystem APIs
+  sanitized = sanitized.replaceAll("\0", "");
+
+  // Reject if the basename itself is a traversal token or empty
+  if (!sanitized || sanitized === "." || sanitized === "..") {
+    return "download.bin";
+  }
+
+  return sanitized;
+}
+
+/**
+ * Check whether `candidate` is safely contained within `baseDir`.
+ * Uses path.relative() which is robust across case-insensitive filesystems.
+ */
+function isWithinDir(baseDir: string, candidate: string): boolean {
+  const rel = path.relative(path.resolve(baseDir), path.resolve(candidate));
+  // Safe if the relative path doesn't escape upward and isn't absolute
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 function buildTempDownloadPath(fileName: string): string {
   const id = crypto.randomUUID();
-  const safeName = fileName.trim() ? fileName.trim() : "download.bin";
-  return path.join("/tmp/openclaw/downloads", `${id}-${safeName}`);
+  const safeName = sanitizeDownloadFilename(fileName);
+  const candidate = path.resolve(path.join(DOWNLOADS_DIR, `${id}-${safeName}`));
+
+  // Belt-and-suspenders: verify the resolved path is within the downloads dir
+  if (!isWithinDir(DOWNLOADS_DIR, candidate)) {
+    return path.join(DOWNLOADS_DIR, `${id}-download.bin`);
+  }
+
+  return candidate;
 }
 
 function createPageDownloadWaiter(page: Page, timeoutMs: number) {
