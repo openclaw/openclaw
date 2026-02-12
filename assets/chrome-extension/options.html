@@ -176,15 +176,19 @@
         </div>
 
         <div class="card">
-          <h2>Relay port</h2>
-          <label for="port">Port</label>
+          <h2>Relay connection</h2>
+          <label for="host">Host</label>
+          <div class="row">
+            <input id="host" placeholder="127.0.0.1" style="width:220px" />
+          </div>
+          <label for="port" style="margin-top:10px">Port</label>
           <div class="row">
             <input id="port" inputmode="numeric" pattern="[0-9]*" />
             <button id="save" type="button">Save</button>
           </div>
           <div class="hint">
-            Default: <code>18792</code>. Extension connects to: <code id="relay-url">http://127.0.0.1:&lt;port&gt;/</code>.
-            Only change this if your OpenClaw profile uses a different <code>cdpUrl</code> port.
+            Defaults: host <code>127.0.0.1</code>, port <code>18792</code>. Extension connects to: <code id="relay-url">http://127.0.0.1:&lt;port&gt;/</code>.
+            Change the host to connect to a remote OpenClaw gateway (e.g. <code>192.168.1.100</code>).
           </div>
           <div class="status" id="status"></div>
         </div>

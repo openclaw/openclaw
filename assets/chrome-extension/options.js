@@ -7,10 +7,10 @@ function clampPort(value) {
   return n
 }
 
-function updateRelayUrl(port) {
+function updateRelayUrl(host, port) {
   const el = document.getElementById('relay-url')
   if (!el) return
-  el.textContent = `http://127.0.0.1:${port}/`
+  el.textContent = `http://${host}:${port}/`
 }
 
 function setStatus(kind, message) {
@@ -20,8 +20,8 @@ function setStatus(kind, message) {
   status.textContent = message || ''
 }
 
-async function checkRelayReachable(port) {
-  const url = `http://127.0.0.1:${port}/`
+async function checkRelayReachable(host, port) {
+  const url = `http://${host}:${port}/`
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), 900)
   try {
@@ -39,20 +39,25 @@ async function checkRelayReachable(port) {
 }
 
 async function load() {
-  const stored = await chrome.storage.local.get(['relayPort'])
+  const stored = await chrome.storage.local.get(['relayPort', 'relayHost'])
   const port = clampPort(stored.relayPort)
+  const host = (stored.relayHost || '').trim() || '127.0.0.1'
   document.getElementById('port').value = String(port)
-  updateRelayUrl(port)
-  await checkRelayReachable(port)
+  document.getElementById('host').value = host
+  updateRelayUrl(host, port)
+  await checkRelayReachable(host, port)
 }
 
 async function save() {
   const input = document.getElementById('port')
+  const hostInput = document.getElementById('host')
   const port = clampPort(input.value)
-  await chrome.storage.local.set({ relayPort: port })
+  const host = (hostInput.value || '').trim() || '127.0.0.1'
+  await chrome.storage.local.set({ relayPort: port, relayHost: host })
   input.value = String(port)
-  updateRelayUrl(port)
-  await checkRelayReachable(port)
+  hostInput.value = host
+  updateRelayUrl(host, port)
+  await checkRelayReachable(host, port)
 }
 
 document.getElementById('save').addEventListener('click', () => void save())
