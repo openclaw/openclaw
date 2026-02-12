@@ -8,11 +8,11 @@ import { join } from "node:path";
  * recall-format output structure, code formatting preservation.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { HashEmbedding } from "../core/embedding.js";
-import { KnowledgeStore } from "../core/knowledge-store.js";
-import { buildRecalledContextBlock } from "../core/recall-format.js";
-import { estimateTokens } from "../core/runtime.js";
-import { WarmStore } from "../core/store.js";
+import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
+import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
+import { buildRecalledContextBlock } from "../../../../src/agents/memory-context/recall-format.js";
+import { estimateTokens } from "../../../../src/agents/memory-context/runtime.js";
+import { WarmStore } from "../../../../src/agents/memory-context/store.js";
 
 describe("recall + format", () => {
   let tmpDir: string;

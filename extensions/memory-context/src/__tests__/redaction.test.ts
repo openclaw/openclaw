@@ -4,7 +4,7 @@
  * Verifies that common secret patterns are masked before persisting to disk.
  */
 import { describe, it, expect } from "vitest";
-import { redact, maybeRedact } from "../core/redaction.js";
+import { redact, maybeRedact } from "../../../../src/agents/memory-context/redaction.js";
 
 describe("redaction", () => {
   it("masks Authorization Bearer tokens", () => {

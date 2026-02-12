@@ -5,9 +5,15 @@ import { join } from "node:path";
  * Phase 2 -- Knowledge Store + Extractor + Updater tests
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { extractKnowledge, __testing as extractorInternals } from "../core/knowledge-extractor.js";
-import { KnowledgeStore } from "../core/knowledge-store.js";
-import { applyKnowledgeUpdates, __testing as updaterInternals } from "../core/knowledge-updater.js";
+import {
+  extractKnowledge,
+  __testing as extractorInternals,
+} from "../../../../src/agents/memory-context/knowledge-extractor.js";
+import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
+import {
+  applyKnowledgeUpdates,
+  __testing as updaterInternals,
+} from "../../../../src/agents/memory-context/knowledge-updater.js";
 
 // -- Knowledge Store Tests --
 

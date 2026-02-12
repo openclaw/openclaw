@@ -90,7 +90,11 @@ export class TransformerEmbedding implements EmbeddingProvider {
 
   private async doInit(): Promise<void> {
     try {
-      const { pipeline, env } = await import("@xenova/transformers");
+      const {
+        pipeline,
+        env,
+      } = // @ts-ignore optional dependency
+        await import("@xenova/transformers");
       // Disable local model check to allow downloading
       env.allowLocalModels = true;
       env.useBrowserCache = false;
@@ -102,6 +106,7 @@ export class TransformerEmbedding implements EmbeddingProvider {
       this.initPromise = null;
       throw new Error(
         `TransformerEmbedding: failed to load model ${this.modelName}: ${String(err)}`,
+        { cause: err },
       );
     }
   }

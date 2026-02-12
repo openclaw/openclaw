@@ -114,7 +114,9 @@ export class WarmStore {
       // Eviction: skip old segments from warm store
       if (eviction.enabled) {
         const cutoff = Date.now() - eviction.maxAgeDays * 24 * 60 * 60 * 1000;
-        if (seg.timestamp < cutoff) continue;
+        if (seg.timestamp < cutoff) {
+          continue;
+        }
       }
 
       // Dedup on load
@@ -301,7 +303,9 @@ export class WarmStore {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
   private persistVectorsDebounced(): void {
-    if (this.persistTimer) clearTimeout(this.persistTimer);
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+    }
     this.persistTimer = setTimeout(() => {
       this.persistVectorsNow();
     }, 5000); // Debounce 5s
@@ -374,7 +378,9 @@ export class WarmStore {
     // To keep `minScore` meaningful for both BM25-only and vector-only candidates,
     // normalize by the sum of weights that contributed to the score for that result.
     const filtered = results.filter((r) => {
-      if (minScore <= 0) return true;
+      if (minScore <= 0) {
+        return true;
+      }
       const hasVector = r.vectorScore > 0;
       const hasBm25 = r.bm25Score > 0;
       const denom = (hasVector ? config.vectorWeight : 0) + (hasBm25 ? config.bm25Weight : 0);

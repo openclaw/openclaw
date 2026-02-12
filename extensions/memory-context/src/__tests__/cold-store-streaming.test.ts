@@ -22,7 +22,7 @@ describe("cold-store streaming", () => {
   });
 
   it("loadAll() does NOT call fs.readFile (uses streaming instead)", async () => {
-    const { ColdStore } = await import("../core/cold-store.js");
+    const { ColdStore } = await import("../../../../src/agents/memory-context/cold-store.js");
     const cold = new ColdStore(tmpDir);
     await cold.ensureReady();
 
@@ -59,7 +59,7 @@ describe("cold-store streaming", () => {
   });
 
   it("loadAll() handles corrupt lines gracefully in streaming mode", async () => {
-    const { ColdStore } = await import("../core/cold-store.js");
+    const { ColdStore } = await import("../../../../src/agents/memory-context/cold-store.js");
     const cold = new ColdStore(tmpDir);
     await cold.ensureReady();
 
@@ -85,7 +85,7 @@ describe("cold-store streaming", () => {
   });
 
   it("append() does NOT include embedding in JSONL by default", async () => {
-    const { ColdStore } = await import("../core/cold-store.js");
+    const { ColdStore } = await import("../../../../src/agents/memory-context/cold-store.js");
     const cold = new ColdStore(tmpDir);
     await cold.ensureReady();
 

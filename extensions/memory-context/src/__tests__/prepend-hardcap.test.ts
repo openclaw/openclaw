@@ -11,7 +11,7 @@ import {
   enforceHardCap,
   type MemoryContextRuntime,
   type MemoryContextConfig,
-} from "../core/runtime.js";
+} from "../../../../src/agents/memory-context/runtime.js";
 
 function makeRuntime(
   overrides: Partial<

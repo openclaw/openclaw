@@ -28,7 +28,9 @@ export type RecallResult = {
  * Groups by type, one fact per line.
  */
 function formatKnowledgeBlock(facts: KnowledgeFact[]): string {
-  if (facts.length === 0) return "";
+  if (facts.length === 0) {
+    return "";
+  }
 
   const lines = facts.map((f) => `- [${f.type}] ${f.content}`);
   return `<knowledge>\n${lines.join("\n")}\n</knowledge>`;
@@ -41,10 +43,12 @@ function formatKnowledgeBlock(facts: KnowledgeFact[]): string {
 function formatDetailBlock(
   segments: Array<{ segment: ConversationSegment; score: number }>,
 ): string {
-  if (segments.length === 0) return "";
+  if (segments.length === 0) {
+    return "";
+  }
 
   // Sort by timestamp (oldest first) to preserve conversation flow
-  const sorted = [...segments].sort((a, b) => a.segment.timestamp - b.segment.timestamp);
+  const sorted = [...segments].toSorted((a, b) => a.segment.timestamp - b.segment.timestamp);
 
   const lines = sorted.map((s) => {
     const when = new Date(s.segment.timestamp).toISOString().slice(0, 16).replace("T", " ");
@@ -103,8 +107,12 @@ export function buildRecalledContextBlock(
   const detailBlock = formatDetailBlock(includedDetails);
 
   const parts: string[] = [];
-  if (knowledgeBlock) parts.push(knowledgeBlock);
-  if (detailBlock) parts.push(detailBlock);
+  if (knowledgeBlock) {
+    parts.push(knowledgeBlock);
+  }
+  if (detailBlock) {
+    parts.push(detailBlock);
+  }
 
   if (parts.length === 0) {
     return { block: "", tokens: 0, knowledgeCount: 0, detailCount: 0 };
@@ -119,8 +127,12 @@ export function buildRecalledContextBlock(
       includedDetails.pop();
       const rebuiltDetail = formatDetailBlock(includedDetails);
       const rebuiltParts: string[] = [];
-      if (knowledgeBlock) rebuiltParts.push(knowledgeBlock);
-      if (rebuiltDetail) rebuiltParts.push(rebuiltDetail);
+      if (knowledgeBlock) {
+        rebuiltParts.push(knowledgeBlock);
+      }
+      if (rebuiltDetail) {
+        rebuiltParts.push(rebuiltDetail);
+      }
       if (rebuiltParts.length === 0) {
         return { block: "", tokens: 0, knowledgeCount: 0, detailCount: 0 };
       }

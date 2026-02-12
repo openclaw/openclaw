@@ -48,7 +48,9 @@ export class KnowledgeStore {
   }
 
   async init(): Promise<void> {
-    if (this.initialized) return;
+    if (this.initialized) {
+      return;
+    }
     await fs.mkdir(this.storagePath, { recursive: true });
     try {
       await fs.access(this.filePath);
@@ -62,10 +64,14 @@ export class KnowledgeStore {
     try {
       for await (const line of rl) {
         const trimmed = line.trim();
-        if (!trimmed) continue;
+        if (!trimmed) {
+          continue;
+        }
         try {
           const obj = JSON.parse(trimmed) as StoredFact;
-          if (!obj?.id || !obj?.content || !obj?.type) continue;
+          if (!obj?.id || !obj?.content || !obj?.type) {
+            continue;
+          }
           if (obj._deleted) {
             this.facts.delete(obj.id);
             continue;
@@ -93,7 +99,9 @@ export class KnowledgeStore {
     // Only count active (non-superseded) facts
     let count = 0;
     for (const f of this.facts.values()) {
-      if (!f.supersededBy) count++;
+      if (!f.supersededBy) {
+        count++;
+      }
     }
     return count;
   }
@@ -150,7 +158,9 @@ export class KnowledgeStore {
   async update(id: string, newContent: string, newContext?: string): Promise<KnowledgeFact | null> {
     await this.init();
     const existing = this.facts.get(id);
-    if (!existing) return null;
+    if (!existing) {
+      return null;
+    }
 
     // Remove old content hash
     const oldHash = this.contentHash(existing.content);
@@ -176,7 +186,9 @@ export class KnowledgeStore {
   async supersede(oldId: string, newId: string): Promise<boolean> {
     await this.init();
     const existing = this.facts.get(oldId);
-    if (!existing) return false;
+    if (!existing) {
+      return false;
+    }
 
     const updated: KnowledgeFact = { ...existing, supersededBy: newId };
     this.facts.set(oldId, updated);
@@ -190,7 +202,9 @@ export class KnowledgeStore {
   async delete(id: string): Promise<boolean> {
     await this.init();
     const existing = this.facts.get(id);
-    if (!existing) return false;
+    if (!existing) {
+      return false;
+    }
 
     this.facts.delete(id);
     const hash = this.contentHash(existing.content);
@@ -212,11 +226,15 @@ export class KnowledgeStore {
   getActive(type?: KnowledgeFactType): KnowledgeFact[] {
     const result: KnowledgeFact[] = [];
     for (const f of this.facts.values()) {
-      if (f.supersededBy) continue;
-      if (type && f.type !== type) continue;
+      if (f.supersededBy) {
+        continue;
+      }
+      if (type && f.type !== type) {
+        continue;
+      }
       result.push(f);
     }
-    return result.sort((a, b) => b.timestamp - a.timestamp);
+    return result.toSorted((a, b) => b.timestamp - a.timestamp);
   }
 
   /**
@@ -224,11 +242,15 @@ export class KnowledgeStore {
    */
   search(query: string, limit = 10): KnowledgeFact[] {
     const queryWords = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (queryWords.length === 0) return [];
+    if (queryWords.length === 0) {
+      return [];
+    }
 
     const results: KnowledgeFact[] = [];
     for (const f of this.facts.values()) {
-      if (f.supersededBy) continue;
+      if (f.supersededBy) {
+        continue;
+      }
       const text = `${f.content} ${f.context ?? ""}`.toLowerCase();
       // Require at least 50% of query words to match (reduces false positives from common words)
       const matchCount = queryWords.filter((w) => text.includes(w)).length;
@@ -251,14 +273,18 @@ export class KnowledgeStore {
   findByContent(content: string): KnowledgeFact | undefined {
     const hash = this.contentHash(content);
     const id = this.contentIndex.get(hash);
-    if (id) return this.facts.get(id);
+    if (id) {
+      return this.facts.get(id);
+    }
     return undefined;
   }
 
   stats(): { active: number; superseded: number; total: number } {
     let superseded = 0;
     for (const f of this.facts.values()) {
-      if (f.supersededBy) superseded++;
+      if (f.supersededBy) {
+        superseded++;
+      }
     }
     return { active: this.size, superseded, total: this.facts.size };
   }

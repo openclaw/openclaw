@@ -3,15 +3,12 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
-import { HashEmbedding } from "../../../extensions/memory-context/src/core/embedding.js";
-import { KnowledgeStore } from "../../../extensions/memory-context/src/core/knowledge-store.js";
-import {
-  setMemoryContextRuntime,
-  type MemoryContextConfig,
-} from "../../../extensions/memory-context/src/core/runtime.js";
-import { WarmStore } from "../../../extensions/memory-context/src/core/store.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { HashEmbedding } from "../memory-context/embedding.js";
+import { KnowledgeStore } from "../memory-context/knowledge-store.js";
+import { setMemoryContextRuntime, type MemoryContextConfig } from "../memory-context/runtime.js";
+import { WarmStore } from "../memory-context/store.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
@@ -133,7 +130,8 @@ export function buildEmbeddedExtensionPaths(params: {
 
     const embedding = new HashEmbedding(384);
     const rawStore = new WarmStore({
-      sessionId: params.sessionManager.sessionId ?? "default",
+      sessionId:
+        (params.sessionManager as unknown as { sessionId?: string }).sessionId ?? "default",
       embedding,
       coldStore: { path: resolvedPath },
       maxSegments: config.maxSegments,

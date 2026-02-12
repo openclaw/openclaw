@@ -35,11 +35,15 @@ export type KnowledgeUpdaterOptions = {
 function wordOverlap(a: string, b: string): number {
   const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(Boolean));
   const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(Boolean));
-  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  if (wordsA.size === 0 || wordsB.size === 0) {
+    return 0;
+  }
 
   let intersection = 0;
   for (const w of wordsA) {
-    if (wordsB.has(w)) intersection++;
+    if (wordsB.has(w)) {
+      intersection++;
+    }
   }
   const union = new Set([...wordsA, ...wordsB]).size;
   return union > 0 ? intersection / union : 0;
@@ -53,11 +57,15 @@ function wordOverlap(a: string, b: string): number {
 function subsetRatio(shorter: string, longer: string): number {
   const wordsS = new Set(shorter.toLowerCase().split(/\s+/).filter(Boolean));
   const wordsL = new Set(longer.toLowerCase().split(/\s+/).filter(Boolean));
-  if (wordsS.size === 0) return 0;
+  if (wordsS.size === 0) {
+    return 0;
+  }
 
   let found = 0;
   for (const w of wordsS) {
-    if (wordsL.has(w)) found++;
+    if (wordsL.has(w)) {
+      found++;
+    }
   }
   return found / wordsS.size;
 }
@@ -75,8 +83,12 @@ function findBestMatch(
 
   for (const existing of existingFacts) {
     // Must be same type for UPDATE/SUPERSEDE
-    if (existing.type !== newFact.type) continue;
-    if (existing.supersededBy) continue;
+    if (existing.type !== newFact.type) {
+      continue;
+    }
+    if (existing.supersededBy) {
+      continue;
+    }
 
     const sim = wordOverlap(newFact.content, existing.content);
     if (sim > bestScore) {

@@ -30,7 +30,9 @@ export function getEvictableIds(
   config: EvictionConfig,
   now = Date.now(),
 ): Set<string> {
-  if (!config.enabled) return new Set();
+  if (!config.enabled) {
+    return new Set();
+  }
 
   const cutoff = now - config.maxAgeDays * 24 * 60 * 60 * 1000;
   const ids = new Set<string>();
@@ -48,7 +50,9 @@ export function getEvictableIds(
  * Check if a single segment should be evicted.
  */
 export function shouldEvict(timestamp: number, config: EvictionConfig, now = Date.now()): boolean {
-  if (!config.enabled) return false;
+  if (!config.enabled) {
+    return false;
+  }
   const cutoff = now - config.maxAgeDays * 24 * 60 * 60 * 1000;
   return timestamp < cutoff;
 }

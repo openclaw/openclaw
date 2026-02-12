@@ -7,8 +7,8 @@ import { join } from "node:path";
  * Covers: deduplication, maxSegments cap, timeline eviction performance.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { HashEmbedding } from "../core/embedding.js";
-import { WarmStore } from "../core/store.js";
+import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
+import { WarmStore } from "../../../../src/agents/memory-context/store.js";
 
 describe("store dedup", () => {
   let tmpDir: string;

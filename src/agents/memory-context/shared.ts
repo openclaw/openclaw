@@ -11,7 +11,9 @@ export const RECALLED_CONTEXT_MARKER = '<recalled-context source="memory-context
  * Handles both string content and array-of-blocks content.
  */
 export function extractText(msg: { content?: unknown }): string {
-  if (typeof msg.content === "string") return msg.content;
+  if (typeof msg.content === "string") {
+    return msg.content;
+  }
   if (Array.isArray(msg.content)) {
     return (msg.content as Array<{ type?: string; text?: string }>)
       .filter((b) => b?.type === "text" && typeof b.text === "string")

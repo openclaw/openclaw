@@ -15,16 +15,16 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   archiveCompactedMessages,
   scheduleKnowledgeExtraction,
-} from "../core/compaction-bridge.js";
-import { HashEmbedding } from "../core/embedding.js";
-import { KnowledgeStore } from "../core/knowledge-store.js";
-import { buildRecalledContextBlock } from "../core/recall-format.js";
+} from "../../../../src/agents/memory-context/compaction-bridge.js";
+import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
+import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
+import { buildRecalledContextBlock } from "../../../../src/agents/memory-context/recall-format.js";
 import {
   computeHardCap,
   type MemoryContextRuntime,
   type MemoryContextConfig,
-} from "../core/runtime.js";
-import { WarmStore } from "../core/store.js";
+} from "../../../../src/agents/memory-context/runtime.js";
+import { WarmStore } from "../../../../src/agents/memory-context/store.js";
 
 // -- Helpers --
 

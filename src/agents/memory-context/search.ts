@@ -13,8 +13,12 @@ export type HybridSearchResult = SegmentSearchResult & {
  * score *= decay^(days_since_message)
  */
 export function calculateTimeDecay(timestamp: number, now: number, decay: number): number {
-  if (decay >= 1) return 1;
-  if (decay <= 0) return 0;
+  if (decay >= 1) {
+    return 1;
+  }
+  if (decay <= 0) {
+    return 0;
+  }
 
   const daysSince = Math.max(0, (now - timestamp) / (1000 * 60 * 60 * 24));
   return Math.pow(decay, daysSince);
@@ -26,10 +30,14 @@ export function calculateTimeDecay(timestamp: number, now: number, decay: number
  */
 function normalizeBM25Scores(results: Array<{ id: string; score: number }>): Map<string, number> {
   const map = new Map<string, number>();
-  if (results.length === 0) return map;
+  if (results.length === 0) {
+    return map;
+  }
 
   const maxScore = Math.max(...results.map((r) => r.score));
-  if (maxScore <= 0) return map;
+  if (maxScore <= 0) {
+    return map;
+  }
 
   for (const r of results) {
     map.set(r.id, r.score / maxScore);
@@ -72,10 +80,14 @@ export function hybridSearch(
 
   // Add BM25-only results (not in vector results)
   for (const [id, rawBm25Score] of bm25Scores) {
-    if (merged.has(id)) continue;
+    if (merged.has(id)) {
+      continue;
+    }
 
     const segment = getSegment(id);
-    if (!segment) continue;
+    if (!segment) {
+      continue;
+    }
 
     const bm25Score = rawBm25Score;
     const rawScore = bm25Weight * bm25Score;

@@ -7,11 +7,15 @@ import { join } from "node:path";
  * Simulates multi-round context events with trimming + archiving + recall.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { HashEmbedding } from "../core/embedding.js";
-import { KnowledgeStore } from "../core/knowledge-store.js";
-import { buildRecalledContextBlock } from "../core/recall-format.js";
-import { smartTrim, isRecalledContext, type MessageLike } from "../core/smart-trim.js";
-import { WarmStore } from "../core/store.js";
+import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
+import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
+import { buildRecalledContextBlock } from "../../../../src/agents/memory-context/recall-format.js";
+import {
+  smartTrim,
+  isRecalledContext,
+  type MessageLike,
+} from "../../../../src/agents/memory-context/smart-trim.js";
+import { WarmStore } from "../../../../src/agents/memory-context/store.js";
 
 const est = (msg: MessageLike) => {
   const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");

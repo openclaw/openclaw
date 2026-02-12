@@ -79,19 +79,27 @@ export function loadVectors(filePath: string): {
   dim: number;
   entries: VectorEntry[];
 } | null {
-  if (!fs.existsSync(filePath)) return null;
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
 
   const buf = fs.readFileSync(filePath);
-  if (buf.length < 16) return null;
+  if (buf.length < 16) {
+    return null;
+  }
 
   let offset = 0;
   const magic = buf.readUInt32LE(offset);
   offset += 4;
-  if (magic !== MAGIC) return null;
+  if (magic !== MAGIC) {
+    return null;
+  }
 
   const version = buf.readUInt32LE(offset);
   offset += 4;
-  if (version !== VERSION) return null;
+  if (version !== VERSION) {
+    return null;
+  }
 
   const dim = buf.readUInt32LE(offset);
   offset += 4;
@@ -101,15 +109,21 @@ export function loadVectors(filePath: string): {
   const entries: VectorEntry[] = [];
 
   for (let i = 0; i < count; i++) {
-    if (offset + 2 > buf.length) break;
+    if (offset + 2 > buf.length) {
+      break;
+    }
     const idLen = buf.readUInt16LE(offset);
     offset += 2;
 
-    if (offset + idLen > buf.length) break;
+    if (offset + idLen > buf.length) {
+      break;
+    }
     const id = buf.toString("utf8", offset, offset + idLen);
     offset += idLen;
 
-    if (offset + dim * 4 > buf.length) break;
+    if (offset + dim * 4 > buf.length) {
+      break;
+    }
     const vector: number[] = new Array(dim);
     for (let j = 0; j < dim; j++) {
       vector[j] = buf.readFloatLE(offset);

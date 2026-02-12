@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { smartTrim, isRecalledContext, type MessageLike } from "../core/smart-trim.js";
+import {
+  smartTrim,
+  isRecalledContext,
+  type MessageLike,
+} from "../../../../src/agents/memory-context/smart-trim.js";
 
 const est = (msg: MessageLike) => {
   const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");

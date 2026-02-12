@@ -80,7 +80,7 @@ export function enforceHardCap(
   segments: Array<{ content: string; score: number }>,
   hardCap: number,
 ): Array<{ content: string; score: number }> {
-  const sorted = [...segments].sort((a, b) => b.score - a.score);
+  const sorted = [...segments].toSorted((a, b) => b.score - a.score);
   const result: Array<{ content: string; score: number }> = [];
   let totalTokens = 0;
 

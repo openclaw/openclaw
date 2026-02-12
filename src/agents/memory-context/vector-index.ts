@@ -143,7 +143,7 @@ export class HnswIndex implements VectorIndexInterface {
       this.index.setEf(this.efSearch);
       this.initialized = true;
     } catch (err) {
-      throw new Error(`HnswIndex: failed to initialize hnswlib: ${String(err)}`);
+      throw new Error(`HnswIndex: failed to initialize hnswlib: ${String(err)}`, { cause: err });
     }
   }
 
@@ -162,7 +162,7 @@ export class HnswIndex implements VectorIndexInterface {
     // Reuse deleted label or get new one
     let label: number;
     if (this.deletedLabels.size > 0) {
-      label = this.deletedLabels.values().next().value;
+      label = this.deletedLabels.values().next().value!;
       this.deletedLabels.delete(label);
     } else {
       label = this.nextLabel++;

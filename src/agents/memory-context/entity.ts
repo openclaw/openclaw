@@ -75,7 +75,9 @@ function matchGroup(text: string, re: RegExp, type: EntityType, group = 1): Extr
  * Extract entities from text.
  */
 export function extractEntities(text: string): ExtractedEntity[] {
-  if (!text || typeof text !== "string") return [];
+  if (!text || typeof text !== "string") {
+    return [];
+  }
 
   const entities: ExtractedEntity[] = [];
 
@@ -101,7 +103,9 @@ export function extractEntities(text: string): ExtractedEntity[] {
   const seen = new Set<string>();
   return entities.filter((e) => {
     const key = `${e.type}:${e.value}`;
-    if (seen.has(key)) return false;
+    if (seen.has(key)) {
+      return false;
+    }
     seen.add(key);
     return true;
   });

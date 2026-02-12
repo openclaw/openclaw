@@ -10,16 +10,10 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
  * Execution order in context chain: runs AFTER context-pruning (micro-level).
  */
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { buildRecalledContextBlock } from "../../../extensions/memory-context/src/core/recall-format.js";
-import { maybeRedact } from "../../../extensions/memory-context/src/core/redaction.js";
-import {
-  getMemoryContextRuntime,
-  computeHardCap,
-} from "../../../extensions/memory-context/src/core/runtime.js";
-import {
-  smartTrim,
-  type MessageLike,
-} from "../../../extensions/memory-context/src/core/smart-trim.js";
+import { buildRecalledContextBlock } from "../memory-context/recall-format.js";
+import { maybeRedact } from "../memory-context/redaction.js";
+import { getMemoryContextRuntime, computeHardCap } from "../memory-context/runtime.js";
+import { smartTrim, type MessageLike } from "../memory-context/smart-trim.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
 /** Marker to identify injected recalled-context messages. */

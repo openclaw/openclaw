@@ -13,10 +13,10 @@ import {
   archiveCompactedMessages,
   scheduleKnowledgeExtraction,
   extractMessageText,
-} from "../core/compaction-bridge.js";
-import { HashEmbedding } from "../core/embedding.js";
-import { KnowledgeStore } from "../core/knowledge-store.js";
-import { WarmStore } from "../core/store.js";
+} from "../../../../src/agents/memory-context/compaction-bridge.js";
+import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
+import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
+import { WarmStore } from "../../../../src/agents/memory-context/store.js";
 
 describe("compaction archive", () => {
   let tmpDir: string;

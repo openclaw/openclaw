@@ -12,8 +12,8 @@ import { completeSimple } from "@mariozechner/pi-ai";
 import {
   archiveCompactedMessages,
   scheduleKnowledgeExtraction,
-} from "../../../extensions/memory-context/src/core/compaction-bridge.js";
-import { getMemoryContextRuntime } from "../../../extensions/memory-context/src/core/runtime.js";
+} from "../memory-context/compaction-bridge.js";
+import { getMemoryContextRuntime } from "../memory-context/runtime.js";
 
 export default function memoryContextArchiveExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {

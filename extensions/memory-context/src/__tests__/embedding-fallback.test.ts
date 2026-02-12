@@ -22,7 +22,7 @@ describe("embedding fallback", () => {
   });
 
   it("HashEmbedding works standalone as a reliable fallback", async () => {
-    const { HashEmbedding } = await import("../core/embedding.js");
+    const { HashEmbedding } = await import("../../../../src/agents/memory-context/embedding.js");
     const emb = new HashEmbedding(384);
     const vec = await emb.embed("test input");
 
@@ -34,7 +34,8 @@ describe("embedding fallback", () => {
   });
 
   it("createEmbeddingProvider falls back to hash when transformer fails", async () => {
-    const { createEmbeddingProvider } = await import("../core/embedding.js");
+    const { createEmbeddingProvider } =
+      await import("../../../../src/agents/memory-context/embedding.js");
     const warnSpy = vi.fn();
 
     // "transformer" mode with a non-existent model should fail and fall back
@@ -53,8 +54,8 @@ describe("embedding fallback", () => {
   });
 
   it("WarmStore remains functional with hash fallback (BM25 search works)", async () => {
-    const { HashEmbedding } = await import("../core/embedding.js");
-    const { WarmStore } = await import("../core/store.js");
+    const { HashEmbedding } = await import("../../../../src/agents/memory-context/embedding.js");
+    const { WarmStore } = await import("../../../../src/agents/memory-context/store.js");
 
     const store = new WarmStore({
       sessionId: "test",
@@ -76,8 +77,10 @@ describe("embedding fallback", () => {
   });
 
   it("vector index dimension matches embedding dimension after fallback", async () => {
-    const { createEmbeddingProvider } = await import("../core/embedding.js");
-    const { createVectorIndex } = await import("../core/vector-index.js");
+    const { createEmbeddingProvider } =
+      await import("../../../../src/agents/memory-context/embedding.js");
+    const { createVectorIndex } =
+      await import("../../../../src/agents/memory-context/vector-index.js");
 
     const provider = await createEmbeddingProvider("transformer", 384, "nonexistent/model", {
       warn: () => {},

@@ -36,7 +36,9 @@ export function isRecalledContext(msg: MessageLike): boolean {
 }
 
 function hasToolUse(msg: MessageLike): boolean {
-  if (msg.role !== "assistant") return false;
+  if (msg.role !== "assistant") {
+    return false;
+  }
   if (Array.isArray(msg.content)) {
     return (msg.content as Array<{ type?: string }>).some((b) => b?.type === "tool_use");
   }
@@ -49,10 +51,16 @@ function isToolResult(msg: MessageLike): boolean {
 
 function isCompactionSummary(msg: MessageLike, idx: number, messages: MessageLike[]): boolean {
   // Compaction summary is typically the first assistant/user message after system prompt
-  if (idx === 0) return false;
-  if (idx > 2) return false; // Summary is always near the beginning
+  if (idx === 0) {
+    return false;
+  }
+  if (idx > 2) {
+    return false;
+  } // Summary is always near the beginning
   const prevRole = messages[idx - 1]?.role;
-  if (prevRole !== "system" && idx !== 1) return false;
+  if (prevRole !== "system" && idx !== 1) {
+    return false;
+  }
   const text = extractText(msg);
   // Heuristic: contains file operation tags or summary markers
   return (
@@ -66,9 +74,15 @@ function isCompactionSummary(msg: MessageLike, idx: number, messages: MessageLik
 function markProtected(messages: MessageLike[], protectedRecent: number): Set<number> {
   const s = new Set<number>();
   for (let i = 0; i < messages.length; i++) {
-    if (messages[i].role === "system") s.add(i);
-    if (isRecalledContext(messages[i])) s.add(i);
-    if (isCompactionSummary(messages[i], i, messages)) s.add(i);
+    if (messages[i].role === "system") {
+      s.add(i);
+    }
+    if (isRecalledContext(messages[i])) {
+      s.add(i);
+    }
+    if (isCompactionSummary(messages[i], i, messages)) {
+      s.add(i);
+    }
   }
   let count = 0;
   for (let i = messages.length - 1; i >= 0 && count < protectedRecent; i--) {
@@ -83,8 +97,11 @@ function markProtected(messages: MessageLike[], protectedRecent: number): Set<nu
     if (hasToolUse(messages[i])) {
       s.add(i);
       for (let j = i + 1; j < messages.length; j++) {
-        if (isToolResult(messages[j])) s.add(j);
-        else break;
+        if (isToolResult(messages[j])) {
+          s.add(j);
+        } else {
+          break;
+        }
       }
       break;
     }
@@ -101,9 +118,13 @@ function relevanceTrim(
   const bm25 = new BM25Index();
   const candidates: Array<{ idx: number }> = [];
   for (let i = 0; i < messages.length; i++) {
-    if (protectedSet.has(i)) continue;
+    if (protectedSet.has(i)) {
+      continue;
+    }
     const text = extractText(messages[i]);
-    if (!text.trim()) continue;
+    if (!text.trim()) {
+      continue;
+    }
     bm25.add(`msg-${i}`, text);
     candidates.push({ idx: i });
   }
@@ -112,14 +133,18 @@ function relevanceTrim(
   }
   const scores = bm25.search(query, candidates.length);
   const scoreMap = new Map(scores.map((s) => [s.id, s.score]));
-  const sorted = [...candidates].sort((a, b) => {
+  const sorted = [...candidates].toSorted((a, b) => {
     return (scoreMap.get(`msg-${a.idx}`) ?? 0) - (scoreMap.get(`msg-${b.idx}`) ?? 0);
   });
   let totalTokens = 0;
-  for (let i = 0; i < messages.length; i++) totalTokens += config.estimateTokens(messages[i]);
+  for (let i = 0; i < messages.length; i++) {
+    totalTokens += config.estimateTokens(messages[i]);
+  }
   const trimmedIndices: number[] = [];
   for (const c of sorted) {
-    if (totalTokens <= config.safeLimit) break;
+    if (totalTokens <= config.safeLimit) {
+      break;
+    }
     trimmedIndices.push(c.idx);
     totalTokens -= config.estimateTokens(messages[c.idx]);
   }
@@ -137,7 +162,9 @@ function timeOrderTrim(
   config: SmartTrimConfig,
 ): { kept: number[]; trimmed: number[] } {
   let totalTokens = 0;
-  for (const i of keptIndices) totalTokens += config.estimateTokens(messages[i]);
+  for (const i of keptIndices) {
+    totalTokens += config.estimateTokens(messages[i]);
+  }
   if (totalTokens <= config.safeLimit) {
     const keptSet = new Set(keptIndices);
     return {
@@ -147,8 +174,12 @@ function timeOrderTrim(
   }
   const keptSet = new Set(keptIndices);
   for (const i of keptIndices) {
-    if (totalTokens <= config.safeLimit) break;
-    if (protectedSet.has(i)) continue;
+    if (totalTokens <= config.safeLimit) {
+      break;
+    }
+    if (protectedSet.has(i)) {
+      continue;
+    }
     keptSet.delete(i);
     totalTokens -= config.estimateTokens(messages[i]);
   }
@@ -161,7 +192,9 @@ function timeOrderTrim(
 function sanitizeToolPairing(messages: MessageLike[], keptIndices: number[]): number[] {
   const keptSet = new Set(keptIndices);
   for (let i = 0; i < messages.length; i++) {
-    if (!keptSet.has(i)) continue;
+    if (!keptSet.has(i)) {
+      continue;
+    }
     if (hasToolUse(messages[i])) {
       for (let j = i + 1; j < messages.length; j++) {
         if (isToolResult(messages[j])) {
@@ -169,16 +202,22 @@ function sanitizeToolPairing(messages: MessageLike[], keptIndices: number[]): nu
             keptSet.delete(i);
             break;
           }
-        } else break;
+        } else {
+          break;
+        }
       }
     }
     if (isToolResult(messages[i])) {
       for (let j = i - 1; j >= 0; j--) {
         if (hasToolUse(messages[j])) {
-          if (!keptSet.has(j)) keptSet.delete(i);
+          if (!keptSet.has(j)) {
+            keptSet.delete(i);
+          }
           break;
         }
-        if (!isToolResult(messages[j])) break;
+        if (!isToolResult(messages[j])) {
+          break;
+        }
       }
     }
   }
@@ -191,7 +230,9 @@ export function smartTrim(
   config: SmartTrimConfig,
 ): SmartTrimResult {
   let totalTokens = 0;
-  for (const msg of messages) totalTokens += config.estimateTokens(msg);
+  for (const msg of messages) {
+    totalTokens += config.estimateTokens(msg);
+  }
   if (totalTokens <= config.safeLimit) {
     return { kept: messages, trimmed: [], didTrim: false };
   }
@@ -203,7 +244,9 @@ export function smartTrim(
   const kept = sanitized.map((i) => messages[i]);
   const trimmed: MessageLike[] = [];
   for (let i = 0; i < messages.length; i++) {
-    if (!keptSet.has(i) && !isRecalledContext(messages[i])) trimmed.push(messages[i]);
+    if (!keptSet.has(i) && !isRecalledContext(messages[i])) {
+      trimmed.push(messages[i]);
+    }
   }
   return { kept, trimmed, didTrim: true };
 }

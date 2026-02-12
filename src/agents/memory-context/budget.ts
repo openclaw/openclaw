@@ -36,7 +36,9 @@ export type BudgetResult = {
  * We use a simple ratio for both.
  */
 export function estimateTokens(text: string, ratio = 3): number {
-  if (!text) return 0;
+  if (!text) {
+    return 0;
+  }
   return Math.max(1, Math.ceil(text.length / ratio));
 }
 

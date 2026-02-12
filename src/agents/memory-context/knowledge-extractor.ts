@@ -57,13 +57,17 @@ const MAX_INPUT_CHARS = 8000;
  * Extract an AgentMessage-like object's text content.
  */
 function extractMessageText(msg: { role?: string; content?: unknown }): string {
-  if (typeof msg.content === "string") return msg.content;
+  if (typeof msg.content === "string") {
+    return msg.content;
+  }
   if (Array.isArray(msg.content)) {
     const parts: string[] = [];
     for (const block of msg.content) {
       if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
         const text = (block as { text?: string }).text;
-        if (typeof text === "string") parts.push(text);
+        if (typeof text === "string") {
+          parts.push(text);
+        }
       }
     }
     return parts.join("\n");
@@ -78,10 +82,14 @@ function formatConversation(messages: Array<{ role?: string; content?: unknown }
   const lines: string[] = [];
   for (const msg of messages) {
     // Only include user and assistant messages in extraction context
-    if (msg.role !== "user" && msg.role !== "assistant") continue;
+    if (msg.role !== "user" && msg.role !== "assistant") {
+      continue;
+    }
     const role = msg.role === "assistant" ? "Assistant" : "User";
     const text = extractMessageText(msg).trim();
-    if (!text) continue;
+    if (!text) {
+      continue;
+    }
     lines.push(`${role}: ${text}`);
   }
   let result = lines.join("\n\n");
