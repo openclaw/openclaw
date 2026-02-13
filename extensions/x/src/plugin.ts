@@ -64,7 +64,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
   agentPrompt: {
     messageToolHints: () => [
       "X/Twitter has a 280-character limit. Use plain text without markdown formatting (no **bold**, *italic*, `code`, or other markdown syntax). Keep responses concise.",
-      "For X/Twitter actions (follow/unfollow users, like/unlike tweets, repost/unrepost tweets, reply to tweets, send DMs), ALWAYS use the message tool with X-specific actions (x-follow, x-unfollow, x-like, x-unlike, x-repost, x-unrepost, x-reply, x-dm). Do NOT use the browser tool for these operations - the message tool's X actions are faster, more reliable, and use the configured API credentials.",
+      "For X/Twitter actions (follow/unfollow users, like/unlike tweets, repost/unrepost tweets, reply to tweets, post new tweets, send DMs), ALWAYS use the message tool with X-specific actions (x-follow, x-unfollow, x-like, x-unlike, x-repost, x-unrepost, x-reply, x-post, x-dm). Do NOT use the browser tool for these operations - the message tool's X actions are faster, more reliable, and use the configured API credentials.",
     ],
   },
 
@@ -78,6 +78,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
       "x-repost",
       "x-unrepost",
       "x-reply",
+      "x-post",
     ],
     supportsAction: ({ action }) =>
       [
@@ -89,6 +90,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
         "x-repost",
         "x-unrepost",
         "x-reply",
+        "x-post",
       ].includes(action),
     handleAction: async (ctx) => {
       return handleXAction(ctx.params, ctx.cfg, ctx.accountId ?? undefined, {
@@ -335,7 +337,11 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
           finalizeInboundContext: runtime.channel.reply.finalizeInboundContext,
           resolveStorePath: runtime.channel.session.resolveStorePath,
           recordInboundSession: runtime.channel.session.recordInboundSession,
-          dispatchReply: async (params) => {
+          dispatchReply: async (params: {
+            ctx: Record<string, unknown>;
+            cfg: OpenClawConfig;
+            deliver: (payload: { text?: string }) => Promise<void>;
+          }) => {
             await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
               ctx: params.ctx,
               cfg: params.cfg,
