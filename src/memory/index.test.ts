@@ -57,9 +57,8 @@ describe("memory index", () => {
     await fs.mkdir(path.join(workspaceDir, "memory"));
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-01-12.md"),
-      "# Log\nAlpha memory line.\nZebra memory line.\nAnother line.",
+      "# Log\nAlpha memory line.\nZebra memory line.",
     );
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Beta knowledge base entry.");
   });
 
   afterEach(async () => {
