@@ -1,0 +1,184 @@
+/* 
+ * RYKIRI // ELITE — INDUSTRIAL FUTURISM HUD THEME (V2.0)
+ * HIGH-PRECISION METICULOUS REFINEMENT
+ */
+
+:root {
+    /* Primary Colors */
+    --ry-neon: #EAFF00;
+    --ry-black: #050505;
+    --ry-black-trans: rgba(5, 5, 5, 0.85);
+    --ry-grit: #1A1A1A;
+    --ry-danger: #FF3333;
+
+    /* Glow & Depth */
+    --ry-neon-glow: 0 0 10px rgba(234, 255, 0, 0.4), 0 0 20px rgba(234, 255, 0, 0.2);
+    --ry-border-glow: inset 0 0 5px rgba(234, 255, 0, 0.1);
+
+    /* Typography */
+    --font-mono: 'JetBrains Mono', monospace;
+}
+
+body {
+    background-color: var(--ry-black);
+    background-image:
+        radial-gradient(circle at 50% 50%, rgba(26, 26, 26, 0.4) 0%, transparent 100%),
+        linear-gradient(rgba(234, 255, 0, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(234, 255, 0, 0.02) 1px, transparent 1px);
+    background-size: 100% 100%, 30px 30px, 30px 30px;
+    color: #FFFFFF;
+    font-family: var(--font-mono);
+    text-shadow: 0 0 2px rgba(255, 255, 255, 0.2);
+    overflow: hidden;
+}
+
+/* --- ADVANCED SCANLINE ENGINE --- */
+.ry-scanlines {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(transparent 50%,
+            rgba(0, 0, 0, 0.1) 50%);
+    background-size: 100% 4px;
+    z-index: 1000;
+    pointer-events: none;
+    animation: scanline-flicker 0.1s infinite;
+}
+
+@keyframes scanline-flicker {
+    0% {
+        opacity: 0.15;
+    }
+
+    50% {
+        opacity: 0.18;
+    }
+
+    100% {
+        opacity: 0.15;
+    }
+}
+
+/* --- ELITE MODULE GEOMETRY --- */
+.ry-module {
+    background-color: var(--ry-black-trans);
+    border: 1px solid var(--ry-neon);
+    clip-path: polygon(0 12px,
+            12px 0,
+            calc(100% - 24px) 0,
+            100% 24px,
+            100% calc(100% - 12px),
+            calc(100% - 12px) 100%,
+            24px 100%,
+            0 calc(100% - 24px));
+    padding: 24px;
+    position: relative;
+    box-shadow: var(--ry-neon-glow);
+    backdrop-filter: blur(8px);
+    transition: transform 0.2s cubic-bezier(0.1, 0.7, 1.0, 0.1);
+}
+
+.ry-module::before {
+    content: "RYKIRI // ELITE CORE";
+    position: absolute;
+    top: 4px;
+    left: 24px;
+    font-size: 8px;
+    color: var(--ry-neon);
+    opacity: 0.5;
+    letter-spacing: 2px;
+}
+
+/* --- THE NEON FLICKER (Atmospheric) --- */
+.ry-neon-flicker {
+    animation: neon-pulse 5s infinite alternate;
+}
+
+@keyframes neon-pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+        filter: brightness(1);
+    }
+
+    92% {
+        opacity: 1;
+        filter: brightness(1);
+    }
+
+    93% {
+        opacity: 0.8;
+        filter: brightness(0.8);
+    }
+
+    94% {
+        opacity: 1;
+        filter: brightness(1.2);
+    }
+
+    95% {
+        opacity: 0.7;
+        filter: brightness(0.6);
+    }
+
+    96% {
+        opacity: 1;
+        filter: brightness(1);
+    }
+}
+
+/* --- STATUS INDICATORS --- */
+.ry-status {
+    width: 8px;
+    height: 8px;
+    background: var(--ry-neon);
+    border-radius: 50%;
+    display: inline-block;
+    box-shadow: 0 0 10px var(--ry-neon);
+    margin-right: 8px;
+}
+
+.ry-status-busy {
+    animation: ry-pulse 1.5s infinite ease-in-out;
+}
+
+@keyframes ry-pulse {
+    0% {
+        transform: scale(0.9);
+        opacity: 0.7;
+    }
+
+    50% {
+        transform: scale(1.2);
+        opacity: 1;
+        box-shadow: 0 0 15px var(--ry-neon);
+    }
+
+    100% {
+        transform: scale(0.9);
+        opacity: 0.7;
+    }
+}
+
+/* --- DATA STREAM TEXT --- */
+.ry-text-glow {
+    color: var(--ry-neon);
+    text-shadow: 0 0 5px rgba(234, 255, 0, 0.5);
+}
+
+/* --- SCROLLBAR REDESIGN --- */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--ry-black);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--ry-neon);
+    border-radius: 0;
+}

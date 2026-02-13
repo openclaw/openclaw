@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RYKIRI // ELITE // HUD DEMO</title>
+    <link rel="stylesheet" href="rykiri-clawx-theme.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            width: 800px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+
+        .header {
+            grid-column: span 2;
+            font-size: 24px;
+            margin-bottom: 20px;
+            letter-spacing: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="ry-scanlines"></div>
+
+    <div class="header ry-text-glow ry-neon-flicker">
+        ⚡ RYKIRI // ELITE // COMMAND HUD ⚡
+    </div>
+
+    <div class="container">
+        <!-- SYSTEM STATUS MODULE -->
+        <div class="ry-module ry-neon-flicker">
+            <h3 class="ry-text-glow">CORE STATUS</h3>
+            <p><span class="ry-status ry-status-busy"></span> MISSION STATUS: ACTIVE</p>
+            <p>INTEGRITY: 100%</p>
+            <div class="thinking-progress"></div>
+        </div>
+
+        <!-- SOLANA PROTOCOL MODULE -->
+        <div class="ry-module">
+            <h3 class="ry-text-glow">SOLANA PROTOCOLS</h3>
+            <p>> JITO MEV: ENABLED</p>
+            <p>> JUPITER ROUTER: CONNECTED</p>
+            <p>> HELIUS RPC: 4ms LATENCY</p>
+        </div>
+
+        <!-- DATA STREAM MODULE -->
+        <div class="ry-module" style="grid-column: span 2;">
+            <h3 class="ry-text-glow">DATA STREAM</h3>
+            <div style="font-size: 12px; opacity: 0.8;">
+                [08:00:01] INITIALIZING RYKIRI CORE...<br>
+                [08:00:02] LOADING JITO PROTOCOLS...<br>
+                [08:00:03] HANDSHAKE SUCCESSFUL: HELIUS-01<br>
+                [08:00:04] <span class="ry-text-glow">SCANNING BLOCKCHAIN... NO MALICIOUS CODE DETECTED</span>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
