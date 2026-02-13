@@ -275,11 +275,11 @@ clawdock-dashboard() {
   _clawdock_ensure_dir || return 1
 
   echo "🦞 Getting dashboard URL..."
-  local output status url
+  local output exit_status url
   output=$(_clawdock_compose run --rm openclaw-cli dashboard --no-open 2>&1)
-  status=$?
+  exit_status=$?
   url=$(printf "%s\n" "$output" | _clawdock_filter_warnings | grep -o 'http[s]\?://[^[:space:]]*' | head -n 1)
-  if [[ $status -ne 0 ]]; then
+  if [[ $exit_status -ne 0 ]]; then
     echo "❌ Failed to get dashboard URL"
     echo -e "   Try restarting: $(_cmd clawdock-restart)"
     return 1
@@ -304,11 +304,11 @@ clawdock-devices() {
   _clawdock_ensure_dir || return 1
 
   echo "🔍 Checking device pairings..."
-  local output status
+  local output exit_status
   output=$(_clawdock_compose exec openclaw-gateway node dist/index.js devices list 2>&1)
-  status=$?
+  exit_status=$?
   printf "%s\n" "$output" | _clawdock_filter_warnings
-  if [ $status -ne 0 ]; then
+  if [ $exit_status -ne 0 ]; then
     echo ""
     echo -e "${_CLR_CYAN}💡 If you see token errors above:${_CLR_RESET}"
     echo -e "   1. Verify token is set: $(_cmd clawdock-token)"
