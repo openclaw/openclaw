@@ -303,7 +303,8 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
 export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
-  const hooksEnabled = cfg.hooks?.enabled === true;
+  const webhooksEnabled = cfg.hooks?.enabled === true;
+  const internalHooksEnabled = cfg.hooks?.internal?.enabled === true;
   const browserEnabled = cfg.browser?.enabled ?? true;
 
   const detail =
@@ -311,7 +312,9 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     `\n` +
     `tools.elevated: ${elevated ? "enabled" : "disabled"}` +
     `\n` +
-    `hooks: ${hooksEnabled ? "enabled" : "disabled"}` +
+    `hooks.webhooks: ${webhooksEnabled ? "enabled" : "disabled"}` +
+    `\n` +
+    `hooks.internal: ${internalHooksEnabled ? "enabled" : "disabled"}` +
     `\n` +
     `browser control: ${browserEnabled ? "enabled" : "disabled"}`;
 
