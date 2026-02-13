@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 const embedBatch = vi.fn(async (texts: string[]) => texts.map(() => [0, 1, 0]));
@@ -20,16 +20,26 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 describe("memory embedding batches", () => {
+  let fixtureRoot: string;
+  let caseId = 0;
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
 
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
   beforeEach(async () => {
     embedBatch.mockClear();
     embedQuery.mockClear();
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
+    workspaceDir = path.join(fixtureRoot, `case-${++caseId}`);
     indexPath = path.join(workspaceDir, "index.sqlite");
-    await fs.mkdir(path.join(workspaceDir, "memory"));
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
   });
 
   afterEach(async () => {
@@ -37,7 +47,6 @@ describe("memory embedding batches", () => {
       await manager.close();
       manager = null;
     }
-    await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
   it("splits large files across multiple embedding batches", async () => {

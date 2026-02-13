@@ -144,6 +144,7 @@ describe("memory index", () => {
       throw new Error("manager missing");
     }
     await first.manager.sync({ force: true });
+    const callsAfterFirstSync = embedBatchCalls;
     await first.manager.close();
 
     const second = await getMemorySearchManager({
@@ -168,8 +169,9 @@ describe("memory index", () => {
     }
     manager = second.manager;
     await second.manager.sync({ reason: "test" });
-    const results = await second.manager.search("alpha");
-    expect(results.length).toBeGreaterThan(0);
+    expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
+    const status = second.manager.status();
+    expect(status.files).toBeGreaterThan(0);
   });
 
   it("reuses cached embeddings on forced reindex", async () => {
@@ -280,7 +282,7 @@ describe("memory index", () => {
   });
 
   it("hybrid weights can favor vector-only matches over keyword-only matches", async () => {
-    const manyAlpha = Array.from({ length: 80 }, () => "Alpha").join(" ");
+    const manyAlpha = Array.from({ length: 50 }, () => "Alpha").join(" ");
     await fs.writeFile(
       path.join(workspaceDir, "memory", "vector-only.md"),
       "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
@@ -338,7 +340,7 @@ describe("memory index", () => {
   });
 
   it("hybrid weights can favor keyword matches when text weight dominates", async () => {
-    const manyAlpha = Array.from({ length: 80 }, () => "Alpha").join(" ");
+    const manyAlpha = Array.from({ length: 50 }, () => "Alpha").join(" ");
     await fs.writeFile(
       path.join(workspaceDir, "memory", "vector-only.md"),
       "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
