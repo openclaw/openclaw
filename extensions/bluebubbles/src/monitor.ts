@@ -291,7 +291,7 @@ type BlueBubblesDebounceEntry = {
  * This helps combine URL text + link preview balloon messages that BlueBubbles
  * sends as separate webhook events when no explicit inbound debounce config exists.
  */
-const DEFAULT_INBOUND_DEBOUNCE_MS = 500;
+const DEFAULT_INBOUND_DEBOUNCE_MS = 1500;
 
 /**
  * Combines multiple debounced messages into a single message for processing.
@@ -412,6 +412,18 @@ function getOrCreateDebouncer(target: WebhookTarget) {
         return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
       }
 
+      // Inbound messages: use sender+chat key so text and subsequent URL balloons
+      // (which arrive with different GUIDs and no associatedMessageGuid) merge
+      // within the debounce window.
+      if (!msg.fromMe) {
+        const chatKey =
+          msg.chatGuid?.trim() ??
+          msg.chatIdentifier?.trim() ??
+          (msg.chatId ? String(msg.chatId) : "dm");
+        return `bluebubbles:${account.accountId}:${chatKey}:${msg.senderId}`;
+      }
+
+      // From-me: keep message-id keying to avoid merging distinct outbound messages
       const messageId = msg.messageId?.trim();
       if (messageId) {
         return `bluebubbles:${account.accountId}:msg:${messageId}`;
