@@ -58,6 +58,7 @@ export const VENICE_MODEL_CATALOG = [
     contextWindow: 131072,
     maxTokens: 8192,
     privacy: "private",
+    supportsFunctionCalling: false,
   },
 
   // Qwen models
@@ -125,6 +126,7 @@ export const VENICE_MODEL_CATALOG = [
     contextWindow: 163840,
     maxTokens: 8192,
     privacy: "private",
+    supportsFunctionCalling: false,
   },
 
   // Venice-specific models
@@ -136,6 +138,7 @@ export const VENICE_MODEL_CATALOG = [
     contextWindow: 32768,
     maxTokens: 8192,
     privacy: "private",
+    supportsFunctionCalling: false,
   },
   {
     id: "mistral-31-24b",
@@ -292,7 +295,7 @@ export type VeniceCatalogEntry = (typeof VENICE_MODEL_CATALOG)[number];
  * mode is inherent to each model and documented in the catalog/docs.
  */
 export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefinitionConfig {
-  return {
+  const def: ModelDefinitionConfig = {
     id: entry.id,
     name: entry.name,
     reasoning: entry.reasoning,
@@ -301,6 +304,29 @@ export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefi
     contextWindow: entry.contextWindow,
     maxTokens: entry.maxTokens,
   };
+  if ("supportsFunctionCalling" in entry && entry.supportsFunctionCalling === false) {
+    def.supportsFunctionCalling = false;
+  }
+  return def;
+}
+
+/**
+ * Set of Venice model IDs that do NOT support function calling.
+ * Used at runtime to strip tools before sending requests.
+ */
+const VENICE_NO_FC_MODEL_IDS: ReadonlySet<string> = new Set(
+  VENICE_MODEL_CATALOG.filter(
+    (m) => "supportsFunctionCalling" in m && m.supportsFunctionCalling === false,
+  ).map((m) => m.id as string),
+);
+
+/**
+ * Check whether a Venice model supports function calling.
+ * Returns `false` only for models explicitly marked as not supporting it.
+ * For unknown models, defaults to `true`.
+ */
+export function veniceModelSupportsFunctionCalling(modelId: string): boolean {
+  return !VENICE_NO_FC_MODEL_IDS.has(modelId);
 }
 
 // Venice API response types
@@ -372,8 +398,9 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           apiModel.id.toLowerCase().includes("r1");
 
         const hasVision = apiModel.model_spec.capabilities.supportsVision;
+        const fc = apiModel.model_spec.capabilities.supportsFunctionCalling;
 
-        models.push({
+        const def: ModelDefinitionConfig = {
           id: apiModel.id,
           name: apiModel.model_spec.name || apiModel.id,
           reasoning: isReasoning,
@@ -381,7 +408,11 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           cost: VENICE_DEFAULT_COST,
           contextWindow: apiModel.model_spec.availableContextTokens || 128000,
           maxTokens: 8192,
-        });
+        };
+        if (fc === false) {
+          def.supportsFunctionCalling = false;
+        }
+        models.push(def);
       }
     }
 
