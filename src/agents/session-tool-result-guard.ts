@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { redactSensitiveText } from "../logging/redact.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { HARD_MAX_TOOL_RESULT_CHARS } from "./pi-embedded-runner/tool-result-truncation.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
@@ -69,6 +70,40 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
   });
 
   return { ...msg, content: newContent } as AgentMessage;
+}
+
+/**
+ * Redact secrets (API keys, tokens, passwords, PEM blocks) from text
+ * content blocks in a tool result message before persisting to disk.
+ * The read path already redacts on load (session-files.ts), but the write
+ * path was missing — secrets were stored in plain text on disk (#12182).
+ */
+function redactToolResultSecrets(msg: AgentMessage): AgentMessage {
+  const role = (msg as { role?: string }).role;
+  if (role !== "toolResult") {
+    return msg;
+  }
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return msg;
+  }
+  let changed = false;
+  const redactedContent = content.map((block: unknown) => {
+    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
+      return block;
+    }
+    const text = (block as TextContent).text;
+    if (typeof text !== "string") {
+      return block;
+    }
+    const safe = redactSensitiveText(text, { mode: "tools" });
+    if (safe === text) {
+      return block;
+    }
+    changed = true;
+    return { ...block, text: safe };
+  });
+  return changed ? ({ ...msg, content: redactedContent } as AgentMessage) : msg;
 }
 
 type ToolCall = { id: string; name?: string };
@@ -186,7 +221,7 @@ export function installSessionToolResultGuard(
       }
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(nextMessage);
+      const capped = redactToolResultSecrets(capToolResultSize(nextMessage));
       return originalAppend(
         persistToolResult(capped, {
           toolCallId: id ?? undefined,
