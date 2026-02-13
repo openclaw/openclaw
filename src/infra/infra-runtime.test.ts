@@ -80,10 +80,14 @@ describe("infra runtime", () => {
       __testing.resetSigusr1State();
     });
 
-    it("consumes a scheduled authorization once", async () => {
+    it("authorizes exactly once when scheduled restart emits", async () => {
       expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
 
       scheduleGatewaySigusr1Restart({ delayMs: 0 });
+
+      // No pre-authorization before the scheduled emission fires.
+      expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
       expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);

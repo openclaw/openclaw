@@ -71,7 +71,7 @@ export function isGatewaySigusr1RestartExternallyAllowed() {
   return sigusr1ExternalAllowed;
 }
 
-export function authorizeGatewaySigusr1Restart(delayMs = 0) {
+function authorizeGatewaySigusr1Restart(delayMs = 0) {
   const delay = Math.max(0, Math.floor(delayMs));
   const expiresAt = Date.now() + delay + SIGUSR1_AUTH_GRACE_MS;
   sigusr1AuthorizedCount += 1;
@@ -230,7 +230,6 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   const DEFERRAL_POLL_MS = 500;
   const DEFERRAL_MAX_WAIT_MS = 30_000;
 
-  authorizeGatewaySigusr1Restart(delayMs + DEFERRAL_MAX_WAIT_MS);
   setTimeout(() => {
     if (!preRestartCheck) {
       emitGatewayRestart();
