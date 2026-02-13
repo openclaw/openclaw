@@ -38,9 +38,8 @@ import {
   resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
+  resolveDiscordMemberAllowed,
   resolveDiscordShouldRequireMention,
-  resolveDiscordRoleAllowed,
-  resolveDiscordUserAllowed,
   resolveGroupDmAllow,
 } from "./allow-list.js";
 import {
@@ -221,8 +220,9 @@ export async function preflightDiscordMessage(
   }
 
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
-  // member.roles is already string[] (Snowflake IDs) per Discord API types
-  const memberRoleIds: string[] = params.data.member?.roles ?? [];
+  const memberRoleIds = Array.isArray(params.data.member?.roles)
+    ? params.data.member.roles.map((roleId: string) => String(roleId))
+    : [];
   const route = resolveAgentRoute({
     cfg: loadConfig(),
     channel: "discord",
@@ -455,6 +455,19 @@ export async function preflightDiscordMessage(
     surface: "discord",
   });
   const hasControlCommandInMessage = hasControlCommand(baseText, params.cfg);
+  const channelUsers = channelConfig?.users ?? guildInfo?.users;
+  const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
+  const hasAccessRestrictions =
+    (Array.isArray(channelUsers) && channelUsers.length > 0) ||
+    (Array.isArray(channelRoles) && channelRoles.length > 0);
+  const memberAllowed = resolveDiscordMemberAllowed({
+    userAllowList: channelUsers,
+    roleAllowList: channelRoles,
+    memberRoleIds,
+    userId: sender.id,
+    userName: sender.name,
+    userTag: sender.tag,
+  });
 
   if (!isDirectMessage) {
     const ownerAllowList = normalizeDiscordAllowList(params.allowFrom, [
@@ -469,22 +482,12 @@ export async function preflightDiscordMessage(
           tag: sender.tag,
         })
       : false;
-    const channelUsers = channelConfig?.users ?? guildInfo?.users;
-    const usersOk =
-      Array.isArray(channelUsers) && channelUsers.length > 0
-        ? resolveDiscordUserAllowed({
-            allowList: channelUsers,
-            userId: sender.id,
-            userName: sender.name,
-            userTag: sender.tag,
-          })
-        : false;
     const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
         { configured: ownerAllowList != null, allowed: ownerOk },
-        { configured: Array.isArray(channelUsers) && channelUsers.length > 0, allowed: usersOk },
+        { configured: hasAccessRestrictions, allowed: memberAllowed },
       ],
       modeWhenAccessGroupsOff: "configured",
       allowTextCommands,
@@ -536,35 +539,9 @@ export async function preflightDiscordMessage(
     }
   }
 
-  if (isGuildMessage) {
-    const channelUsers = channelConfig?.users ?? guildInfo?.users;
-    const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
-    const hasUserRestriction = Array.isArray(channelUsers) && channelUsers.length > 0;
-    const hasRoleRestriction = Array.isArray(channelRoles) && channelRoles.length > 0;
-
-    if (hasUserRestriction || hasRoleRestriction) {
-      // member.roles is already string[] (Snowflake IDs) per Discord API types
-      const memberRoleIds: string[] = params.data.member?.roles ?? [];
-      const userOk = hasUserRestriction
-        ? resolveDiscordUserAllowed({
-            allowList: channelUsers,
-            userId: sender.id,
-            userName: sender.name,
-            userTag: sender.tag,
-          })
-        : false;
-      const roleOk = hasRoleRestriction
-        ? resolveDiscordRoleAllowed({
-            allowList: channelRoles,
-            memberRoleIds,
-          })
-        : false;
-
-      if (!userOk && !roleOk) {
-        logVerbose(`Blocked discord guild sender ${sender.id} (not in users/roles allowlist)`);
-        return null;
-      }
-    }
+  if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {
+    logVerbose(`Blocked discord guild sender ${sender.id} (not in users/roles allowlist)`);
+    return null;
   }
 
   const systemLocation = resolveDiscordSystemLocation({
