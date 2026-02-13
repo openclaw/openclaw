@@ -9,11 +9,8 @@ export type ChannelGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
-  /** Silent message ingestion config (runs hooks without LLM/tools). */
-  ingest?: {
-    enabled: boolean;
-    hooks: string[];
-  };
+  /** Enable silent message ingestion (runs message_ingest hooks without LLM/tools). */
+  ingest?: boolean;
 };
 
 export type ChannelGroupPolicy = {

@@ -27,6 +27,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
+import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
@@ -55,9 +56,8 @@ import {
   extractTelegramLocation,
   hasBotMention,
   resolveTelegramThreadSpec,
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 } from "./bot/helpers.js";
-import type { StickerMetadata, TelegramContext } from "./bot/types.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 
 export type TelegramMediaRef = {
@@ -491,63 +491,56 @@ export const buildTelegramMessageContext = async ({
       });
 
       // Silent ingest: run hooks on non-mentioned messages
-      const ingestConfig = topicConfig?.ingest ?? groupConfig?.ingest;
-      if (ingestConfig && typeof ingestConfig === 'object') {
-        const enabled = ingestConfig.enabled === true;
-        const hooks = Array.isArray(ingestConfig.hooks) ? ingestConfig.hooks : [];
-        
-        if (enabled && hooks.length > 0 && rawBody && rawBody.trim().length > 0) {
+      const ingestEnabled = topicConfig?.ingest ?? groupConfig?.ingest;
+      if (ingestEnabled && rawBody && rawBody.trim().length > 0) {
           const hookRunner = getGlobalHookRunner();
           if (hookRunner) {
-            const { ALLOWED_INGEST_HOOKS } = await import("../config/ingest-hooks.js");
             const { sanitizeUserText } = await import("../utils/sanitize.js");
             
-            const validHooks = hooks.filter((h): h is string => 
-              typeof h === 'string' && ALLOWED_INGEST_HOOKS.includes(h as any)
-            );
-            
-            if (validHooks.length > 0) {
-              const messageIdForHook = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
-              const sanitizedMetadata = {
-                to: String(chatId),
-                provider: "telegram",
-                surface: "telegram",
-                threadId: resolvedThreadId,
-                originatingChannel: "telegram",
-                originatingTo: String(chatId),
-                messageId: messageIdForHook,
-                senderId: senderId || undefined,
-                senderName: sanitizeUserText(senderName),
-                senderUsername: sanitizeUserText(senderUsername),
-              };
+            const messageIdForHook =
+              typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
+            const hookSenderName = buildSenderName(msg);
+            const hookConversationLabel = isGroup
+              ? (msg.chat.title ? buildGroupLabel(msg, chatId, resolvedThreadId) : null) ?? `group:${chatId}`
+              : buildSenderLabel(msg, senderId || chatId);
+            const sanitizedMetadata = {
+              to: String(chatId),
+              provider: "telegram",
+              surface: "telegram",
+              threadId: resolvedThreadId,
+              originatingChannel: "telegram",
+              originatingTo: String(chatId),
+              messageId: messageIdForHook,
+              senderId: senderId || undefined,
+              senderName: sanitizeUserText(hookSenderName),
+              senderUsername: sanitizeUserText(senderUsername),
+            };
 
-              const HOOK_TIMEOUT_MS = 5000;
-              const timeoutPromise = new Promise<void>((_, reject) => {
-                setTimeout(() => reject(new Error('Hook timeout')), HOOK_TIMEOUT_MS);
-              });
+            const HOOK_TIMEOUT_MS = 5000;
+            const timeoutPromise = new Promise<void>((_, reject) => {
+              setTimeout(() => reject(new Error('Hook timeout')), HOOK_TIMEOUT_MS);
+            });
 
-              void Promise.race([
-                hookRunner.runMessageReceived(
-                  {
-                    from: conversationLabel,
-                    content: rawBody,
-                    timestamp: msg.date ? msg.date * 1000 : undefined,
-                    metadata: sanitizedMetadata,
-                  },
-                  {
-                    channelId: "telegram",
-                    accountId: route.accountId,
-                    conversationId: String(chatId),
-                  },
-                ),
-                timeoutPromise,
-              ]).catch((err) => {
-                const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-                logVerbose(`telegram: ingest hook failed: ${errorMsg}`);
-              });
-            }
+            void Promise.race([
+              hookRunner.runMessageIngest(
+                {
+                  from: hookConversationLabel,
+                  content: rawBody,
+                  timestamp: msg.date ? msg.date * 1000 : undefined,
+                  metadata: sanitizedMetadata,
+                },
+                {
+                  channelId: "telegram",
+                  accountId: route.accountId,
+                  conversationId: String(chatId),
+                },
+              ),
+              timeoutPromise,
+            ]).catch((err) => {
+              const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+              logVerbose(`telegram: ingest hook failed: ${errorMsg}`);
+            });
           }
-        }
       }
 
       return null;

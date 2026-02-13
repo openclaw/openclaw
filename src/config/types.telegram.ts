@@ -162,11 +162,8 @@ export type TelegramTopicConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this topic. */
   systemPrompt?: string;
-  /** Silent message ingestion config (runs hooks without LLM/tools). */
-  ingest?: {
-    enabled: boolean;
-    hooks: string[];
-  };
+  /** Enable silent message ingestion (runs message_ingest hooks without LLM/tools). */
+  ingest?: boolean;
 };
 
 export type TelegramGroupConfig = {
@@ -186,11 +183,8 @@ export type TelegramGroupConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;
-  /** Silent message ingestion config (runs hooks without LLM/tools). */
-  ingest?: {
-    enabled: boolean;
-    hooks: string[];
-  };
+  /** Enable silent message ingestion (runs message_ingest hooks without LLM/tools). */
+  ingest?: boolean;
 };
 
 export type TelegramConfig = {

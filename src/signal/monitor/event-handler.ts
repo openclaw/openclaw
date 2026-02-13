@@ -601,63 +601,51 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupId,
         accountId: deps.accountId,
       });
-      const ingestConfig = groupConfig?.ingest;
-      if (ingestConfig && typeof ingestConfig === 'object') {
-        const enabled = ingestConfig.enabled === true;
-        const hooks = Array.isArray(ingestConfig.hooks) ? ingestConfig.hooks : [];
-        
-        if (enabled && hooks.length > 0 && groupId && pendingBodyText && pendingBodyText.trim().length > 0) {
+      const ingestEnabled = groupConfig?.ingest;
+      if (ingestEnabled && groupId && pendingBodyText && pendingBodyText.trim().length > 0) {
           const hookRunner = getGlobalHookRunner();
           if (hookRunner) {
-            const { ALLOWED_INGEST_HOOKS } = await import("../../config/ingest-hooks.js");
             const { sanitizeUserText } = await import("../../utils/sanitize.js");
             
-            const validHooks = hooks.filter((h): h is string => 
-              typeof h === 'string' && ALLOWED_INGEST_HOOKS.includes(h as any)
-            );
-            
-            if (validHooks.length > 0) {
-              const timestamp = typeof envelope.timestamp === 'number' && envelope.timestamp > 0
-                ? envelope.timestamp
-                : undefined;
-              const messageIdForHook = timestamp ? String(timestamp) : undefined;
-              const sanitizedMetadata = {
-                to: groupId,
-                provider: "signal",
-                surface: "signal",
-                messageId: messageIdForHook,
-                originatingChannel: "signal",
-                originatingTo: groupId,
-                senderName: sanitizeUserText(senderDisplay),
-              };
+            const timestamp = typeof envelope.timestamp === 'number' && envelope.timestamp > 0
+              ? envelope.timestamp
+              : undefined;
+            const messageIdForHook = timestamp ? String(timestamp) : undefined;
+            const sanitizedMetadata = {
+              to: groupId,
+              provider: "signal",
+              surface: "signal",
+              messageId: messageIdForHook,
+              originatingChannel: "signal",
+              originatingTo: groupId,
+              senderName: sanitizeUserText(senderDisplay),
+            };
 
-              const HOOK_TIMEOUT_MS = 5000;
-              const timeoutPromise = new Promise<void>((_, reject) => {
-                setTimeout(() => reject(new Error('Hook timeout')), HOOK_TIMEOUT_MS);
-              });
+            const HOOK_TIMEOUT_MS = 5000;
+            const timeoutPromise = new Promise<void>((_, reject) => {
+              setTimeout(() => reject(new Error('Hook timeout')), HOOK_TIMEOUT_MS);
+            });
 
-              void Promise.race([
-                hookRunner.runMessageReceived(
-                  {
-                    from: senderDisplay,
-                    content: pendingBodyText,
-                    timestamp,
-                    metadata: sanitizedMetadata,
-                  },
-                  {
-                    channelId: "signal",
-                    accountId: deps.accountId,
-                    conversationId: groupId,
-                  },
-                ),
-                timeoutPromise,
-              ]).catch((err) => {
-                const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-                logVerbose(`signal: ingest hook failed: ${errorMsg}`);
-              });
-            }
+            void Promise.race([
+              hookRunner.runMessageIngest(
+                {
+                  from: senderDisplay,
+                  content: pendingBodyText,
+                  timestamp,
+                  metadata: sanitizedMetadata,
+                },
+                {
+                  channelId: "signal",
+                  accountId: deps.accountId,
+                  conversationId: groupId,
+                },
+              ),
+              timeoutPromise,
+            ]).catch((err) => {
+              const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+              logVerbose(`signal: ingest hook failed: ${errorMsg}`);
+            });
           }
-        }
       }
 
       return;
