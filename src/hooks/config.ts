@@ -70,12 +70,7 @@ export function hasBinary(bin: string): boolean {
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
   const extensions =
     process.platform === "win32"
-      ? [
-          "",
-          ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-            .split(";")
-            .filter(Boolean),
-        ]
+      ? ["", ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)]
       : [""];
   for (const part of parts) {
     for (const ext of extensions) {
