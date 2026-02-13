@@ -11,7 +11,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -123,6 +123,12 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
+      const startedAt = Date.now();
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt },
+      });
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -187,8 +193,18 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "end", startedAt, endedAt: Date.now() },
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "error", startedAt, endedAt: Date.now(), error: message },
+        });
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         return;
       }

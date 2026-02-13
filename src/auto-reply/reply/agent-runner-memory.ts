@@ -15,7 +15,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
@@ -89,6 +89,12 @@ export async function runMemoryFlushIfNeeded(params: {
     });
   }
   let memoryCompactionCompleted = false;
+  const flushStartedAt = Date.now();
+  emitAgentEvent({
+    runId: flushRunId,
+    stream: "lifecycle",
+    data: { phase: "start", startedAt: flushStartedAt },
+  });
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
     memoryFlushSettings.systemPrompt,
@@ -162,6 +168,11 @@ export async function runMemoryFlushIfNeeded(params: {
         });
       },
     });
+    emitAgentEvent({
+      runId: flushRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: flushStartedAt, endedAt: Date.now() },
+    });
     let memoryFlushCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
@@ -195,6 +206,11 @@ export async function runMemoryFlushIfNeeded(params: {
       }
     }
   } catch (err) {
+    emitAgentEvent({
+      runId: flushRunId,
+      stream: "lifecycle",
+      data: { phase: "error", startedAt: flushStartedAt, endedAt: Date.now(), error: String(err) },
+    });
     logVerbose(`memory flush run failed: ${String(err)}`);
   }
 

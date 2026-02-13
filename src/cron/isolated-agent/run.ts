@@ -42,7 +42,7 @@ import {
   resolveSessionTranscriptPath,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { logWarn } from "../../logger.js";
@@ -394,6 +394,11 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionKey: agentSessionKey,
       verboseLevel: resolvedVerboseLevel,
     });
+    emitAgentEvent({
+      runId: cronSession.sessionEntry.sessionId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: runStartedAt },
+    });
     const messageChannel = resolvedDelivery.channel;
     const fallbackResult = await runWithModelFallback({
       cfg: cfgWithAgentDefaults,
@@ -447,7 +452,17 @@ export async function runCronIsolatedAgentTurn(params: {
     fallbackProvider = fallbackResult.provider;
     fallbackModel = fallbackResult.model;
     runEndedAt = Date.now();
+    emitAgentEvent({
+      runId: cronSession.sessionEntry.sessionId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: runStartedAt, endedAt: runEndedAt },
+    });
   } catch (err) {
+    emitAgentEvent({
+      runId: cronSession.sessionEntry.sessionId,
+      stream: "lifecycle",
+      data: { phase: "error", startedAt: runStartedAt, endedAt: Date.now(), error: String(err) },
+    });
     return withRunSession({ status: "error", error: String(err) });
   }
 

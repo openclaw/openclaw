@@ -6,14 +6,10 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
-  emitAgentEvent({
-    runId: ctx.params.runId,
-    stream: "lifecycle",
-    data: {
-      phase: "start",
-      startedAt: Date.now(),
-    },
-  });
+  // NOTE: lifecycle events are NOT emitted here to avoid premature gateway
+  // chatLink consumption during model-fallback retries. The outer command
+  // layer (agent.ts) emits a single lifecycle:start / lifecycle:end pair
+  // that spans the entire fallback chain.
   void ctx.params.onAgentEvent?.({
     stream: "lifecycle",
     data: { phase: "start" },
@@ -95,14 +91,7 @@ export function handleAutoCompactionEnd(
 
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId}`);
-  emitAgentEvent({
-    runId: ctx.params.runId,
-    stream: "lifecycle",
-    data: {
-      phase: "end",
-      endedAt: Date.now(),
-    },
-  });
+  // NOTE: lifecycle:end is emitted by agent.ts, not here (see handleAgentStart).
   void ctx.params.onAgentEvent?.({
     stream: "lifecycle",
     data: { phase: "end" },

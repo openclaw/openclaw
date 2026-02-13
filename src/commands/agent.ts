@@ -370,7 +370,18 @@ export async function agentCommand(
     });
 
     const startedAt = Date.now();
-    let lifecycleEnded = false;
+
+    // Emit lifecycle:start once for the entire run (including all fallback attempts).
+    // Per-attempt lifecycle events are no longer emitted by the subscription handler
+    // to avoid premature chatLink consumption in the gateway during model fallback.
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        startedAt,
+      },
+    });
 
     let result: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
     let fallbackProvider = provider;
@@ -452,47 +463,33 @@ export async function agentCommand(
             inputProvenance: opts.inputProvenance,
             streamParams: opts.streamParams,
             agentDir,
-            onAgentEvent: (evt) => {
-              // Track lifecycle end for fallback emission below.
-              if (
-                evt.stream === "lifecycle" &&
-                typeof evt.data?.phase === "string" &&
-                (evt.data.phase === "end" || evt.data.phase === "error")
-              ) {
-                lifecycleEnded = true;
-              }
-            },
           });
         },
       });
       result = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
-      if (!lifecycleEnded) {
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: {
-            phase: "end",
-            startedAt,
-            endedAt: Date.now(),
-            aborted: result.meta.aborted ?? false,
-          },
-        });
-      }
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt,
+          endedAt: Date.now(),
+          aborted: result.meta.aborted ?? false,
+        },
+      });
     } catch (err) {
-      if (!lifecycleEnded) {
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: {
-            phase: "error",
-            startedAt,
-            endedAt: Date.now(),
-            error: String(err),
-          },
-        });
-      }
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt,
+          endedAt: Date.now(),
+          error: String(err),
+        },
+      });
       throw err;
     }
 
