@@ -1,5 +1,7 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as authModule from "../agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { createEmbeddingProvider } from "./embeddings.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(),
@@ -9,6 +11,11 @@ vi.mock("../agents/model-auth.js", () => ({
     }
     throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
   },
+}));
+
+const importNodeLlamaCppMock = vi.fn();
+vi.mock("./node-llama.js", () => ({
+  importNodeLlamaCpp: (...args: unknown[]) => importNodeLlamaCppMock(...args),
 }));
 
 const createFetchMock = () =>
@@ -27,9 +34,6 @@ describe("embedding provider remote overrides", () => {
   it("uses remote baseUrl/apiKey and merges headers", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
-
-    const { createEmbeddingProvider } = await import("./embeddings.js");
-    const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "provider-key",
       mode: "api-key",
@@ -81,9 +85,6 @@ describe("embedding provider remote overrides", () => {
   it("falls back to resolved api key when remote apiKey is blank", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
-
-    const { createEmbeddingProvider } = await import("./embeddings.js");
-    const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "provider-key",
       mode: "api-key",
@@ -125,9 +126,6 @@ describe("embedding provider remote overrides", () => {
       json: async () => ({ embedding: { values: [1, 2, 3] } }),
     })) as unknown as typeof fetch;
     vi.stubGlobal("fetch", fetchMock);
-
-    const { createEmbeddingProvider } = await import("./embeddings.js");
-    const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "provider-key",
       mode: "api-key",
@@ -173,8 +171,6 @@ describe("embedding provider auto selection", () => {
   });
 
   it("prefers openai when a key resolves", async () => {
-    const { createEmbeddingProvider } = await import("./embeddings.js");
-    const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
         return { apiKey: "openai-key", source: "env: OPENAI_API_KEY", mode: "api-key" };
@@ -200,9 +196,6 @@ describe("embedding provider auto selection", () => {
       json: async () => ({ embedding: { values: [1, 2, 3] } }),
     })) as unknown as typeof fetch;
     vi.stubGlobal("fetch", fetchMock);
-
-    const { createEmbeddingProvider } = await import("./embeddings.js");
-    const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
         throw new Error('No API key found for provider "openai".');
@@ -236,9 +229,6 @@ describe("embedding provider auto selection", () => {
       json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
     })) as unknown as typeof fetch;
     vi.stubGlobal("fetch", fetchMock);
-
-    const { createEmbeddingProvider } = await import("./embeddings.js");
-    const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
         return { apiKey: "openai-key", source: "env: OPENAI_API_KEY", mode: "api-key" };
@@ -264,31 +254,21 @@ describe("embedding provider auto selection", () => {
 });
 
 describe("embedding provider local fallback", () => {
-  beforeAll(() => {
-    vi.resetModules();
-  });
-
   afterEach(() => {
     vi.resetAllMocks();
-    vi.resetModules();
     vi.unstubAllGlobals();
-    vi.doUnmock("./node-llama.js");
   });
 
   it("falls back to openai when node-llama-cpp is missing", async () => {
-    vi.doMock("./node-llama.js", () => ({
-      importNodeLlamaCpp: async () => {
-        throw Object.assign(new Error("Cannot find package 'node-llama-cpp'"), {
-          code: "ERR_MODULE_NOT_FOUND",
-        });
-      },
-    }));
+    importNodeLlamaCppMock.mockRejectedValue(
+      Object.assign(new Error("Cannot find package 'node-llama-cpp'"), {
+        code: "ERR_MODULE_NOT_FOUND",
+      }),
+    );
 
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
 
-    const { createEmbeddingProvider } = await import("./embeddings.js");
-    const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "provider-key",
       mode: "api-key",
@@ -308,15 +288,11 @@ describe("embedding provider local fallback", () => {
   });
 
   it("throws a helpful error when local is requested and fallback is none", async () => {
-    vi.doMock("./node-llama.js", () => ({
-      importNodeLlamaCpp: async () => {
-        throw Object.assign(new Error("Cannot find package 'node-llama-cpp'"), {
-          code: "ERR_MODULE_NOT_FOUND",
-        });
-      },
-    }));
-
-    const { createEmbeddingProvider } = await import("./embeddings.js");
+    importNodeLlamaCppMock.mockRejectedValue(
+      Object.assign(new Error("Cannot find package 'node-llama-cpp'"), {
+        code: "ERR_MODULE_NOT_FOUND",
+      }),
+    );
 
     await expect(
       createEmbeddingProvider({
@@ -332,31 +308,25 @@ describe("embedding provider local fallback", () => {
 describe("local embedding normalization", () => {
   afterEach(() => {
     vi.resetAllMocks();
-    vi.resetModules();
     vi.unstubAllGlobals();
-    vi.doUnmock("./node-llama.js");
   });
 
   it("normalizes local embeddings to magnitude ~1.0", async () => {
     const unnormalizedVector = [2.35, 3.45, 0.63, 4.3, 1.2, 5.1, 2.8, 3.9];
 
-    vi.doMock("./node-llama.js", () => ({
-      importNodeLlamaCpp: async () => ({
-        getLlama: async () => ({
-          loadModel: vi.fn().mockResolvedValue({
-            createEmbeddingContext: vi.fn().mockResolvedValue({
-              getEmbeddingFor: vi.fn().mockResolvedValue({
-                vector: new Float32Array(unnormalizedVector),
-              }),
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        loadModel: vi.fn().mockResolvedValue({
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            getEmbeddingFor: vi.fn().mockResolvedValue({
+              vector: new Float32Array(unnormalizedVector),
             }),
           }),
         }),
-        resolveModelFile: async () => "/fake/model.gguf",
-        LlamaLogLevel: { error: 0 },
       }),
-    }));
-
-    const { createEmbeddingProvider } = await import("./embeddings.js");
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
 
     const result = await createEmbeddingProvider({
       config: {} as never,
@@ -375,23 +345,19 @@ describe("local embedding normalization", () => {
   it("handles zero vector without division by zero", async () => {
     const zeroVector = [0, 0, 0, 0];
 
-    vi.doMock("./node-llama.js", () => ({
-      importNodeLlamaCpp: async () => ({
-        getLlama: async () => ({
-          loadModel: vi.fn().mockResolvedValue({
-            createEmbeddingContext: vi.fn().mockResolvedValue({
-              getEmbeddingFor: vi.fn().mockResolvedValue({
-                vector: new Float32Array(zeroVector),
-              }),
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        loadModel: vi.fn().mockResolvedValue({
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            getEmbeddingFor: vi.fn().mockResolvedValue({
+              vector: new Float32Array(zeroVector),
             }),
           }),
         }),
-        resolveModelFile: async () => "/fake/model.gguf",
-        LlamaLogLevel: { error: 0 },
       }),
-    }));
-
-    const { createEmbeddingProvider } = await import("./embeddings.js");
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
 
     const result = await createEmbeddingProvider({
       config: {} as never,
@@ -409,23 +375,19 @@ describe("local embedding normalization", () => {
   it("sanitizes non-finite values before normalization", async () => {
     const nonFiniteVector = [1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
 
-    vi.doMock("./node-llama.js", () => ({
-      importNodeLlamaCpp: async () => ({
-        getLlama: async () => ({
-          loadModel: vi.fn().mockResolvedValue({
-            createEmbeddingContext: vi.fn().mockResolvedValue({
-              getEmbeddingFor: vi.fn().mockResolvedValue({
-                vector: new Float32Array(nonFiniteVector),
-              }),
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        loadModel: vi.fn().mockResolvedValue({
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            getEmbeddingFor: vi.fn().mockResolvedValue({
+              vector: new Float32Array(nonFiniteVector),
             }),
           }),
         }),
-        resolveModelFile: async () => "/fake/model.gguf",
-        LlamaLogLevel: { error: 0 },
       }),
-    }));
-
-    const { createEmbeddingProvider } = await import("./embeddings.js");
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
 
     const result = await createEmbeddingProvider({
       config: {} as never,
@@ -447,25 +409,21 @@ describe("local embedding normalization", () => {
       [1.0, 1.0, 1.0, 1.0],
     ];
 
-    vi.doMock("./node-llama.js", () => ({
-      importNodeLlamaCpp: async () => ({
-        getLlama: async () => ({
-          loadModel: vi.fn().mockResolvedValue({
-            createEmbeddingContext: vi.fn().mockResolvedValue({
-              getEmbeddingFor: vi
-                .fn()
-                .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[0]) })
-                .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[1]) })
-                .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[2]) }),
-            }),
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        loadModel: vi.fn().mockResolvedValue({
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            getEmbeddingFor: vi
+              .fn()
+              .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[0]) })
+              .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[1]) })
+              .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[2]) }),
           }),
         }),
-        resolveModelFile: async () => "/fake/model.gguf",
-        LlamaLogLevel: { error: 0 },
       }),
-    }));
-
-    const { createEmbeddingProvider } = await import("./embeddings.js");
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
 
     const result = await createEmbeddingProvider({
       config: {} as never,
