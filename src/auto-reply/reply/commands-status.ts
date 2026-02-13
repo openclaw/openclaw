@@ -224,6 +224,7 @@ export async function buildStatusReply(params: {
       verboseDefault: agentDefaults.verboseDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
     },
+    agentId: statusAgentId,
     sessionEntry,
     sessionKey,
     sessionScope,
