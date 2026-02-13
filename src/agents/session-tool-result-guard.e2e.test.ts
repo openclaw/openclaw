@@ -436,313 +436,322 @@ describe("installSessionToolResultGuard", () => {
       sourceTool: "sessions_send",
     });
 
-  it("keeps secrets in memory but redacts them on disk (xoxb token)", () => {
-    const { sm, getSessionFile } = createTrackedDiskSM();
-    installSessionToolResultGuard(sm);
+    it("keeps secrets in memory but redacts them on disk (xoxb token)", () => {
+      const { sm, getSessionFile } = createTrackedDiskSM();
+      installSessionToolResultGuard(sm);
 
-    const secret = "xoxb-fake-test-token-not-real-abcdefghij";
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        content: [{ type: "text", text: `{"botToken": "${secret}"}` }],
-      }),
-    );
+      const secret = "xoxb-fake-test-token-not-real-abcdefghij";
+      sm.appendMessage(toolCallMessage);
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          content: [{ type: "text", text: `{"botToken": "${secret}"}` }],
+        }),
+      );
 
-    // In-memory: agent sees the unredacted secret
-    const memEntries = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-    const memText = (
-      memEntries.find((m) => m.role === "toolResult") as {
-        content: Array<{ type: string; text: string }>;
-      }
-    ).content.find((b) => b.type === "text")!.text;
-    expect(memText).toContain(secret);
-
-    // On disk: secret is redacted
-    const diskEntries = readSessionJsonl(getSessionFile());
-    const diskToolResult = diskEntries.find(
-      (e) =>
-        (e as Record<string, unknown>).type === "message" &&
-        ((e as Record<string, unknown>).message as { role?: string })?.role === "toolResult",
-    ) as Record<string, unknown>;
-    const diskText = extractToolResultText(diskToolResult)!;
-    expect(diskText).not.toContain(secret);
-    expect(diskText).toContain("xoxb-f");
-    expect(diskText).toContain("…");
-  });
-
-  it("keeps secrets in memory but redacts them on disk (sk-ant key)", () => {
-    const { sm, getSessionFile } = createTrackedDiskSM();
-    installSessionToolResultGuard(sm);
-
-    const secret = "sk-ant-fake-test-key-abcdefghijklmnopqrstuvwxyz";
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        content: [{ type: "text", text: `token: "${secret}"` }],
-      }),
-    );
-
-    // In-memory: unredacted
-    const memText = (
-      sm
+      // In-memory: agent sees the unredacted secret
+      const memEntries = sm
         .getEntries()
         .filter((e) => e.type === "message")
-        .map((e) => (e as { message: AgentMessage }).message)
-        .find((m) => m.role === "toolResult") as { content: Array<{ type: string; text: string }> }
-    ).content.find((b) => b.type === "text")!.text;
-    expect(memText).toContain(secret);
+        .map((e) => (e as { message: AgentMessage }).message);
+      const memText = (
+        memEntries.find((m) => m.role === "toolResult") as {
+          content: Array<{ type: string; text: string }>;
+        }
+      ).content.find((b) => b.type === "text")!.text;
+      expect(memText).toContain(secret);
 
-    // On disk: redacted
-    const diskEntries = readSessionJsonl(getSessionFile());
-    const diskToolResult = diskEntries.find(
-      (e) =>
-        (e as Record<string, unknown>).type === "message" &&
-        ((e as Record<string, unknown>).message as { role?: string })?.role === "toolResult",
-    ) as Record<string, unknown>;
-    expect(extractToolResultText(diskToolResult)).not.toContain(secret);
-  });
+      // On disk: secret is redacted
+      const diskEntries = readSessionJsonl(getSessionFile());
+      const diskToolResult = diskEntries.find(
+        (e) =>
+          (e as Record<string, unknown>).type === "message" &&
+          ((e as Record<string, unknown>).message as { role?: string })?.role === "toolResult",
+      ) as Record<string, unknown>;
+      const diskText = extractToolResultText(diskToolResult)!;
+      expect(diskText).not.toContain(secret);
+      expect(diskText).toContain("xoxb-f");
+      expect(diskText).toContain("…");
+    });
 
-  it("keeps secrets in memory but redacts them on disk (Bearer JWT)", () => {
-    const { sm, getSessionFile } = createTrackedDiskSM();
-    installSessionToolResultGuard(sm);
+    it("keeps secrets in memory but redacts them on disk (sk-ant key)", () => {
+      const { sm, getSessionFile } = createTrackedDiskSM();
+      installSessionToolResultGuard(sm);
 
-    const jwt = "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwiZXhwIjoiMTIzNCJ9.payload.signature";
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        content: [{ type: "text", text: `curl -H "Authorization: Bearer ${jwt}"` }],
-      }),
-    );
+      const secret = "sk-ant-fake-test-key-abcdefghijklmnopqrstuvwxyz";
+      sm.appendMessage(toolCallMessage);
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          content: [{ type: "text", text: `token: "${secret}"` }],
+        }),
+      );
 
-    // In-memory: unredacted
-    const memText = (
-      sm
+      // In-memory: unredacted
+      const memText = (
+        sm
+          .getEntries()
+          .filter((e) => e.type === "message")
+          .map((e) => (e as { message: AgentMessage }).message)
+          .find((m) => m.role === "toolResult") as {
+          content: Array<{ type: string; text: string }>;
+        }
+      ).content.find((b) => b.type === "text")!.text;
+      expect(memText).toContain(secret);
+
+      // On disk: redacted
+      const diskEntries = readSessionJsonl(getSessionFile());
+      const diskToolResult = diskEntries.find(
+        (e) =>
+          (e as Record<string, unknown>).type === "message" &&
+          ((e as Record<string, unknown>).message as { role?: string })?.role === "toolResult",
+      ) as Record<string, unknown>;
+      expect(extractToolResultText(diskToolResult)).not.toContain(secret);
+    });
+
+    it("keeps secrets in memory but redacts them on disk (Bearer JWT)", () => {
+      const { sm, getSessionFile } = createTrackedDiskSM();
+      installSessionToolResultGuard(sm);
+
+      const jwt = "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwiZXhwIjoiMTIzNCJ9.payload.signature";
+      sm.appendMessage(toolCallMessage);
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          content: [{ type: "text", text: `curl -H "Authorization: Bearer ${jwt}"` }],
+        }),
+      );
+
+      // In-memory: unredacted
+      const memText = (
+        sm
+          .getEntries()
+          .filter((e) => e.type === "message")
+          .map((e) => (e as { message: AgentMessage }).message)
+          .find((m) => m.role === "toolResult") as {
+          content: Array<{ type: string; text: string }>;
+        }
+      ).content.find((b) => b.type === "text")!.text;
+      expect(memText).toContain(jwt);
+
+      // On disk: redacted
+      const diskEntries = readSessionJsonl(getSessionFile());
+      const diskToolResult = diskEntries.find(
+        (e) =>
+          (e as Record<string, unknown>).type === "message" &&
+          ((e as Record<string, unknown>).message as { role?: string })?.role === "toolResult",
+      ) as Record<string, unknown>;
+      expect(extractToolResultText(diskToolResult)).not.toContain(jwt);
+    });
+
+    it("does not modify tool results without secrets (memory and disk match)", () => {
+      const { sm, getSessionFile } = createTrackedDiskSM();
+      installSessionToolResultGuard(sm);
+
+      const cleanText = "total 42\ndrwxr-xr-x 5 user user 4096 Feb 8 ls output";
+      sm.appendMessage(toolCallMessage);
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          content: [{ type: "text", text: cleanText }],
+        }),
+      );
+
+      // In-memory: unchanged
+      const memText = (
+        sm
+          .getEntries()
+          .filter((e) => e.type === "message")
+          .map((e) => (e as { message: AgentMessage }).message)
+          .find((m) => m.role === "toolResult") as {
+          content: Array<{ type: string; text: string }>;
+        }
+      ).content.find((b) => b.type === "text")!.text;
+      expect(memText).toBe(cleanText);
+
+      // On disk: also unchanged
+      const diskEntries = readSessionJsonl(getSessionFile());
+      const diskToolResult = diskEntries.find(
+        (e) =>
+          (e as Record<string, unknown>).type === "message" &&
+          ((e as Record<string, unknown>).message as { role?: string })?.role === "toolResult",
+      ) as Record<string, unknown>;
+      expect(extractToolResultText(diskToolResult)).toBe(cleanText);
+    });
+
+    it("keeps secrets in memory but redacts them on disk (Google API key)", () => {
+      const { sm, getSessionFile } = createTrackedDiskSM();
+      installSessionToolResultGuard(sm);
+
+      const secret = "AIzaSyBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+      sm.appendMessage(toolCallMessage);
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          content: [{ type: "text", text: `"apiKey": "${secret}"` }],
+        }),
+      );
+
+      // In-memory: unredacted
+      const memText = (
+        sm
+          .getEntries()
+          .filter((e) => e.type === "message")
+          .map((e) => (e as { message: AgentMessage }).message)
+          .find((m) => m.role === "toolResult") as {
+          content: Array<{ type: string; text: string }>;
+        }
+      ).content.find((b) => b.type === "text")!.text;
+      expect(memText).toContain(secret);
+
+      // On disk: redacted
+      const diskEntries = readSessionJsonl(getSessionFile());
+      const diskToolResult = diskEntries.find(
+        (e) =>
+          (e as Record<string, unknown>).type === "message" &&
+          ((e as Record<string, unknown>).message as { role?: string })?.role === "toolResult",
+      ) as Record<string, unknown>;
+      expect(extractToolResultText(diskToolResult)).not.toContain(secret);
+    });
+
+    it("redacts secrets on disk when _rewriteFile is triggered", () => {
+      const { sm, getSessionFile } = createTrackedDiskSM();
+      installSessionToolResultGuard(sm);
+
+      const secret = "xoxb-rewrite-test-token-abcdefghijklmnop";
+      // Build up entries that would trigger _rewriteFile (e.g., migration)
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: `Token: ${secret}` }],
+        }),
+      );
+
+      // Force a rewrite (simulates migration/recovery)
+      (sm as unknown as { _rewriteFile: () => void })._rewriteFile();
+
+      // On disk: secret should be redacted after rewrite
+      const diskEntries = readSessionJsonl(getSessionFile());
+      const assistantEntry = diskEntries.find(
+        (e) =>
+          (e as Record<string, unknown>).type === "message" &&
+          ((e as Record<string, unknown>).message as { role?: string })?.role === "assistant",
+      ) as Record<string, unknown>;
+      expect(extractToolResultText(assistantEntry)).not.toContain(secret);
+
+      // In-memory: still unredacted
+      const memEntries = sm
         .getEntries()
         .filter((e) => e.type === "message")
-        .map((e) => (e as { message: AgentMessage }).message)
-        .find((m) => m.role === "toolResult") as { content: Array<{ type: string; text: string }> }
-    ).content.find((b) => b.type === "text")!.text;
-    expect(memText).toContain(jwt);
+        .map((e) => (e as { message: AgentMessage }).message);
+      const memText = (
+        memEntries.find((m) => m.role === "assistant") as {
+          content: Array<{ type: string; text: string }>;
+        }
+      ).content.find((b) => b.type === "text")!.text;
+      expect(memText).toContain(secret);
+    });
 
-    // On disk: redacted
-    const diskEntries = readSessionJsonl(getSessionFile());
-    const diskToolResult = diskEntries.find(
-      (e) =>
-        (e as Record<string, unknown>).type === "message" &&
-        ((e as Record<string, unknown>).message as { role?: string })?.role === "toolResult",
-    ) as Record<string, unknown>;
-    expect(extractToolResultText(diskToolResult)).not.toContain(jwt);
-  });
+    it("redacts secrets in assistant messages on disk", () => {
+      const { sm, getSessionFile } = createTrackedDiskSM();
+      installSessionToolResultGuard(sm);
 
-  it("does not modify tool results without secrets (memory and disk match)", () => {
-    const { sm, getSessionFile } = createTrackedDiskSM();
-    installSessionToolResultGuard(sm);
+      const secret = "xoxb-leaked-in-assistant-message-abcdefghij";
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: `The token is ${secret}` }],
+        }),
+      );
 
-    const cleanText = "total 42\ndrwxr-xr-x 5 user user 4096 Feb 8 ls output";
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        content: [{ type: "text", text: cleanText }],
-      }),
-    );
-
-    // In-memory: unchanged
-    const memText = (
-      sm
+      // In-memory: unredacted
+      const memEntries = sm
         .getEntries()
         .filter((e) => e.type === "message")
-        .map((e) => (e as { message: AgentMessage }).message)
-        .find((m) => m.role === "toolResult") as { content: Array<{ type: string; text: string }> }
-    ).content.find((b) => b.type === "text")!.text;
-    expect(memText).toBe(cleanText);
+        .map((e) => (e as { message: AgentMessage }).message);
+      const memText = (
+        memEntries.find((m) => m.role === "assistant") as {
+          content: Array<{ type: string; text: string }>;
+        }
+      ).content.find((b) => b.type === "text")!.text;
+      expect(memText).toContain(secret);
 
-    // On disk: also unchanged
-    const diskEntries = readSessionJsonl(getSessionFile());
-    const diskToolResult = diskEntries.find(
-      (e) =>
-        (e as Record<string, unknown>).type === "message" &&
-        ((e as Record<string, unknown>).message as { role?: string })?.role === "toolResult",
-    ) as Record<string, unknown>;
-    expect(extractToolResultText(diskToolResult)).toBe(cleanText);
-  });
+      // On disk: redacted
+      const diskEntries = readSessionJsonl(getSessionFile());
+      const assistantEntry = diskEntries.find(
+        (e) =>
+          (e as Record<string, unknown>).type === "message" &&
+          ((e as Record<string, unknown>).message as { role?: string })?.role === "assistant",
+      ) as Record<string, unknown>;
+      expect(extractToolResultText(assistantEntry)).not.toContain(secret);
+    });
 
-  it("keeps secrets in memory but redacts them on disk (Google API key)", () => {
-    const { sm, getSessionFile } = createTrackedDiskSM();
-    installSessionToolResultGuard(sm);
+    it("redacts secrets in user messages on disk", () => {
+      const { sm, getSessionFile } = createTrackedDiskSM();
+      installSessionToolResultGuard(sm);
 
-    const secret = "AIzaSyBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        content: [{ type: "text", text: `"apiKey": "${secret}"` }],
-      }),
-    );
+      const secret = "sk-ant-user-pasted-secret-abcdefghijklmnopqr";
+      // Need assistant first for persistence to trigger
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "hello" }],
+        }),
+      );
+      sm.appendMessage(
+        asAppendMessage({
+          role: "user",
+          content: [{ type: "text", text: `My key is ${secret}` }],
+        }),
+      );
 
-    // In-memory: unredacted
-    const memText = (
-      sm
+      // In-memory: unredacted
+      const memEntries = sm
         .getEntries()
         .filter((e) => e.type === "message")
-        .map((e) => (e as { message: AgentMessage }).message)
-        .find((m) => m.role === "toolResult") as { content: Array<{ type: string; text: string }> }
-    ).content.find((b) => b.type === "text")!.text;
-    expect(memText).toContain(secret);
+        .map((e) => (e as { message: AgentMessage }).message);
+      const memText = (
+        memEntries.find((m) => m.role === "user") as {
+          content: Array<{ type: string; text: string }>;
+        }
+      ).content.find((b) => b.type === "text")!.text;
+      expect(memText).toContain(secret);
 
-    // On disk: redacted
-    const diskEntries = readSessionJsonl(getSessionFile());
-    const diskToolResult = diskEntries.find(
-      (e) =>
-        (e as Record<string, unknown>).type === "message" &&
-        ((e as Record<string, unknown>).message as { role?: string })?.role === "toolResult",
-    ) as Record<string, unknown>;
-    expect(extractToolResultText(diskToolResult)).not.toContain(secret);
-  });
+      // On disk: redacted
+      const diskEntries = readSessionJsonl(getSessionFile());
+      const userEntry = diskEntries.find(
+        (e) =>
+          (e as Record<string, unknown>).type === "message" &&
+          ((e as Record<string, unknown>).message as { role?: string })?.role === "user",
+      ) as Record<string, unknown>;
+      expect(extractToolResultText(userEntry)).not.toContain(secret);
+    });
 
-  it("redacts secrets on disk when _rewriteFile is triggered", () => {
-    const { sm, getSessionFile } = createTrackedDiskSM();
-    installSessionToolResultGuard(sm);
+    it("does not modify non-message entries (session header, labels)", () => {
+      const { sm, getSessionFile } = createTrackedDiskSM();
+      installSessionToolResultGuard(sm);
 
-    const secret = "xoxb-rewrite-test-token-abcdefghijklmnop";
-    // Build up entries that would trigger _rewriteFile (e.g., migration)
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: `Token: ${secret}` }],
-      }),
-    );
+      // Trigger persistence with an assistant message
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "hello" }],
+        }),
+      );
 
-    // Force a rewrite (simulates migration/recovery)
-    (sm as unknown as { _rewriteFile: () => void })._rewriteFile();
-
-    // On disk: secret should be redacted after rewrite
-    const diskEntries = readSessionJsonl(getSessionFile());
-    const assistantEntry = diskEntries.find(
-      (e) =>
-        (e as Record<string, unknown>).type === "message" &&
-        ((e as Record<string, unknown>).message as { role?: string })?.role === "assistant",
-    ) as Record<string, unknown>;
-    expect(extractToolResultText(assistantEntry)).not.toContain(secret);
-
-    // In-memory: still unredacted
-    const memEntries = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-    const memText = (
-      memEntries.find((m) => m.role === "assistant") as {
-        content: Array<{ type: string; text: string }>;
-      }
-    ).content.find((b) => b.type === "text")!.text;
-    expect(memText).toContain(secret);
-  });
-
-  it("redacts secrets in assistant messages on disk", () => {
-    const { sm, getSessionFile } = createTrackedDiskSM();
-    installSessionToolResultGuard(sm);
-
-    const secret = "xoxb-leaked-in-assistant-message-abcdefghij";
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: `The token is ${secret}` }],
-      }),
-    );
-
-    // In-memory: unredacted
-    const memEntries = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-    const memText = (
-      memEntries.find((m) => m.role === "assistant") as {
-        content: Array<{ type: string; text: string }>;
-      }
-    ).content.find((b) => b.type === "text")!.text;
-    expect(memText).toContain(secret);
-
-    // On disk: redacted
-    const diskEntries = readSessionJsonl(getSessionFile());
-    const assistantEntry = diskEntries.find(
-      (e) =>
-        (e as Record<string, unknown>).type === "message" &&
-        ((e as Record<string, unknown>).message as { role?: string })?.role === "assistant",
-    ) as Record<string, unknown>;
-    expect(extractToolResultText(assistantEntry)).not.toContain(secret);
-  });
-
-  it("redacts secrets in user messages on disk", () => {
-    const { sm, getSessionFile } = createTrackedDiskSM();
-    installSessionToolResultGuard(sm);
-
-    const secret = "sk-ant-user-pasted-secret-abcdefghijklmnopqr";
-    // Need assistant first for persistence to trigger
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "hello" }],
-      }),
-    );
-    sm.appendMessage(
-      asAppendMessage({
-        role: "user",
-        content: [{ type: "text", text: `My key is ${secret}` }],
-      }),
-    );
-
-    // In-memory: unredacted
-    const memEntries = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-    const memText = (
-      memEntries.find((m) => m.role === "user") as {
-        content: Array<{ type: string; text: string }>;
-      }
-    ).content.find((b) => b.type === "text")!.text;
-    expect(memText).toContain(secret);
-
-    // On disk: redacted
-    const diskEntries = readSessionJsonl(getSessionFile());
-    const userEntry = diskEntries.find(
-      (e) =>
-        (e as Record<string, unknown>).type === "message" &&
-        ((e as Record<string, unknown>).message as { role?: string })?.role === "user",
-    ) as Record<string, unknown>;
-    expect(extractToolResultText(userEntry)).not.toContain(secret);
-  });
-
-  it("does not modify non-message entries (session header, labels)", () => {
-    const { sm, getSessionFile } = createTrackedDiskSM();
-    installSessionToolResultGuard(sm);
-
-    // Trigger persistence with an assistant message
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "hello" }],
-      }),
-    );
-
-    // Session header should be unchanged on disk
-    const diskEntries = readSessionJsonl(getSessionFile());
-    const header = diskEntries.find(
-      (e) => (e as Record<string, unknown>).type === "session",
-    ) as Record<string, unknown>;
-    expect(header).toBeDefined();
-    expect(header.type).toBe("session");
-    expect(header.id).toBeDefined();
+      // Session header should be unchanged on disk
+      const diskEntries = readSessionJsonl(getSessionFile());
+      const header = diskEntries.find(
+        (e) => (e as Record<string, unknown>).type === "session",
+      ) as Record<string, unknown>;
+      expect(header).toBeDefined();
+      expect(header.type).toBe("session");
+      expect(header.id).toBeDefined();
+    });
   });
 });
