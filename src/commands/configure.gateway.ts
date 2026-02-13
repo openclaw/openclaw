@@ -5,7 +5,12 @@ import { findTailscaleBinary } from "../infra/tailscale.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
-import { guardCancel, normalizeGatewayTokenInput, randomToken } from "./onboard-helpers.js";
+import {
+  guardCancel,
+  normalizeGatewayTokenInput,
+  randomToken,
+  validateGatewayPasswordInput,
+} from "./onboard-helpers.js";
 
 type GatewayAuthChoice = "token" | "password";
 
@@ -189,11 +194,11 @@ export async function promptGatewayConfig(
     const password = guardCancel(
       await text({
         message: "Gateway password",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateGatewayPasswordInput,
       }),
       runtime,
     );
-    gatewayPassword = String(password).trim();
+    gatewayPassword = String(password ?? "").trim();
   }
 
   const authConfig = buildGatewayAuthConfig({

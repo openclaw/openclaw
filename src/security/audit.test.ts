@@ -7,7 +7,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { discordPlugin } from "../../extensions/discord/src/channel.js";
 import { slackPlugin } from "../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { collectPluginsCodeSafetyFindings } from "./audit-extra.js";
 import { runSecurityAudit } from "./audit.js";
+import * as skillScanner from "./skill-scanner.js";
 
 const isWindows = process.platform === "win32";
 
@@ -65,6 +67,47 @@ describe("security audit", () => {
     expect(
       res.findings.some((f) => f.checkId === "gateway.bind_no_auth" && f.severity === "critical"),
     ).toBe(true);
+  });
+
+  it("warns when non-loopback bind has auth but no auth rate limit", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { token: "secret" },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      res.findings.some((f) => f.checkId === "gateway.auth_no_rate_limit" && f.severity === "warn"),
+    ).toBe(true);
+  });
+
+  it("does not warn for auth rate limiting when configured", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {
+          token: "secret",
+          rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings.some((f) => f.checkId === "gateway.auth_no_rate_limit")).toBe(false);
   });
 
   it("warns when loopback control UI lacks trusted proxies", async () => {
@@ -262,6 +305,110 @@ describe("security audit", () => {
     expect(finding?.detail).toContain("sandbox=all");
   });
 
+  it("flags sandbox docker config when sandbox mode is off", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off",
+            docker: { image: "ghcr.io/example/sandbox:latest" },
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "sandbox.docker_config_mode_off",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
+
+  it("does not flag global sandbox docker config when an agent enables sandbox mode", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off",
+            docker: { image: "ghcr.io/example/sandbox:latest" },
+          },
+        },
+        list: [{ id: "ops", sandbox: { mode: "all" } }],
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings.some((f) => f.checkId === "sandbox.docker_config_mode_off")).toBe(false);
+  });
+
+  it("flags ineffective gateway.nodes.denyCommands entries", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["system.*", "system.runx"],
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("system.*");
+    expect(finding?.detail).toContain("system.runx");
+  });
+
+  it("flags agent profile overrides when global tools.profile is minimal", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "minimal",
+      },
+      agents: {
+        list: [
+          {
+            id: "owner",
+            tools: { profile: "full" },
+          },
+        ],
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "tools.profile_minimal_overridden",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
+
   it("flags tools.elevated allowFrom wildcard as critical", async () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -285,6 +432,52 @@ describe("security audit", () => {
         }),
       ]),
     );
+  });
+
+  it("flags browser control without auth when browser is enabled", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        controlUi: { enabled: false },
+        auth: {},
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "browser.control_no_auth", severity: "critical" }),
+      ]),
+    );
+  });
+
+  it("does not flag browser control auth when gateway token is configured", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        controlUi: { enabled: false },
+        auth: { token: "very-long-browser-token-0123456789" },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings.some((f) => f.checkId === "browser.control_no_auth")).toBe(false);
   });
 
   it("warns when remote CDP uses HTTP", async () => {
@@ -398,6 +591,7 @@ describe("security audit", () => {
         expect.objectContaining({
           checkId: "channels.whatsapp.dm.scope_main_multiuser",
           severity: "warn",
+          remediation: expect.stringContaining('config set session.dmScope "per-channel-peer"'),
         }),
       ]),
     );
@@ -824,6 +1018,106 @@ describe("security audit", () => {
     }
   });
 
+  it("warns when hooks.defaultSessionKey is unset", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "hooks.default_session_key_unset", severity: "warn" }),
+      ]),
+    );
+  });
+
+  it("flags hooks request sessionKey override when enabled", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+        defaultSessionKey: "hook:ingress",
+        allowRequestSessionKey: true,
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "hooks.request_session_key_enabled", severity: "warn" }),
+        expect.objectContaining({
+          checkId: "hooks.request_session_key_prefixes_missing",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
+
+  it("escalates hooks request sessionKey override when gateway is remotely exposed", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: { bind: "lan" },
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+        defaultSessionKey: "hook:ingress",
+        allowRequestSessionKey: true,
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "hooks.request_session_key_enabled",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("reports HTTP API session-key override surfaces when enabled", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        http: {
+          endpoints: {
+            chatCompletions: { enabled: true },
+            responses: { enabled: true },
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.http.session_key_override_enabled",
+          severity: "info",
+        }),
+      ]),
+    );
+  });
+
   it("warns when state/config look like a synced folder", async () => {
     const cfg: OpenClawConfig = {};
 
@@ -959,6 +1253,68 @@ describe("security audit", () => {
       } else {
         process.env.SLACK_APP_TOKEN = prevSlackAppToken;
       }
+    }
+  });
+
+  it("flags enabled extensions when tool policy can expose plugin tools", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-plugins-"));
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
+      recursive: true,
+      mode: 0o700,
+    });
+
+    try {
+      const cfg: OpenClawConfig = {
+        plugins: { allow: ["some-plugin"] },
+      };
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: true,
+        includeChannelSecurity: false,
+        stateDir,
+        configPath: path.join(stateDir, "openclaw.json"),
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "plugins.tools_reachable_permissive_policy",
+            severity: "warn",
+          }),
+        ]),
+      );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not flag plugin tool reachability when profile is restrictive", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-plugins-"));
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
+      recursive: true,
+      mode: 0o700,
+    });
+
+    try {
+      const cfg: OpenClawConfig = {
+        plugins: { allow: ["some-plugin"] },
+        tools: { profile: "coding" },
+      };
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: true,
+        includeChannelSecurity: false,
+        stateDir,
+        configPath: path.join(stateDir, "openclaw.json"),
+      });
+
+      expect(
+        res.findings.some((f) => f.checkId === "plugins.tools_reachable_permissive_policy"),
+      ).toBe(false);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
     }
   });
 
@@ -1138,17 +1494,9 @@ description: test skill
   });
 
   it("reports scan_failed when plugin code scanner throws during deep audit", async () => {
-    vi.resetModules();
-    vi.doMock("./skill-scanner.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./skill-scanner.js")>("./skill-scanner.js");
-      return {
-        ...actual,
-        scanDirectoryWithSummary: async () => {
-          throw new Error("boom");
-        },
-      };
-    });
+    const scanSpy = vi
+      .spyOn(skillScanner, "scanDirectoryWithSummary")
+      .mockRejectedValueOnce(new Error("boom"));
 
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-scanner-"));
     try {
@@ -1163,12 +1511,10 @@ description: test skill
       );
       await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
 
-      const { collectPluginsCodeSafetyFindings } = await import("./audit-extra.js");
       const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
       expect(findings.some((f) => f.checkId === "plugins.code_safety.scan_failed")).toBe(true);
     } finally {
-      vi.doUnmock("./skill-scanner.js");
-      vi.resetModules();
+      scanSpy.mockRestore();
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
     }
   });

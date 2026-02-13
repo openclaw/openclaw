@@ -150,6 +150,40 @@ describe("trigger handling", () => {
       expect(store[sessionKey]?.compactionCount).toBe(1);
     });
   });
+  it("runs /compact for non-default agents without transcript path validation failures", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(compactEmbeddedPiSession).mockClear();
+      vi.mocked(compactEmbeddedPiSession).mockResolvedValue({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "x",
+          tokensBefore: 12000,
+        },
+      });
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/compact",
+          From: "+1004",
+          To: "+2000",
+          SessionKey: "agent:worker1:telegram:12345",
+          CommandAuthorized: true,
+        },
+        {},
+        makeCfg(home),
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(compactEmbeddedPiSession).toHaveBeenCalledOnce();
+      expect(vi.mocked(compactEmbeddedPiSession).mock.calls[0]?.[0]?.sessionFile).toContain(
+        join("agents", "worker1", "sessions"),
+      );
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
   it("ignores think directives that only appear in the context wrapper", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
