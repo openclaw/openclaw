@@ -328,6 +328,7 @@ export { discordOnboardingAdapter } from "../channels/plugins/onboarding/discord
 export {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
+  normalizeDiscordOutboundTarget,
 } from "../channels/plugins/normalize/discord.js";
 export { collectDiscordStatusIssues } from "../channels/plugins/status-issues/discord.js";
 
