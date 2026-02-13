@@ -6,13 +6,14 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { getConsoleSettings, shouldLogSubsystemToConsole } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import { getChildLogger } from "./logger.js";
+import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
 export type SubsystemLogger = {
   subsystem: string;
+  isEnabled: (level: LogLevel, target?: "any" | "console" | "file") => boolean;
   trace: (message: string, meta?: Record<string, unknown>) => void;
   debug: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -271,9 +272,26 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     });
     writeConsoleLine(level, line);
   };
+  const isConsoleEnabled = (level: LogLevel): boolean => {
+    const consoleSettings = getConsoleSettings();
+    return (
+      shouldLogToConsole(level, { level: consoleSettings.level }) &&
+      shouldLogSubsystemToConsole(subsystem)
+    );
+  };
+  const isFileEnabled = (level: LogLevel): boolean => isFileLogLevelEnabled(level);
 
   const logger: SubsystemLogger = {
     subsystem,
+    isEnabled: (level, target = "any") => {
+      if (target === "console") {
+        return isConsoleEnabled(level);
+      }
+      if (target === "file") {
+        return isFileEnabled(level);
+      }
+      return isConsoleEnabled(level) || isFileEnabled(level);
+    },
     trace: (message, meta) => emit("trace", message, meta),
     debug: (message, meta) => emit("debug", message, meta),
     info: (message, meta) => emit("info", message, meta),
