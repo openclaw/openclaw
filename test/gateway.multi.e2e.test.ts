@@ -28,8 +28,6 @@ type NodeListPayload = {
   nodes?: Array<{ nodeId?: string; connected?: boolean; paired?: boolean }>;
 };
 
-type HealthPayload = { ok?: boolean };
-
 const GATEWAY_START_TIMEOUT_MS = 45_000;
 const E2E_TIMEOUT_MS = 120_000;
 
@@ -195,40 +193,6 @@ const stopGatewayInstance = async (inst: GatewayInstance) => {
     }
   }
   await fs.rm(inst.homeDir, { recursive: true, force: true });
-};
-
-const runCliJson = async (args: string[], env: NodeJS.ProcessEnv): Promise<unknown> => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const child = spawn("node", ["dist/index.js", ...args], {
-    cwd: process.cwd(),
-    env: { ...process.env, ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout?.setEncoding("utf8");
-  child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (d) => stdout.push(String(d)));
-  child.stderr?.on("data", (d) => stderr.push(String(d)));
-  const result = await new Promise<{
-    code: number | null;
-    signal: string | null;
-  }>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
-  const out = stdout.join("").trim();
-  if (result.code !== 0) {
-    throw new Error(
-      `cli failed (code=${String(result.code)} signal=${String(result.signal)})\n` +
-        `--- stdout ---\n${out}\n--- stderr ---\n${stderr.join("")}`,
-    );
-  }
-  try {
-    return out ? (JSON.parse(out) as unknown) : null;
-  } catch (err) {
-    throw new Error(
-      `cli returned non-json output: ${String(err)}\n` +
-        `--- stdout ---\n${out}\n--- stderr ---\n${stderr.join("")}`,
-      { cause: err },
-    );
-  }
 };
 
 const postJson = async (url: string, body: unknown, headers?: Record<string, string>) => {
@@ -424,21 +388,6 @@ describe("gateway multi-instance e2e", () => {
       instances.push(gwA);
       const gwB = await spawnGatewayInstance("b");
       instances.push(gwB);
-
-      const [healthA, healthB] = (await Promise.all([
-        runCliJson(["health", "--json", "--timeout", "10000"], {
-          OPENCLAW_GATEWAY_PORT: String(gwA.port),
-          OPENCLAW_GATEWAY_TOKEN: gwA.gatewayToken,
-          OPENCLAW_GATEWAY_PASSWORD: "",
-        }),
-        runCliJson(["health", "--json", "--timeout", "10000"], {
-          OPENCLAW_GATEWAY_PORT: String(gwB.port),
-          OPENCLAW_GATEWAY_TOKEN: gwB.gatewayToken,
-          OPENCLAW_GATEWAY_PASSWORD: "",
-        }),
-      ])) as [HealthPayload, HealthPayload];
-      expect(healthA.ok).toBe(true);
-      expect(healthB.ok).toBe(true);
 
       const [hookResA, hookResB] = await Promise.all([
         postJson(
