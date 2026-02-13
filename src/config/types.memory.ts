@@ -10,6 +10,12 @@ export type MemoryConfig = {
   qmd?: MemoryQmdConfig;
 };
 
+export type MemoryQmdMcpConfig = {
+  enabled?: boolean;
+  command?: string;
+  args?: string[];
+};
+
 export type MemoryQmdConfig = {
   command?: string;
   searchMode?: MemoryQmdSearchMode;
@@ -19,6 +25,7 @@ export type MemoryQmdConfig = {
   update?: MemoryQmdUpdateConfig;
   limits?: MemoryQmdLimitsConfig;
   scope?: SessionSendPolicyConfig;
+  mcp?: MemoryQmdMcpConfig;
 };
 
 export type MemoryQmdIndexPath = {

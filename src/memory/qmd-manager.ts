@@ -1,3 +1,5 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -84,6 +86,13 @@ export class QmdMemoryManager implements MemorySearchManager {
   private lastUpdateAt: number | null = null;
   private lastEmbedAt: number | null = null;
 
+  // MCP daemon fields
+  private mcpClient: Client | null = null;
+  private mcpTransport: StdioClientTransport | null = null;
+  private mcpEnabled = false;
+  private mcpStartupPromise: Promise<void> | null = null;
+  private mcpStartupFailed = false;
+
   private constructor(params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -145,6 +154,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     // isolated while models are shared.
     await this.symlinkSharedModels();
 
+    // Start MCP daemon if enabled
+    this.mcpEnabled = this.qmd.mcp?.enabled ?? false;
+    if (this.mcpEnabled) {
+      this.mcpStartupPromise = this.startMcpDaemon().catch((err) => {
+        log.error(`[qmd-mcp] daemon startup failed, falling back to CLI mode: ${String(err)}`);
+        this.mcpStartupFailed = true;
+        this.mcpEnabled = false;
+      });
+    }
+
     this.bootstrapCollections();
     await this.ensureCollections();
 
@@ -166,6 +185,46 @@ export class QmdMemoryManager implements MemorySearchManager {
           log.warn(`qmd update failed (${String(err)})`);
         });
       }, this.qmd.update.intervalMs);
+    }
+  }
+
+  private async startMcpDaemon(): Promise<void> {
+    const command = this.qmd.mcp?.command || this.qmd.command;
+    const args = this.qmd.mcp?.args || ["mcp"];
+
+    log.info(`[qmd-mcp] Starting QMD MCP daemon: ${command} ${args.join(" ")}`);
+
+    // Create stdio transport
+    this.mcpTransport = new StdioClientTransport({
+      command,
+      args,
+      env: this.env as Record<string, string>,
+    });
+
+    // Create MCP client
+    this.mcpClient = new Client(
+      {
+        name: "openclaw-qmd-client",
+        version: "1.0.0",
+      },
+      {
+        capabilities: {},
+      },
+    );
+
+    // Connect to MCP server
+    await this.mcpClient.connect(this.mcpTransport);
+
+    // List available tools to verify connection
+    const tools = await this.mcpClient.listTools();
+    const toolNames = tools.tools?.map((t: { name: string }) => t.name) || [];
+    log.info(`[qmd-mcp] QMD MCP daemon ready with tools: ${toolNames.join(", ")}`);
+
+    // Verify required tools exist
+    const requiredTools = ["search", "query", "get"];
+    const missingTools = requiredTools.filter((t) => !toolNames.includes(t));
+    if (missingTools.length > 0) {
+      throw new Error(`QMD MCP missing required tools: ${missingTools.join(", ")}`);
     }
   }
 
@@ -251,6 +310,25 @@ export class QmdMemoryManager implements MemorySearchManager {
       return [];
     }
     await this.waitForPendingUpdateBeforeSearch();
+
+    // Wait for MCP startup if in progress
+    if (this.mcpEnabled && this.mcpStartupPromise) {
+      await this.mcpStartupPromise.catch(() => {
+        // Error already logged in startMcpDaemon
+      });
+      this.mcpStartupPromise = null; // Clear after first wait
+    }
+
+    // Try MCP client if available
+    if (this.mcpEnabled && this.mcpClient && !this.mcpStartupFailed) {
+      try {
+        return await this.searchViaMcp(trimmed, opts);
+      } catch (err) {
+        log.warn(`[qmd-mcp] search failed, falling back to CLI: ${String(err)}`);
+        // Fall through to CLI mode
+      }
+    }
+
     const limit = Math.min(
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
@@ -317,6 +395,101 @@ export class QmdMemoryManager implements MemorySearchManager {
       });
     }
     return this.clampResultsByInjectedChars(results.slice(0, limit));
+  }
+
+  private async searchViaMcp(
+    query: string,
+    opts?: { maxResults?: number; minScore?: number },
+  ): Promise<MemorySearchResult[]> {
+    const maxResults = Math.min(
+      this.qmd.limits.maxResults,
+      opts?.maxResults ?? this.qmd.limits.maxResults,
+    );
+    const minScore = opts?.minScore ?? 0;
+
+    // Call QMD's 'query' tool (hybrid search with reranking)
+    const result = await this.mcpClient!.callTool({
+      name: "query",
+      arguments: {
+        query,
+        limit: maxResults,
+        minScore,
+      },
+    });
+
+    // Parse structured content from MCP response
+    // QMD MCP returns structuredContent.results with the search results
+    const structured = (result as Record<string, unknown>).structuredContent as
+      | Record<string, unknown>
+      | undefined;
+    let mcpResults: Array<{ docid?: string; file?: string; snippet?: string; score?: number }>;
+
+    if (structured?.results && Array.isArray(structured.results)) {
+      mcpResults = structured.results as typeof mcpResults;
+      log.info(`[qmd-mcp] got ${mcpResults.length} results via structuredContent`);
+    } else {
+      // Fallback: try parsing text content
+      const content = result.content as Array<{ type: string; text?: string }>;
+      const textContent = content?.find((c) => c.type === "text");
+      if (!textContent?.text) {
+        log.warn("[qmd-mcp] No content in MCP response");
+        return [];
+      }
+      try {
+        const match = textContent.text.match(/\[[\s\S]*\]/);
+        if (!match) {
+          log.warn(`[qmd-mcp] No JSON array in text response: ${textContent.text.slice(0, 200)}`);
+          return [];
+        }
+        mcpResults = JSON.parse(match[0]);
+      } catch (err) {
+        log.warn(`[qmd-mcp] Failed to parse MCP response: ${String(err)}`);
+        return [];
+      }
+    }
+
+    // Convert MCP results to MemorySearchResult format
+    const results: MemorySearchResult[] = [];
+    for (const r of mcpResults) {
+      // Try resolving via docid first, then by file path
+      let doc = r.docid ? await this.resolveDocLocation(r.docid) : null;
+      if (!doc && r.file) {
+        doc = await this.resolveDocLocation(r.file);
+      }
+      if (!doc) {
+        // Last resort: use file field directly as relative path
+        if (!r.file) {
+          continue;
+        }
+        // Strip collection prefix (e.g., "memory-dir/" -> actual path)
+        const relPath = r.file.replace(/^[^/]+\//, "");
+        doc = {
+          rel: relPath,
+          abs: path.join(this.workspaceDir, relPath),
+          source: "memory" as MemorySource,
+        };
+      }
+
+      // Extract line number from snippet (format: "123: content")
+      const lineMatch = r.snippet?.match(/^(\d+):/);
+      const startLine = lineMatch ? parseInt(lineMatch[1], 10) : 1;
+
+      // Clean snippet (remove line numbers)
+      const cleanSnippet = (r.snippet || "").replace(/^\d+:\s?/gm, "");
+      const snippet = cleanSnippet.slice(0, this.qmd.limits.maxSnippetChars);
+      const endLine = startLine + snippet.split("\n").length;
+
+      results.push({
+        path: doc.rel,
+        startLine,
+        endLine,
+        score: r.score ?? 0,
+        snippet,
+        source: doc.source,
+      });
+    }
+
+    return this.clampResultsByInjectedChars(results.slice(0, maxResults));
   }
 
   async sync(params?: {
@@ -414,6 +587,19 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.queuedForcedRuns = 0;
     await this.pendingUpdate?.catch(() => undefined);
     await this.queuedForcedUpdate?.catch(() => undefined);
+
+    // Close MCP client if active
+    if (this.mcpClient) {
+      try {
+        await this.mcpClient.close();
+        log.info("[qmd-mcp] MCP client closed");
+      } catch (err) {
+        log.warn(`[qmd-mcp] Error closing MCP client: ${String(err)}`);
+      }
+      this.mcpClient = null;
+      this.mcpTransport = null;
+    }
+
     if (this.db) {
       this.db.close();
       this.db = null;
@@ -496,7 +682,7 @@ export class QmdMemoryManager implements MemorySearchManager {
    * is a no-op.
    */
   private async symlinkSharedModels(): Promise<void> {
-    // process.env is never modified — only this.env (passed to child_process
+    // process.env is never modified - only this.env (passed to child_process
     // spawn) overrides XDG_CACHE_HOME.  So reading it here gives us the
     // user's original value, which is where `qmd` downloaded its models.
     //
@@ -524,10 +710,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       // Check if something already exists at the target path
       try {
         await fs.lstat(targetModelsDir);
-        // Already exists (directory, symlink, or file) – leave it alone
+        // Already exists (directory, symlink, or file) - leave it alone
         return;
       } catch {
-        // Does not exist – proceed to create symlink
+        // Does not exist - proceed to create symlink
       }
       // On Windows, creating directory symlinks requires either Administrator
       // privileges or Developer Mode.  Fall back to a directory junction which

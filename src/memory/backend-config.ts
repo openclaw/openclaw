@@ -50,6 +50,12 @@ export type ResolvedQmdSessionConfig = {
   retentionDays?: number;
 };
 
+export type ResolvedQmdMcpConfig = {
+  enabled: boolean;
+  command?: string;
+  args?: string[];
+};
+
 export type ResolvedQmdConfig = {
   command: string;
   searchMode: MemoryQmdSearchMode;
@@ -59,6 +65,7 @@ export type ResolvedQmdConfig = {
   limits: ResolvedQmdLimitsConfig;
   includeDefaultMemory: boolean;
   scope?: SessionSendPolicyConfig;
+  mcp?: ResolvedQmdMcpConfig;
 };
 
 const DEFAULT_BACKEND: MemoryBackend = "builtin";
@@ -300,6 +307,13 @@ export function resolveMemoryBackendConfig(params: {
     },
     limits: resolveLimits(qmdCfg?.limits),
     scope: qmdCfg?.scope ?? DEFAULT_QMD_SCOPE,
+    mcp: qmdCfg?.mcp
+      ? {
+          enabled: qmdCfg.mcp.enabled === true,
+          command: qmdCfg.mcp.command?.trim() || undefined,
+          args: qmdCfg.mcp.args || undefined,
+        }
+      : undefined,
   };
 
   return {

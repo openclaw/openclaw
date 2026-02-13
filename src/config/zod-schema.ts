@@ -71,6 +71,14 @@ const MemoryQmdLimitsSchema = z
   })
   .strict();
 
+const MemoryQmdMcpSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    command: z.string().optional(),
+    args: z.array(z.string()).optional(),
+  })
+  .strict();
+
 const MemoryQmdSchema = z
   .object({
     command: z.string().optional(),
@@ -81,6 +89,7 @@ const MemoryQmdSchema = z
     update: MemoryQmdUpdateSchema.optional(),
     limits: MemoryQmdLimitsSchema.optional(),
     scope: SessionSendPolicySchema.optional(),
+    mcp: MemoryQmdMcpSchema.optional(),
   })
   .strict();
 
