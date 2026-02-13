@@ -169,27 +169,23 @@ export function resolveWorkspaceDir(ctx: {
   return dir ? path.resolve(dir) : null;
 }
 
-export function matchPattern(value: string, pattern: string): boolean {
+function matchSingleSegment(value: string, pattern: string): boolean {
   if (pattern === "*") {
     return true;
   }
-  // No wildcards -- exact match
   if (!pattern.includes("*")) {
     return value === pattern;
   }
-  // Split on wildcards and match segments linearly to avoid ReDoS
   const segments = pattern.split("*");
   let pos = 0;
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i]!;
     if (i === 0) {
-      // First segment must match the start
       if (!value.startsWith(segment)) {
         return false;
       }
       pos = segment.length;
     } else if (i === segments.length - 1) {
-      // Last segment must match the end
       if (!value.endsWith(segment)) {
         return false;
       }
@@ -197,7 +193,6 @@ export function matchPattern(value: string, pattern: string): boolean {
         return false;
       }
     } else {
-      // Middle segment must appear somewhere after current pos
       const idx = value.indexOf(segment, pos);
       if (idx === -1) {
         return false;
@@ -206,6 +201,69 @@ export function matchPattern(value: string, pattern: string): boolean {
     }
   }
   return true;
+}
+
+function matchPathPattern(value: string, pattern: string): boolean {
+  const valueSegments = value.split("/");
+  const patternSegments = pattern.split("/");
+  const memo = new Map<string, boolean>();
+
+  const visit = (valueIndex: number, patternIndex: number): boolean => {
+    const key = `${valueIndex}:${patternIndex}`;
+    const cached = memo.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    let result = false;
+    if (patternIndex === patternSegments.length) {
+      result = valueIndex === valueSegments.length;
+    } else {
+      const rawPatternSegment = patternSegments[patternIndex] ?? "";
+      if (rawPatternSegment === "**") {
+        let nextPatternIndex = patternIndex;
+        while ((patternSegments[nextPatternIndex + 1] ?? "") === "**") {
+          nextPatternIndex += 1;
+        }
+        if (nextPatternIndex === patternSegments.length - 1) {
+          result = true;
+        } else {
+          for (let cursor = valueIndex; cursor <= valueSegments.length; cursor += 1) {
+            if (visit(cursor, nextPatternIndex + 1)) {
+              result = true;
+              break;
+            }
+          }
+        }
+      } else if (
+        valueIndex < valueSegments.length &&
+        matchSingleSegment(valueSegments[valueIndex] ?? "", rawPatternSegment)
+      ) {
+        result = visit(valueIndex + 1, patternIndex + 1);
+      } else {
+        result = false;
+      }
+    }
+
+    memo.set(key, result);
+    return result;
+  };
+
+  return visit(0, 0);
+}
+
+export function matchPattern(value: string, pattern: string): boolean {
+  if (pattern === "*") {
+    return true;
+  }
+  if (!pattern.includes("*")) {
+    return value === pattern;
+  }
+  const isPathPattern = pattern.includes("/") || value.includes("/") || pattern.includes("**");
+  if (isPathPattern) {
+    return matchPathPattern(value, pattern);
+  }
+  return matchSingleSegment(value, pattern);
 }
 
 export function anyMatch(value: string, patterns?: string[]): boolean {

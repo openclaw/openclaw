@@ -51,4 +51,32 @@ describe("saint-email accounts", () => {
     expect(sales.pushVerificationToken).toBe("sales-token");
     expect(fallback.pushVerificationToken).toBe("global-token");
   });
+
+  it("resolves oauth2 config with account-level overrides", () => {
+    const cfg = {
+      channels: {
+        email: {
+          address: "bot@example.com",
+          oauth2: {
+            serviceAccountEmail: "svc@example.iam.gserviceaccount.com",
+            privateKey: "-----BEGIN PRIVATE KEY-----\\nBASE\\n-----END PRIVATE KEY-----",
+            scopes: ["https://www.googleapis.com/auth/gmail.send"],
+          },
+          accounts: {
+            support: {
+              address: "support@example.com",
+              oauth2: {
+                subject: "support@example.com",
+              },
+            },
+          },
+        },
+      },
+    } as const;
+
+    const account = resolveSaintEmailAccount({ cfg, accountId: "support" });
+    expect(account.oauth2?.serviceAccountEmail).toBe("svc@example.iam.gserviceaccount.com");
+    expect(account.oauth2?.subject).toBe("support@example.com");
+    expect(account.oauth2?.scopes).toEqual(["https://www.googleapis.com/auth/gmail.send"]);
+  });
 });

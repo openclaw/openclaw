@@ -7,13 +7,27 @@ import type {
   ResolvedSaintEmailAccount,
   SaintEmailInboundMessage,
 } from "./types.js";
-import { decodeBase64Url, gmailGetMessage, gmailListMessages } from "./gmail-api.js";
+import {
+  decodeBase64Url,
+  decodeBase64UrlToBuffer,
+  gmailGetAttachment,
+  gmailGetMessage,
+  gmailListMessages,
+} from "./gmail-api.js";
 import { handleSaintEmailInbound } from "./inbound.js";
 import {
   getSaintEmailRuntime,
   registerSaintEmailMonitor,
   unregisterSaintEmailMonitor,
 } from "./runtime.js";
+
+type InboundAttachmentCandidate = {
+  filename: string;
+  mimeType?: string;
+  size?: number;
+  attachmentId?: string;
+  inlineData?: string;
+};
 
 function headerValue(headers: GmailMessageHeader[] | undefined, name: string): string {
   const lowered = name.toLowerCase();
@@ -78,7 +92,99 @@ function decodePartText(part?: GmailMessagePart): string {
   return "";
 }
 
-function toInboundMessage(message: GmailMessage): SaintEmailInboundMessage | null {
+function sanitizeAttachmentFilename(filename: string, index: number): string {
+  const trimmed = filename.trim();
+  if (!trimmed) {
+    return `attachment-${index + 1}.bin`;
+  }
+  const cleaned = trimmed.replace(/[/\\]/g, "_");
+  return cleaned || `attachment-${index + 1}.bin`;
+}
+
+function collectAttachmentCandidates(
+  part: GmailMessagePart | undefined,
+  out: InboundAttachmentCandidate[] = [],
+): InboundAttachmentCandidate[] {
+  if (!part) {
+    return out;
+  }
+  const filename = typeof part.filename === "string" ? part.filename.trim() : "";
+  const attachmentId =
+    typeof part.body?.attachmentId === "string" ? part.body.attachmentId.trim() : "";
+  const inlineData = typeof part.body?.data === "string" ? part.body.data.trim() : "";
+  if (attachmentId || (filename && inlineData)) {
+    out.push({
+      filename,
+      mimeType: part.mimeType?.trim(),
+      size: part.body?.size,
+      attachmentId: attachmentId || undefined,
+      inlineData: inlineData || undefined,
+    });
+  }
+  for (const child of part.parts ?? []) {
+    collectAttachmentCandidates(child, out);
+  }
+  return out;
+}
+
+async function resolveInboundAttachments(params: {
+  account: ResolvedSaintEmailAccount;
+  messageId: string;
+  payload: GmailMessagePart | undefined;
+}): Promise<Array<{ path: string; filename: string; mimeType?: string }>> {
+  const core = getSaintEmailRuntime();
+  const candidates = collectAttachmentCandidates(params.payload);
+  if (candidates.length === 0) {
+    return [];
+  }
+  const maxBytes = Math.max(1, params.account.maxAttachmentMb) * 1024 * 1024;
+  const out: Array<{ path: string; filename: string; mimeType?: string }> = [];
+  for (const [index, candidate] of candidates.entries()) {
+    if (typeof candidate.size === "number" && candidate.size > maxBytes) {
+      continue;
+    }
+    try {
+      let buffer: Buffer;
+      if (candidate.inlineData) {
+        buffer = decodeBase64UrlToBuffer(candidate.inlineData);
+      } else if (candidate.attachmentId) {
+        buffer = await gmailGetAttachment({
+          account: params.account,
+          messageId: params.messageId,
+          attachmentId: candidate.attachmentId,
+        });
+      } else {
+        continue;
+      }
+      if (buffer.byteLength === 0 || buffer.byteLength > maxBytes) {
+        continue;
+      }
+      const filename = sanitizeAttachmentFilename(candidate.filename, index);
+      const saved = await core.channel.media.saveMediaBuffer(
+        buffer,
+        candidate.mimeType,
+        "inbound",
+        maxBytes,
+        filename,
+      );
+      out.push({
+        path: saved.path,
+        filename,
+        mimeType: saved.contentType ?? candidate.mimeType,
+      });
+    } catch {
+      // Keep polling resilient: one failed attachment should not drop the message.
+      continue;
+    }
+  }
+  return out;
+}
+
+function toInboundMessage(params: {
+  message: GmailMessage;
+  attachments: Array<{ path: string; filename: string; mimeType?: string }>;
+}): SaintEmailInboundMessage | null {
+  const { message, attachments } = params;
   const headers = message.payload?.headers;
   const from = headerValue(headers, "From");
   const to = headerValue(headers, "To");
@@ -99,6 +205,7 @@ function toInboundMessage(message: GmailMessage): SaintEmailInboundMessage | nul
     to,
     text: text.trim(),
     timestamp: Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now(),
+    attachments,
   };
 }
 
@@ -146,8 +253,16 @@ export async function monitorSaintEmailProvider(
         // Process each message individually — don't let one failure abort the batch
         try {
           const message = await gmailGetMessage({ account: opts.account, id });
-          const inbound = toInboundMessage(message);
-          if (!inbound || !inbound.text) {
+          const attachments = await resolveInboundAttachments({
+            account: opts.account,
+            messageId: message.id,
+            payload: message.payload,
+          });
+          const inbound = toInboundMessage({
+            message,
+            attachments,
+          });
+          if (!inbound || (!inbound.text && inbound.attachments.length === 0)) {
             // Mark as seen even if we can't parse it (it's not a transient failure)
             seen.add(id);
             continue;
@@ -221,4 +336,6 @@ export const __testing = {
   decodePartText,
   extractEmailAddress,
   stripHtml,
+  collectAttachmentCandidates,
+  sanitizeAttachmentFilename,
 };

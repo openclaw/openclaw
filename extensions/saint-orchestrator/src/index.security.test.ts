@@ -69,6 +69,17 @@ describe("isBlockedUrl hardening", () => {
   });
 });
 
+describe("exec blocklist hardening", () => {
+  it("blocks /agent config/private reads for manager and employee tiers", () => {
+    const manager = __testing.FALLBACK_CUSTOM.manager;
+    const employee = __testing.FALLBACK_CUSTOM.employee;
+    expect(__testing.isExecBlocked(manager, "cat /agent/config/tiers.yaml")).toBe(true);
+    expect(__testing.isExecBlocked(manager, "cat /agent/memory/private/roadmap.md")).toBe(true);
+    expect(__testing.isExecBlocked(employee, "cat /agent/config/contacts.json")).toBe(true);
+    expect(__testing.isExecBlocked(employee, "cat /agent/memory/private/plan.md")).toBe(true);
+  });
+});
+
 describe("matchPattern (linear-time glob)", () => {
   it("matches wildcard-only pattern", () => {
     expect(__testing.matchPattern("anything", "*")).toBe(true);
@@ -101,6 +112,22 @@ describe("matchPattern (linear-time glob)", () => {
     expect(__testing.matchPattern("a/b/c.txt", "a/*/c.*")).toBe(true);
     expect(__testing.matchPattern("a/x/c.md", "a/*/c.*")).toBe(true);
     expect(__testing.matchPattern("a/b/d.txt", "a/*/c.*")).toBe(false);
+  });
+
+  it("treats * as single-segment for slash-delimited paths", () => {
+    expect(__testing.matchPattern("memory/users/alice/preferences.md", "memory/users/*/*")).toBe(
+      true,
+    );
+    expect(
+      __testing.matchPattern("memory/users/team/alice/preferences.md", "memory/users/*/*"),
+    ).toBe(false);
+  });
+
+  it("supports ** as recursive glob for slash-delimited paths", () => {
+    expect(
+      __testing.matchPattern("memory/users/team/alice/preferences.md", "memory/users/**/*"),
+    ).toBe(true);
+    expect(__testing.matchPattern("a/b/c/d.txt", "a/**/d.*")).toBe(true);
   });
 
   it("handles empty segments from consecutive wildcards", () => {

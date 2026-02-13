@@ -8,6 +8,14 @@ export type SaintEmailAttachment = {
   contentBase64: string;
 };
 
+export type SaintEmailOAuth2Config = {
+  serviceAccountEmail?: string;
+  privateKey?: string;
+  subject?: string;
+  tokenUri?: string;
+  scopes?: string[];
+};
+
 export type SaintEmailChannelData = {
   subject?: string;
   cc?: string[];
@@ -24,11 +32,13 @@ export type SaintEmailAccountConfig = {
   address?: string;
   userId?: string;
   accessToken?: string;
+  oauth2?: SaintEmailOAuth2Config;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: string[];
   pollIntervalSec?: number;
   pollQuery?: string;
   maxPollResults?: number;
+  maxAttachmentMb?: number;
   pushVerificationToken?: string;
 };
 
@@ -38,13 +48,23 @@ export type SaintEmailConfig = {
   address?: string;
   userId?: string;
   accessToken?: string;
+  oauth2?: SaintEmailOAuth2Config;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: string[];
   pollIntervalSec?: number;
   pollQuery?: string;
   maxPollResults?: number;
+  maxAttachmentMb?: number;
   pushVerificationToken?: string;
   accounts?: Record<string, SaintEmailAccountConfig>;
+};
+
+export type ResolvedSaintEmailOAuth2Config = {
+  serviceAccountEmail: string;
+  privateKey: string;
+  subject?: string;
+  tokenUri: string;
+  scopes: string[];
 };
 
 export type CoreConfig = OpenClawConfig & {
@@ -60,11 +80,13 @@ export type ResolvedSaintEmailAccount = {
   address: string;
   userId: string;
   accessToken?: string;
+  oauth2?: ResolvedSaintEmailOAuth2Config;
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom: string[];
   pollIntervalSec: number;
   pollQuery: string;
   maxPollResults: number;
+  maxAttachmentMb: number;
   pushVerificationToken?: string;
 };
 
@@ -102,4 +124,9 @@ export type SaintEmailInboundMessage = {
   to: string;
   text: string;
   timestamp: number;
+  attachments: Array<{
+    path: string;
+    filename: string;
+    mimeType?: string;
+  }>;
 };

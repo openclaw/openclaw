@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -114,6 +114,27 @@ function parseTokenBinding(value: unknown): AllowedTokenBinding | null {
   };
 }
 
+function timingSafeStringEquals(left: string, right: string): boolean {
+  const lhs = Buffer.from(left, "utf-8");
+  const rhs = Buffer.from(right, "utf-8");
+  if (lhs.length !== rhs.length) {
+    return false;
+  }
+  return timingSafeEqual(lhs, rhs);
+}
+
+function findTokenBinding(
+  tokens: Map<string, AllowedTokenBinding>,
+  requestToken: string,
+): AllowedTokenBinding | null {
+  for (const binding of tokens.values()) {
+    if (timingSafeStringEquals(binding.token, requestToken)) {
+      return binding;
+    }
+  }
+  return null;
+}
+
 async function readAllowedTokens(
   stateDir: string,
   defaults?: string[],
@@ -153,10 +174,16 @@ function tokenBindingMatchesRequest(
   binding: AllowedTokenBinding,
   request: CliportRequest,
 ): boolean {
-  if (binding.sessionKey && binding.sessionKey !== request.sessionKey) {
+  if (
+    binding.sessionKey &&
+    (!request.sessionKey || !timingSafeStringEquals(binding.sessionKey, request.sessionKey))
+  ) {
     return false;
   }
-  if (binding.containerName && binding.containerName !== request.containerName) {
+  if (
+    binding.containerName &&
+    (!request.containerName || !timingSafeStringEquals(binding.containerName, request.containerName))
+  ) {
     return false;
   }
   return true;
@@ -390,7 +417,7 @@ async function handleRequest(params: {
 }) {
   const registry = await readRegistry(params.options.registryPath);
   const tokens = await readAllowedTokens(params.options.stateDir, params.options.defaultTokens);
-  const tokenBinding = tokens.get(params.request.token);
+  const tokenBinding = findTokenBinding(tokens, params.request.token);
   if (!tokenBinding || !tokenBindingMatchesRequest(tokenBinding, params.request)) {
     params.socket.write(encodeErrorFrame("invalid cliport token"));
     return;
@@ -647,6 +674,8 @@ export const __testing = {
   buildSpawnEnv,
   parseTokenBinding,
   tokenBindingMatchesRequest,
+  timingSafeStringEquals,
+  findTokenBinding,
   MAX_LINE_LENGTH,
   MAX_CONNECTIONS,
   MAX_ARG_LENGTH,

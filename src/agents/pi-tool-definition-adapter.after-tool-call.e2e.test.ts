@@ -3,29 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 
 const hookMocks = vi.hoisted(() => ({
-  runner: {
-    hasHooks: vi.fn(() => false),
-    runAfterToolCall: vi.fn(async () => {}),
-  },
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
     params,
   })),
 }));
 
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => hookMocks.runner,
-}));
-
 vi.mock("./pi-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
 }));
 
-describe("pi tool definition adapter after_tool_call", () => {
+describe("pi tool definition adapter hook isolation", () => {
   beforeEach(() => {
-    hookMocks.runner.hasHooks.mockReset();
-    hookMocks.runner.runAfterToolCall.mockReset();
-    hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
     hookMocks.runBeforeToolCallHook.mockReset();
     hookMocks.runBeforeToolCallHook.mockImplementation(async ({ params }) => ({
       blocked: false,
@@ -33,12 +22,7 @@ describe("pi tool definition adapter after_tool_call", () => {
     }));
   });
 
-  it("dispatches after_tool_call once on successful adapter execution", async () => {
-    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
-    hookMocks.runBeforeToolCallHook.mockResolvedValue({
-      blocked: false,
-      params: { mode: "safe" },
-    });
+  it("executes tools without invoking hook wrappers", async () => {
     const tool = {
       name: "read",
       label: "Read",
@@ -51,19 +35,10 @@ describe("pi tool definition adapter after_tool_call", () => {
     const result = await defs[0].execute("call-ok", { path: "/tmp/file" }, undefined, undefined);
 
     expect(result.details).toMatchObject({ ok: true });
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledWith(
-      {
-        toolName: "read",
-        params: { mode: "safe" },
-        result,
-      },
-      { toolName: "read" },
-    );
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
   });
 
-  it("dispatches after_tool_call once on adapter error with normalized tool name", async () => {
-    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
+  it("keeps normalized error results and still skips hook wrappers", async () => {
     const tool = {
       name: "bash",
       label: "Bash",
@@ -82,32 +57,6 @@ describe("pi tool definition adapter after_tool_call", () => {
       tool: "exec",
       error: "boom",
     });
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledWith(
-      {
-        toolName: "exec",
-        params: { cmd: "ls" },
-        error: "boom",
-      },
-      { toolName: "exec" },
-    );
-  });
-
-  it("does not break execution when after_tool_call hook throws", async () => {
-    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
-    hookMocks.runner.runAfterToolCall.mockRejectedValue(new Error("hook failed"));
-    const tool = {
-      name: "read",
-      label: "Read",
-      description: "reads",
-      parameters: {},
-      execute: vi.fn(async () => ({ content: [], details: { ok: true } })),
-    } satisfies AgentTool<unknown, unknown>;
-
-    const defs = toToolDefinitions([tool]);
-    const result = await defs[0].execute("call-ok2", { path: "/tmp/file" }, undefined, undefined);
-
-    expect(result.details).toMatchObject({ ok: true });
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
   });
 });

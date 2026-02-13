@@ -1,5 +1,6 @@
 import JSON5 from "json5";
 import crypto from "node:crypto";
+import path from "node:path";
 import type { ContactsFile, TierConfig, TierFile, ValidationResult } from "./types.js";
 import { CONFIRM_TTL_MS, FALLBACK_EXTERNAL_CEILING, FALLBACK_OWNER_CEILING } from "./constants.js";
 import {
@@ -8,9 +9,10 @@ import {
   normalizePath,
   parseJsonSafe,
   parseYamlSafe,
+  readFileIfExists,
   uniqueStrings,
 } from "./normalize.js";
-import { loadSaintState, mergeTier, validateTierAgainstCeiling } from "./tiers.js";
+import { mergeTier, normalizeTierState, validateTierAgainstCeiling } from "./tiers.js";
 
 const pendingConfigConfirmations = new Map<
   string,
@@ -207,6 +209,15 @@ export function validateTiersPayload(content: string): ValidationResult {
   return { ok: errors.length === 0, errors };
 }
 
+function resolveKnownTierNamesFromTiersContent(content: string): Set<string> | null {
+  const parsed = parseYamlSafe<TierFile>(content);
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  const state = normalizeTierState(parsed);
+  return new Set<string>(["owner", "external", ...Object.keys(state.custom).map((entry) => normalizeId(entry))]);
+}
+
 export async function validateConfigWrite(params: {
   workspaceDir: string;
   relPath: string;
@@ -214,16 +225,53 @@ export async function validateConfigWrite(params: {
 }): Promise<ValidationResult> {
   const normalized = normalizePath(params.relPath);
   if (normalized === "config/contacts.json") {
-    const state = await loadSaintState(params.workspaceDir);
-    const knownTierNames = new Set<string>([
-      "owner",
-      "external",
-      ...Object.keys(state.tiers.custom).map((entry) => normalizeId(entry)),
-    ]);
+    const tiersPath = path.join(params.workspaceDir, "config", "tiers.yaml");
+    const tiersRaw = await readFileIfExists(tiersPath);
+    const knownTierNames = tiersRaw
+      ? resolveKnownTierNamesFromTiersContent(tiersRaw)
+      : new Set<string>([
+          "owner",
+          "external",
+          ...Object.keys(normalizeTierState({}).custom).map((entry) => normalizeId(entry)),
+        ]);
+    if (!knownTierNames) {
+      return {
+        ok: false,
+        errors: [
+          "tiers.yaml is invalid YAML; fix config/tiers.yaml before updating config/contacts.json",
+        ],
+      };
+    }
     return validateContactsPayload({ content: params.content, knownTierNames });
   }
   if (normalized === "config/tiers.yaml") {
-    return validateTiersPayload(params.content);
+    const tiersValidation = validateTiersPayload(params.content);
+    if (!tiersValidation.ok) {
+      return tiersValidation;
+    }
+    const knownTierNames = resolveKnownTierNamesFromTiersContent(params.content);
+    if (!knownTierNames) {
+      return {
+        ok: false,
+        errors: ["tiers.yaml is invalid YAML"],
+      };
+    }
+    const contactsPath = path.join(params.workspaceDir, "config", "contacts.json");
+    const contactsRaw = await readFileIfExists(contactsPath);
+    if (!contactsRaw) {
+      return tiersValidation;
+    }
+    const contactsValidation = validateContactsPayload({
+      content: contactsRaw,
+      knownTierNames,
+    });
+    if (!contactsValidation.ok) {
+      return {
+        ok: false,
+        errors: contactsValidation.errors.map((entry) => `contacts.json compatibility check: ${entry}`),
+      };
+    }
+    return tiersValidation;
   }
   if (
     normalized === "openclaw.json" ||

@@ -107,6 +107,27 @@ describe("cliport token binding helpers", () => {
       }),
     ).toBe(false);
   });
+
+  it("finds token binding using timing-safe token comparison", () => {
+    const tokens = new Map([
+      [
+        "tok-1",
+        {
+          token: "tok-1",
+          sessionKey: "agent:main:main",
+        },
+      ],
+    ]);
+    const found = __testing.findTokenBinding(tokens, "tok-1");
+    expect(found?.token).toBe("tok-1");
+    const missing = __testing.findTokenBinding(tokens, "tok-2");
+    expect(missing).toBeNull();
+  });
+
+  it("timingSafeStringEquals returns false for length mismatch", () => {
+    expect(__testing.timingSafeStringEquals("abc", "abcd")).toBe(false);
+    expect(__testing.timingSafeStringEquals("abc", "abc")).toBe(true);
+  });
 });
 
 describe("normalizeRequest arg length limits", () => {

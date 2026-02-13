@@ -71,6 +71,11 @@ export async function handleSaintEmailInbound(params: {
     },
   });
 
+  const mediaPaths = message.attachments.map((attachment) => attachment.path).filter(Boolean);
+  const mediaTypes = message.attachments
+    .map((attachment) => attachment.mimeType)
+    .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "Email",
     from: message.from,
@@ -97,6 +102,12 @@ export async function handleSaintEmailInbound(params: {
     Surface: SAINT_EMAIL_CHANNEL_ID,
     MessageSid: message.id,
     Timestamp: message.timestamp,
+    MediaPath: mediaPaths[0],
+    MediaUrl: mediaPaths[0],
+    MediaType: mediaTypes[0],
+    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
     OriginatingChannel: SAINT_EMAIL_CHANNEL_ID,
     OriginatingTo: `email:${account.address}`,
     CommandAuthorized: commandGate.commandAuthorized,

@@ -19,6 +19,14 @@ import { monitorSaintEmailProvider } from "./monitor.js";
 import { sendSaintEmail } from "./send.js";
 import { SAINT_EMAIL_CHANNEL_ID } from "./types.js";
 
+function hasOauth2Credentials(account: ResolvedSaintEmailAccount): boolean {
+  return Boolean(account.oauth2?.serviceAccountEmail && account.oauth2?.privateKey);
+}
+
+function hasAuthConfig(account: ResolvedSaintEmailAccount): boolean {
+  return Boolean(account.accessToken?.trim()) || hasOauth2Credentials(account);
+}
+
 const runningMonitors = new Map<string, () => void>();
 
 const meta = {
@@ -71,14 +79,23 @@ export const saintEmailPlugin: ChannelPlugin<ResolvedSaintEmailAccount> = {
         cfg,
         sectionKey: "email",
         accountId,
-        clearBaseFields: ["name", "address", "userId", "accessToken", "allowFrom", "dmPolicy"],
+        clearBaseFields: [
+          "name",
+          "address",
+          "userId",
+          "accessToken",
+          "oauth2",
+          "allowFrom",
+          "dmPolicy",
+          "maxAttachmentMb",
+        ],
       }),
-    isConfigured: (account) => Boolean(account.address?.trim() && account.accessToken?.trim()),
+    isConfigured: (account) => Boolean(account.address?.trim() && hasAuthConfig(account)),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.address?.trim() && account.accessToken?.trim()),
+      configured: Boolean(account.address?.trim() && hasAuthConfig(account)),
       address: account.address || "[missing]",
       userId: account.userId,
       pollIntervalSec: account.pollIntervalSec,
@@ -96,9 +113,7 @@ export const saintEmailPlugin: ChannelPlugin<ResolvedSaintEmailAccount> = {
       const accounts = cfg.channels?.email?.accounts;
       const useAccountPath = Boolean(
         accounts &&
-          Object.keys(accounts).some(
-            (key) => key.toLowerCase() === resolvedAccountId.toLowerCase(),
-          ),
+        Object.keys(accounts).some((key) => key.toLowerCase() === resolvedAccountId.toLowerCase()),
       );
       const basePath = useAccountPath
         ? `channels.email.accounts.${resolvedAccountId}.`
@@ -202,7 +217,7 @@ export const saintEmailPlugin: ChannelPlugin<ResolvedSaintEmailAccount> = {
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.address?.trim() && account.accessToken?.trim()),
+      configured: Boolean(account.address?.trim() && hasAuthConfig(account)),
       address: account.address || "[missing]",
       userId: account.userId,
       running: runtime?.running ?? false,
@@ -217,7 +232,7 @@ export const saintEmailPlugin: ChannelPlugin<ResolvedSaintEmailAccount> = {
       if (!account.enabled) {
         throw new Error(`Email account ${account.accountId} is disabled`);
       }
-      if (!account.address || !account.accessToken) {
+      if (!account.address || !hasAuthConfig(account)) {
         throw new Error(`Email account ${account.accountId} is not configured`);
       }
       const { stop } = await monitorSaintEmailProvider({

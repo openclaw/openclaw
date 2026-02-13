@@ -1,18 +1,25 @@
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV BUN_INSTALL=/opt/bun
+ENV PATH="${BUN_INSTALL}/bin:${PATH}"
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
     curl \
+    ffmpeg \
     git \
     jq \
     nodejs \
     python3 \
     ripgrep \
+    unzip \
   && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://bun.sh/install | bash \
+  && ln -sf "${BUN_INSTALL}/bin/bun" /usr/local/bin/bun
 
 COPY cliport-proxy.js /usr/local/bin/cliport-proxy
 RUN chmod +x /usr/local/bin/cliport-proxy \

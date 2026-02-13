@@ -1,7 +1,7 @@
 import type { TierConfig } from "./types.js";
 
 export const PLATFORM_PROTECTED_FILES = new Set(["SOUL.md", "IDENTITY.md", "AGENTS.md"]);
-export const SESSION_TIER_TTL_MS = 4 * 60 * 60 * 1000;
+export const SESSION_TIER_TTL_MS = 10 * 60 * 1000;
 export const STATE_CACHE_TTL_MS = 250;
 export const CONFIRM_TTL_MS = 10 * 60 * 1000;
 
@@ -82,7 +82,13 @@ export const FALLBACK_CUSTOM: Record<string, TierConfig> = {
       "cron",
     ],
     deny_tools: ["process", "apply_patch"],
-    exec_blocklist: ["gog gmail delete *", "gog drive delete *", "rm -rf *"],
+    exec_blocklist: [
+      "gog gmail delete *",
+      "gog drive delete *",
+      "cat /agent/config/*",
+      "cat /agent/memory/private/*",
+      "rm -rf *",
+    ],
     memory_scope: ["shared", "daily", "own_user", "all_users"],
     skills: "*",
     max_budget_usd: 5,
@@ -102,6 +108,8 @@ export const FALLBACK_CUSTOM: Record<string, TierConfig> = {
       "gog gmail delete *",
       "gog calendar delete *",
       "gog drive delete *",
+      "cat /agent/config/*",
+      "cat /agent/memory/private/*",
       "rm -rf *",
     ],
     memory_scope: ["shared", "own_user"],

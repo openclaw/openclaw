@@ -7,7 +7,11 @@ const {
   readDockerPortMock,
   startBrowserBridgeServerMock,
 } = vi.hoisted(() => ({
-  buildSandboxCreateArgsMock: vi.fn(() => ["create", "--network", "none"]),
+  buildSandboxCreateArgsMock: vi.fn((params?: { cfg?: { network?: string } }) => [
+    "create",
+    "--network",
+    params?.cfg?.network ?? "none",
+  ]),
   dockerContainerStateMock: vi.fn(async () => ({ exists: false, running: false })),
   execDockerMock: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
   readDockerPortMock: vi.fn(async () => 9222),
@@ -104,5 +108,9 @@ describe("ensureSandboxBrowser network override", () => {
     const networkIndex = args.indexOf("--network");
     expect(networkIndex).toBeGreaterThan(-1);
     expect(args[networkIndex + 1]).toBe("bridge");
+    const buildArgsCall = buildSandboxCreateArgsMock.mock.calls[0]?.[0] as {
+      cfg?: { network?: string };
+    };
+    expect(buildArgsCall?.cfg?.network).toBe("bridge");
   });
 });

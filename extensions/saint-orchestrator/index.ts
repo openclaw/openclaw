@@ -5,10 +5,14 @@ import type { ResolvedTier, UsageLogEntry } from "./src/types.js";
 import {
   addBudgetSpent,
   appendUsageLog,
+  buildBudgetReservationSignature,
   cleanupBudgetCache,
   estimateToolCostUsd,
   getBudgetSpent,
+  getReservedBudgetSpent,
+  reserveBudgetSpend,
   sanitizeParamsForLog,
+  settleBudgetReservation,
   utcDayPrefix,
 } from "./src/budget.js";
 import { createCliportService } from "./src/cliport/service.js";
@@ -264,8 +268,10 @@ const saintOrchestratorPlugin = {
       cleanupStaleCaches();
 
       const dayPrefix = utcDayPrefix();
-      // Use in-memory budget tracker to prevent TOCTOU races
-      const spentToday = await getBudgetSpent(workspaceDir, tier.contactSlug, dayPrefix);
+      // Combine committed + reserved spend to prevent TOCTOU races with concurrent calls.
+      const committedToday = await getBudgetSpent(workspaceDir, tier.contactSlug, dayPrefix);
+      const reservedToday = getReservedBudgetSpent(workspaceDir, tier.contactSlug, dayPrefix);
+      const spentToday = committedToday + reservedToday;
       const maxBudget = tier.tier.max_budget_usd;
       const nextCost = estimateToolCostUsd(event.toolName);
       if (
@@ -280,6 +286,14 @@ const saintOrchestratorPlugin = {
       }
       // Run all blocking checks before reserving budget so blocked calls don't
       // drain the budget.
+
+      // Enforce a strict parent ceiling for sub-agents: no grandchild spawning.
+      if (event.toolName === "sessions_spawn" && tier.source === "subagent") {
+        return {
+          block: true,
+          blockReason: "sessions_spawn denied for subagent sessions (grandchild cap)",
+        };
+      }
 
       if (event.toolName === "exec" || event.toolName === "bash") {
         const command = typeof event.params.command === "string" ? event.params.command : "";
@@ -305,13 +319,23 @@ const saintOrchestratorPlugin = {
       if (event.toolName === "memory_search") {
         const allowed = resolveMemoryReadPatterns(tier.tier.memory_scope, tier.contactSlug);
         if (allowed.length > 0) {
-          // Pre-reserve budget before allowing the search
-          addBudgetSpent(workspaceDir, tier.contactSlug, dayPrefix, nextCost);
+          const nextParams = {
+            ...event.params,
+            pathFilter: allowed,
+          };
+          reserveBudgetSpend({
+            workspaceDir,
+            userSlug: tier.contactSlug,
+            dayPrefix,
+            signature: buildBudgetReservationSignature({
+              sessionKey: ctx.sessionKey,
+              toolName: event.toolName,
+              params: nextParams,
+            }),
+            amount: nextCost,
+          });
           return {
-            params: {
-              ...event.params,
-              pathFilter: allowed,
-            },
+            params: nextParams,
           };
         }
         // No memory scopes resolved -- block the search (consistent with memory_get)
@@ -338,7 +362,17 @@ const saintOrchestratorPlugin = {
 
       // All blocking checks passed — pre-reserve budget to prevent concurrent
       // calls from all passing the budget check simultaneously.
-      addBudgetSpent(workspaceDir, tier.contactSlug, dayPrefix, nextCost);
+      reserveBudgetSpend({
+        workspaceDir,
+        userSlug: tier.contactSlug,
+        dayPrefix,
+        signature: buildBudgetReservationSignature({
+          sessionKey: ctx.sessionKey,
+          toolName: event.toolName,
+          params: event.params,
+        }),
+        amount: nextCost,
+      });
     });
 
     api.on("after_tool_call", async (event, ctx) => {
@@ -367,6 +401,31 @@ const saintOrchestratorPlugin = {
         });
       }
       const estimatedCostUsd = estimateToolCostUsd(event.toolName);
+      const dayPrefix = utcDayPrefix();
+      const budgetSignature = buildBudgetReservationSignature({
+        sessionKey: ctx.sessionKey,
+        toolName: event.toolName,
+        params: event.params,
+      });
+      const settledAmount = settleBudgetReservation({
+        workspaceDir,
+        userSlug: tier.contactSlug,
+        dayPrefix,
+        signature: budgetSignature,
+      });
+      let billedCostUsd = settledAmount;
+      // Fallback for legacy/no-match reservation keys:
+      // account successful calls, but avoid charging blocked/error calls that never
+      // consumed a reservation in before_tool_call.
+      if (settledAmount <= 0) {
+        const hasError = typeof event.error === "string" && event.error.trim().length > 0;
+        if (!hasError) {
+          addBudgetSpent(workspaceDir, tier.contactSlug, dayPrefix, estimatedCostUsd);
+          billedCostUsd = estimatedCostUsd;
+        } else {
+          billedCostUsd = 0;
+        }
+      }
       // Sanitize params for logging — strip large/sensitive fields
       const sanitizedParams = sanitizeParamsForLog(event.toolName, event.params);
       const usage: UsageLogEntry = {
@@ -377,7 +436,7 @@ const saintOrchestratorPlugin = {
         params: sanitizedParams,
         durationMs: event.durationMs,
         error: event.error,
-        estimatedCostUsd,
+        estimatedCostUsd: billedCostUsd,
       };
       await appendUsageLog(workspaceDir, usage);
 

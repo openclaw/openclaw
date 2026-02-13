@@ -1,5 +1,4 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import type { PluginHookBeforeToolCallEvent } from "../plugins/types.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -56,20 +55,6 @@ export async function handleToolExecutionStart(
     args && typeof args === "object" ? { ...(args as Record<string, unknown>) } : {};
   ctx.state.toolStartTimes.set(toolCallId, Date.now());
   ctx.state.toolParamsById.set(toolCallId, normalizedArgs);
-
-  // Call before_tool_call hook
-  const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
-  if (hookRunner?.hasHooks?.("before_tool_call")) {
-    try {
-      const hookEvent: PluginHookBeforeToolCallEvent = {
-        toolName,
-        params: args && typeof args === "object" ? (args as Record<string, unknown>) : {},
-      };
-      await hookRunner.runBeforeToolCall(hookEvent, { toolName });
-    } catch (err) {
-      ctx.log.debug(`before_tool_call hook failed: tool=${toolName} error=${String(err)}`);
-    }
-  }
 
   if (toolName === "read") {
     const filePath = typeof normalizedArgs.path === "string" ? normalizedArgs.path.trim() : "";

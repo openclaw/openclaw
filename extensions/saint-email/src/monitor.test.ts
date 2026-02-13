@@ -30,23 +30,54 @@ describe("saint-email inbound parsing", () => {
       .replace(/=+$/g, "");
 
     const message = __testing.toInboundMessage({
-      id: "abc",
-      threadId: "thread-1",
-      internalDate: "1700000000000",
-      payload: {
-        headers: [
-          { name: "From", value: "Client <client@example.com>" },
-          { name: "To", value: "bot@example.com" },
-          { name: "Subject", value: "Question" },
-        ],
-        mimeType: "text/plain",
-        body: { data },
+      message: {
+        id: "abc",
+        threadId: "thread-1",
+        internalDate: "1700000000000",
+        payload: {
+          headers: [
+            { name: "From", value: "Client <client@example.com>" },
+            { name: "To", value: "bot@example.com" },
+            { name: "Subject", value: "Question" },
+          ],
+          mimeType: "text/plain",
+          body: { data },
+        },
+        snippet: "Hello",
       },
-      snippet: "Hello",
+      attachments: [],
     });
 
     expect(message?.fromEmail).toBe("client@example.com");
     expect(message?.subject).toBe("Question");
     expect(message?.text).toBe("Hello");
+    expect(message?.attachments).toEqual([]);
+  });
+
+  it("collects attachment candidates recursively", () => {
+    const candidates = __testing.collectAttachmentCandidates({
+      mimeType: "multipart/mixed",
+      parts: [
+        {
+          mimeType: "text/plain",
+          body: { data: "SGVsbG8" },
+        },
+        {
+          filename: "report.pdf",
+          mimeType: "application/pdf",
+          body: { attachmentId: "att-1", size: 1200 },
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([
+      {
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+        size: 1200,
+        attachmentId: "att-1",
+        inlineData: undefined,
+      },
+    ]);
   });
 });

@@ -109,20 +109,13 @@ export async function ensureSandboxBrowser(params: {
     const cfgWithoutBinds = params.cfg.docker.binds?.length
       ? { ...params.cfg.docker, binds: undefined }
       : params.cfg.docker;
+    const browserNetwork = params.cfg.browser.network?.trim() || "bridge";
     const args = buildSandboxCreateArgs({
       name: containerName,
-      cfg: { ...cfgWithoutBinds, network: "bridge" },
+      cfg: { ...cfgWithoutBinds, network: browserNetwork },
       scopeKey: params.scopeKey,
       labels: { "openclaw.sandboxBrowser": "1" },
     });
-    if (params.cfg.browser.network) {
-      const networkIndex = args.indexOf("--network");
-      if (networkIndex !== -1 && networkIndex + 1 < args.length) {
-        args[networkIndex + 1] = params.cfg.browser.network;
-      } else {
-        args.push("--network", params.cfg.browser.network);
-      }
-    }
     const mainMountSuffix =
       params.cfg.workspaceAccess === "ro" && params.workspaceDir === params.agentWorkspaceDir
         ? ":ro"

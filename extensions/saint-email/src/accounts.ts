@@ -1,5 +1,18 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
-import type { CoreConfig, ResolvedSaintEmailAccount, SaintEmailConfig } from "./types.js";
+import type {
+  CoreConfig,
+  ResolvedSaintEmailAccount,
+  ResolvedSaintEmailOAuth2Config,
+  SaintEmailConfig,
+  SaintEmailOAuth2Config,
+} from "./types.js";
+
+const DEFAULT_MAX_ATTACHMENT_MB = 20;
+const DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token";
+const DEFAULT_OAUTH_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/gmail.send",
+];
 
 function resolveSection(cfg: CoreConfig): SaintEmailConfig {
   const section = cfg.channels?.email;
@@ -14,6 +27,34 @@ function unique(values?: string[]): string[] {
     return [];
   }
   return Array.from(new Set(values.map((entry) => entry.trim().toLowerCase()).filter(Boolean)));
+}
+
+function mergeOAuth2Config(params: {
+  global?: SaintEmailOAuth2Config;
+  account?: SaintEmailOAuth2Config;
+  fallbackSubject?: string;
+}): ResolvedSaintEmailOAuth2Config | undefined {
+  const serviceAccountEmail =
+    params.account?.serviceAccountEmail?.trim() || params.global?.serviceAccountEmail?.trim() || "";
+  const privateKey = params.account?.privateKey?.trim() || params.global?.privateKey?.trim() || "";
+  if (!serviceAccountEmail || !privateKey) {
+    return undefined;
+  }
+  const subject =
+    params.account?.subject?.trim() ||
+    params.global?.subject?.trim() ||
+    params.fallbackSubject?.trim() ||
+    undefined;
+  const tokenUri =
+    params.account?.tokenUri?.trim() || params.global?.tokenUri?.trim() || DEFAULT_TOKEN_URI;
+  const scopes = unique(params.account?.scopes ?? params.global?.scopes);
+  return {
+    serviceAccountEmail,
+    privateKey,
+    subject,
+    tokenUri,
+    scopes: scopes.length > 0 ? scopes : [...DEFAULT_OAUTH_SCOPES],
+  };
 }
 
 /** Case-insensitive lookup of a config key in an object. */
@@ -71,8 +112,17 @@ export function resolveSaintEmailAccount(params: {
     pollIntervalSec: account.pollIntervalSec ?? section.pollIntervalSec ?? 60,
     pollQuery: account.pollQuery ?? section.pollQuery ?? "in:inbox",
     maxPollResults: account.maxPollResults ?? section.maxPollResults ?? 10,
+    maxAttachmentMb:
+      account.maxAttachmentMb ?? section.maxAttachmentMb ?? DEFAULT_MAX_ATTACHMENT_MB,
     pushVerificationToken: account.pushVerificationToken ?? section.pushVerificationToken,
   } as const;
+
+  const oauth2 = mergeOAuth2Config({
+    global: section.oauth2,
+    account: account.oauth2,
+    fallbackSubject:
+      merged.userId && merged.userId !== "me" ? merged.userId : merged.address || undefined,
+  });
 
   return {
     accountId: requested,
@@ -81,11 +131,13 @@ export function resolveSaintEmailAccount(params: {
     address: merged.address,
     userId: merged.userId,
     accessToken: merged.accessToken,
+    oauth2,
     dmPolicy: merged.dmPolicy,
     allowFrom: merged.allowFrom,
     pollIntervalSec: merged.pollIntervalSec,
     pollQuery: merged.pollQuery,
     maxPollResults: merged.maxPollResults,
+    maxAttachmentMb: Math.max(1, Math.min(100, merged.maxAttachmentMb)),
     pushVerificationToken: merged.pushVerificationToken,
   };
 }
