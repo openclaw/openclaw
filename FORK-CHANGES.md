@@ -101,6 +101,8 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
 
 ### Foundry / Cursor integration hardening
 
+Operational checklist when running this fork with [OpenClaw-Foundry](https://github.com/openclaw/openclaw-foundry): [docs/MAINTENANCE.md](docs/MAINTENANCE.md#openclaw-foundry-integration).
+
 - **Tool group tightening for agents**
   - `group:fs` now expands to `read` + `apply_patch` only. Direct `write`/`edit` are no longer part of the global fs group and must be granted explicitly on a per-agent basis (for example, to a dedicated analyst workspace) instead of every agent inheriting broad write access.
   - Gateway docs and examples have been updated so `tools.profile: "coding"` plus `group:fs` describe read + structured patch access, matching the new behavior.

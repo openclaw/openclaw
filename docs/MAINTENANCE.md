@@ -179,6 +179,28 @@ With this set:
 
 You can adjust the list over time without code changes; just update the env var and restart the gateway.
 
+## OpenClaw-Foundry integration
+
+This fork is wired to work with [OpenClaw-Foundry](https://github.com/openclaw/openclaw-foundry) (the self-writing meta-extension). When running Foundry alongside this gateway, keep these in mind:
+
+### Gateway bootstrap timeout
+
+Foundry-style plugin stacks can be heavy on cold start. Increase the bootstrap timeout so the gateway does not SIGKILL before plugins finish loading:
+
+```bash
+export GATEWAY_BOOTSTRAP_TIMEOUT=120000
+```
+
+(120000 ms = 120 seconds; set this in your systemd service `Environment=` or in `~/.openclaw/.env`.)
+
+### Tool groups and config
+
+In this fork, `group:fs` grants **read + apply_patch** only. Direct `write`/`edit` must be granted explicitly per-agent (for example to a dedicated analyst workspace), not inherited globally. See [configuration-examples.md](gateway/configuration-examples.md) for the recommended `tools.allow` pattern (`["exec", "process", "group:fs"]` plus per-agent write grants as needed).
+
+### Foundry config pre-flight (external repo)
+
+When updating or developing the OpenClaw-Foundry extension: if any Foundry tool (e.g. `foundry_write_extension` or equivalent) ever writes `models.providers` or provider entries into `openclaw.json`, it **must** perform a pre-flight check first: for each new provider, verify the corresponding API key/token environment variables are present, and abort with a clear error if they are not. That prevents the gateway from booting with an invalid provider config.
+
 ## Protection Mechanisms
 
 ### Backup your service file
