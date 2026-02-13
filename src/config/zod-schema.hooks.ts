@@ -59,7 +59,10 @@ const HookConfigSchema = z
     enabled: z.boolean().optional(),
     env: z.record(z.string(), z.string()).optional(),
   })
-  .strict();
+  // Hook configs are intentionally open-ended (handlers can define their own keys).
+  // Keep enabled/env typed, but allow additional per-hook keys without marking the
+  // whole config invalid (which triggers doctor/best-effort loads).
+  .passthrough();
 
 const HookInstallRecordSchema = z
   .object({

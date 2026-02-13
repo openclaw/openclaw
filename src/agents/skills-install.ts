@@ -147,13 +147,13 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
 function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
   switch (prefs.nodeManager) {
     case "pnpm":
-      return ["pnpm", "add", "-g", packageName];
+      return ["pnpm", "add", "-g", "--ignore-scripts", packageName];
     case "yarn":
-      return ["yarn", "global", "add", packageName];
+      return ["yarn", "global", "add", "--ignore-scripts", packageName];
     case "bun":
-      return ["bun", "add", "-g", packageName];
+      return ["bun", "add", "-g", "--ignore-scripts", packageName];
     default:
-      return ["npm", "install", "-g", packageName];
+      return ["npm", "install", "-g", "--ignore-scripts", packageName];
   }
 }
 

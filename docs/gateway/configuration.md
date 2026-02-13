@@ -262,6 +262,9 @@ When validation fails:
         enabled: true,
         token: "shared-secret",
         path: "/hooks",
+        defaultSessionKey: "hook:ingress",
+        allowRequestSessionKey: false,
+        allowedSessionKeyPrefixes: ["hook:"],
         mappings: [
           {
             match: { path: "gmail" },

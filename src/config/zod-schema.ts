@@ -73,6 +73,7 @@ const MemoryQmdLimitsSchema = z
 const MemoryQmdSchema = z
   .object({
     command: z.string().optional(),
+    searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
     sessions: MemoryQmdSessionSchema.optional(),
@@ -301,6 +302,9 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         path: z.string().optional(),
         token: z.string().optional(),
+        defaultSessionKey: z.string().optional(),
+        allowRequestSessionKey: z.boolean().optional(),
+        allowedSessionKeyPrefixes: z.array(z.string()).optional(),
         allowedAgentIds: z.array(z.string()).optional(),
         maxBodyBytes: z.number().int().positive().optional(),
         presets: z.array(z.string()).optional(),
@@ -456,9 +460,11 @@ export const OpenClawSchema = z
                   .object({
                     enabled: z.boolean().optional(),
                     maxBodyBytes: z.number().int().positive().optional(),
+                    maxUrlParts: z.number().int().nonnegative().optional(),
                     files: z
                       .object({
                         allowUrl: z.boolean().optional(),
+                        urlAllowlist: z.array(z.string()).optional(),
                         allowedMimes: z.array(z.string()).optional(),
                         maxBytes: z.number().int().positive().optional(),
                         maxChars: z.number().int().positive().optional(),
@@ -478,6 +484,7 @@ export const OpenClawSchema = z
                     images: z
                       .object({
                         allowUrl: z.boolean().optional(),
+                        urlAllowlist: z.array(z.string()).optional(),
                         allowedMimes: z.array(z.string()).optional(),
                         maxBytes: z.number().int().positive().optional(),
                         maxRedirects: z.number().int().nonnegative().optional(),

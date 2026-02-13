@@ -28,7 +28,7 @@ Status: ready for DMs and guild channels via the official Discord gateway.
     Create an application in the Discord Developer Portal, add a bot, then enable:
 
     - **Message Content Intent**
-    - **Server Members Intent** (recommended for name-to-ID lookups and allowlist matching)
+    - **Server Members Intent** (required for role allowlists and role-based routing; recommended for name-to-ID allowlist matching)
 
   </Step>
 
@@ -121,6 +121,7 @@ Token resolution is account-aware. Config token values win over env fallback. `D
     `allowlist` behavior:
 
     - guild must match `channels.discord.guilds` (`id` preferred, slug accepted)
+    - optional sender allowlists: `users` (IDs or names) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
     - if a guild has `channels` configured, non-listed channels are denied
     - if a guild has no `channels` block, all channels in that allowlisted guild are allowed
 
@@ -135,6 +136,7 @@ Token resolution is account-aware. Config token values win over env fallback. `D
         "123456789012345678": {
           requireMention: true,
           users: ["987654321098765432"],
+          roles: ["123456789012345678"],
           channels: {
             general: { allow: true },
             help: { allow: true, requireMention: true },
@@ -168,6 +170,32 @@ Token resolution is account-aware. Config token values win over env fallback. `D
 
   </Tab>
 </Tabs>
+
+### Role-based agent routing
+
+Use `bindings[].match.roles` to route Discord guild members to different agents by role ID. Role-based bindings accept role IDs only and are evaluated after peer or parent-peer bindings and before guild-only bindings.
+
+```json5
+{
+  bindings: [
+    {
+      agentId: "opus",
+      match: {
+        channel: "discord",
+        guildId: "123456789012345678",
+        roles: ["111111111111111111"],
+      },
+    },
+    {
+      agentId: "sonnet",
+      match: {
+        channel: "discord",
+        guildId: "123456789012345678",
+      },
+    },
+  ],
+}
+```
 
 ## Developer Portal setup
 

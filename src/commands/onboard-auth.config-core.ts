@@ -38,6 +38,7 @@ import {
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 import {
+  buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
   QIANFAN_BASE_URL,
@@ -47,18 +48,65 @@ import {
   MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
+  ZAI_DEFAULT_MODEL_ID,
+  resolveZaiBaseUrl,
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
 } from "./onboard-auth.models.js";
 
-export function applyZaiConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyZaiProviderConfig(
+  cfg: OpenClawConfig,
+  params?: { endpoint?: string; modelId?: string },
+): OpenClawConfig {
+  const modelId = params?.modelId?.trim() || ZAI_DEFAULT_MODEL_ID;
+  const modelRef = `zai/${modelId}`;
+
   const models = { ...cfg.agents?.defaults?.models };
-  models[ZAI_DEFAULT_MODEL_REF] = {
-    ...models[ZAI_DEFAULT_MODEL_REF],
-    alias: models[ZAI_DEFAULT_MODEL_REF]?.alias ?? "GLM",
+  models[modelRef] = {
+    ...models[modelRef],
+    alias: models[modelRef]?.alias ?? "GLM",
   };
 
-  const existingModel = cfg.agents?.defaults?.model;
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.zai;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+
+  const defaultModels = [
+    buildZaiModelDefinition({ id: "glm-5" }),
+    buildZaiModelDefinition({ id: "glm-4.7" }),
+    buildZaiModelDefinition({ id: "glm-4.7-flash" }),
+    buildZaiModelDefinition({ id: "glm-4.7-flashx" }),
+  ];
+
+  const mergedModels = [...existingModels];
+  const seen = new Set(existingModels.map((m) => m.id));
+  for (const model of defaultModels) {
+    if (!seen.has(model.id)) {
+      mergedModels.push(model);
+      seen.add(model.id);
+    }
+  }
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+
+  const baseUrl = params?.endpoint
+    ? resolveZaiBaseUrl(params.endpoint)
+    : (typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl : "") ||
+      resolveZaiBaseUrl();
+
+  providers.zai = {
+    ...existingProviderRest,
+    baseUrl,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultModels,
+  };
+
   return {
     ...cfg,
     agents: {
@@ -66,13 +114,37 @@ export function applyZaiConfig(cfg: OpenClawConfig): OpenClawConfig {
       defaults: {
         ...cfg.agents?.defaults,
         models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyZaiConfig(
+  cfg: OpenClawConfig,
+  params?: { endpoint?: string; modelId?: string },
+): OpenClawConfig {
+  const modelId = params?.modelId?.trim() || ZAI_DEFAULT_MODEL_ID;
+  const modelRef = modelId === ZAI_DEFAULT_MODEL_ID ? ZAI_DEFAULT_MODEL_REF : `zai/${modelId}`;
+  const next = applyZaiProviderConfig(cfg, params);
+
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
         model: {
           ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
             ? {
                 fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
               }
             : undefined),
-          primary: ZAI_DEFAULT_MODEL_REF,
+          primary: modelRef,
         },
       },
     },
