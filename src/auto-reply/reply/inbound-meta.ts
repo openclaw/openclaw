@@ -56,6 +56,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     group_channel: safeTrim(ctx.GroupChannel),
     group_space: safeTrim(ctx.GroupSpace),
     thread_label: safeTrim(ctx.ThreadLabel),
+    thread_id: ctx.MessageThreadId != null ? String(ctx.MessageThreadId) : undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
   };

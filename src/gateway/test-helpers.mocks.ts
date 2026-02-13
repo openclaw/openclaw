@@ -86,53 +86,9 @@ const createStubPluginRegistry = (): PluginRegistry => ({
       }),
     },
     {
-      pluginId: "discord",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "discord", label: "Discord" }),
-    },
-    {
       pluginId: "slack",
       source: "test",
       plugin: createStubChannelPlugin({ id: "slack", label: "Slack" }),
-    },
-    {
-      pluginId: "signal",
-      source: "test",
-      plugin: createStubChannelPlugin({
-        id: "signal",
-        label: "Signal",
-        summary: { lastProbeAt: null },
-      }),
-    },
-    {
-      pluginId: "imessage",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
-    },
-    {
-      pluginId: "msteams",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "msteams", label: "Microsoft Teams" }),
-    },
-    {
-      pluginId: "matrix",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "matrix", label: "Matrix" }),
-    },
-    {
-      pluginId: "zalo",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "zalo", label: "Zalo" }),
-    },
-    {
-      pluginId: "zalouser",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "zalouser", label: "Zalo Personal" }),
-    },
-    {
-      pluginId: "bluebubbles",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "bluebubbles", label: "BlueBubbles" }),
     },
   ],
   providers: [],
