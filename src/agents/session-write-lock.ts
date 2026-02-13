@@ -11,12 +11,47 @@ type HeldLock = {
   count: number;
   handle: fs.FileHandle;
   lockPath: string;
+  releasing?: Promise<void>;
 };
 
 const HELD_LOCKS = new Map<string, HeldLock>();
 const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
 type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
 const cleanupHandlers = new Map<CleanupSignal, () => void>();
+
+async function releaseHeldLock(sessionKey: string): Promise<void> {
+  const current = HELD_LOCKS.get(sessionKey);
+  if (!current) {
+    return;
+  }
+
+  // If a release is already in progress, just wait for it.
+  if (current.releasing) {
+    await current.releasing;
+    return;
+  }
+
+  current.count -= 1;
+  if (current.count > 0) {
+    return;
+  }
+
+  // Final release: mark as releasing *before* any await so acquires can wait.
+  current.count = 0;
+  const releasing = (async () => {
+    // Close can fail (already closed / transient). Still attempt to remove the file.
+    await current.handle.close().catch(() => undefined);
+    await fs.rm(current.lockPath, { force: true });
+  })();
+  current.releasing = releasing;
+
+  try {
+    await releasing;
+  } finally {
+    // Ensure we don’t keep a stale in-memory entry.
+    HELD_LOCKS.delete(sessionKey);
+  }
+}
 
 function isAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) {
@@ -131,29 +166,29 @@ export async function acquireSessionWriteLock(params: {
   const normalizedSessionFile = path.join(normalizedDir, path.basename(sessionFile));
   const lockPath = `${normalizedSessionFile}.lock`;
 
-  const held = HELD_LOCKS.get(normalizedSessionFile);
-  if (held) {
-    held.count += 1;
-    return {
-      release: async () => {
-        const current = HELD_LOCKS.get(normalizedSessionFile);
-        if (!current) {
-          return;
-        }
-        current.count -= 1;
-        if (current.count > 0) {
-          return;
-        }
-        HELD_LOCKS.delete(normalizedSessionFile);
-        await current.handle.close();
-        await fs.rm(current.lockPath, { force: true });
-      },
-    };
-  }
-
   const startedAt = Date.now();
   let attempt = 0;
   while (Date.now() - startedAt < timeoutMs) {
+    const held = HELD_LOCKS.get(normalizedSessionFile);
+    if (held) {
+      if (held.releasing) {
+        // Another task in this process is tearing the lock down.
+        // Wait rather than spinning on the filesystem lock file, but still
+        // respect the overall acquire timeout.
+        const remainingMs = timeoutMs - (Date.now() - startedAt);
+        if (remainingMs <= 0) {
+          break;
+        }
+        await Promise.race([
+          held.releasing,
+          new Promise<void>((resolve) => setTimeout(resolve, remainingMs)),
+        ]);
+        continue;
+      }
+      held.count += 1;
+      return { release: () => releaseHeldLock(normalizedSessionFile) };
+    }
+
     attempt += 1;
     try {
       const handle = await fs.open(lockPath, "wx");
@@ -162,21 +197,7 @@ export async function acquireSessionWriteLock(params: {
         "utf8",
       );
       HELD_LOCKS.set(normalizedSessionFile, { count: 1, handle, lockPath });
-      return {
-        release: async () => {
-          const current = HELD_LOCKS.get(normalizedSessionFile);
-          if (!current) {
-            return;
-          }
-          current.count -= 1;
-          if (current.count > 0) {
-            return;
-          }
-          HELD_LOCKS.delete(normalizedSessionFile);
-          await current.handle.close();
-          await fs.rm(current.lockPath, { force: true });
-        },
-      };
+      return { release: () => releaseHeldLock(normalizedSessionFile) };
     } catch (err) {
       const code = (err as { code?: unknown }).code;
       if (code !== "EEXIST") {
