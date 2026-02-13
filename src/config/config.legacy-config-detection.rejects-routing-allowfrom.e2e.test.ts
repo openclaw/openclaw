@@ -134,6 +134,45 @@ describe("legacy config detection", () => {
     });
     expect(res.config?.routing).toBeUndefined();
   });
+  it("migrates audio.transcription with custom script names", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      audio: {
+        transcription: {
+          command: ["/home/user/.scripts/whisperx-transcribe.sh"],
+          timeoutSeconds: 120,
+        },
+      },
+    });
+    expect(res.changes).toContain("Moved audio.transcription → tools.media.audio.models.");
+    expect(res.config?.tools?.media?.audio).toEqual({
+      enabled: true,
+      models: [
+        {
+          command: "/home/user/.scripts/whisperx-transcribe.sh",
+          type: "cli",
+          timeoutSeconds: 120,
+        },
+      ],
+    });
+    expect(res.config?.audio).toBeUndefined();
+  });
+  it("rejects audio.transcription when command contains non-string parts", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      audio: {
+        transcription: {
+          command: [{}],
+          timeoutSeconds: 120,
+        },
+      },
+    });
+    expect(res.changes).toContain("Removed audio.transcription (invalid or empty command).");
+    expect(res.config?.tools?.media?.audio).toBeUndefined();
+    expect(res.config?.audio).toBeUndefined();
+  });
   it("migrates agent config into agents.defaults and tools", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");
