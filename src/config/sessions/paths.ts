@@ -71,6 +71,29 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   return resolveAgentSessionsDir(opts?.agentId);
 }
 
+function resolveLegacySessionsDirFromAbsolutePath(candidate: string): string | undefined {
+  const trimmed = candidate.trim();
+  if (!trimmed || !path.isAbsolute(trimmed)) {
+    return undefined;
+  }
+
+  const resolvedCandidate = path.resolve(trimmed);
+  const stateDir = resolveStateDir();
+  const agentsRoot = path.resolve(stateDir, "agents");
+  const relativeToAgents = path.relative(agentsRoot, resolvedCandidate);
+  if (relativeToAgents && !relativeToAgents.startsWith("..") && !path.isAbsolute(relativeToAgents)) {
+    const parts = relativeToAgents.split(path.sep).filter(Boolean);
+    // Legacy stores can contain absolute paths for non-default agents.
+    // If callers omitted opts, infer the owning sessions dir from
+    // `<state>/agents/<agentId>/sessions/...` and validate against it.
+    if (parts.length >= 3 && parts[1] === "sessions") {
+      return path.join(agentsRoot, parts[0], "sessions");
+    }
+  }
+
+  return undefined;
+}
+
 function resolvePathWithinSessionsDir(sessionsDir: string, candidate: string): string {
   const trimmed = candidate.trim();
   if (!trimmed) {
@@ -122,7 +145,20 @@ export function resolveSessionFilePath(
   const sessionsDir = resolveSessionsDir(opts);
   const candidate = entry?.sessionFile?.trim();
   if (candidate) {
-    return resolvePathWithinSessionsDir(sessionsDir, candidate);
+    try {
+      return resolvePathWithinSessionsDir(sessionsDir, candidate);
+    } catch (error) {
+      // Backward compatibility: some legacy call paths omitted opts entirely,
+      // while sessions.json stored absolute per-agent transcript paths.
+      // Infer sessionsDir only in this no-opts case.
+      if (!opts) {
+        const inferredSessionsDir = resolveLegacySessionsDirFromAbsolutePath(candidate);
+        if (inferredSessionsDir) {
+          return resolvePathWithinSessionsDir(inferredSessionsDir, candidate);
+        }
+      }
+      throw error;
+    }
   }
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
 }

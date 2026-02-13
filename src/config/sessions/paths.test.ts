@@ -29,6 +29,10 @@ describe("resolveStorePath", () => {
 });
 
 describe("session path safety", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("validates safe session IDs", () => {
     expect(validateSessionId("sess-1")).toBe("sess-1");
     expect(validateSessionId("ABC_123.hello")).toBe("ABC_123.hello");
@@ -106,6 +110,18 @@ describe("session path safety", () => {
         { sessionsDir },
       ),
     ).toThrow(/within sessions directory/);
+  });
+
+  it("infers sessionsDir for absolute legacy agent paths when opts are omitted", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/tmp/openclaw");
+
+    const resolved = resolveSessionFilePath("sess-1", {
+      sessionFile: "/tmp/openclaw/.openclaw/agents/polymarket/sessions/abc-123.jsonl",
+    });
+
+    expect(resolved).toBe(
+      path.resolve("/tmp/openclaw/.openclaw/agents/polymarket/sessions/abc-123.jsonl"),
+    );
   });
 
   it("uses agent sessions dir fallback for transcript path", () => {
