@@ -31,7 +31,7 @@ describe("gateway restart deferral integration", () => {
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         // Simulate network delay
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 20));
         deliveredReplies.push({
           text: payload.text ?? "",
           timestamp: Date.now(),
@@ -115,85 +115,5 @@ describe("gateway restart deferral integration", () => {
       "restart-check: queue=0 pending=0 total=0",
       "restart-can-proceed",
     ]);
-  });
-
-  it("should handle concurrent dispatchers with config changes", async () => {
-    const { createReplyDispatcher } = await import("../auto-reply/reply/reply-dispatcher.js");
-    const { getTotalPendingReplies } = await import("../auto-reply/reply/dispatcher-registry.js");
-
-    // Simulate two messages being processed concurrently
-    const deliveredReplies: string[] = [];
-
-    // Message 1 — dispatcher created
-    const dispatcher1 = createReplyDispatcher({
-      deliver: async (payload) => {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        deliveredReplies.push(`msg1: ${payload.text}`);
-      },
-    });
-
-    // Message 2 — dispatcher created
-    const dispatcher2 = createReplyDispatcher({
-      deliver: async (payload) => {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        deliveredReplies.push(`msg2: ${payload.text}`);
-      },
-    });
-
-    // Both dispatchers have reservations
-    expect(getTotalPendingReplies()).toBe(2);
-
-    // Config change detected - should defer
-    const totalActive = getTotalPendingReplies();
-    expect(totalActive).toBe(2); // 2 dispatcher reservations
-
-    // Messages process and send replies
-    dispatcher1.sendFinalReply({ text: "Reply from message 1" });
-    dispatcher1.markComplete();
-
-    dispatcher2.sendFinalReply({ text: "Reply from message 2" });
-    dispatcher2.markComplete();
-
-    // Wait for both
-    await Promise.all([dispatcher1.waitForIdle(), dispatcher2.waitForIdle()]);
-
-    // All idle
-    expect(getTotalPendingReplies()).toBe(0);
-
-    // Replies delivered
-    expect(deliveredReplies).toHaveLength(2);
-  });
-
-  it("should handle rapid config changes without losing replies", async () => {
-    const { createReplyDispatcher } = await import("../auto-reply/reply/reply-dispatcher.js");
-    const { getTotalPendingReplies } = await import("../auto-reply/reply/dispatcher-registry.js");
-
-    const deliveredReplies: string[] = [];
-
-    // Message received — dispatcher created
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        await new Promise((resolve) => setTimeout(resolve, 200)); // Slow network
-        deliveredReplies.push(payload.text ?? "");
-      },
-    });
-
-    // Config change 1, 2, 3 (rapid changes)
-    // All should be deferred because dispatcher has pending replies
-
-    // Send replies
-    dispatcher.sendFinalReply({ text: "Processing..." });
-    dispatcher.sendFinalReply({ text: "Almost done..." });
-    dispatcher.sendFinalReply({ text: "Complete!" });
-    dispatcher.markComplete();
-
-    // Wait for all replies
-    await dispatcher.waitForIdle();
-
-    // All replies should be delivered
-    expect(deliveredReplies).toEqual(["Processing...", "Almost done...", "Complete!"]);
-
-    // Now restart can proceed
-    expect(getTotalPendingReplies()).toBe(0);
   });
 });

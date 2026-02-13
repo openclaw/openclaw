@@ -36,7 +36,7 @@ describe("real scenario: config change during message processing", () => {
           throw new Error(error);
         }
         // Slow delivery — restart checks will run during this window
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 150));
         deliveredReplies.push(payload.text ?? "");
       },
       onError: () => {
@@ -59,7 +59,7 @@ describe("real scenario: config change during message processing", () => {
     // If the tracking is broken, pending would be 0 and we'd restart.
     let restartTriggered = false;
     for (let i = 0; i < 3; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 25));
       const pending = getTotalPendingReplies();
       if (pending === 0) {
         restartTriggered = true;
@@ -86,7 +86,7 @@ describe("real scenario: config change during message processing", () => {
 
     const dispatcher = createReplyDispatcher({
       deliver: async (_payload) => {
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, 10));
       },
     });
 
@@ -94,7 +94,7 @@ describe("real scenario: config change during message processing", () => {
     expect(getTotalPendingReplies()).toBe(1);
 
     // Simulate command processing delay BEFORE reply is enqueued
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     // During this delay, pending should STILL be 1 (reservation active)
     expect(getTotalPendingReplies()).toBe(1);

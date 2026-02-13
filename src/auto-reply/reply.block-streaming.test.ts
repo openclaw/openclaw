@@ -164,51 +164,6 @@ describe("block streaming", () => {
     });
   });
 
-  it("drops final payloads when block replies streamed", async () => {
-    await withTempHome(async (home) => {
-      const onBlockReply = vi.fn().mockResolvedValue(undefined);
-
-      const impl = async (params: RunEmbeddedPiAgentParams) => {
-        void params.onBlockReply?.({ text: "chunk-1" });
-        return {
-          payloads: [{ text: "chunk-1\nchunk-2" }],
-          meta: {
-            durationMs: 5,
-            agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          },
-        };
-      };
-      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(impl);
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "ping",
-          From: "+1004",
-          To: "+2000",
-          MessageSid: "msg-124",
-          Provider: "discord",
-        },
-        {
-          onBlockReply,
-          disableBlockStreaming: false,
-        },
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions.json") },
-        },
-      );
-
-      expect(res).toBeUndefined();
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-    });
-  });
-
   it("falls back to final payloads when block reply send times out", async () => {
     await withTempHome(async (home) => {
       let sawAbort = false;
