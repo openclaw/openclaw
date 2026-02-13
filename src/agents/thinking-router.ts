@@ -147,18 +147,13 @@ function hasCodeBlocks(message: string): boolean {
 /**
  * Check if a rule matches the given context.
  */
-function matchesRule(
-  context: ThinkingRouterContext,
-  match: ThinkingRouterRule["match"],
-): boolean {
+function matchesRule(context: ThinkingRouterContext, match: ThinkingRouterRule["match"]): boolean {
   const message = context.message ?? "";
   const msgLower = message.toLowerCase();
 
   // Keyword matching (any keyword present = match)
   if (match.keywords?.length) {
-    const hasKeyword = match.keywords.some((kw) =>
-      msgLower.includes(kw.toLowerCase()),
-    );
+    const hasKeyword = match.keywords.some((kw) => msgLower.includes(kw.toLowerCase()));
     if (!hasKeyword) return false;
   }
 
@@ -212,9 +207,7 @@ export function routeThinkingLevel(
   }
 
   // Sort rules by priority (descending)
-  const sortedRules = [...config.rules].sort(
-    (a, b) => (b.priority ?? 0) - (a.priority ?? 0),
-  );
+  const sortedRules = [...config.rules].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 
   for (const rule of sortedRules) {
     if (matchesRule(context, rule.match)) {
