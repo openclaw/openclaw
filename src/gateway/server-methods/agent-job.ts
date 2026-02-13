@@ -40,20 +40,32 @@ function recordAgentRunSnapshot(entry: AgentRunSnapshot) {
   agentRunCache.set(entry.runId, entry);
 }
 
-function extractAssistantText(data: Record<string, unknown> | undefined): string | undefined {
+function extractAssistantText(data: Record<string, unknown> | undefined): {
+  mode: "set" | "append";
+  text: string;
+} | null {
   if (!data) {
-    return undefined;
+    return null;
   }
   const text = data.text;
-  if (typeof text !== "string" || !text.trim()) {
-    return undefined;
+  if (typeof text === "string" && text.trim()) {
+    return { mode: "set", text };
   }
-  return text;
+  const delta = data.delta;
+  if (typeof delta === "string" && delta.length > 0) {
+    return { mode: "append", text: delta };
+  }
+  return null;
 }
 
-function recordAssistantText(runId: string, text: string) {
+function recordAssistantText(runId: string, text: string, mode: "set" | "append" = "set") {
   const ts = Date.now();
   pruneAgentRunCache(ts);
+  if (mode === "append") {
+    const previous = agentRunAssistantTexts.get(runId)?.text ?? "";
+    agentRunAssistantTexts.set(runId, { text: `${previous}${text}`, ts });
+    return;
+  }
   agentRunAssistantTexts.set(runId, { text, ts });
 }
 
@@ -73,9 +85,9 @@ function ensureAgentRunListener() {
       return;
     }
     if (evt.stream === "assistant") {
-      const text = extractAssistantText(evt.data);
-      if (text) {
-        recordAssistantText(evt.runId, text);
+      const update = extractAssistantText(evt.data);
+      if (update) {
+        recordAssistantText(evt.runId, update.text, update.mode);
       }
       return;
     }
@@ -141,13 +153,6 @@ export async function waitForAgentJob(params: {
     };
     const unsubscribe = onAgentEvent((evt) => {
       if (!evt) {
-        return;
-      }
-      if (evt.stream === "assistant" && evt.runId === runId) {
-        const text = extractAssistantText(evt.data);
-        if (text) {
-          recordAssistantText(runId, text);
-        }
         return;
       }
       if (evt.stream !== "lifecycle") {

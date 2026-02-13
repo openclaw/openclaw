@@ -60,4 +60,19 @@ describe("waitForAgentJob", () => {
     expect(first?.finalAssistantText).toBe("cached reply");
     expect(second?.finalAssistantText).toBe("cached reply");
   });
+
+  it("aggregates delta-only assistant events before lifecycle end", async () => {
+    const runId = `run-delta-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({ runId, stream: "assistant", data: { delta: "hel" } });
+    emitAgentEvent({ runId, stream: "assistant", data: { delta: "lo " } });
+    emitAgentEvent({ runId, stream: "assistant", data: { delta: "world" } });
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", endedAt: 700 } });
+
+    const snapshot = await waitPromise;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.status).toBe("ok");
+    expect(snapshot?.finalAssistantText).toBe("hello world");
+  });
 });
