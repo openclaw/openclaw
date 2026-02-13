@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
@@ -45,7 +45,6 @@ describe("models-config", () => {
 
   it("normalizes gemini 3 ids to preview for google providers", async () => {
     await withTempHome(async () => {
-      vi.resetModules();
       const { ensureOpenClawModelsJson } = await import("./models-config.js");
       const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
 

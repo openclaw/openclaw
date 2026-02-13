@@ -31,7 +31,6 @@ describe("sanitizeSessionHistory", () => {
   beforeEach(async () => {
     vi.resetAllMocks();
     vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
-    vi.resetModules();
     ({ sanitizeSessionHistory } = await import("./pi-embedded-runner/google.js"));
   });
 
@@ -94,7 +93,7 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("does not sanitize tool call ids for openai-responses", async () => {
+  it("sanitizes tool call ids for openai-responses", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     await sanitizeSessionHistory({
@@ -108,7 +107,11 @@ describe("sanitizeSessionHistory", () => {
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
       "session:history",
-      expect.objectContaining({ sanitizeMode: "images-only", sanitizeToolCallIds: false }),
+      expect.objectContaining({
+        sanitizeMode: "images-only",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+      }),
     );
   });
 

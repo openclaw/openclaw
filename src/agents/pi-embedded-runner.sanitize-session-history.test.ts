@@ -31,7 +31,6 @@ describe("sanitizeSessionHistory", () => {
   beforeEach(async () => {
     vi.resetAllMocks();
     vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
-    vi.resetModules();
     ({ sanitizeSessionHistory } = await import("./pi-embedded-runner/google.js"));
   });
 
