@@ -15,6 +15,28 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
 
+/** Placeholder written to models.json so the SDK still considers models "available." */
+export const REDACTED_PLACEHOLDER = "REDACTED_BY_OPENCLAW";
+
+/**
+ * Replace credential fields with a safe placeholder so models.json
+ * never contains real secrets. The pi-coding-agent SDK still sees a
+ * non-empty apiKey, keeping custom models "available."
+ */
+function stripProviderSecrets(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  const out: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    if (provider.apiKey) {
+      out[key] = { ...provider, apiKey: REDACTED_PLACEHOLDER };
+    } else {
+      out[key] = provider;
+    }
+  }
+  return out;
+}
+
 function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig): ProviderConfig {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
@@ -127,7 +149,10 @@ export async function ensureOpenClawModelsJson(
     providers: mergedProviders,
     agentDir,
   });
-  const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
+  const safeProviders = normalizedProviders
+    ? stripProviderSecrets(normalizedProviders)
+    : normalizedProviders;
+  const next = `${JSON.stringify({ providers: safeProviders }, null, 2)}\n`;
   try {
     existingRaw = await fs.readFile(targetPath, "utf8");
   } catch {
