@@ -1,3 +1,4 @@
+import { buildThreadKey, getThreadRegistry } from "../config/thread-registry.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
 
 export {
@@ -241,6 +242,62 @@ export function buildGroupHistoryKey(params: {
   const peerId = params.peerId.trim().toLowerCase() || "unknown";
   return `${channel}:${accountId}:${params.peerKind}:${peerId}`;
 }
+
+// ---------------------------------------------------------------------------
+// Thread-binding-aware session key resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve session key with thread-binding registry check.
+ *
+ * Priority:
+ * 1. Check the in-memory registry for explicit bindings (O(1) lookup).
+ * 2. Fall back to the existing `resolveThreadSessionKeys()` suffix logic.
+ */
+export function resolveSessionKeyWithBinding(params: {
+  baseSessionKey: string;
+  channel?: string;
+  accountId?: string;
+  threadId?: string | null;
+  parentSessionKey?: string;
+  useSuffix?: boolean;
+}): {
+  sessionKey: string;
+  boundSessions?: string[];
+  parentSessionKey?: string;
+} {
+  const { baseSessionKey, channel, accountId, threadId, useSuffix } = params;
+  const trimmedThreadId = (threadId ?? "").trim();
+
+  // If no threadId, skip registry lookup entirely.
+  if (!trimmedThreadId || !channel) {
+    return { sessionKey: baseSessionKey };
+  }
+
+  // Registry check (O(1))
+  const threadKey = buildThreadKey({ channel, accountId, threadId: trimmedThreadId });
+  const registry = getThreadRegistry();
+  const boundSessions = registry.lookup(threadKey);
+
+  if (boundSessions.length > 0) {
+    return {
+      sessionKey: boundSessions[0], // Primary bound session
+      boundSessions,
+    };
+  }
+
+  // Fall back to computed suffix logic
+  return resolveThreadSessionKeys({
+    baseSessionKey,
+    threadId: trimmedThreadId,
+    parentSessionKey: params.parentSessionKey,
+    useSuffix,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Legacy suffix-based thread session key resolution
+// ---------------------------------------------------------------------------
 
 export function resolveThreadSessionKeys(params: {
   baseSessionKey: string;

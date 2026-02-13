@@ -198,3 +198,78 @@ export function getThreadRegistry(): ThreadBindingRegistry {
 export function resetThreadRegistry(): void {
   registryInstance = null;
 }
+
+// ---------------------------------------------------------------------------
+// Binding lifecycle helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Bind a session to a thread: updates the session store entry and the
+ * in-memory registry in one atomic operation.
+ */
+export async function bindSessionToThread(params: {
+  storePath: string;
+  sessionKey: string;
+  binding: ThreadBinding;
+}): Promise<void> {
+  const { updateSessionStore } = await import("./sessions/store.js");
+  const { mergeSessionEntry } = await import("./sessions/types.js");
+  const { storePath, sessionKey, binding } = params;
+
+  await updateSessionStore(storePath, (store) => {
+    const existing = store[sessionKey];
+    store[sessionKey] = mergeSessionEntry(existing, { threadBinding: binding });
+  });
+  // Registry is rebuilt inside saveSessionStore, so no manual sync needed.
+}
+
+/**
+ * Remove the thread binding from a session.  Returns `true` if the session
+ * existed and had a binding that was removed.
+ */
+export async function unbindSessionFromThread(params: {
+  storePath: string;
+  sessionKey: string;
+}): Promise<boolean> {
+  const { updateSessionStore } = await import("./sessions/store.js");
+  const { storePath, sessionKey } = params;
+
+  let removed = false;
+  await updateSessionStore(storePath, (store) => {
+    const entry = store[sessionKey];
+    if (!entry?.threadBinding) return;
+    delete entry.threadBinding;
+    removed = true;
+  });
+  // Registry is rebuilt inside saveSessionStore, so the unbind is reflected.
+  return removed;
+}
+
+/**
+ * Query: find all session keys bound to a specific thread.
+ */
+export function findSessionsByThread(params: {
+  channel: string;
+  accountId?: string;
+  threadId: string;
+}): string[] {
+  const threadKey = buildThreadKey(params);
+  return getThreadRegistry().lookup(threadKey);
+}
+
+/**
+ * Query: return the ThreadBinding stored on a session entry, or `undefined`.
+ *
+ * Uses a dynamic import to avoid circular dependency issues at module-load
+ * time.  Because `loadSessionStore` is synchronous (reads from cache / disk)
+ * and the import is cached after the first call, the overall overhead is
+ * negligible.
+ */
+export async function getSessionThreadBinding(params: {
+  storePath: string;
+  sessionKey: string;
+}): Promise<ThreadBinding | undefined> {
+  const { loadSessionStore } = await import("./sessions/store.js");
+  const store = loadSessionStore(params.storePath);
+  return store[params.sessionKey]?.threadBinding;
+}

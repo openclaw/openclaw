@@ -1,10 +1,22 @@
-import { afterEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  saveSessionStore,
+} from "../sessions/store.js";
 import {
   ThreadBindingRegistry,
+  bindSessionToThread,
   buildThreadKey,
+  findSessionsByThread,
+  getSessionThreadBinding,
   getThreadRegistry,
   parseThreadKey,
   resetThreadRegistry,
+  unbindSessionFromThread,
   type ThreadBinding,
 } from "../thread-registry.js";
 
@@ -252,6 +264,171 @@ describe("ThreadBindingRegistry", () => {
       resetThreadRegistry();
       const after = getThreadRegistry();
       expect(before).not.toBe(after);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Binding lifecycle helpers (Phase 2)
+// ---------------------------------------------------------------------------
+
+describe("binding lifecycle helpers", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  const makeBinding = (overrides: Partial<ThreadBinding> = {}): ThreadBinding => ({
+    channel: "slack",
+    threadId: "ts-default",
+    mode: "thread-only",
+    boundAt: Date.now(),
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    resetThreadRegistry();
+    clearSessionStoreCacheForTest();
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "thread-reg-lifecycle-"));
+    storePath = path.join(tmpDir, "sessions.json");
+    // Seed with an empty store
+    await saveSessionStore(storePath, {});
+  });
+
+  afterEach(async () => {
+    resetThreadRegistry();
+    clearSessionStoreCacheForTest();
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  describe("bindSessionToThread", () => {
+    it("creates a new entry with threadBinding if session did not exist", async () => {
+      const binding = makeBinding({ channel: "slack", accountId: "T1", threadId: "ts1" });
+      await bindSessionToThread({ storePath, sessionKey: "agent:main:sub:aaa", binding });
+
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(store["agent:main:sub:aaa"]).toBeDefined();
+      expect(store["agent:main:sub:aaa"].threadBinding).toEqual(binding);
+
+      // Registry should be updated
+      const registry = getThreadRegistry();
+      expect(registry.lookup("slack:T1:ts1")).toContain("agent:main:sub:aaa");
+    });
+
+    it("adds threadBinding to an existing session entry", async () => {
+      // Seed a session
+      await saveSessionStore(storePath, {
+        "agent:main:sub:bbb": {
+          sessionId: "bbb",
+          updatedAt: Date.now(),
+          label: "existing",
+        } as any,
+      });
+
+      const binding = makeBinding({ channel: "discord", threadId: "ch1" });
+      await bindSessionToThread({ storePath, sessionKey: "agent:main:sub:bbb", binding });
+
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(store["agent:main:sub:bbb"].threadBinding).toEqual(binding);
+      expect(store["agent:main:sub:bbb"].label).toBe("existing"); // preserved
+    });
+  });
+
+  describe("unbindSessionFromThread", () => {
+    it("removes threadBinding from a bound session", async () => {
+      const binding = makeBinding({ channel: "slack", accountId: "T2", threadId: "ts2" });
+      await saveSessionStore(storePath, {
+        "agent:main:sub:ccc": {
+          sessionId: "ccc",
+          updatedAt: Date.now(),
+          threadBinding: binding,
+        } as any,
+      });
+      // Force registry rebuild
+      loadSessionStore(storePath, { skipCache: true });
+
+      const result = await unbindSessionFromThread({ storePath, sessionKey: "agent:main:sub:ccc" });
+      expect(result).toBe(true);
+
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(store["agent:main:sub:ccc"].threadBinding).toBeUndefined();
+
+      // Registry should also be updated
+      expect(getThreadRegistry().isBound("agent:main:sub:ccc")).toBe(false);
+    });
+
+    it("returns false when session has no binding", async () => {
+      await saveSessionStore(storePath, {
+        "agent:main:sub:ddd": {
+          sessionId: "ddd",
+          updatedAt: Date.now(),
+        } as any,
+      });
+
+      const result = await unbindSessionFromThread({ storePath, sessionKey: "agent:main:sub:ddd" });
+      expect(result).toBe(false);
+    });
+
+    it("returns false when session does not exist", async () => {
+      const result = await unbindSessionFromThread({ storePath, sessionKey: "nonexistent" });
+      expect(result).toBe(false);
+    });
+  });
+
+  describe("findSessionsByThread", () => {
+    it("returns bound sessions from registry", async () => {
+      const binding = makeBinding({ channel: "slack", accountId: "T1", threadId: "ts-shared" });
+      await saveSessionStore(storePath, {
+        "session-1": { sessionId: "s1", updatedAt: Date.now(), threadBinding: binding } as any,
+        "session-2": {
+          sessionId: "s2",
+          updatedAt: Date.now(),
+          threadBinding: { ...binding },
+        } as any,
+      });
+      // Force registry rebuild
+      loadSessionStore(storePath, { skipCache: true });
+
+      const result = findSessionsByThread({
+        channel: "slack",
+        accountId: "T1",
+        threadId: "ts-shared",
+      });
+      expect(result).toHaveLength(2);
+      expect(new Set(result)).toEqual(new Set(["session-1", "session-2"]));
+    });
+
+    it("returns empty array when no sessions are bound", () => {
+      const result = findSessionsByThread({ channel: "slack", threadId: "unknown" });
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe("getSessionThreadBinding", () => {
+    it("returns the binding from a session entry", async () => {
+      const binding = makeBinding({ channel: "telegram", threadId: "42" });
+      await saveSessionStore(storePath, {
+        "agent:dev:sub:eee": {
+          sessionId: "eee",
+          updatedAt: Date.now(),
+          threadBinding: binding,
+        } as any,
+      });
+
+      const result = await getSessionThreadBinding({ storePath, sessionKey: "agent:dev:sub:eee" });
+      expect(result).toEqual(binding);
+    });
+
+    it("returns undefined when session has no binding", async () => {
+      await saveSessionStore(storePath, {
+        "agent:dev:sub:fff": { sessionId: "fff", updatedAt: Date.now() } as any,
+      });
+
+      const result = await getSessionThreadBinding({ storePath, sessionKey: "agent:dev:sub:fff" });
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined when session does not exist", async () => {
+      const result = await getSessionThreadBinding({ storePath, sessionKey: "nonexistent" });
+      expect(result).toBeUndefined();
     });
   });
 });

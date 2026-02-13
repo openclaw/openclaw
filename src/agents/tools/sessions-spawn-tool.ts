@@ -4,6 +4,8 @@ import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { bindSessionToThread, type ThreadBinding } from "../../config/thread-registry.js";
 import { callGateway } from "../../gateway/call.js";
 import {
   isSubagentSessionKey,
@@ -23,6 +25,37 @@ import {
   resolveMainSessionAlias,
 } from "./sessions-helpers.js";
 
+/** Parameters for thread binding when spawning a child agent. */
+type ThreadBindingSpawnParams = {
+  mode: "bind" | "create";
+  channel: string;
+  accountId?: string;
+  threadId?: string;
+  to?: string;
+  initialMessage?: string;
+  deliveryMode?: "thread-only" | "thread+announcer" | "announcer-only";
+  label?: string;
+};
+
+const ThreadBindingSchema = Type.Optional(
+  Type.Object({
+    mode: Type.Union([Type.Literal("bind"), Type.Literal("create")]),
+    channel: Type.String(),
+    accountId: Type.Optional(Type.String()),
+    threadId: Type.Optional(Type.String()),
+    to: Type.Optional(Type.String()),
+    initialMessage: Type.Optional(Type.String()),
+    deliveryMode: Type.Optional(
+      Type.Union([
+        Type.Literal("thread-only"),
+        Type.Literal("thread+announcer"),
+        Type.Literal("announcer-only"),
+      ]),
+    ),
+    label: Type.Optional(Type.String()),
+  }),
+);
+
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
   label: Type.Optional(Type.String()),
@@ -33,6 +66,7 @@ const SessionsSpawnToolSchema = Type.Object({
   // Back-compat alias. Prefer runTimeoutSeconds.
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
+  threadBinding: ThreadBindingSchema,
 });
 
 function splitModelRef(ref?: string) {
@@ -234,11 +268,112 @@ export function createSessionsSpawnTool(opts?: {
           });
         }
       }
+      // -------------------------------------------------------------------
+      // Thread binding (optional)
+      // -------------------------------------------------------------------
+      const threadBindingParams = params.threadBinding as ThreadBindingSpawnParams | undefined;
+      let resolvedThreadBinding: ThreadBinding | undefined;
+
+      if (threadBindingParams) {
+        const deliveryMode = threadBindingParams.deliveryMode ?? "thread-only";
+
+        if (threadBindingParams.mode === "bind") {
+          // Bind to an existing thread
+          if (!threadBindingParams.threadId) {
+            return jsonResult({
+              status: "error",
+              error: 'threadBinding.threadId is required when mode is "bind"',
+            });
+          }
+          resolvedThreadBinding = {
+            channel: threadBindingParams.channel,
+            accountId: threadBindingParams.accountId,
+            threadId: threadBindingParams.threadId,
+            mode: deliveryMode,
+            boundAt: Date.now(),
+            createdBy: opts?.agentSessionKey,
+            label: threadBindingParams.label,
+          };
+        } else if (threadBindingParams.mode === "create") {
+          // Create a new thread by posting an initial message
+          if (!threadBindingParams.to) {
+            return jsonResult({
+              status: "error",
+              error: 'threadBinding.to (channel/group ID) is required when mode is "create"',
+            });
+          }
+          const initialMessage =
+            threadBindingParams.initialMessage ?? `🤖 Agent spawned: ${task.slice(0, 100)}`;
+
+          // For now, only Slack thread creation is supported.
+          if (threadBindingParams.channel === "slack") {
+            try {
+              const { sendMessageSlack } = await import("../../slack/send.js");
+              const result = await sendMessageSlack(threadBindingParams.to, initialMessage, {
+                accountId: threadBindingParams.accountId ?? undefined,
+              });
+              resolvedThreadBinding = {
+                channel: "slack",
+                accountId: threadBindingParams.accountId,
+                threadId: result.messageId,
+                threadRootId: result.messageId,
+                mode: deliveryMode,
+                boundAt: Date.now(),
+                createdBy: opts?.agentSessionKey,
+                label: threadBindingParams.label,
+              };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return jsonResult({
+                status: "error",
+                error: `Failed to create Slack thread: ${msg}`,
+              });
+            }
+          } else {
+            return jsonResult({
+              status: "error",
+              error: `Thread creation for channel "${threadBindingParams.channel}" is not yet supported. Use mode "bind" with an existing threadId.`,
+            });
+          }
+        }
+
+        // Persist the binding in the session store + registry
+        if (resolvedThreadBinding) {
+          try {
+            const storePath = resolveStorePath(undefined, { agentId: targetAgentId });
+            await bindSessionToThread({
+              storePath,
+              sessionKey: childSessionKey,
+              binding: resolvedThreadBinding,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return jsonResult({
+              status: "error",
+              error: `Failed to persist thread binding: ${msg}`,
+              childSessionKey,
+            });
+          }
+        }
+      }
+
+      // If a thread binding was established, override requester origin to route
+      // the spawned agent's responses to the bound thread.
+      const effectiveOrigin =
+        resolvedThreadBinding && resolvedThreadBinding.mode !== "announcer-only"
+          ? normalizeDeliveryContext({
+              channel: resolvedThreadBinding.channel as GatewayMessageChannel,
+              accountId: resolvedThreadBinding.accountId,
+              to: requesterOrigin?.to ?? undefined,
+              threadId: resolvedThreadBinding.threadId,
+            })
+          : requesterOrigin;
+
       const childSystemPrompt = buildSubagentSystemPrompt({
         requesterSessionKey,
-        requesterOrigin,
+        requesterOrigin: effectiveOrigin,
         childSessionKey,
-        label: label || undefined,
+        label: label || threadBindingParams?.label || undefined,
         task,
       });
 
@@ -250,18 +385,18 @@ export function createSessionsSpawnTool(opts?: {
           params: {
             message: task,
             sessionKey: childSessionKey,
-            channel: requesterOrigin?.channel,
-            to: requesterOrigin?.to ?? undefined,
-            accountId: requesterOrigin?.accountId ?? undefined,
+            channel: effectiveOrigin?.channel,
+            to: effectiveOrigin?.to ?? undefined,
+            accountId: effectiveOrigin?.accountId ?? undefined,
             threadId:
-              requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+              effectiveOrigin?.threadId != null ? String(effectiveOrigin.threadId) : undefined,
             idempotencyKey: childIdem,
             deliver: false,
             lane: AGENT_LANE_SUBAGENT,
             extraSystemPrompt: childSystemPrompt,
             thinking: thinkingOverride,
             timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
-            label: label || undefined,
+            label: label || threadBindingParams?.label || undefined,
             spawnedBy: spawnedByKey,
             groupId: opts?.agentGroupId ?? undefined,
             groupChannel: opts?.agentGroupChannel ?? undefined,
@@ -287,11 +422,11 @@ export function createSessionsSpawnTool(opts?: {
         runId: childRunId,
         childSessionKey,
         requesterSessionKey: requesterInternalKey,
-        requesterOrigin,
+        requesterOrigin: effectiveOrigin,
         requesterDisplayKey,
         task,
         cleanup,
-        label: label || undefined,
+        label: label || threadBindingParams?.label || undefined,
         runTimeoutSeconds,
       });
 
@@ -301,6 +436,14 @@ export function createSessionsSpawnTool(opts?: {
         runId: childRunId,
         modelApplied: resolvedModel ? modelApplied : undefined,
         warning: modelWarning,
+        threadBinding: resolvedThreadBinding
+          ? {
+              threadId: resolvedThreadBinding.threadId,
+              channel: resolvedThreadBinding.channel,
+              mode: resolvedThreadBinding.mode,
+              label: resolvedThreadBinding.label,
+            }
+          : undefined,
       });
     },
   };

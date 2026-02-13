@@ -35,7 +35,10 @@ import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { buildPairingReply } from "../../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+import {
+  resolveSessionKeyWithBinding,
+  resolveThreadSessionKeys,
+} from "../../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../../security/channel-metadata.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
@@ -197,11 +200,21 @@ export async function prepareSlackMessage(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId: isThreadReply ? threadTs : undefined,
-    parentSessionKey: isThreadReply && ctx.threadInheritParent ? baseSessionKey : undefined,
-  });
+
+  // Check thread-binding registry first (explicit bindings take priority).
+  // Falls back to the legacy suffix-based key when no binding is found.
+  const threadKeys = isThreadReply
+    ? resolveSessionKeyWithBinding({
+        baseSessionKey,
+        channel: "slack",
+        accountId: account.accountId,
+        threadId: threadTs,
+        parentSessionKey: ctx.threadInheritParent ? baseSessionKey : undefined,
+      })
+    : resolveThreadSessionKeys({
+        baseSessionKey,
+        threadId: undefined,
+      });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
