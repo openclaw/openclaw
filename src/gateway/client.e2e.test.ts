@@ -70,6 +70,7 @@ describe("GatewayClient", () => {
       const client = new GatewayClient({
         url: `ws://127.0.0.1:${port}`,
         connectDelayMs: 0,
+        tickWatchMinIntervalMs: 5,
         onClose: (code, reason) => resolve({ code, reason }),
       });
       client.start();
