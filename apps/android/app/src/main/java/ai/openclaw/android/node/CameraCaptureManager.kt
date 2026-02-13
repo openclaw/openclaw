@@ -15,6 +15,9 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
+import androidx.camera.video.FallbackStrategy
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
 import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
@@ -36,6 +39,7 @@ import kotlin.coroutines.resumeWithException
 
 class CameraCaptureManager(private val context: Context) {
   data class Payload(val payloadJson: String)
+  data class FilePayload(val file: File, val durationMs: Long, val hasAudio: Boolean)
 
   @Volatile private var lifecycleOwner: LifecycleOwner? = null
   @Volatile private var permissionRequester: PermissionRequester? = null
@@ -77,8 +81,8 @@ class CameraCaptureManager(private val context: Context) {
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
       val facing = parseFacing(paramsJson) ?: "front"
-      val quality = (parseQuality(paramsJson) ?: 0.9).coerceIn(0.1, 1.0)
-      val maxWidth = parseMaxWidth(paramsJson)
+      val quality = (parseQuality(paramsJson) ?: 0.5).coerceIn(0.1, 1.0)
+      val maxWidth = parseMaxWidth(paramsJson) ?: 800
 
       val provider = context.cameraProvider()
       val capture = ImageCapture.Builder().build()
@@ -93,7 +97,7 @@ class CameraCaptureManager(private val context: Context) {
         ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
       val rotated = rotateBitmapByExif(decoded, orientation)
       val scaled =
-        if (maxWidth != null && maxWidth > 0 && rotated.width > maxWidth) {
+        if (maxWidth > 0 && rotated.width > maxWidth) {
           val h =
             (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
               .toInt()
@@ -137,7 +141,7 @@ class CameraCaptureManager(private val context: Context) {
     }
 
   @SuppressLint("MissingPermission")
-  suspend fun clip(paramsJson: String?): Payload =
+  suspend fun clip(paramsJson: String?): FilePayload =
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
@@ -146,19 +150,49 @@ class CameraCaptureManager(private val context: Context) {
       val includeAudio = parseIncludeAudio(paramsJson) ?: true
       if (includeAudio) ensureMicPermission()
 
+      android.util.Log.w("CameraCaptureManager", "clip: start facing=$facing duration=$durationMs audio=$includeAudio")
+
       val provider = context.cameraProvider()
-      val recorder = Recorder.Builder().build()
+      android.util.Log.w("CameraCaptureManager", "clip: got camera provider")
+
+      // Use LOWEST quality for smallest files over WebSocket
+      val recorder = Recorder.Builder()
+        .setQualitySelector(
+          QualitySelector.from(Quality.LOWEST, FallbackStrategy.lowerQualityOrHigherThan(Quality.LOWEST))
+        )
+        .build()
       val videoCapture = VideoCapture.withOutput(recorder)
       val selector =
         if (facing == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
 
+      // CameraX requires a Preview use case for the camera to start producing frames;
+      // without it, the encoder may get no data (ERROR_NO_VALID_DATA).
+      val preview = androidx.camera.core.Preview.Builder().build()
+      // Provide a dummy SurfaceTexture so the preview pipeline activates
+      val surfaceTexture = android.graphics.SurfaceTexture(0)
+      surfaceTexture.setDefaultBufferSize(640, 480)
+      preview.setSurfaceProvider { request ->
+        val surface = android.view.Surface(surfaceTexture)
+        request.provideSurface(surface, context.mainExecutor()) { result ->
+          surface.release()
+          surfaceTexture.release()
+        }
+      }
+
       provider.unbindAll()
-      provider.bindToLifecycle(owner, selector, videoCapture)
+      android.util.Log.w("CameraCaptureManager", "clip: binding preview + videoCapture to lifecycle")
+      val camera = provider.bindToLifecycle(owner, selector, preview, videoCapture)
+      android.util.Log.w("CameraCaptureManager", "clip: bound, cameraInfo=${camera.cameraInfo}")
+
+      // Give camera pipeline time to initialize before recording
+      android.util.Log.w("CameraCaptureManager", "clip: warming up camera 1.5s...")
+      kotlinx.coroutines.delay(1_500)
 
       val file = File.createTempFile("openclaw-clip-", ".mp4")
       val outputOptions = FileOutputOptions.Builder(file).build()
 
       val finalized = kotlinx.coroutines.CompletableDeferred<VideoRecordEvent.Finalize>()
+      android.util.Log.w("CameraCaptureManager", "clip: starting recording to ${file.absolutePath}")
       val recording: Recording =
         videoCapture.output
           .prepareRecording(context, outputOptions)
@@ -166,35 +200,49 @@ class CameraCaptureManager(private val context: Context) {
             if (includeAudio) withAudioEnabled()
           }
           .start(context.mainExecutor()) { event ->
+            android.util.Log.w("CameraCaptureManager", "clip: event ${event.javaClass.simpleName}")
+            if (event is VideoRecordEvent.Status) {
+              android.util.Log.w("CameraCaptureManager", "clip: recording status update")
+            }
             if (event is VideoRecordEvent.Finalize) {
+              android.util.Log.w("CameraCaptureManager", "clip: finalize hasError=${event.hasError()} error=${event.error} cause=${event.cause}")
               finalized.complete(event)
             }
           }
 
+      android.util.Log.w("CameraCaptureManager", "clip: recording started, delaying ${durationMs}ms")
       try {
         kotlinx.coroutines.delay(durationMs.toLong())
       } finally {
+        android.util.Log.w("CameraCaptureManager", "clip: stopping recording")
         recording.stop()
       }
 
       val finalizeEvent =
         try {
-          withTimeout(10_000) { finalized.await() }
+          withTimeout(15_000) { finalized.await() }
         } catch (err: Throwable) {
-          file.delete()
+          android.util.Log.e("CameraCaptureManager", "clip: finalize timed out", err)
+          withContext(Dispatchers.IO) { file.delete() }
+          provider.unbindAll()
           throw IllegalStateException("UNAVAILABLE: camera clip finalize timed out")
         }
       if (finalizeEvent.hasError()) {
-        file.delete()
-        throw IllegalStateException("UNAVAILABLE: camera clip failed")
+        android.util.Log.e("CameraCaptureManager", "clip: FAILED error=${finalizeEvent.error}, cause=${finalizeEvent.cause}", finalizeEvent.cause)
+        // Check file size for debugging
+        val fileSize = withContext(Dispatchers.IO) { if (file.exists()) file.length() else -1 }
+        android.util.Log.e("CameraCaptureManager", "clip: file exists=${file.exists()} size=$fileSize")
+        withContext(Dispatchers.IO) { file.delete() }
+        provider.unbindAll()
+        throw IllegalStateException("UNAVAILABLE: camera clip failed (error=${finalizeEvent.error})")
       }
 
-      val bytes = file.readBytes()
-      file.delete()
-      val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-      Payload(
-        """{"format":"mp4","base64":"$base64","durationMs":$durationMs,"hasAudio":${includeAudio}}""",
-      )
+      val fileSize = withContext(Dispatchers.IO) { file.length() }
+      android.util.Log.w("CameraCaptureManager", "clip: SUCCESS file size=$fileSize")
+
+      provider.unbindAll()
+
+      FilePayload(file = file, durationMs = durationMs.toLong(), hasAudio = includeAudio)
     }
 
   private fun rotateBitmapByExif(bitmap: Bitmap, orientation: Int): Bitmap {

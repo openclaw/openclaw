@@ -8,6 +8,7 @@ import {
   parseCameraClipPayload,
   parseCameraSnapPayload,
   writeBase64ToFile,
+  writeUrlToFile,
 } from "../../cli/nodes-camera.js";
 import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
 import {
@@ -230,14 +231,20 @@ export function createNodesTool(options?: {
                 facing,
                 ext: isJpeg ? "jpg" : "png",
               });
-              await writeBase64ToFile(filePath, payload.base64);
+              if (payload.url) {
+                await writeUrlToFile(filePath, payload.url);
+              } else if (payload.base64) {
+                await writeBase64ToFile(filePath, payload.base64);
+              }
               content.push({ type: "text", text: `MEDIA:${filePath}` });
-              content.push({
-                type: "image",
-                data: payload.base64,
-                mimeType:
-                  imageMimeFromFormat(payload.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
-              });
+              if (payload.base64) {
+                content.push({
+                  type: "image",
+                  data: payload.base64,
+                  mimeType:
+                    imageMimeFromFormat(payload.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
+                });
+              }
               details.push({
                 facing,
                 path: filePath,
@@ -300,7 +307,11 @@ export function createNodesTool(options?: {
               facing,
               ext: payload.format,
             });
-            await writeBase64ToFile(filePath, payload.base64);
+            if (payload.url) {
+              await writeUrlToFile(filePath, payload.url);
+            } else if (payload.base64) {
+              await writeBase64ToFile(filePath, payload.base64);
+            }
             return {
               content: [{ type: "text", text: `FILE:${filePath}` }],
               details: {

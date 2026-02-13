@@ -3,8 +3,6 @@ package ai.openclaw.android
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.location.LocationManager
-import android.os.Build
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import ai.openclaw.android.chat.ChatController
@@ -14,45 +12,26 @@ import ai.openclaw.android.chat.ChatSessionEntry
 import ai.openclaw.android.chat.OutgoingAttachment
 import ai.openclaw.android.gateway.DeviceAuthStore
 import ai.openclaw.android.gateway.DeviceIdentityStore
-import ai.openclaw.android.gateway.GatewayClientInfo
-import ai.openclaw.android.gateway.GatewayConnectOptions
 import ai.openclaw.android.gateway.GatewayDiscovery
 import ai.openclaw.android.gateway.GatewayEndpoint
 import ai.openclaw.android.gateway.GatewaySession
-import ai.openclaw.android.gateway.GatewayTlsParams
-import ai.openclaw.android.node.CameraCaptureManager
-import ai.openclaw.android.node.LocationCaptureManager
-import ai.openclaw.android.BuildConfig
-import ai.openclaw.android.node.CanvasController
-import ai.openclaw.android.node.ScreenRecordManager
-import ai.openclaw.android.node.SmsManager
-import ai.openclaw.android.protocol.OpenClawCapability
-import ai.openclaw.android.protocol.OpenClawCameraCommand
+import ai.openclaw.android.node.*
 import ai.openclaw.android.protocol.OpenClawCanvasA2UIAction
-import ai.openclaw.android.protocol.OpenClawCanvasA2UICommand
-import ai.openclaw.android.protocol.OpenClawCanvasCommand
-import ai.openclaw.android.protocol.OpenClawScreenCommand
-import ai.openclaw.android.protocol.OpenClawLocationCommand
-import ai.openclaw.android.protocol.OpenClawSmsCommand
 import ai.openclaw.android.voice.TalkModeManager
 import ai.openclaw.android.voice.VoiceWakeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -112,6 +91,80 @@ class NodeRuntime(context: Context) {
   val discoveryStatusText: StateFlow<String> = discovery.statusText
 
   private val identityStore = DeviceIdentityStore(appContext)
+  private var connectedEndpoint: GatewayEndpoint? = null
+
+  private val cameraHandler: CameraHandler = CameraHandler(
+    appContext = appContext,
+    camera = camera,
+    prefs = prefs,
+    connectedEndpoint = { connectedEndpoint },
+    externalAudioCaptureActive = externalAudioCaptureActive,
+    showCameraHud = ::showCameraHud,
+    triggerCameraFlash = ::triggerCameraFlash,
+    invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
+  )
+
+  private val debugHandler: DebugHandler = DebugHandler(
+    appContext = appContext,
+    identityStore = identityStore,
+  )
+
+  private val appUpdateHandler: AppUpdateHandler = AppUpdateHandler(
+    appContext = appContext,
+    connectedEndpoint = { connectedEndpoint },
+  )
+
+  private val locationHandler: LocationHandler = LocationHandler(
+    appContext = appContext,
+    location = location,
+    json = json,
+    isForeground = { _isForeground.value },
+    locationMode = { locationMode.value },
+    locationPreciseEnabled = { locationPreciseEnabled.value },
+  )
+
+  private val screenHandler: ScreenHandler = ScreenHandler(
+    screenRecorder = screenRecorder,
+    setScreenRecordActive = { _screenRecordActive.value = it },
+    invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
+  )
+
+  private val smsHandlerImpl: SmsHandler = SmsHandler(
+    sms = sms,
+  )
+
+  private val a2uiHandler: A2UIHandler = A2UIHandler(
+    canvas = canvas,
+    json = json,
+    getNodeCanvasHostUrl = { nodeSession.currentCanvasHostUrl() },
+    getOperatorCanvasHostUrl = { operatorSession.currentCanvasHostUrl() },
+  )
+
+  private val connectionManager: ConnectionManager = ConnectionManager(
+    prefs = prefs,
+    cameraEnabled = { cameraEnabled.value },
+    locationMode = { locationMode.value },
+    voiceWakeMode = { voiceWakeMode.value },
+    smsAvailable = { sms.canSendSms() },
+    hasRecordAudioPermission = { hasRecordAudioPermission() },
+    manualTls = { manualTls.value },
+  )
+
+  private val invokeDispatcher: InvokeDispatcher = InvokeDispatcher(
+    canvas = canvas,
+    cameraHandler = cameraHandler,
+    locationHandler = locationHandler,
+    screenHandler = screenHandler,
+    smsHandler = smsHandlerImpl,
+    a2uiHandler = a2uiHandler,
+    debugHandler = debugHandler,
+    appUpdateHandler = appUpdateHandler,
+    isForeground = { _isForeground.value },
+    cameraEnabled = { cameraEnabled.value },
+    locationEnabled = { locationMode.value != LocationMode.Off },
+  )
+
+  private lateinit var gatewayEventHandler: GatewayEventHandler
 
   private val _isConnected = MutableStateFlow(false)
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -149,7 +202,6 @@ class NodeRuntime(context: Context) {
   private var nodeConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
-  private var connectedEndpoint: GatewayEndpoint? = null
 
   private val operatorSession =
     GatewaySession(
@@ -165,7 +217,7 @@ class NodeRuntime(context: Context) {
         applyMainSessionKey(mainSessionKey)
         updateStatus()
         scope.launch { refreshBrandingFromGateway() }
-        scope.launch { refreshWakeWordsFromGateway() }
+        scope.launch { gatewayEventHandler.refreshWakeWordsFromGateway() }
       },
       onDisconnected = { message ->
         operatorConnected = false
@@ -206,7 +258,7 @@ class NodeRuntime(context: Context) {
       },
       onEvent = { _, _ -> },
       onInvoke = { req ->
-        handleInvoke(req.command, req.paramsJson)
+        invokeDispatcher.handleInvoke(req.command, req.paramsJson)
       },
       onTlsFingerprint = { stableId, fingerprint ->
         prefs.saveGatewayTlsFingerprint(stableId, fingerprint)
@@ -231,8 +283,7 @@ class NodeRuntime(context: Context) {
   }
 
   private fun applyMainSessionKey(candidate: String?) {
-    val trimmed = candidate?.trim().orEmpty()
-    if (trimmed.isEmpty()) return
+    val trimmed = normalizeMainKey(candidate) ?: return
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
@@ -258,7 +309,7 @@ class NodeRuntime(context: Context) {
   }
 
   private fun maybeNavigateToA2uiOnConnect() {
-    val a2uiUrl = resolveA2uiHostUrl() ?: return
+    val a2uiUrl = a2uiHandler.resolveA2uiHostUrl() ?: return
     val current = canvas.currentUrl()?.trim().orEmpty()
     if (current.isEmpty() || current == lastAutoA2uiUrl) {
       lastAutoA2uiUrl = a2uiUrl
@@ -284,12 +335,12 @@ class NodeRuntime(context: Context) {
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
+  val gatewayToken: StateFlow<String> = prefs.gatewayToken
+  fun setGatewayToken(value: String) = prefs.setGatewayToken(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
 
   private var didAutoConnect = false
-  private var suppressWakeWordsSync = false
-  private var wakeWordsSyncJob: Job? = null
 
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   val chatSessionId: StateFlow<String?> = chat.sessionId
@@ -303,6 +354,14 @@ class NodeRuntime(context: Context) {
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
 
   init {
+    gatewayEventHandler = GatewayEventHandler(
+      scope = scope,
+      prefs = prefs,
+      json = json,
+      operatorSession = operatorSession,
+      isConnected = { _isConnected.value },
+    )
+
     scope.launch {
       combine(
         voiceWakeMode,
@@ -434,7 +493,7 @@ class NodeRuntime(context: Context) {
 
   fun setWakeWords(words: List<String>) {
     prefs.setWakeWords(words)
-    scheduleWakeWordsSyncIfNeeded()
+    gatewayEventHandler.scheduleWakeWordsSyncIfNeeded()
   }
 
   fun resetWakeWordsDefaults() {
@@ -449,110 +508,13 @@ class NodeRuntime(context: Context) {
     prefs.setTalkEnabled(value)
   }
 
-  private fun buildInvokeCommands(): List<String> =
-    buildList {
-      add(OpenClawCanvasCommand.Present.rawValue)
-      add(OpenClawCanvasCommand.Hide.rawValue)
-      add(OpenClawCanvasCommand.Navigate.rawValue)
-      add(OpenClawCanvasCommand.Eval.rawValue)
-      add(OpenClawCanvasCommand.Snapshot.rawValue)
-      add(OpenClawCanvasA2UICommand.Push.rawValue)
-      add(OpenClawCanvasA2UICommand.PushJSONL.rawValue)
-      add(OpenClawCanvasA2UICommand.Reset.rawValue)
-      add(OpenClawScreenCommand.Record.rawValue)
-      if (cameraEnabled.value) {
-        add(OpenClawCameraCommand.Snap.rawValue)
-        add(OpenClawCameraCommand.Clip.rawValue)
-      }
-      if (locationMode.value != LocationMode.Off) {
-        add(OpenClawLocationCommand.Get.rawValue)
-      }
-      if (sms.canSendSms()) {
-        add(OpenClawSmsCommand.Send.rawValue)
-      }
-    }
-
-  private fun buildCapabilities(): List<String> =
-    buildList {
-      add(OpenClawCapability.Canvas.rawValue)
-      add(OpenClawCapability.Screen.rawValue)
-      if (cameraEnabled.value) add(OpenClawCapability.Camera.rawValue)
-      if (sms.canSendSms()) add(OpenClawCapability.Sms.rawValue)
-      if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
-        add(OpenClawCapability.VoiceWake.rawValue)
-      }
-      if (locationMode.value != LocationMode.Off) {
-        add(OpenClawCapability.Location.rawValue)
-      }
-    }
-
-  private fun resolvedVersionName(): String {
-    val versionName = BuildConfig.VERSION_NAME.trim().ifEmpty { "dev" }
-    return if (BuildConfig.DEBUG && !versionName.contains("dev", ignoreCase = true)) {
-      "$versionName-dev"
-    } else {
-      versionName
-    }
-  }
-
-  private fun resolveModelIdentifier(): String? {
-    return listOfNotNull(Build.MANUFACTURER, Build.MODEL)
-      .joinToString(" ")
-      .trim()
-      .ifEmpty { null }
-  }
-
-  private fun buildUserAgent(): String {
-    val version = resolvedVersionName()
-    val release = Build.VERSION.RELEASE?.trim().orEmpty()
-    val releaseLabel = if (release.isEmpty()) "unknown" else release
-    return "OpenClawAndroid/$version (Android $releaseLabel; SDK ${Build.VERSION.SDK_INT})"
-  }
-
-  private fun buildClientInfo(clientId: String, clientMode: String): GatewayClientInfo {
-    return GatewayClientInfo(
-      id = clientId,
-      displayName = displayName.value,
-      version = resolvedVersionName(),
-      platform = "android",
-      mode = clientMode,
-      instanceId = instanceId.value,
-      deviceFamily = "Android",
-      modelIdentifier = resolveModelIdentifier(),
-    )
-  }
-
-  private fun buildNodeConnectOptions(): GatewayConnectOptions {
-    return GatewayConnectOptions(
-      role = "node",
-      scopes = emptyList(),
-      caps = buildCapabilities(),
-      commands = buildInvokeCommands(),
-      permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
-      userAgent = buildUserAgent(),
-    )
-  }
-
-  private fun buildOperatorConnectOptions(): GatewayConnectOptions {
-    return GatewayConnectOptions(
-      role = "operator",
-      scopes = emptyList(),
-      caps = emptyList(),
-      commands = emptyList(),
-      permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-control-ui", clientMode = "ui"),
-      userAgent = buildUserAgent(),
-    )
-  }
-
   fun refreshGatewayConnection() {
     val endpoint = connectedEndpoint ?: return
     val token = prefs.loadGatewayToken()
     val password = prefs.loadGatewayPassword()
-    val tls = resolveTlsParams(endpoint)
-    operatorSession.connect(endpoint, token, password, buildOperatorConnectOptions(), tls)
-    nodeSession.connect(endpoint, token, password, buildNodeConnectOptions(), tls)
+    val tls = connectionManager.resolveTlsParams(endpoint)
+    operatorSession.connect(endpoint, token, password, connectionManager.buildOperatorConnectOptions(), tls)
+    nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls)
     operatorSession.reconnect()
     nodeSession.reconnect()
   }
@@ -564,35 +526,14 @@ class NodeRuntime(context: Context) {
     updateStatus()
     val token = prefs.loadGatewayToken()
     val password = prefs.loadGatewayPassword()
-    val tls = resolveTlsParams(endpoint)
-    operatorSession.connect(endpoint, token, password, buildOperatorConnectOptions(), tls)
-    nodeSession.connect(endpoint, token, password, buildNodeConnectOptions(), tls)
+    val tls = connectionManager.resolveTlsParams(endpoint)
+    operatorSession.connect(endpoint, token, password, connectionManager.buildOperatorConnectOptions(), tls)
+    nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls)
   }
 
   private fun hasRecordAudioPermission(): Boolean {
     return (
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
-        PackageManager.PERMISSION_GRANTED
-      )
-  }
-
-  private fun hasFineLocationPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-      )
-  }
-
-  private fun hasCoarseLocationPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-      )
-  }
-
-  private fun hasBackgroundLocationPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
       )
   }
@@ -611,42 +552,6 @@ class NodeRuntime(context: Context) {
     connectedEndpoint = null
     operatorSession.disconnect()
     nodeSession.disconnect()
-  }
-
-  private fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
-    val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)
-    val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
-    val manual = endpoint.stableId.startsWith("manual|")
-
-    if (manual) {
-      if (!manualTls.value) return null
-      return GatewayTlsParams(
-        required = true,
-        expectedFingerprint = endpoint.tlsFingerprintSha256 ?: stored,
-        allowTOFU = stored == null,
-        stableId = endpoint.stableId,
-      )
-    }
-
-    if (hinted) {
-      return GatewayTlsParams(
-        required = true,
-        expectedFingerprint = endpoint.tlsFingerprintSha256 ?: stored,
-        allowTOFU = stored == null,
-        stableId = endpoint.stableId,
-      )
-    }
-
-    if (!stored.isNullOrBlank()) {
-      return GatewayTlsParams(
-        required = true,
-        expectedFingerprint = stored,
-        allowTOFU = false,
-        stableId = endpoint.stableId,
-      )
-    }
-
-    return null
   }
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
@@ -752,58 +657,12 @@ class NodeRuntime(context: Context) {
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
     if (event == "voicewake.changed") {
-      if (payloadJson.isNullOrBlank()) return
-      try {
-        val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
-        val array = payload["triggers"] as? JsonArray ?: return
-        val triggers = array.mapNotNull { it.asStringOrNull() }
-        applyWakeWordsFromGateway(triggers)
-      } catch (_: Throwable) {
-        // ignore
-      }
+      gatewayEventHandler.handleVoiceWakeChangedEvent(payloadJson)
       return
     }
 
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
-  }
-
-  private fun applyWakeWordsFromGateway(words: List<String>) {
-    suppressWakeWordsSync = true
-    prefs.setWakeWords(words)
-    suppressWakeWordsSync = false
-  }
-
-  private fun scheduleWakeWordsSyncIfNeeded() {
-    if (suppressWakeWordsSync) return
-    if (!_isConnected.value) return
-
-    val snapshot = prefs.wakeWords.value
-    wakeWordsSyncJob?.cancel()
-    wakeWordsSyncJob =
-      scope.launch {
-        delay(650)
-        val jsonList = snapshot.joinToString(separator = ",") { it.toJsonString() }
-        val params = """{"triggers":[$jsonList]}"""
-        try {
-          operatorSession.request("voicewake.set", params)
-        } catch (_: Throwable) {
-          // ignore
-        }
-      }
-  }
-
-  private suspend fun refreshWakeWordsFromGateway() {
-    if (!_isConnected.value) return
-    try {
-      val res = operatorSession.request("voicewake.get", "{}")
-      val payload = json.parseToJsonElement(res).asObjectOrNull() ?: return
-      val array = payload["triggers"] as? JsonArray ?: return
-      val triggers = array.mapNotNull { it.asStringOrNull() }
-      applyWakeWordsFromGateway(triggers)
-    } catch (_: Throwable) {
-      // ignore
-    }
   }
 
   private suspend fun refreshBrandingFromGateway() {
@@ -825,242 +684,6 @@ class NodeRuntime(context: Context) {
     }
   }
 
-  private suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
-    if (
-      command.startsWith(OpenClawCanvasCommand.NamespacePrefix) ||
-        command.startsWith(OpenClawCanvasA2UICommand.NamespacePrefix) ||
-        command.startsWith(OpenClawCameraCommand.NamespacePrefix) ||
-        command.startsWith(OpenClawScreenCommand.NamespacePrefix)
-      ) {
-      if (!isForeground.value) {
-        return GatewaySession.InvokeResult.error(
-          code = "NODE_BACKGROUND_UNAVAILABLE",
-          message = "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
-        )
-      }
-    }
-    if (command.startsWith(OpenClawCameraCommand.NamespacePrefix) && !cameraEnabled.value) {
-      return GatewaySession.InvokeResult.error(
-        code = "CAMERA_DISABLED",
-        message = "CAMERA_DISABLED: enable Camera in Settings",
-      )
-    }
-    if (command.startsWith(OpenClawLocationCommand.NamespacePrefix) &&
-      locationMode.value == LocationMode.Off
-    ) {
-      return GatewaySession.InvokeResult.error(
-        code = "LOCATION_DISABLED",
-        message = "LOCATION_DISABLED: enable Location in Settings",
-      )
-    }
-
-    return when (command) {
-      OpenClawCanvasCommand.Present.rawValue -> {
-        val url = CanvasController.parseNavigateUrl(paramsJson)
-        canvas.navigate(url)
-        GatewaySession.InvokeResult.ok(null)
-      }
-      OpenClawCanvasCommand.Hide.rawValue -> GatewaySession.InvokeResult.ok(null)
-      OpenClawCanvasCommand.Navigate.rawValue -> {
-        val url = CanvasController.parseNavigateUrl(paramsJson)
-        canvas.navigate(url)
-        GatewaySession.InvokeResult.ok(null)
-      }
-      OpenClawCanvasCommand.Eval.rawValue -> {
-        val js =
-          CanvasController.parseEvalJs(paramsJson)
-            ?: return GatewaySession.InvokeResult.error(
-              code = "INVALID_REQUEST",
-              message = "INVALID_REQUEST: javaScript required",
-            )
-        val result =
-          try {
-            canvas.eval(js)
-          } catch (err: Throwable) {
-            return GatewaySession.InvokeResult.error(
-              code = "NODE_BACKGROUND_UNAVAILABLE",
-              message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
-            )
-          }
-        GatewaySession.InvokeResult.ok("""{"result":${result.toJsonString()}}""")
-      }
-      OpenClawCanvasCommand.Snapshot.rawValue -> {
-        val snapshotParams = CanvasController.parseSnapshotParams(paramsJson)
-        val base64 =
-          try {
-            canvas.snapshotBase64(
-              format = snapshotParams.format,
-              quality = snapshotParams.quality,
-              maxWidth = snapshotParams.maxWidth,
-            )
-          } catch (err: Throwable) {
-            return GatewaySession.InvokeResult.error(
-              code = "NODE_BACKGROUND_UNAVAILABLE",
-              message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
-            )
-          }
-        GatewaySession.InvokeResult.ok("""{"format":"${snapshotParams.format.rawValue}","base64":"$base64"}""")
-      }
-      OpenClawCanvasA2UICommand.Reset.rawValue -> {
-        val a2uiUrl = resolveA2uiHostUrl()
-          ?: return GatewaySession.InvokeResult.error(
-            code = "A2UI_HOST_NOT_CONFIGURED",
-            message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
-          )
-        val ready = ensureA2uiReady(a2uiUrl)
-        if (!ready) {
-          return GatewaySession.InvokeResult.error(
-            code = "A2UI_HOST_UNAVAILABLE",
-            message = "A2UI host not reachable",
-          )
-        }
-        val res = canvas.eval(a2uiResetJS)
-        GatewaySession.InvokeResult.ok(res)
-      }
-      OpenClawCanvasA2UICommand.Push.rawValue, OpenClawCanvasA2UICommand.PushJSONL.rawValue -> {
-        val messages =
-          try {
-            decodeA2uiMessages(command, paramsJson)
-          } catch (err: Throwable) {
-            return GatewaySession.InvokeResult.error(code = "INVALID_REQUEST", message = err.message ?: "invalid A2UI payload")
-          }
-        val a2uiUrl = resolveA2uiHostUrl()
-          ?: return GatewaySession.InvokeResult.error(
-            code = "A2UI_HOST_NOT_CONFIGURED",
-            message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
-          )
-        val ready = ensureA2uiReady(a2uiUrl)
-        if (!ready) {
-          return GatewaySession.InvokeResult.error(
-            code = "A2UI_HOST_UNAVAILABLE",
-            message = "A2UI host not reachable",
-          )
-        }
-        val js = a2uiApplyMessagesJS(messages)
-        val res = canvas.eval(js)
-        GatewaySession.InvokeResult.ok(res)
-      }
-      OpenClawCameraCommand.Snap.rawValue -> {
-        showCameraHud(message = "Taking photo…", kind = CameraHudKind.Photo)
-        triggerCameraFlash()
-        val res =
-          try {
-            camera.snap(paramsJson)
-          } catch (err: Throwable) {
-            val (code, message) = invokeErrorFromThrowable(err)
-            showCameraHud(message = message, kind = CameraHudKind.Error, autoHideMs = 2200)
-            return GatewaySession.InvokeResult.error(code = code, message = message)
-          }
-        showCameraHud(message = "Photo captured", kind = CameraHudKind.Success, autoHideMs = 1600)
-        GatewaySession.InvokeResult.ok(res.payloadJson)
-      }
-      OpenClawCameraCommand.Clip.rawValue -> {
-        val includeAudio = paramsJson?.contains("\"includeAudio\":true") != false
-        if (includeAudio) externalAudioCaptureActive.value = true
-        try {
-          showCameraHud(message = "Recording…", kind = CameraHudKind.Recording)
-          val res =
-            try {
-              camera.clip(paramsJson)
-            } catch (err: Throwable) {
-              val (code, message) = invokeErrorFromThrowable(err)
-              showCameraHud(message = message, kind = CameraHudKind.Error, autoHideMs = 2400)
-              return GatewaySession.InvokeResult.error(code = code, message = message)
-            }
-          showCameraHud(message = "Clip captured", kind = CameraHudKind.Success, autoHideMs = 1800)
-          GatewaySession.InvokeResult.ok(res.payloadJson)
-        } finally {
-          if (includeAudio) externalAudioCaptureActive.value = false
-        }
-      }
-      OpenClawLocationCommand.Get.rawValue -> {
-        val mode = locationMode.value
-        if (!isForeground.value && mode != LocationMode.Always) {
-          return GatewaySession.InvokeResult.error(
-            code = "LOCATION_BACKGROUND_UNAVAILABLE",
-            message = "LOCATION_BACKGROUND_UNAVAILABLE: background location requires Always",
-          )
-        }
-        if (!hasFineLocationPermission() && !hasCoarseLocationPermission()) {
-          return GatewaySession.InvokeResult.error(
-            code = "LOCATION_PERMISSION_REQUIRED",
-            message = "LOCATION_PERMISSION_REQUIRED: grant Location permission",
-          )
-        }
-        if (!isForeground.value && mode == LocationMode.Always && !hasBackgroundLocationPermission()) {
-          return GatewaySession.InvokeResult.error(
-            code = "LOCATION_PERMISSION_REQUIRED",
-            message = "LOCATION_PERMISSION_REQUIRED: enable Always in system Settings",
-          )
-        }
-        val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)
-        val preciseEnabled = locationPreciseEnabled.value
-        val accuracy =
-          when (desiredAccuracy) {
-            "precise" -> if (preciseEnabled && hasFineLocationPermission()) "precise" else "balanced"
-            "coarse" -> "coarse"
-            else -> if (preciseEnabled && hasFineLocationPermission()) "precise" else "balanced"
-          }
-        val providers =
-          when (accuracy) {
-            "precise" -> listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-            "coarse" -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
-            else -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
-          }
-        try {
-          val payload =
-            location.getLocation(
-              desiredProviders = providers,
-              maxAgeMs = maxAgeMs,
-              timeoutMs = timeoutMs,
-              isPrecise = accuracy == "precise",
-            )
-          GatewaySession.InvokeResult.ok(payload.payloadJson)
-        } catch (err: TimeoutCancellationException) {
-          GatewaySession.InvokeResult.error(
-            code = "LOCATION_TIMEOUT",
-            message = "LOCATION_TIMEOUT: no fix in time",
-          )
-        } catch (err: Throwable) {
-          val message = err.message ?: "LOCATION_UNAVAILABLE: no fix"
-          GatewaySession.InvokeResult.error(code = "LOCATION_UNAVAILABLE", message = message)
-        }
-      }
-      OpenClawScreenCommand.Record.rawValue -> {
-        // Status pill mirrors screen recording state so it stays visible without overlay stacking.
-        _screenRecordActive.value = true
-        try {
-          val res =
-            try {
-              screenRecorder.record(paramsJson)
-            } catch (err: Throwable) {
-              val (code, message) = invokeErrorFromThrowable(err)
-              return GatewaySession.InvokeResult.error(code = code, message = message)
-            }
-          GatewaySession.InvokeResult.ok(res.payloadJson)
-        } finally {
-          _screenRecordActive.value = false
-        }
-      }
-      OpenClawSmsCommand.Send.rawValue -> {
-        val res = sms.send(paramsJson)
-        if (res.ok) {
-          GatewaySession.InvokeResult.ok(res.payloadJson)
-        } else {
-          val error = res.error ?: "SMS_SEND_FAILED"
-          val idx = error.indexOf(':')
-          val code = if (idx > 0) error.substring(0, idx).trim() else "SMS_SEND_FAILED"
-          GatewaySession.InvokeResult.error(code = code, message = error)
-        }
-      }
-      else ->
-        GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: unknown command",
-        )
-    }
-  }
-
   private fun triggerCameraFlash() {
     // Token is used as a pulse trigger; value doesn't matter as long as it changes.
     _cameraFlashToken.value = SystemClock.elapsedRealtimeNanos()
@@ -1078,194 +701,4 @@ class NodeRuntime(context: Context) {
     }
   }
 
-  private fun invokeErrorFromThrowable(err: Throwable): Pair<String, String> {
-    val raw = (err.message ?: "").trim()
-    if (raw.isEmpty()) return "UNAVAILABLE" to "UNAVAILABLE: camera error"
-
-    val idx = raw.indexOf(':')
-    if (idx <= 0) return "UNAVAILABLE" to raw
-    val code = raw.substring(0, idx).trim().ifEmpty { "UNAVAILABLE" }
-    val message = raw.substring(idx + 1).trim().ifEmpty { raw }
-    // Preserve full string for callers/logging, but keep the returned message human-friendly.
-    return code to "$code: $message"
-  }
-
-  private fun parseLocationParams(paramsJson: String?): Triple<Long?, Long, String?> {
-    if (paramsJson.isNullOrBlank()) {
-      return Triple(null, 10_000L, null)
-    }
-    val root =
-      try {
-        json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      }
-    val maxAgeMs = (root?.get("maxAgeMs") as? JsonPrimitive)?.content?.toLongOrNull()
-    val timeoutMs =
-      (root?.get("timeoutMs") as? JsonPrimitive)?.content?.toLongOrNull()?.coerceIn(1_000L, 60_000L)
-        ?: 10_000L
-    val desiredAccuracy =
-      (root?.get("desiredAccuracy") as? JsonPrimitive)?.content?.trim()?.lowercase()
-    return Triple(maxAgeMs, timeoutMs, desiredAccuracy)
-  }
-
-  private fun resolveA2uiHostUrl(): String? {
-    val nodeRaw = nodeSession.currentCanvasHostUrl()?.trim().orEmpty()
-    val operatorRaw = operatorSession.currentCanvasHostUrl()?.trim().orEmpty()
-    val raw = if (nodeRaw.isNotBlank()) nodeRaw else operatorRaw
-    if (raw.isBlank()) return null
-    val base = raw.trimEnd('/')
-    return "${base}/__openclaw__/a2ui/?platform=android"
-  }
-
-  private suspend fun ensureA2uiReady(a2uiUrl: String): Boolean {
-    try {
-      val already = canvas.eval(a2uiReadyCheckJS)
-      if (already == "true") return true
-    } catch (_: Throwable) {
-      // ignore
-    }
-
-    canvas.navigate(a2uiUrl)
-    repeat(50) {
-      try {
-        val ready = canvas.eval(a2uiReadyCheckJS)
-        if (ready == "true") return true
-      } catch (_: Throwable) {
-        // ignore
-      }
-      delay(120)
-    }
-    return false
-  }
-
-  private fun decodeA2uiMessages(command: String, paramsJson: String?): String {
-    val raw = paramsJson?.trim().orEmpty()
-    if (raw.isBlank()) throw IllegalArgumentException("INVALID_REQUEST: paramsJSON required")
-
-    val obj =
-      json.parseToJsonElement(raw) as? JsonObject
-        ?: throw IllegalArgumentException("INVALID_REQUEST: expected object params")
-
-    val jsonlField = (obj["jsonl"] as? JsonPrimitive)?.content?.trim().orEmpty()
-    val hasMessagesArray = obj["messages"] is JsonArray
-
-    if (command == OpenClawCanvasA2UICommand.PushJSONL.rawValue || (!hasMessagesArray && jsonlField.isNotBlank())) {
-      val jsonl = jsonlField
-      if (jsonl.isBlank()) throw IllegalArgumentException("INVALID_REQUEST: jsonl required")
-      val messages =
-        jsonl
-          .lineSequence()
-          .map { it.trim() }
-          .filter { it.isNotBlank() }
-          .mapIndexed { idx, line ->
-            val el = json.parseToJsonElement(line)
-            val msg =
-              el as? JsonObject
-                ?: throw IllegalArgumentException("A2UI JSONL line ${idx + 1}: expected a JSON object")
-            validateA2uiV0_8(msg, idx + 1)
-            msg
-          }
-          .toList()
-      return JsonArray(messages).toString()
-    }
-
-    val arr = obj["messages"] as? JsonArray ?: throw IllegalArgumentException("INVALID_REQUEST: messages[] required")
-    val out =
-      arr.mapIndexed { idx, el ->
-        val msg =
-          el as? JsonObject
-            ?: throw IllegalArgumentException("A2UI messages[${idx}]: expected a JSON object")
-        validateA2uiV0_8(msg, idx + 1)
-        msg
-      }
-    return JsonArray(out).toString()
-  }
-
-  private fun validateA2uiV0_8(msg: JsonObject, lineNumber: Int) {
-    if (msg.containsKey("createSurface")) {
-      throw IllegalArgumentException(
-        "A2UI JSONL line $lineNumber: looks like A2UI v0.9 (`createSurface`). Canvas supports v0.8 messages only.",
-      )
-    }
-    val allowed = setOf("beginRendering", "surfaceUpdate", "dataModelUpdate", "deleteSurface")
-    val matched = msg.keys.filter { allowed.contains(it) }
-    if (matched.size != 1) {
-      val found = msg.keys.sorted().joinToString(", ")
-      throw IllegalArgumentException(
-        "A2UI JSONL line $lineNumber: expected exactly one of ${allowed.sorted().joinToString(", ")}; found: $found",
-      )
-    }
-  }
-}
-
-private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
-
-private const val DEFAULT_SEAM_COLOR_ARGB: Long = 0xFF4F7A9A
-
-private const val a2uiReadyCheckJS: String =
-  """
-  (() => {
-    try {
-      const host = globalThis.openclawA2UI;
-      return !!host && typeof host.applyMessages === 'function';
-    } catch (_) {
-      return false;
-    }
-  })()
-  """
-
-private const val a2uiResetJS: String =
-  """
-  (() => {
-    try {
-      const host = globalThis.openclawA2UI;
-      if (!host) return { ok: false, error: "missing openclawA2UI" };
-      return host.reset();
-    } catch (e) {
-      return { ok: false, error: String(e?.message ?? e) };
-    }
-  })()
-  """
-
-private fun a2uiApplyMessagesJS(messagesJson: String): String {
-  return """
-    (() => {
-      try {
-        const host = globalThis.openclawA2UI;
-        if (!host) return { ok: false, error: "missing openclawA2UI" };
-        const messages = $messagesJson;
-        return host.applyMessages(messages);
-      } catch (e) {
-        return { ok: false, error: String(e?.message ?? e) };
-      }
-    })()
-  """.trimIndent()
-}
-
-private fun String.toJsonString(): String {
-  val escaped =
-    this.replace("\\", "\\\\")
-      .replace("\"", "\\\"")
-      .replace("\n", "\\n")
-      .replace("\r", "\\r")
-  return "\"$escaped\""
-}
-
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
-private fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
-
-private fun parseHexColorArgb(raw: String?): Long? {
-  val trimmed = raw?.trim().orEmpty()
-  if (trimmed.isEmpty()) return null
-  val hex = if (trimmed.startsWith("#")) trimmed.drop(1) else trimmed
-  if (hex.length != 6) return null
-  val rgb = hex.toLongOrNull(16) ?: return null
-  return 0xFF000000L or rgb
 }
