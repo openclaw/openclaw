@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import path from "node:path";
 import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveSessionFilePath } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
@@ -152,10 +153,20 @@ export function createSessionsListTool(opts?: {
         });
 
         const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : undefined;
-        const transcriptPath =
-          sessionId && storePath
-            ? path.join(path.dirname(storePath), `${sessionId}.jsonl`)
-            : undefined;
+        const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
+        const sessionFile = typeof sessionFileRaw === "string" ? sessionFileRaw : undefined;
+        let transcriptPath: string | undefined;
+        if (sessionId && storePath) {
+          try {
+            transcriptPath = resolveSessionFilePath(
+              sessionId,
+              sessionFile ? { sessionFile } : undefined,
+              { sessionsDir: path.dirname(storePath) },
+            );
+          } catch {
+            transcriptPath = undefined;
+          }
+        }
 
         const row: SessionListRow = {
           key: displayKey,
