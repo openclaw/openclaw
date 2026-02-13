@@ -25,6 +25,7 @@ import {
   resolveSystemPromptUsage,
   writeCliImages,
 } from "./cli-runner/helpers.js";
+import { ensureProxyHealthy } from "./cloudru-proxy-health.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
@@ -74,6 +75,19 @@ export async function runCliAgent(params: {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
   const backend = backendResolved.config;
+
+  // Pre-flight health check for Cloud.ru proxy (when proxy URL is configured)
+  const proxyUrl = backend.env?.["ANTHROPIC_BASE_URL"];
+  if (proxyUrl && proxyUrl.includes("localhost")) {
+    try {
+      await ensureProxyHealthy(proxyUrl);
+    } catch (healthErr) {
+      // Throw plain Error (not FailoverError) — a dead proxy means ALL tiers are
+      // unreachable, so model-level fallback would just cycle through the same dead endpoint
+      throw healthErr;
+    }
+  }
+
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
