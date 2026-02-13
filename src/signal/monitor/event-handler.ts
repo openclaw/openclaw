@@ -30,6 +30,12 @@ import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { mediaKindFromMime } from "../../media/constants.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import {
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
+} from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { DM_GROUP_ACCESS_REASON } from "../../security/dm-policy-shared.js";
 import { normalizeE164 } from "../../utils.js";
@@ -630,6 +636,73 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
         },
       });
+
+      // Silent ingest: run hooks on non-mentioned messages
+      const { groupConfig } = resolveChannelGroupPolicy({
+        cfg: deps.cfg,
+        channel: "signal",
+        groupId,
+        accountId: deps.accountId,
+      });
+      const ingestConfig = groupConfig?.ingest;
+      if (ingestConfig && typeof ingestConfig === 'object') {
+        const enabled = ingestConfig.enabled === true;
+        const hooks = Array.isArray(ingestConfig.hooks) ? ingestConfig.hooks : [];
+        
+        if (enabled && hooks.length > 0 && groupId && pendingBodyText && pendingBodyText.trim().length > 0) {
+          const hookRunner = getGlobalHookRunner();
+          if (hookRunner) {
+            const { ALLOWED_INGEST_HOOKS } = await import("../../config/ingest-hooks.js");
+            const { sanitizeUserText } = await import("../../utils/sanitize.js");
+            
+            const validHooks = hooks.filter((h): h is string => 
+              typeof h === 'string' && ALLOWED_INGEST_HOOKS.includes(h as any)
+            );
+            
+            if (validHooks.length > 0) {
+              const timestamp = typeof envelope.timestamp === 'number' && envelope.timestamp > 0
+                ? envelope.timestamp
+                : undefined;
+              const messageIdForHook = timestamp ? String(timestamp) : undefined;
+              const sanitizedMetadata = {
+                to: groupId,
+                provider: "signal",
+                surface: "signal",
+                messageId: messageIdForHook,
+                originatingChannel: "signal",
+                originatingTo: groupId,
+                senderName: sanitizeUserText(senderDisplay),
+              };
+
+              const HOOK_TIMEOUT_MS = 5000;
+              const timeoutPromise = new Promise<void>((_, reject) => {
+                setTimeout(() => reject(new Error('Hook timeout')), HOOK_TIMEOUT_MS);
+              });
+
+              void Promise.race([
+                hookRunner.runMessageReceived(
+                  {
+                    from: senderDisplay,
+                    content: pendingBodyText,
+                    timestamp,
+                    metadata: sanitizedMetadata,
+                  },
+                  {
+                    channelId: "signal",
+                    accountId: deps.accountId,
+                    conversationId: groupId,
+                  },
+                ),
+                timeoutPromise,
+              ]).catch((err) => {
+                const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+                logVerbose(`signal: ingest hook failed: ${errorMsg}`);
+              });
+            }
+          }
+        }
+      }
+
       return;
     }
 
