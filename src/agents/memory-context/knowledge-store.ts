@@ -238,33 +238,59 @@ export class KnowledgeStore {
   }
 
   /**
-   * Search facts by keyword (any query word must appear in content or context).
+   * Tokenize text into words (whitespace-split) + individual CJK characters.
+   * Handles mixed Chinese/English without external dependencies.
+   */
+  private static tokenize(text: string): string[] {
+    const tokens: string[] = [];
+    // Match runs of CJK chars individually, or runs of non-CJK non-whitespace as words
+    const re =
+      /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]|[^\s\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const t = m[0].toLowerCase();
+      if (t) {
+        tokens.push(t);
+      }
+    }
+    return tokens;
+  }
+
+  /**
+   * Search facts by keyword with CJK-aware tokenization and adaptive threshold.
+   * Uses scoring to rank results by match quality.
    */
   search(query: string, limit = 10): KnowledgeFact[] {
-    const queryWords = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (queryWords.length === 0) {
+    const queryTokens = [...new Set(KnowledgeStore.tokenize(query))];
+    if (queryTokens.length === 0) {
       return [];
     }
 
-    const results: KnowledgeFact[] = [];
+    // Adaptive threshold: prevents long concatenated queries from requiring too many matches
+    let threshold: number;
+    if (queryTokens.length <= 2) {
+      threshold = 1;
+    } else if (queryTokens.length <= 8) {
+      threshold = Math.ceil(queryTokens.length * 0.5);
+    } else {
+      // For long queries (e.g. 3 user messages concatenated): cap threshold
+      threshold = Math.min(Math.ceil(queryTokens.length * 0.3), 6);
+    }
+
+    const scored: { fact: KnowledgeFact; score: number }[] = [];
     for (const f of this.facts.values()) {
       if (f.supersededBy) {
         continue;
       }
       const text = `${f.content} ${f.context ?? ""}`.toLowerCase();
-      // Require at least 50% of query words to match (reduces false positives from common words)
-      const matchCount = queryWords.filter((w) => text.includes(w)).length;
-      const matched =
-        queryWords.length <= 2
-          ? matchCount >= 1 // For 1-2 word queries, any match is enough
-          : matchCount >= Math.ceil(queryWords.length * 0.5); // For longer queries, require 50%+
-      if (matched) {
-        results.push(f);
+      const matchCount = queryTokens.filter((w) => text.includes(w)).length;
+      if (matchCount >= threshold) {
+        scored.push({ fact: f, score: matchCount / queryTokens.length });
       }
     }
-    // Sort by timestamp descending (most recent first)
-    results.sort((a, b) => b.timestamp - a.timestamp);
-    return results.slice(0, limit);
+    // Sort by match score descending, then by timestamp descending
+    scored.sort((a, b) => b.score - a.score || b.fact.timestamp - a.fact.timestamp);
+    return scored.slice(0, limit).map((s) => s.fact);
   }
 
   /**

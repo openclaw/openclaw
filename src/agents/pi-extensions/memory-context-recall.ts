@@ -39,7 +39,14 @@ function extractText(msg: AgentMessage): string {
 }
 
 /**
+ * Check if a message is a channel-injected system prefix (e.g. Feishu metadata).
+ * These contain no user intent and should be excluded from search queries.
+ */
+const SYSTEM_PREFIX_RE = /^System:\s*\[\d{4}-\d{2}-\d{2}\s/;
+
+/**
  * Extract search query from last 2-3 user messages (broader keyword coverage).
+ * Skips channel system-prefix messages and recalled-context blocks.
  */
 function extractSearchQuery(messages: AgentMessage[]): string {
   const userMessages: string[] = [];
@@ -47,7 +54,11 @@ function extractSearchQuery(messages: AgentMessage[]): string {
     const msg = messages[i];
     if (msg && (msg as { role?: string }).role === "user") {
       const content = extractText(msg);
-      if (content.trim() && !content.includes(RECALLED_CONTEXT_MARKER)) {
+      if (
+        content.trim() &&
+        !content.includes(RECALLED_CONTEXT_MARKER) &&
+        !SYSTEM_PREFIX_RE.test(content.trim())
+      ) {
         userMessages.unshift(content);
       }
     }
@@ -159,6 +170,12 @@ export default function memoryContextRecallExtension(api: ExtensionAPI): void {
     try {
       await runtime.rawStore.init();
       await runtime.knowledgeStore.init();
+      const ksStats = runtime.knowledgeStore.stats();
+      if (ksStats.active === 0 && ksStats.total === 0) {
+        console.warn(
+          `memory-context: KnowledgeStore empty after init (filePath may be wrong or file empty)`,
+        );
+      }
 
       const searchConfig = {
         vectorWeight: 0.7,
@@ -176,6 +193,13 @@ export default function memoryContextRecallExtension(api: ExtensionAPI): void {
       );
 
       const knowledgeFacts = runtime.knowledgeStore.search(query, 10);
+
+      if (knowledgeFacts.length === 0) {
+        const stats = runtime.knowledgeStore.stats();
+        console.info(
+          `memory-context: knowledge search returned 0 for query="${query.substring(0, 60)}" (store: active=${stats.active}, total=${stats.total})`,
+        );
+      }
 
       const recall = buildRecalledContextBlock(knowledgeFacts, rawResults, hardCap);
 
