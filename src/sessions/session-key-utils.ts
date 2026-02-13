@@ -58,6 +58,20 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("acp:"));
 }
 
+export function isGroupChannelSessionKey(sessionKey: string | undefined | null): boolean {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
+    return false;
+  }
+  const normalized = raw.toLowerCase();
+  if (normalized.includes(":group:") || normalized.includes(":channel:")) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(raw);
+  const rest = (parsed?.rest ?? "").toLowerCase();
+  return rest.includes(":group:") || rest.includes(":channel:");
+}
+
 const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
 
 export function resolveThreadParentSessionKey(
