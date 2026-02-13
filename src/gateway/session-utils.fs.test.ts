@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
+  archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readSessionMessages,
@@ -551,5 +552,82 @@ describe("resolveSessionTranscriptCandidates safety", () => {
 
     expect(candidates.some((value) => value.includes("etc/passwd"))).toBe(false);
     expect(normalizedCandidates).toContain(expectedFallback);
+  });
+});
+
+describe("archiveSessionTranscripts", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-archive-test-"));
+    storePath = path.join(tmpDir, "sessions.json");
+    vi.stubEnv("OPENCLAW_HOME", tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("archives existing transcript file and returns archived path", () => {
+    const sessionId = "sess-archive-1";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+
+    const archived = archiveSessionTranscripts({
+      sessionId,
+      storePath,
+      reason: "reset",
+    });
+
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toContain(".reset.");
+    expect(fs.existsSync(transcriptPath)).toBe(false);
+    expect(fs.existsSync(archived[0])).toBe(true);
+  });
+
+  test("archives transcript found via explicit sessionFile path", () => {
+    const sessionId = "sess-archive-2";
+    const customPath = path.join(tmpDir, "custom-transcript.jsonl");
+    fs.writeFileSync(customPath, '{"type":"session"}\n', "utf-8");
+
+    const archived = archiveSessionTranscripts({
+      sessionId,
+      storePath: undefined,
+      sessionFile: customPath,
+      reason: "reset",
+    });
+
+    expect(archived).toHaveLength(1);
+    expect(fs.existsSync(customPath)).toBe(false);
+    expect(fs.existsSync(archived[0])).toBe(true);
+  });
+
+  test("returns empty array when no transcript files exist", () => {
+    const archived = archiveSessionTranscripts({
+      sessionId: "nonexistent-session",
+      storePath,
+      reason: "reset",
+    });
+
+    expect(archived).toEqual([]);
+  });
+
+  test("skips files that do not exist and archives only existing ones", () => {
+    const sessionId = "sess-archive-3";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+
+    const archived = archiveSessionTranscripts({
+      sessionId,
+      storePath,
+      sessionFile: "/nonexistent/path/file.jsonl",
+      reason: "deleted",
+    });
+
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toContain(".deleted.");
+    expect(fs.existsSync(transcriptPath)).toBe(false);
   });
 });

@@ -17,10 +17,13 @@ vi.mock("../logging/diagnostic.js", () => ({
 }));
 
 import {
+  clearCommandLane,
+  CommandLaneClearedError,
   enqueueCommand,
   enqueueCommandInLane,
   getActiveTaskCount,
   getQueueSize,
+  resetAllLanes,
   setCommandLaneConcurrency,
   waitForActiveTasks,
 } from "./command-queue.js";
@@ -32,6 +35,12 @@ describe("command queue", () => {
     diagnosticMocks.diag.debug.mockClear();
     diagnosticMocks.diag.warn.mockClear();
     diagnosticMocks.diag.error.mockClear();
+  });
+
+  it("resetAllLanes is safe when no lanes have been created", () => {
+    expect(getActiveTaskCount()).toBe(0);
+    expect(() => resetAllLanes()).not.toThrow();
+    expect(getActiveTaskCount()).toBe(0);
   });
 
   it("runs tasks one at a time in order", async () => {
@@ -160,6 +169,49 @@ describe("command queue", () => {
     await task;
   });
 
+  it("resetAllLanes drains queued work immediately after reset", async () => {
+    const lane = `reset-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    let resolve1!: () => void;
+    const blocker = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+
+    // Start a task that blocks the lane
+    const task1 = enqueueCommandInLane(lane, async () => {
+      await blocker;
+    });
+
+    await vi.waitFor(() => {
+      expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
+    });
+
+    // Enqueue another task — it should be stuck behind the blocker
+    let task2Ran = false;
+    const task2 = enqueueCommandInLane(lane, async () => {
+      task2Ran = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
+    });
+    expect(task2Ran).toBe(false);
+
+    // Simulate SIGUSR1: reset all lanes. Queued work (task2) should be
+    // drained immediately — no fresh enqueue needed.
+    resetAllLanes();
+
+    // Complete the stale in-flight task; generation mismatch makes its
+    // completion path a no-op for queue bookkeeping.
+    resolve1();
+    await task1;
+
+    // task2 should have been pumped by resetAllLanes's drain pass.
+    await task2;
+    expect(task2Ran).toBe(true);
+  });
+
   it("waitForActiveTasks ignores tasks that start after the call", async () => {
     const lane = `drain-snapshot-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 2);
@@ -193,5 +245,34 @@ describe("command queue", () => {
 
     resolve2();
     await Promise.all([first, second]);
+  });
+
+  it("clearCommandLane rejects pending promises", async () => {
+    let resolve1!: () => void;
+    const blocker = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+
+    // First task blocks the lane.
+    const first = enqueueCommand(async () => {
+      await blocker;
+      return "first";
+    });
+
+    // Second task is queued behind the first.
+    const second = enqueueCommand(async () => "second");
+
+    // Give the first task a tick to start.
+    await new Promise((r) => setTimeout(r, 5));
+
+    const removed = clearCommandLane();
+    expect(removed).toBe(1); // only the queued (not active) entry
+
+    // The queued promise should reject.
+    await expect(second).rejects.toBeInstanceOf(CommandLaneClearedError);
+
+    // Let the active task finish normally.
+    resolve1();
+    await expect(first).resolves.toBe("first");
   });
 });
