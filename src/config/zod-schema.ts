@@ -404,6 +404,13 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         trustedProxies: z.array(z.string()).optional(),
+        tools: z
+          .object({
+            deny: z.array(z.string()).optional(),
+            allow: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),

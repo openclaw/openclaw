@@ -1912,6 +1912,12 @@ See [Plugins](/tools/plugin).
       // password: "your-password",
     },
     trustedProxies: ["10.0.0.1"],
+    tools: {
+      // Additional /tools/invoke HTTP denies
+      deny: ["browser"],
+      // Remove tools from the default HTTP deny list
+      allow: ["gateway"],
+    },
   },
 }
 ```
@@ -1927,6 +1933,8 @@ See [Plugins](/tools/plugin).
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
 - `gateway.remote.token` is for remote CLI calls only; does not enable local gateway auth.
 - `trustedProxies`: reverse proxy IPs that terminate TLS. Only list proxies you control.
+- `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
+- `gateway.tools.allow`: remove tool names from the default HTTP deny list.
 
 </Accordion>
 
