@@ -64,6 +64,7 @@ function createDispatcher(): ReplyDispatcher {
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    markComplete: vi.fn(),
   };
 }
 

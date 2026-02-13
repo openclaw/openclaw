@@ -17,6 +17,40 @@ const SIGUSR1_AUTH_GRACE_MS = 5000;
 let sigusr1AuthorizedCount = 0;
 let sigusr1AuthorizedUntil = 0;
 let sigusr1ExternalAllowed = false;
+let preRestartCheck: (() => number) | null = null;
+let sigusr1Emitted = false;
+
+/**
+ * Register a callback that scheduleGatewaySigusr1Restart checks before emitting SIGUSR1.
+ * The callback should return the number of pending items (0 = safe to restart).
+ */
+export function setPreRestartDeferralCheck(fn: () => number): void {
+  preRestartCheck = fn;
+}
+
+/**
+ * Emit an authorized SIGUSR1 gateway restart, guarded against duplicate emissions.
+ * Returns true if SIGUSR1 was emitted, false if a restart was already emitted.
+ * Both scheduleGatewaySigusr1Restart and the config watcher should use this
+ * to ensure only one restart fires.
+ */
+export function emitGatewayRestart(): boolean {
+  if (sigusr1Emitted) {
+    return false;
+  }
+  sigusr1Emitted = true;
+  authorizeGatewaySigusr1Restart();
+  try {
+    if (process.listenerCount("SIGUSR1") > 0) {
+      process.emit("SIGUSR1");
+    } else {
+      process.kill(process.pid, "SIGUSR1");
+    }
+  } catch {
+    /* ignore */
+  }
+  return true;
+}
 
 function resetSigusr1AuthorizationIfExpired(now = Date.now()) {
   if (sigusr1AuthorizedCount <= 0) {
@@ -37,7 +71,7 @@ export function isGatewaySigusr1RestartExternallyAllowed() {
   return sigusr1ExternalAllowed;
 }
 
-export function authorizeGatewaySigusr1Restart(delayMs = 0) {
+function authorizeGatewaySigusr1Restart(delayMs = 0) {
   const delay = Math.max(0, Math.floor(delayMs));
   const expiresAt = Date.now() + delay + SIGUSR1_AUTH_GRACE_MS;
   sigusr1AuthorizedCount += 1;
@@ -51,6 +85,10 @@ export function consumeGatewaySigusr1RestartAuthorization(): boolean {
   if (sigusr1AuthorizedCount <= 0) {
     return false;
   }
+  // Reset the emission guard so the next restart cycle can fire.
+  // The run loop re-enters startGatewayServer() after close(), which
+  // re-registers setPreRestartDeferralCheck and can schedule new restarts.
+  sigusr1Emitted = false;
   sigusr1AuthorizedCount -= 1;
   if (sigusr1AuthorizedCount <= 0) {
     sigusr1AuthorizedUntil = 0;
@@ -189,27 +227,48 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     typeof opts?.reason === "string" && opts.reason.trim()
       ? opts.reason.trim().slice(0, 200)
       : undefined;
-  authorizeGatewaySigusr1Restart(delayMs);
-  const pid = process.pid;
-  const hasListener = process.listenerCount("SIGUSR1") > 0;
+  const DEFERRAL_POLL_MS = 500;
+  const DEFERRAL_MAX_WAIT_MS = 30_000;
+
   setTimeout(() => {
-    try {
-      if (hasListener) {
-        process.emit("SIGUSR1");
-      } else {
-        process.kill(pid, "SIGUSR1");
-      }
-    } catch {
-      /* ignore */
+    if (!preRestartCheck) {
+      emitGatewayRestart();
+      return;
     }
+    let pending: number;
+    try {
+      pending = preRestartCheck();
+    } catch {
+      emitGatewayRestart();
+      return;
+    }
+    if (pending <= 0) {
+      emitGatewayRestart();
+      return;
+    }
+    // Poll until pending work drains or timeout
+    let waited = 0;
+    const poll = setInterval(() => {
+      waited += DEFERRAL_POLL_MS;
+      let current: number;
+      try {
+        current = preRestartCheck!();
+      } catch {
+        current = 0;
+      }
+      if (current <= 0 || waited >= DEFERRAL_MAX_WAIT_MS) {
+        clearInterval(poll);
+        emitGatewayRestart();
+      }
+    }, DEFERRAL_POLL_MS);
   }, delayMs);
   return {
     ok: true,
-    pid,
+    pid: process.pid,
     signal: "SIGUSR1",
     delayMs,
     reason,
-    mode: hasListener ? "emit" : "signal",
+    mode: process.listenerCount("SIGUSR1") > 0 ? "emit" : "signal",
   };
 }
 
@@ -218,5 +277,7 @@ export const __testing = {
     sigusr1AuthorizedCount = 0;
     sigusr1AuthorizedUntil = 0;
     sigusr1ExternalAllowed = false;
+    preRestartCheck = null;
+    sigusr1Emitted = false;
   },
 };

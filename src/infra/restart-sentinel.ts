@@ -28,7 +28,7 @@ export type RestartSentinelStats = {
 };
 
 export type RestartSentinelPayload = {
-  kind: "config-apply" | "update" | "restart";
+  kind: "config-apply" | "config-patch" | "update" | "restart";
   status: "ok" | "error" | "skipped";
   ts: number;
   sessionKey?: string;
@@ -109,7 +109,10 @@ export async function consumeRestartSentinel(
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
-  return `GatewayRestart:\n${JSON.stringify(payload, null, 2)}`;
+  if (payload.message?.trim()) {
+    return payload.message.trim();
+  }
+  return summarizeRestartSentinel(payload);
 }
 
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
