@@ -32,6 +32,16 @@ describe("stripReasoningTagsFromText", () => {
       const input = "<think>first</think>A<think>second</think>B";
       expect(stripReasoningTagsFromText(input)).toBe("AB");
     });
+
+    it("returns empty when only closed think tag", () => {
+      const input = "<think>Hello</think>";
+      expect(stripReasoningTagsFromText(input)).toBe("");
+    });
+
+    it("returns unclosed think content when no final tag", () => {
+      const input = "<think>Hello";
+      expect(stripReasoningTagsFromText(input)).toBe("Hello");
+    });
   });
 
   describe("code block preservation (issue #3952)", () => {
