@@ -157,37 +157,39 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     );
   }
 
+  const fingerprintSet =
+    options.tls && !options.tlsInsecure && options.tlsFingerprints?.length
+      ? new Set(options.tlsFingerprints.map(normalizeTlsFingerprint))
+      : null;
+
+  if (fingerprintSet) {
+    log(`fingerprint validation enabled: expecting one of [${[...fingerprintSet].join(", ")}]`);
+  }
+
   const socket = options.tls
     ? tls.connect({
         host: options.host,
         port: options.port,
         servername: options.host,
         rejectUnauthorized: !bypassTlsVerification,
+        checkServerIdentity: fingerprintSet
+          ? (_host: string, cert: tls.PeerCertificate) => {
+              const peerFingerprint = normalizeTlsFingerprint(cert.fingerprint256 ?? "");
+              log(`peer certificate fingerprint: ${peerFingerprint || "(empty)"}`);
+              if (!peerFingerprint || !fingerprintSet.has(peerFingerprint)) {
+                log(`fingerprint mismatch — aborting handshake`);
+                return new Error(
+                  `TLS certificate fingerprint mismatch: got ${peerFingerprint}, expected one of [${[...fingerprintSet].join(", ")}]`,
+                );
+              }
+              log(`fingerprint matched`);
+              return undefined;
+            }
+          : undefined,
       })
     : net.connect({ host: options.host, port: options.port });
 
-  if (options.tls && !options.tlsInsecure && options.tlsFingerprints?.length) {
-    const allowedFingerprints = new Set(options.tlsFingerprints.map(normalizeTlsFingerprint));
-    log(
-      `fingerprint validation enabled: expecting one of [${[...allowedFingerprints].join(", ")}]`,
-    );
-    const tlsSocket = socket as tls.TLSSocket;
-    tlsSocket.once("secureConnect", () => {
-      const cert = tlsSocket.getPeerCertificate();
-      const peerFingerprint = normalizeTlsFingerprint(cert.fingerprint256 ?? "");
-      log(`peer certificate fingerprint: ${peerFingerprint || "(empty)"}`);
-      if (!peerFingerprint || !allowedFingerprints.has(peerFingerprint)) {
-        log(`fingerprint mismatch — destroying connection`);
-        tlsSocket.destroy(
-          new Error(
-            `TLS certificate fingerprint mismatch: got ${peerFingerprint}, expected one of [${[...allowedFingerprints].join(", ")}]`,
-          ),
-        );
-      } else {
-        log(`fingerprint matched`);
-      }
-    });
-  } else if (options.tls && options.tlsInsecure) {
+  if (options.tls && options.tlsInsecure) {
     log(`tls verification fully bypassed (tlsInsecure=true)`);
   }
 
