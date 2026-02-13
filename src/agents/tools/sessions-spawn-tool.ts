@@ -370,6 +370,14 @@ export function createSessionsSpawnTool(opts?: {
         childSessionKey,
         label: label || threadBindingParams?.label || undefined,
         task,
+        threadBinding: resolvedThreadBinding
+          ? {
+              channel: resolvedThreadBinding.channel,
+              to: resolvedThreadBinding.to!,
+              threadId: resolvedThreadBinding.threadId,
+              label: resolvedThreadBinding.label,
+            }
+          : undefined,
       });
 
       const childIdem = crypto.randomUUID();

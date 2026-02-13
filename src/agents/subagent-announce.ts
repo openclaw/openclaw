@@ -297,11 +297,21 @@ export function buildSubagentSystemPrompt(params: {
   childSessionKey: string;
   label?: string;
   task?: string;
+  threadBinding?: {
+    channel: string;
+    to: string;
+    threadId: string;
+    label?: string;
+  };
 }) {
   const taskText =
     typeof params.task === "string" && params.task.trim()
       ? params.task.replace(/\s+/g, " ").trim()
       : "{{TASK_DESCRIPTION}}";
+
+  const hasThread =
+    params.threadBinding?.channel && params.threadBinding?.to && params.threadBinding?.threadId;
+
   const lines = [
     "# Subagent Context",
     "",
@@ -329,18 +339,61 @@ export function buildSubagentSystemPrompt(params: {
     "- NO external messages (email, tweets, etc.) unless explicitly tasked with a specific recipient/channel",
     "- NO cron jobs or persistent state",
     "- NO pretending to be the main agent",
-    "- Only use the `message` tool when explicitly instructed to contact a specific external recipient; otherwise return plain text and let the main agent deliver it",
-    "",
-    "## Session Context",
-    params.label ? `- Label: ${params.label}` : undefined,
-    params.requesterSessionKey ? `- Requester session: ${params.requesterSessionKey}.` : undefined,
-    params.requesterOrigin?.channel
-      ? `- Requester channel: ${params.requesterOrigin.channel}.`
-      : undefined,
-    `- Your session: ${params.childSessionKey}.`,
+    hasThread
+      ? undefined
+      : "- Only use the `message` tool when explicitly instructed to contact a specific external recipient; otherwise return plain text and let the main agent deliver it",
     "",
   ].filter((line): line is string => line !== undefined);
-  return lines.join("\n");
+
+  // Thread binding context — tells the agent where to post progress updates
+  if (hasThread) {
+    const tb = params.threadBinding!;
+    lines.push(
+      "## Thread Communication",
+      "",
+      "You are bound to a platform thread. Post progress updates there so humans can follow along.",
+      "",
+      `- **Channel:** ${tb.channel}`,
+      `- **Target:** ${tb.to}`,
+      `- **Thread ID:** ${tb.threadId}`,
+      tb.label ? `- **Thread label:** ${tb.label}` : (undefined as unknown as string),
+      "",
+      "To post an update, use the `message` tool:",
+      `  action=send, channel=${tb.channel}, target=${tb.to}, threadId=${tb.threadId}`,
+      "",
+      "**When to post:**",
+      "- Significant progress milestones (e.g., 'Found the issue', 'Starting implementation')",
+      "- Key findings or decisions",
+      "- Errors or blockers encountered",
+      "- Completion summary",
+      "",
+      "**Don't spam** — a few meaningful updates, not every command you run.",
+      "",
+    );
+    // Filter out any undefined entries from conditional label line
+    const filtered = lines.filter(
+      (line): line is string => line !== undefined && typeof line === "string",
+    );
+    lines.length = 0;
+    lines.push(...filtered);
+  }
+
+  lines.push(
+    "## Session Context",
+    params.label ? `- Label: ${params.label}` : (undefined as unknown as string),
+    params.requesterSessionKey
+      ? `- Requester session: ${params.requesterSessionKey}.`
+      : (undefined as unknown as string),
+    params.requesterOrigin?.channel
+      ? `- Requester channel: ${params.requesterOrigin.channel}.`
+      : (undefined as unknown as string),
+    `- Your session: ${params.childSessionKey}.`,
+    "",
+  );
+
+  return lines
+    .filter((line): line is string => line !== undefined && typeof line === "string")
+    .join("\n");
 }
 
 // ---------------------------------------------------------------------------
