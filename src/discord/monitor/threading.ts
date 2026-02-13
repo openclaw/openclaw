@@ -294,7 +294,9 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
   agentId: string;
   channel: string;
 }): Promise<DiscordAutoThreadReplyPlan> {
-  const originalReplyTarget = `channel:${params.message.channelId}`;
+  // Prefer the resolved thread channel ID when available so replies stay in-thread.
+  const targetChannelId = params.threadChannel?.id ?? params.message.channelId;
+  const originalReplyTarget = `channel:${targetChannelId}`;
   const createdThreadId = await maybeCreateDiscordAutoThread({
     client: params.client,
     message: params.message,
@@ -391,15 +393,9 @@ export function resolveDiscordReplyDeliveryPlan(params: {
   let deliverTarget = originalReplyTarget;
   let replyTarget = originalReplyTarget;
 
-  // When a new thread was created, route to the new thread
+  // When a new thread was created, route to the new thread.
   if (params.createdThreadId) {
     deliverTarget = `channel:${params.createdThreadId}`;
-    replyTarget = deliverTarget;
-  }
-  // When in an existing thread (not newly created), ensure we route to the thread
-  // This fixes #8278: autoThread replies sometimes going to root channel
-  else if (params.threadChannel?.id) {
-    deliverTarget = `channel:${params.threadChannel.id}`;
     replyTarget = deliverTarget;
   }
   const allowReference = deliverTarget === originalReplyTarget;
