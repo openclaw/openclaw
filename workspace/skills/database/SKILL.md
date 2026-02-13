@@ -463,9 +463,7 @@ Run this whenever tables/columns change in Supabase. Uses the PostgREST OpenAPI 
 ## Known Limitations
 
 1. **Aggregate filters** — only exact match and lists (IN), not operators like `{"gt": 100}`. Workaround: use `read` with operators, then aggregate client-side.
-2. **Aggregate HAVING** — may fail if the RPC doesn't recognize column aliases. Workaround: aggregate without HAVING, filter results client-side.
-3. **Expression updates** — can't do `price * 1.1`. Read → calculate → write with literal values.
-4. **Some tables restrict aggregates** — RLS policies may block `dynamic_aggregate` on certain tables.
+2. **Expression updates** — can't do `price * 1.1`. Read → calculate → write with literal values.
 
 ---
 

@@ -412,6 +412,15 @@ def cmd_aggregate(args: argparse.Namespace) -> None:
         for col, pattern in search.items():
             combined_filters[f"__ilike__{col}"] = pattern
 
+    # Validate HAVING aliases match aggregate aliases
+    if having:
+        for alias in having:
+            if alias not in aggregates:
+                error_exit(
+                    f"HAVING references unknown alias '{alias}'",
+                    hint=f"Available aliases: {list(aggregates.keys())}. HAVING must reference an alias from --aggregates.",
+                )
+
     client = get_client()
 
     try:

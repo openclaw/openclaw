@@ -139,6 +139,9 @@ importers:
       pdfjs-dist:
         specifier: ^5.4.624
         version: 5.4.624
+      playwright:
+        specifier: ^1.58.2
+        version: 1.58.2
       playwright-core:
         specifier: 1.58.2
         version: 1.58.2
