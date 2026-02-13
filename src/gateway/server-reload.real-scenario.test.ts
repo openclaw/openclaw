@@ -3,6 +3,11 @@
  * This test MUST fail if "imsg rpc not running" would occur in production.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import {
+  clearAllDispatchers,
+  getTotalPendingReplies,
+} from "../auto-reply/reply/dispatcher-registry.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -26,14 +31,10 @@ describe("real scenario: config change during message processing", () => {
     vi.restoreAllMocks();
     // Wait for any pending microtasks (from markComplete()) to complete
     await Promise.resolve();
-    const { clearAllDispatchers } = await import("../auto-reply/reply/dispatcher-registry.js");
     clearAllDispatchers();
   });
 
   it("should NOT restart gateway while reply delivery is in flight", async () => {
-    const { createReplyDispatcher } = await import("../auto-reply/reply/reply-dispatcher.js");
-    const { getTotalPendingReplies } = await import("../auto-reply/reply/dispatcher-registry.js");
-
     let rpcConnected = true;
     const deliveredReplies: string[] = [];
     const deliveryStarted = createDeferred();
@@ -95,8 +96,6 @@ describe("real scenario: config change during message processing", () => {
   });
 
   it("should keep pending > 0 until reply is actually enqueued", async () => {
-    const { createReplyDispatcher } = await import("../auto-reply/reply/reply-dispatcher.js");
-    const { getTotalPendingReplies } = await import("../auto-reply/reply/dispatcher-registry.js");
     const allowDelivery = createDeferred();
 
     const dispatcher = createReplyDispatcher({

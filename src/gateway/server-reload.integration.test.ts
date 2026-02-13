@@ -4,6 +4,12 @@
  * and ensures they get a reply before the gateway restarts.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import {
+  clearAllDispatchers,
+  getTotalPendingReplies,
+} from "../auto-reply/reply/dispatcher-registry.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import { getTotalQueueSize } from "../process/command-queue.js";
 
 describe("gateway restart deferral integration", () => {
   beforeEach(() => {
@@ -14,15 +20,10 @@ describe("gateway restart deferral integration", () => {
     vi.restoreAllMocks();
     // Wait for any pending microtasks (from markComplete()) to complete
     await Promise.resolve();
-    const { clearAllDispatchers } = await import("../auto-reply/reply/dispatcher-registry.js");
     clearAllDispatchers();
   });
 
   it("should defer restart until dispatcher completes with reply", async () => {
-    const { createReplyDispatcher } = await import("../auto-reply/reply/reply-dispatcher.js");
-    const { getTotalPendingReplies } = await import("../auto-reply/reply/dispatcher-registry.js");
-    const { getTotalQueueSize } = await import("../process/command-queue.js");
-
     const events: string[] = [];
 
     // T=0: Message received — dispatcher created (pending=1 reservation)

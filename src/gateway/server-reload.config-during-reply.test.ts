@@ -7,6 +7,8 @@ import {
   clearAllDispatchers,
   getTotalPendingReplies,
 } from "../auto-reply/reply/dispatcher-registry.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import { getTotalQueueSize } from "../process/command-queue.js";
 
 // Helper to flush all pending microtasks
 async function flushMicrotasks() {
@@ -28,9 +30,6 @@ describe("gateway config reload during reply", () => {
   });
 
   it("should defer restart until reply dispatcher completes", async () => {
-    const { createReplyDispatcher } = await import("../auto-reply/reply/reply-dispatcher.js");
-    const { getTotalQueueSize } = await import("../process/command-queue.js");
-
     // Create a dispatcher (simulating message handling)
     let deliveredReplies: string[] = [];
     const dispatcher = createReplyDispatcher({
