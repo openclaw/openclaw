@@ -933,6 +933,8 @@ type NormalizedWebhookMessage = {
   replyToId?: string;
   replyToBody?: string;
   replyToSender?: string;
+  /** Set when this message is an edit of a previously sent message. */
+  dateEdited?: number;
 };
 
 type NormalizedWebhookReaction = {
@@ -1272,6 +1274,15 @@ function normalizeWebhookMessage(
         : timestampRaw * 1000
       : undefined;
 
+  const dateEditedRaw =
+    readNumberLike(message, "dateEdited") ?? readNumberLike(message, "date_edited");
+  const dateEdited =
+    typeof dateEditedRaw === "number"
+      ? dateEditedRaw > 1_000_000_000_000
+        ? dateEditedRaw
+        : dateEditedRaw * 1000
+      : undefined;
+
   const normalizedSender = normalizeBlueBubblesHandle(senderId);
   if (!normalizedSender) {
     return null;
@@ -1300,7 +1311,32 @@ function normalizeWebhookMessage(
     replyToId: replyMetadata.replyToId,
     replyToBody: replyMetadata.replyToBody,
     replyToSender: replyMetadata.replyToSender,
+    dateEdited,
   };
+}
+
+/**
+ * Attempts to normalize an `updated-message` webhook payload as a message edit.
+ * Returns a NormalizedWebhookMessage with `dateEdited` set when the update
+ * represents an edit (i.e. has dateEdited and is not a tapback/reaction).
+ * Returns null when the payload is not an edit.
+ */
+function normalizeWebhookEdit(
+  payload: Record<string, unknown>,
+): NormalizedWebhookMessage | null {
+  const message = normalizeWebhookMessage(payload);
+  if (!message) {
+    return null;
+  }
+  // Only treat as edit when dateEdited is present and the message is not a tapback
+  if (!message.dateEdited) {
+    return null;
+  }
+  if (message.associatedMessageGuid) {
+    // This is a tapback/reaction update, not a text edit
+    return null;
+  }
+  return message;
 }
 
 function normalizeWebhookReaction(
@@ -1493,11 +1529,19 @@ export async function handleBlueBubblesWebhookRequest(
     return true;
   }
   const reaction = normalizeWebhookReaction(payload);
+
+  // For updated-message events that aren't reactions, check if this is a message edit.
+  let editMessage: NormalizedWebhookMessage | null = null;
+  if (eventType === "updated-message" && !reaction) {
+    editMessage = normalizeWebhookEdit(payload);
+  }
+
   if (
     (eventType === "updated-message" ||
       eventType === "message-reaction" ||
       eventType === "reaction") &&
-    !reaction
+    !reaction &&
+    !editMessage
   ) {
     res.statusCode = 200;
     res.end("ok");
@@ -1505,12 +1549,12 @@ export async function handleBlueBubblesWebhookRequest(
       logVerbose(
         firstTarget.core,
         firstTarget.runtime,
-        `webhook ignored ${eventType || "event"} without reaction`,
+        `webhook ignored ${eventType || "event"} without reaction or edit`,
       );
     }
     return true;
   }
-  const message = reaction ? null : normalizeWebhookMessage(payload);
+  const message = editMessage ?? (reaction ? null : normalizeWebhookMessage(payload));
   if (!message && !reaction) {
     res.statusCode = 400;
     res.end("invalid payload");
@@ -1577,10 +1621,11 @@ export async function handleBlueBubblesWebhookRequest(
     }
   } else if (message) {
     if (firstTarget) {
+      const editTag = message.dateEdited ? " (edit)" : "";
       logVerbose(
         firstTarget.core,
         firstTarget.runtime,
-        `webhook accepted sender=${message.senderId} group=${message.isGroup} chatGuid=${message.chatGuid ?? ""} chatId=${message.chatId ?? ""}`,
+        `webhook accepted${editTag} sender=${message.senderId} group=${message.isGroup} chatGuid=${message.chatGuid ?? ""} chatId=${message.chatId ?? ""}`,
       );
     }
   }
@@ -1599,21 +1644,33 @@ async function processMessage(
   const text = message.text.trim();
   const attachments = message.attachments ?? [];
   const placeholder = buildMessagePlaceholder(message);
-  // Check if text is a tapback pattern (e.g., 'Loved "hello"') and transform to emoji format
-  // For tapbacks, we'll append [[reply_to:N]] at the end; for regular messages, prepend it
-  const tapbackContext = resolveTapbackContext(message);
-  const tapbackParsed = parseTapbackText({
-    text,
-    emojiHint: tapbackContext?.emojiHint,
-    actionHint: tapbackContext?.actionHint,
-    requireQuoted: !tapbackContext,
-  });
+  const isEdit = Boolean(message.dateEdited);
+
+  // For edits, resolve the original message's short ID so we can reference it.
+  // The GUID stays the same across edits, so the reply cache may already have it.
+  let editOriginalShortId: string | undefined;
+  if (isEdit && message.messageId) {
+    editOriginalShortId = getShortIdForUuid(message.messageId);
+  }
+
+  // Skip tapback detection for edits — edited text should never be misinterpreted as a tapback.
+  const tapbackContext = isEdit ? undefined : resolveTapbackContext(message);
+  const tapbackParsed = isEdit
+    ? undefined
+    : parseTapbackText({
+        text,
+        emojiHint: tapbackContext?.emojiHint,
+        actionHint: tapbackContext?.actionHint,
+        requireQuoted: !tapbackContext,
+      });
   const isTapbackMessage = Boolean(tapbackParsed);
-  const rawBody = tapbackParsed
-    ? tapbackParsed.action === "removed"
-      ? `removed ${tapbackParsed.emoji} reaction`
-      : `reacted with ${tapbackParsed.emoji}`
-    : text || placeholder;
+  const rawBody = isEdit
+    ? text || placeholder
+    : tapbackParsed
+      ? tapbackParsed.action === "removed"
+        ? `removed ${tapbackParsed.emoji} reaction`
+        : `reacted with ${tapbackParsed.emoji}`
+      : text || placeholder;
 
   const cacheMessageId = message.messageId?.trim();
   let messageShortId: string | undefined;
@@ -1980,11 +2037,19 @@ async function processMessage(
   // For tapbacks/reactions: append at end (e.g., "reacted with ❤️ [[reply_to:4]]")
   // For regular replies: prepend at start (e.g., "[[reply_to:4]] Awesome")
   const replyTag = formatReplyTag({ replyToId, replyToShortId });
-  const baseBody = replyTag
-    ? isTapbackMessage
-      ? `${rawBody} ${replyTag}`
-      : `${replyTag} ${rawBody}`
-    : rawBody;
+  // For edits, prefix with [[edit:N]] tag so the AI knows which message was changed.
+  const editTag = isEdit
+    ? editOriginalShortId
+      ? `[[edit:${editOriginalShortId}]] `
+      : "[[edit]] "
+    : "";
+  const baseBody = editTag
+    ? `${editTag}${rawBody}`
+    : replyTag
+      ? isTapbackMessage
+        ? `${rawBody} ${replyTag}`
+        : `${replyTag} ${rawBody}`
+      : rawBody;
   const fromLabel = isGroup ? undefined : message.senderName || `user:${message.senderId}`;
   const groupSubject = isGroup ? message.chatName?.trim() || undefined : undefined;
   const groupMembers = isGroup

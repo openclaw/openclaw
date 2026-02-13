@@ -2393,4 +2393,189 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
   });
+
+  describe("message edit handling", () => {
+    it("processes updated-message with dateEdited as an edit", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      // First, send the original message so it's cached with a short ID.
+      const originalPayload = {
+        type: "new-message",
+        data: {
+          text: "hello world",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-edit-1",
+          date: Date.now(),
+        },
+      };
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", originalPayload),
+        createMockResponse(),
+      );
+      await flushAsync();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockClear();
+
+      // Now send the edit event.
+      const editPayload = {
+        type: "updated-message",
+        data: {
+          text: "hello universe",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-edit-1",
+          date: Date.now(),
+          dateEdited: Date.now(),
+        },
+      };
+      const req = createMockRequest("POST", "/bluebubbles-webhook", editPayload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(res.statusCode).toBe(200);
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      // Body should contain the [[edit:N]] tag referencing the original short ID
+      expect(callArgs.ctx.Body).toContain("[[edit:");
+      expect(callArgs.ctx.Body).toContain("hello universe");
+      // Should NOT contain the old text
+      expect(callArgs.ctx.Body).not.toContain("hello world");
+    });
+
+    it("ignores updated-message without dateEdited (e.g. delivery receipt)", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "updated-message",
+        data: {
+          text: "hello world",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-status-1",
+          date: Date.now(),
+          dateRead: Date.now(),
+          // No dateEdited — this is a delivery/read receipt, not an edit
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(res.statusCode).toBe(200);
+      // Should NOT dispatch — no reaction and no edit
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("edit from-me updates cache but does not dispatch to AI", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const editPayload = {
+        type: "updated-message",
+        data: {
+          text: "corrected text",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: true,
+          guid: "msg-my-edit-1",
+          date: Date.now(),
+          dateEdited: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", editPayload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(res.statusCode).toBe(200);
+      // from-me messages are cached but not dispatched
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("edit without prior cache still dispatches with [[edit]] tag", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      // Send an edit for a message we never received the original for.
+      const editPayload = {
+        type: "updated-message",
+        data: {
+          text: "surprise edit",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-unknown-orig",
+          date: Date.now(),
+          dateEdited: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", editPayload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(res.statusCode).toBe(200);
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      // Should have the [[edit]] tag without a short ID since the original was never cached
+      expect(callArgs.ctx.Body).toContain("[[edit]]");
+      expect(callArgs.ctx.Body).toContain("surprise edit");
+    });
+  });
 });
