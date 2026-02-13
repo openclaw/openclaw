@@ -117,6 +117,27 @@ describe("web_search country and language parameters", () => {
   ])("passes $key parameter to Brave API", async ({ key, value }) => {
     const url = await runBraveSearchAndGetUrl({ [key]: value });
     expect(url.searchParams.get(key)).toBe(value);
+
+  it("normalizes zh to zh-hans for search_lang", async () => {
+    const url = await runBraveSearchAndGetUrl({ search_lang: "zh" });
+    expect(url.searchParams.get("search_lang")).toBe("zh-hans");
+  });
+
+  it("normalizes zh-tw to zh-hant for search_lang", async () => {
+    const url = await runBraveSearchAndGetUrl({ search_lang: "zh-tw" });
+    expect(url.searchParams.get("search_lang")).toBe("zh-hant");
+  });
+
+  it("normalizes zh to zh-CN for ui_lang", async () => {
+    const url = await runBraveSearchAndGetUrl({ ui_lang: "zh" });
+    expect(url.searchParams.get("ui_lang")).toBe("zh-CN");
+  });
+
+  it("normalizes zh-tw to zh-TW for ui_lang", async () => {
+    const url = await runBraveSearchAndGetUrl({ ui_lang: "zh-tw" });
+    expect(url.searchParams.get("ui_lang")).toBe("zh-TW");
+  });
+
   });
 
   it("rejects invalid freshness values", async () => {
