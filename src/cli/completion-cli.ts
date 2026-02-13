@@ -236,7 +236,9 @@ export function registerCompletionCli(program: Command) {
     .option("-y, --yes", "Skip confirmation (non-interactive)", false)
     .action(async (options) => {
       const shell = options.shell ?? "zsh";
-      // Eagerly register all subcommands to build the full tree
+      // Eagerly register all subcommands to build the full tree.
+      // Signal completion mode so plugin-heavy registrations can skip plugin loading.
+      process.env.OPENCLAW_COMPLETION_MODE = "1";
       const entries = getSubCliEntries();
       for (const entry of entries) {
         // Skip completion command itself to avoid cycle if we were to add it to the list
@@ -245,6 +247,7 @@ export function registerCompletionCli(program: Command) {
         }
         await registerSubCliByName(program, entry.name);
       }
+      delete process.env.OPENCLAW_COMPLETION_MODE;
 
       if (options.writeState) {
         const writeShells = options.shell ? [shell] : [...COMPLETION_SHELLS];

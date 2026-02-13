@@ -175,8 +175,11 @@ const entries: SubCliEntry[] = [
       // Initialize plugins before registering pairing CLI.
       // The pairing CLI calls listPairingChannels() at registration time,
       // which requires the plugin registry to be populated with channel plugins.
-      const { registerPluginCliCommands } = await import("../../plugins/cli.js");
-      registerPluginCliCommands(program, await loadConfig());
+      // Skip plugin loading in completion mode to avoid jiti transpilation overhead.
+      if (!isTruthyEnvValue(process.env.OPENCLAW_COMPLETION_MODE)) {
+        const { registerPluginCliCommands } = await import("../../plugins/cli.js");
+        registerPluginCliCommands(program, await loadConfig());
+      }
       const mod = await import("../pairing-cli.js");
       mod.registerPairingCli(program);
     },
@@ -187,8 +190,11 @@ const entries: SubCliEntry[] = [
     register: async (program) => {
       const mod = await import("../plugins-cli.js");
       mod.registerPluginsCli(program);
-      const { registerPluginCliCommands } = await import("../../plugins/cli.js");
-      registerPluginCliCommands(program, await loadConfig());
+      // Skip plugin loading in completion mode to avoid jiti transpilation overhead.
+      if (!isTruthyEnvValue(process.env.OPENCLAW_COMPLETION_MODE)) {
+        const { registerPluginCliCommands } = await import("../../plugins/cli.js");
+        registerPluginCliCommands(program, await loadConfig());
+      }
     },
   },
   {
