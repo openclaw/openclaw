@@ -45,14 +45,14 @@ const entries: SubCliEntry[] = [
     description: "Gateway control",
     register: async (program) => {
       const mod = await import("../gateway-cli.js");
-      await mod.registerGatewayCli(program);
+      mod.registerGatewayCli(program);
     },
   },
   {
     name: "daemon",
     description: "Gateway service (legacy alias)",
     register: async (program) => {
-      const mod = await import("../daemon-cli.js");
+      const mod = await import("../daemon-cli/register.js");
       mod.registerDaemonCli(program);
     },
   },

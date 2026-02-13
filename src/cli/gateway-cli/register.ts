@@ -4,6 +4,8 @@ import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
+import { gatewayCallOpts } from "./call-opts.js";
+import { addGatewayRunCommand } from "./run-opts.js";
 
 function styleHealthChannelLine(line: string, rich: boolean): string {
   if (!rich) {
@@ -100,10 +102,7 @@ async function renderCostUsageSummary(
   return lines;
 }
 
-export async function registerGatewayCli(program: Command) {
-  const { addGatewayRunCommand } = await import("./run.js");
-  const { gatewayCallOpts } = await import("./call.js");
-
+export function registerGatewayCli(program: Command) {
   const gateway = addGatewayRunCommand(
     program
       .command("gateway")

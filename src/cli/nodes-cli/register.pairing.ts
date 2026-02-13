@@ -3,9 +3,9 @@ import type { NodesRpcOpts } from "./types.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
+import { nodesCallOpts } from "./call-opts.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parsePairingList } from "./format.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
@@ -14,6 +14,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .description("List pending pairing requests")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("pending", async () => {
+          const { callGatewayCli } = await import("./rpc.js");
           const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending } = parsePairingList(result);
           if (opts.json) {
@@ -61,6 +62,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .argument("<requestId>", "Pending request id")
       .action(async (requestId: string, opts: NodesRpcOpts) => {
         await runNodesCommand("approve", async () => {
+          const { callGatewayCli } = await import("./rpc.js");
           const result = await callGatewayCli("node.pair.approve", opts, {
             requestId,
           });
@@ -76,6 +78,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .argument("<requestId>", "Pending request id")
       .action(async (requestId: string, opts: NodesRpcOpts) => {
         await runNodesCommand("reject", async () => {
+          const { callGatewayCli } = await import("./rpc.js");
           const result = await callGatewayCli("node.pair.reject", opts, {
             requestId,
           });
@@ -92,6 +95,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .requiredOption("--name <displayName>", "New display name")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("rename", async () => {
+          const { callGatewayCli, resolveNodeId } = await import("./rpc.js");
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const name = String(opts.name ?? "").trim();
           if (!nodeId || !name) {

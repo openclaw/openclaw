@@ -115,7 +115,7 @@ describe("gateway-cli coverage", () => {
     const { registerGatewayCli } = await import("./gateway-cli.js");
     const program = new Command();
     program.exitOverride();
-    await registerGatewayCli(program);
+    registerGatewayCli(program);
 
     await program.parseAsync(["gateway", "call", "health", "--params", '{"x":1}', "--json"], {
       from: "user",
@@ -133,7 +133,7 @@ describe("gateway-cli coverage", () => {
     const { registerGatewayCli } = await import("./gateway-cli.js");
     const program = new Command();
     program.exitOverride();
-    await registerGatewayCli(program);
+    registerGatewayCli(program);
 
     await program.parseAsync(["gateway", "probe", "--json"], { from: "user" });
 
@@ -160,7 +160,7 @@ describe("gateway-cli coverage", () => {
     const { registerGatewayCli } = await import("./gateway-cli.js");
     const program = new Command();
     program.exitOverride();
-    await registerGatewayCli(program);
+    registerGatewayCli(program);
 
     await program.parseAsync(["gateway", "discover", "--json"], {
       from: "user",
@@ -192,7 +192,7 @@ describe("gateway-cli coverage", () => {
     const { registerGatewayCli } = await import("./gateway-cli.js");
     const program = new Command();
     program.exitOverride();
-    await registerGatewayCli(program);
+    registerGatewayCli(program);
 
     await program.parseAsync(["gateway", "discover", "--timeout", "1"], {
       from: "user",
@@ -215,7 +215,7 @@ describe("gateway-cli coverage", () => {
     const { registerGatewayCli } = await import("./gateway-cli.js");
     const program = new Command();
     program.exitOverride();
-    await registerGatewayCli(program);
+    registerGatewayCli(program);
 
     await expect(
       program.parseAsync(["gateway", "discover", "--timeout", "0"], {
@@ -235,7 +235,7 @@ describe("gateway-cli coverage", () => {
     const { registerGatewayCli } = await import("./gateway-cli.js");
     const program = new Command();
     program.exitOverride();
-    await registerGatewayCli(program);
+    registerGatewayCli(program);
 
     await expect(
       program.parseAsync(["gateway", "call", "status", "--params", "not-json"], { from: "user" }),
@@ -254,7 +254,7 @@ describe("gateway-cli coverage", () => {
     // Invalid port
     const programInvalidPort = new Command();
     programInvalidPort.exitOverride();
-    await registerGatewayCli(programInvalidPort);
+    registerGatewayCli(programInvalidPort);
     await expect(
       programInvalidPort.parseAsync(["gateway", "--port", "0", "--token", "test-token"], {
         from: "user",
@@ -267,7 +267,7 @@ describe("gateway-cli coverage", () => {
     });
     const programForceFail = new Command();
     programForceFail.exitOverride();
-    await registerGatewayCli(programForceFail);
+    registerGatewayCli(programForceFail);
     await expect(
       programForceFail.parseAsync(
         ["gateway", "--port", "18789", "--token", "test-token", "--force", "--allow-unconfigured"],
@@ -279,7 +279,7 @@ describe("gateway-cli coverage", () => {
     startGatewayServer.mockRejectedValueOnce(new Error("nope"));
     const programStartFail = new Command();
     programStartFail.exitOverride();
-    await registerGatewayCli(programStartFail);
+    registerGatewayCli(programStartFail);
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const beforeSigint = new Set(process.listeners("SIGINT"));
     await expect(
@@ -315,7 +315,7 @@ describe("gateway-cli coverage", () => {
     const { registerGatewayCli } = await import("./gateway-cli.js");
     const program = new Command();
     program.exitOverride();
-    await registerGatewayCli(program);
+    registerGatewayCli(program);
 
     await expect(
       program.parseAsync(["gateway", "--token", "test-token", "--allow-unconfigured"], {
@@ -337,7 +337,7 @@ describe("gateway-cli coverage", () => {
       const { registerGatewayCli } = await import("./gateway-cli.js");
       const program = new Command();
       program.exitOverride();
-      await registerGatewayCli(program);
+      registerGatewayCli(program);
 
       startGatewayServer.mockRejectedValueOnce(new Error("nope"));
       await expect(

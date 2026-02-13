@@ -2,8 +2,8 @@ import type { Command } from "commander";
 import type { NodesRpcOpts } from "./types.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
+import { nodesCallOpts } from "./call-opts.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 
 export function registerNodesNotifyCommand(nodes: Command) {
   nodesCallOpts(
@@ -19,6 +19,7 @@ export function registerNodesNotifyCommand(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("notify", async () => {
+          const { callGatewayCli, resolveNodeId } = await import("./rpc.js");
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const title = String(opts.title ?? "").trim();
           const body = String(opts.body ?? "").trim();
