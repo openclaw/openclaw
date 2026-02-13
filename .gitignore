@@ -83,3 +83,6 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 local/
+
+# Runtime debug logs
+openclaw-*.log

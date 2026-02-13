@@ -544,9 +544,11 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText });
     }
-    // Shared subagent announce flow is text-based; keep direct outbound delivery
-    // for media/channel payloads so structured content is preserved.
-    if (deliveryPayloadHasStructuredContent) {
+    // Route all cron payloads (including text-only) through direct delivery.
+    // The announce flow routes through the main session which can respond with
+    // NO_REPLY, causing legitimate cron outputs to be silently dropped.
+    // See: https://github.com/openclaw/openclaw/issues/13289
+    if (deliveryPayloadHasStructuredContent || synthesizedText) {
       try {
         await deliverOutboundPayloads({
           cfg: cfgWithAgentDefaults,
@@ -563,7 +565,11 @@ export async function runCronIsolatedAgentTurn(params: {
           return withRunSession({ status: "error", summary, outputText, error: String(err) });
         }
       }
-    } else if (synthesizedText) {
+    } else if (false && synthesizedText) {
+      // NOTE: This branch is intentionally unreachable. The announce flow is
+      // preserved for potential future use but disabled because routing through
+      // the main session agent is unreliable — accumulated NO_REPLY patterns
+      // cause it to drop legitimate cron outputs.
       const announceSessionKey = resolveAgentMainSessionKey({
         cfg: params.cfg,
         agentId,
