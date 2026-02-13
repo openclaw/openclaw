@@ -32,6 +32,7 @@ describe("applyAuthChoice", () => {
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
   const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
   const previousOpenrouterKey = process.env.OPENROUTER_API_KEY;
   const previousLitellmKey = process.env.LITELLM_API_KEY;
   const previousAiGatewayKey = process.env.AI_GATEWAY_API_KEY;
@@ -61,6 +62,11 @@ describe("applyAuthChoice", () => {
       delete process.env.PI_CODING_AGENT_DIR;
     } else {
       process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+    }
+    if (previousAnthropicKey === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
     }
     if (previousOpenrouterKey === undefined) {
       delete process.env.OPENROUTER_API_KEY;
@@ -441,6 +447,102 @@ describe("applyAuthChoice", () => {
     expect(result.config.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
     expect(result.config.models?.providers?.["opencode-zen"]).toBeUndefined();
     expect(result.agentModelOverride).toBe("opencode/claude-opus-4-6");
+  });
+
+  it("does not persist literal 'undefined' when Anthropic API key prompt returns undefined", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    delete process.env.ANTHROPIC_API_KEY;
+
+    const text = vi.fn(async () => undefined as unknown as string);
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select: vi.fn(async () => "" as never),
+      multiselect: vi.fn(async () => []),
+      text,
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "apiKey",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(result.config.auth?.profiles?.["anthropic:default"]).toMatchObject({
+      provider: "anthropic",
+      mode: "api_key",
+    });
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { key?: string }>;
+    };
+    expect(parsed.profiles?.["anthropic:default"]?.key).toBe("");
+    expect(parsed.profiles?.["anthropic:default"]?.key).not.toBe("undefined");
+  });
+
+  it("does not persist literal 'undefined' when OpenRouter API key prompt returns undefined", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    delete process.env.OPENROUTER_API_KEY;
+
+    const text = vi.fn(async () => undefined as unknown as string);
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select: vi.fn(async () => "" as never),
+      multiselect: vi.fn(async () => []),
+      text,
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "openrouter-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(result.config.auth?.profiles?.["openrouter:default"]).toMatchObject({
+      provider: "openrouter",
+      mode: "api_key",
+    });
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { key?: string }>;
+    };
+    expect(parsed.profiles?.["openrouter:default"]?.key).toBe("");
+    expect(parsed.profiles?.["openrouter:default"]?.key).not.toBe("undefined");
   });
 
   it("uses existing OPENROUTER_API_KEY when selecting openrouter-api-key", async () => {
