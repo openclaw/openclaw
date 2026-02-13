@@ -1,15 +1,15 @@
 import type { Command } from "commander";
-import { defaultRuntime } from "../runtime.js";
-import { isRich, theme } from "../terminal/theme.js";
-import { renderTable } from "../terminal/table.js";
-import { callGatewayFromCli } from "./gateway-rpc.js";
-import { describeUnknownError } from "./gateway-cli/shared.js";
+import { resolveStateDir } from "../config/paths.js";
+import { AgentShieldAllowlist } from "../infra/agentshield-allowlist.js";
 import {
   AgentShieldApprovalStore,
   type ApprovalRequestStatus,
 } from "../infra/agentshield-approval-store.js";
-import { AgentShieldAllowlist } from "../infra/agentshield-allowlist.js";
-import { resolveStateDir } from "../config/paths.js";
+import { defaultRuntime } from "../runtime.js";
+import { renderTable } from "../terminal/table.js";
+import { isRich, theme } from "../terminal/theme.js";
+import { describeUnknownError } from "./gateway-cli/shared.js";
+import { callGatewayFromCli } from "./gateway-rpc.js";
 
 type AgentShieldApprovalsCliOpts = {
   json?: boolean;
@@ -46,7 +46,7 @@ function formatTimestamp(isoString: string): string {
 
 function formatCliError(err: unknown): string {
   const msg = describeUnknownError(err);
-  return msg.includes("\n") ? msg.split("\n")[0]! : msg;
+  return msg.includes("\n") ? msg.split("\n")[0] : msg;
 }
 
 function checkEnabled(): boolean {
@@ -76,7 +76,9 @@ export function registerAgentShieldApprovalsCli(program: Command) {
     .option("--limit <n>", "Limit number of results")
     .option("--json", "Output as JSON")
     .action(async (opts: AgentShieldApprovalsCliOpts) => {
-      if (!checkEnabled()) return;
+      if (!checkEnabled()) {
+        return;
+      }
 
       try {
         const stateDir = resolveStateDir();
@@ -108,7 +110,7 @@ export function registerAgentShieldApprovalsCli(program: Command) {
         }
 
         // Merge: gateway pending approvals take precedence for status
-        const mergedMap = new Map<string, typeof persistedRequests[0]>();
+        const mergedMap = new Map<string, (typeof persistedRequests)[0]>();
         for (const req of persistedRequests) {
           mergedMap.set(req.id, req);
         }
@@ -135,9 +137,7 @@ export function registerAgentShieldApprovalsCli(program: Command) {
         }
 
         // Sort by createdAt descending
-        entries.sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-        );
+        entries.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
         // Apply limit
         if (limit && limit > 0) {
@@ -150,11 +150,7 @@ export function registerAgentShieldApprovalsCli(program: Command) {
         }
 
         if (entries.length === 0) {
-          defaultRuntime.log(
-            isRich()
-              ? theme.muted("No approvals found.")
-              : "No approvals found.",
-          );
+          defaultRuntime.log(isRich() ? theme.muted("No approvals found.") : "No approvals found.");
           return;
         }
 
@@ -194,7 +190,9 @@ export function registerAgentShieldApprovalsCli(program: Command) {
     .description("View details of an approval request")
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: AgentShieldApprovalsCliOpts) => {
-      if (!checkEnabled()) return;
+      if (!checkEnabled()) {
+        return;
+      }
 
       try {
         const stateDir = resolveStateDir();
@@ -228,18 +226,24 @@ export function registerAgentShieldApprovalsCli(program: Command) {
               defaultRuntime.log(`Tool:        ${entry.toolName}`);
               defaultRuntime.log(`Agent:       ${entry.agentId || "*"}`);
               defaultRuntime.log(`Fingerprint: ${entry.argsFingerprint}`);
-              defaultRuntime.log(`Created:     ${formatTimestamp(new Date(entry.createdAtMs).toISOString())}`);
-              defaultRuntime.log(`Expires:     ${formatTimestamp(new Date(entry.expiresAtMs).toISOString())}`);
+              defaultRuntime.log(
+                `Created:     ${formatTimestamp(new Date(entry.createdAtMs).toISOString())}`,
+              );
+              defaultRuntime.log(
+                `Expires:     ${formatTimestamp(new Date(entry.expiresAtMs).toISOString())}`,
+              );
               defaultRuntime.log(`Status:      pending`);
               defaultRuntime.log("");
+              defaultRuntime.log(isRich() ? theme.muted("Commands:") : "Commands:");
               defaultRuntime.log(
-                isRich()
-                  ? theme.muted("Commands:")
-                  : "Commands:",
+                `  openclaw agentshield-approvals decide ${entry.id.slice(0, 12)} --decision allow-once`,
               );
-              defaultRuntime.log(`  openclaw agentshield-approvals decide ${entry.id.slice(0, 12)} --decision allow-once`);
-              defaultRuntime.log(`  openclaw agentshield-approvals decide ${entry.id.slice(0, 12)} --decision allow-always`);
-              defaultRuntime.log(`  openclaw agentshield-approvals decide ${entry.id.slice(0, 12)} --decision deny`);
+              defaultRuntime.log(
+                `  openclaw agentshield-approvals decide ${entry.id.slice(0, 12)} --decision allow-always`,
+              );
+              defaultRuntime.log(
+                `  openclaw agentshield-approvals decide ${entry.id.slice(0, 12)} --decision deny`,
+              );
               return;
             }
           } catch {
@@ -281,21 +285,19 @@ export function registerAgentShieldApprovalsCli(program: Command) {
 
         if (request.status === "pending") {
           defaultRuntime.log("");
+          defaultRuntime.log(isRich() ? theme.muted("Commands:") : "Commands:");
           defaultRuntime.log(
-            isRich()
-              ? theme.muted("Commands:")
-              : "Commands:",
+            `  openclaw agentshield-approvals decide ${request.id.slice(0, 12)} --decision allow-once`,
           );
-          defaultRuntime.log(`  openclaw agentshield-approvals decide ${request.id.slice(0, 12)} --decision allow-once`);
-          defaultRuntime.log(`  openclaw agentshield-approvals decide ${request.id.slice(0, 12)} --decision allow-always`);
-          defaultRuntime.log(`  openclaw agentshield-approvals decide ${request.id.slice(0, 12)} --decision deny`);
+          defaultRuntime.log(
+            `  openclaw agentshield-approvals decide ${request.id.slice(0, 12)} --decision allow-always`,
+          );
+          defaultRuntime.log(
+            `  openclaw agentshield-approvals decide ${request.id.slice(0, 12)} --decision deny`,
+          );
         } else if (request.status === "approved" && decision?.decision !== "deny") {
           defaultRuntime.log("");
-          defaultRuntime.log(
-            isRich()
-              ? theme.muted("To retry:")
-              : "To retry:",
-          );
+          defaultRuntime.log(isRich() ? theme.muted("To retry:") : "To retry:");
           defaultRuntime.log(`  openclaw agentshield-approvals retry ${request.id.slice(0, 12)}`);
         }
       } catch (err) {
@@ -309,12 +311,16 @@ export function registerAgentShieldApprovalsCli(program: Command) {
   // ─────────────────────────────────────────────────────────────────────────────
   approvals
     .command("decide <id>")
-    .description("Approve or deny an AgentShield approval (--decision allow-once|allow-always|deny)")
+    .description(
+      "Approve or deny an AgentShield approval (--decision allow-once|allow-always|deny)",
+    )
     .requiredOption("--decision <decision>", "Decision: allow-once, allow-always, or deny")
     .option("--reason <reason>", "Optional reason for the decision")
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: AgentShieldApprovalsCliOpts & { decision: string }) => {
-      if (!checkEnabled()) return;
+      if (!checkEnabled()) {
+        return;
+      }
 
       try {
         const decision = opts.decision;
@@ -333,10 +339,14 @@ export function registerAgentShieldApprovalsCli(program: Command) {
         // Try to resolve in gateway first
         let gatewayResolved = false;
         try {
-          const result = (await callGatewayFromCli("agentshield.approval.resolve", {}, {
-            id: id.trim(),
-            decision,
-          })) as { ok: boolean };
+          const result = (await callGatewayFromCli(
+            "agentshield.approval.resolve",
+            {},
+            {
+              id: id.trim(),
+              decision,
+            },
+          )) as { ok: boolean };
           gatewayResolved = result.ok;
         } catch {
           // Gateway not running or approval not in memory
@@ -377,7 +387,9 @@ export function registerAgentShieldApprovalsCli(program: Command) {
         if (decision === "allow-always" && request) {
           defaultRuntime.log(
             isRich()
-              ? theme.muted(`Added fingerprint ${request.argsFingerprint.slice(0, 16)}… to allowlist.`)
+              ? theme.muted(
+                  `Added fingerprint ${request.argsFingerprint.slice(0, 16)}… to allowlist.`,
+                )
               : `Added fingerprint ${request.argsFingerprint.slice(0, 16)}… to allowlist.`,
           );
         }
@@ -385,9 +397,7 @@ export function registerAgentShieldApprovalsCli(program: Command) {
         if (decision !== "deny") {
           defaultRuntime.log("");
           defaultRuntime.log(
-            isRich()
-              ? theme.muted("To retry the tool call:")
-              : "To retry the tool call:",
+            isRich() ? theme.muted("To retry the tool call:") : "To retry the tool call:",
           );
           defaultRuntime.log(`  openclaw agentshield-approvals retry ${id.slice(0, 12)}`);
         }
@@ -403,12 +413,16 @@ export function registerAgentShieldApprovalsCli(program: Command) {
     .description("(Deprecated: use 'decide' instead) Approve or deny a pending approval")
     .option("--json", "Output as JSON")
     .action(async (id: string, decision: string, opts: AgentShieldApprovalsCliOpts) => {
-      if (!checkEnabled()) return;
+      if (!checkEnabled()) {
+        return;
+      }
 
       // Delegate to decide
       defaultRuntime.log(
         isRich()
-          ? theme.muted("Note: 'approve' is deprecated. Use 'decide --decision <decision>' instead.")
+          ? theme.muted(
+              "Note: 'approve' is deprecated. Use 'decide --decision <decision>' instead.",
+            )
           : "Note: 'approve' is deprecated. Use 'decide --decision <decision>' instead.",
       );
 
@@ -451,7 +465,9 @@ export function registerAgentShieldApprovalsCli(program: Command) {
     .description("Retry an approved tool call")
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: AgentShieldApprovalsCliOpts) => {
-      if (!checkEnabled()) return;
+      if (!checkEnabled()) {
+        return;
+      }
 
       try {
         const stateDir = resolveStateDir();
@@ -491,17 +507,18 @@ export function registerAgentShieldApprovalsCli(program: Command) {
 
         if (!retryEntry) {
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify({
-              ok: false,
-              error: "retry_data_not_available",
-              message: "Retry data not available. The tool call must be re-initiated by the agent.",
-            }));
+            defaultRuntime.log(
+              JSON.stringify({
+                ok: false,
+                error: "retry_data_not_available",
+                message:
+                  "Retry data not available. The tool call must be re-initiated by the agent.",
+              }),
+            );
             return;
           }
           defaultRuntime.log(
-            isRich()
-              ? theme.warning("Retry data not available.")
-              : "⚠️ Retry data not available.",
+            isRich() ? theme.warn("Retry data not available.") : "⚠️ Retry data not available.",
           );
           defaultRuntime.log("The tool call must be re-initiated by the agent.");
           defaultRuntime.log("");
@@ -525,13 +542,15 @@ export function registerAgentShieldApprovalsCli(program: Command) {
         }
 
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify({
-            ok: true,
-            id: request.id,
-            toolName: retryEntry.toolName,
-            fingerprint: request.argsFingerprint,
-            decision: decision.decision,
-          }));
+          defaultRuntime.log(
+            JSON.stringify({
+              ok: true,
+              id: request.id,
+              toolName: retryEntry.toolName,
+              fingerprint: request.argsFingerprint,
+              decision: decision.decision,
+            }),
+          );
           return;
         }
 
@@ -563,7 +582,9 @@ export function registerAgentShieldApprovalsCli(program: Command) {
     .description("List allowlist entries")
     .option("--json", "Output as JSON")
     .action((opts: AgentShieldApprovalsCliOpts) => {
-      if (!checkEnabled()) return;
+      if (!checkEnabled()) {
+        return;
+      }
 
       const stateDir = resolveStateDir();
       const allowlist = new AgentShieldAllowlist(stateDir);
@@ -575,11 +596,7 @@ export function registerAgentShieldApprovalsCli(program: Command) {
       }
 
       if (entries.length === 0) {
-        defaultRuntime.log(
-          isRich()
-            ? theme.muted("Allowlist is empty.")
-            : "Allowlist is empty.",
-        );
+        defaultRuntime.log(isRich() ? theme.muted("Allowlist is empty.") : "Allowlist is empty.");
         return;
       }
 
@@ -607,7 +624,9 @@ export function registerAgentShieldApprovalsCli(program: Command) {
     .description("Remove a fingerprint from the allowlist")
     .option("--json", "Output as JSON")
     .action((fingerprint: string, opts: AgentShieldApprovalsCliOpts) => {
-      if (!checkEnabled()) return;
+      if (!checkEnabled()) {
+        return;
+      }
 
       const stateDir = resolveStateDir();
       const allowlist = new AgentShieldAllowlist(stateDir);

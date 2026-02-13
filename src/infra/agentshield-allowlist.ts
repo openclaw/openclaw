@@ -88,9 +88,7 @@ export class AgentShieldAllowlist {
    */
   isAllowedForTool(fingerprint: string, toolName: string): boolean {
     const data = this.load();
-    return data.entries.some(
-      (e) => e.fingerprint === fingerprint && e.toolName === toolName,
-    );
+    return data.entries.some((e) => e.fingerprint === fingerprint && e.toolName === toolName);
   }
 
   /**
@@ -110,9 +108,7 @@ export class AgentShieldAllowlist {
     data.entries = data.entries.filter((e) => e.fingerprint !== entry.fingerprint);
     data.entries.push(entry);
     // Sort by createdAt descending
-    data.entries.sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
+    data.entries.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     this.save(data);
   }
 

@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import {
-  wrapToolWithAgentShieldApproval,
-  __testing,
-} from "./pi-tools.agentshield.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { wrapToolWithAgentShieldApproval, __testing } from "./pi-tools.agentshield.js";
 
 const { isEnabled, needsApproval, canonicalParamsJSON } = __testing;
 
@@ -133,7 +130,7 @@ describe("wrapToolWithAgentShieldApproval", () => {
     const inner = { content: [{ type: "text", text: "ok" }] };
     const tool = makeTool(inner);
     const wrapped = wrapToolWithAgentShieldApproval(tool, { agentId: "a1" });
-    const result = await wrapped.execute!("tc-1", { x: 1 }, undefined as never);
+    const result = await wrapped.execute("tc-1", { x: 1 }, undefined as never);
     expect(result).toBe(inner);
   });
 
@@ -145,7 +142,7 @@ describe("wrapToolWithAgentShieldApproval", () => {
       agentId: "a1",
       sessionKey: "s1",
     });
-    const result = await wrapped.execute!("tc-1", { cmd: "ls" }, undefined as never);
+    const result = await wrapped.execute("tc-1", { cmd: "ls" }, undefined as never);
     expect(result).toBeDefined();
     const details = (result as Record<string, unknown>).details as Record<string, unknown>;
     expect(details.status).toBe("approval-pending");
@@ -162,7 +159,7 @@ describe("wrapToolWithAgentShieldApproval", () => {
     };
     const tool = makeTool(inner);
     const wrapped = wrapToolWithAgentShieldApproval(tool);
-    const result = await wrapped.execute!("tc-1", {}, undefined as never);
+    const result = await wrapped.execute("tc-1", {}, undefined as never);
     const details = (result as Record<string, unknown>).details as Record<string, unknown>;
     expect(details.status).toBe("approval-pending");
   });
@@ -173,7 +170,7 @@ describe("wrapToolWithAgentShieldApproval", () => {
     const tool = makeTool(inner);
     const params = { b: 2, a: 1 };
     const wrapped = wrapToolWithAgentShieldApproval(tool);
-    const result = await wrapped.execute!("tc-1", params, undefined as never);
+    const result = await wrapped.execute("tc-1", params, undefined as never);
     const details = (result as Record<string, unknown>).details as Record<string, unknown>;
     expect(details.paramsJSON).toBe(canonicalParamsJSON(params));
   });

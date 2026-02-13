@@ -212,7 +212,7 @@ describe("wrapToolWithAgentShieldTrust — revocation enforcement", () => {
       publisherId: "bad-publisher",
     });
 
-    const result = await wrapped.execute!("call-1", {}, undefined, undefined);
+    const result = await wrapped.execute("call-1", {}, undefined, undefined);
     const content = result?.content?.[0];
     expect(content).toBeDefined();
     const parsed = JSON.parse((content as { text: string }).text);
@@ -238,7 +238,7 @@ describe("wrapToolWithAgentShieldTrust — revocation enforcement", () => {
       publisherId: "good-publisher",
     });
 
-    await wrapped.execute!("call-1", {}, undefined, undefined);
+    await wrapped.execute("call-1", {}, undefined, undefined);
     expect(tool.execute).toHaveBeenCalledOnce();
   });
 });
@@ -289,7 +289,7 @@ describe("wrapToolWithAgentShieldTrust — keyring enforcement", () => {
       signerPubkey: "unknown-key-hex",
     });
 
-    const result = await wrapped.execute!("call-1", {}, undefined, undefined);
+    const result = await wrapped.execute("call-1", {}, undefined, undefined);
     const content = result?.content?.[0];
     expect(content).toBeDefined();
     const parsed = JSON.parse((content as { text: string }).text);
@@ -320,7 +320,7 @@ describe("wrapToolWithAgentShieldTrust — keyring enforcement", () => {
       signerPubkey: "active-key-hex",
     });
 
-    await wrapped.execute!("call-1", {}, undefined, undefined);
+    await wrapped.execute("call-1", {}, undefined, undefined);
     expect(tool.execute).toHaveBeenCalledOnce();
   });
 });
