@@ -35,10 +35,6 @@ describe("pi tool definition adapter after_tool_call", () => {
 
   it("dispatches after_tool_call once on successful adapter execution", async () => {
     hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
-    hookMocks.runBeforeToolCallHook.mockResolvedValue({
-      blocked: false,
-      params: { mode: "safe" },
-    });
     const tool = {
       name: "read",
       label: "Read",
@@ -52,10 +48,13 @@ describe("pi tool definition adapter after_tool_call", () => {
 
     expect(result.details).toMatchObject({ ok: true });
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
+    // after_tool_call receives the params as passed to toToolDefinitions;
+    // before_tool_call adjustment happens in wrapToolWithBeforeToolCallHook
+    // (upstream), not inside toToolDefinitions (#15502).
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledWith(
       {
         toolName: "read",
-        params: { mode: "safe" },
+        params: { path: "/tmp/file" },
         result,
       },
       { toolName: "read" },

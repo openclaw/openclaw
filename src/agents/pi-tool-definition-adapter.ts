@@ -91,17 +91,11 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         try {
-          // Call before_tool_call hook
-          const hookOutcome = await runBeforeToolCallHook({
-            toolName: name,
-            params,
-            toolCallId,
-          });
-          if (hookOutcome.blocked) {
-            throw new Error(hookOutcome.reason);
-          }
-          const adjustedParams = hookOutcome.params;
-          const result = await tool.execute(toolCallId, adjustedParams, signal, onUpdate);
+          // NOTE: before_tool_call hook is NOT called here — it is already
+          // invoked by wrapToolWithBeforeToolCallHook (applied in pi-tools.ts)
+          // before the tool reaches toToolDefinitions.  Calling it again would
+          // fire the hook twice per invocation (#15502).
+          const result = await tool.execute(toolCallId, params, signal, onUpdate);
 
           // Call after_tool_call hook
           const hookRunner = getGlobalHookRunner();
@@ -110,7 +104,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               await hookRunner.runAfterToolCall(
                 {
                   toolName: name,
-                  params: isPlainObject(adjustedParams) ? adjustedParams : {},
+                  params: isPlainObject(params) ? params : {},
                   result,
                 },
                 { toolName: name },
