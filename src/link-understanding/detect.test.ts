@@ -26,6 +26,9 @@ describe("extractLinksFromMessage", () => {
 
   it("blocks localhost and common loopback addresses", () => {
     expect(extractLinksFromMessage("http://localhost/secret")).toEqual([]);
+    expect(extractLinksFromMessage("http://foo.localhost/secret")).toEqual([]);
+    expect(extractLinksFromMessage("http://service.local/secret")).toEqual([]);
+    expect(extractLinksFromMessage("http://service.internal/secret")).toEqual([]);
     expect(extractLinksFromMessage("http://0.0.0.0/secret")).toEqual([]);
     expect(extractLinksFromMessage("http://[::1]/secret")).toEqual([]);
   });
@@ -39,14 +42,25 @@ describe("extractLinksFromMessage", () => {
   it("blocks link-local and cloud metadata addresses", () => {
     expect(extractLinksFromMessage("http://169.254.169.254/latest/meta-data/")).toEqual([]);
     expect(extractLinksFromMessage("http://169.254.1.1/test")).toEqual([]);
+    expect(extractLinksFromMessage("http://metadata.google.internal/computeMetadata/v1/")).toEqual(
+      [],
+    );
   });
 
   it("blocks CGNAT range used by Tailscale", () => {
     expect(extractLinksFromMessage("http://100.100.50.1/test")).toEqual([]);
   });
 
+  it("blocks private and mapped IPv6 addresses", () => {
+    expect(extractLinksFromMessage("http://[::ffff:127.0.0.1]/secret")).toEqual([]);
+    expect(extractLinksFromMessage("http://[fe80::1]/secret")).toEqual([]);
+    expect(extractLinksFromMessage("http://[fc00::1]/secret")).toEqual([]);
+  });
+
   it("allows legitimate public URLs", () => {
-    expect(extractLinksFromMessage("https://example.com/page")).toEqual(["https://example.com/page"]);
+    expect(extractLinksFromMessage("https://example.com/page")).toEqual([
+      "https://example.com/page",
+    ]);
     expect(extractLinksFromMessage("https://8.8.8.8/dns")).toEqual(["https://8.8.8.8/dns"]);
   });
 });
