@@ -34,12 +34,13 @@ function extractToolCallsFromAssistant(
     }
 
     if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
-      if (typeof rec.name !== "string" || !rec.name) {
+      const name = typeof rec.name === "string" ? rec.name.trim() : "";
+      if (!name) {
         continue;
       }
       toolCalls.push({
         id: rec.id,
-        name: rec.name,
+        name: name,
       });
     }
   }
@@ -55,11 +56,12 @@ function isToolCallBlock(block: unknown): block is ToolCallBlock {
 }
 
 function isValidToolCallBlock(block: ToolCallBlock): boolean {
-  const b = block as { id?: unknown; name?: unknown };
-  return typeof b.id === "string" && !!b.id && typeof b.name === "string" && !!b.name;
-}
+  const id = typeof block.id === "string" ? block.id.trim() : "";
+  const name = typeof block.name === "string" ? block.name.trim() : "";
+  if (!id || !name) {
+    return false;
+  }
 
-function hasToolCallInput(block: ToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
@@ -85,7 +87,7 @@ function makeMissingToolResult(params: {
   return {
     role: "toolResult",
     toolCallId: params.toolCallId,
-    toolName: params.toolName || "unknown",
+    toolName: (params.toolName && params.toolName.trim()) || "unknown",
     content: [
       {
         type: "text",
@@ -127,7 +129,7 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
 
     for (const block of msg.content) {
       if (isToolCallBlock(block)) {
-        if (!hasToolCallInput(block) || !isValidToolCallBlock(block)) {
+        if (!isValidToolCallBlock(block)) {
           droppedToolCalls += 1;
           droppedInMessage += 1;
           changed = true;
