@@ -40,6 +40,12 @@ import {
   tail,
 } from "./bash-process-registry.js";
 import {
+  type ExecProcessHandle,
+  type ExecProcessOutcome,
+  type PtyHandle,
+  validateHostEnv,
+} from "./bash-tools.exec-internal.js";
+import {
   buildDockerExecArgs,
   buildSandboxEnv,
   chunkString,
@@ -56,55 +62,6 @@ import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
-// Security: Blocklist of environment variables that could alter execution flow
-// or inject code when running on non-sandboxed hosts (Gateway/Node).
-const DANGEROUS_HOST_ENV_VARS = new Set([
-  "LD_PRELOAD",
-  "LD_LIBRARY_PATH",
-  "LD_AUDIT",
-  "DYLD_INSERT_LIBRARIES",
-  "DYLD_LIBRARY_PATH",
-  "NODE_OPTIONS",
-  "NODE_PATH",
-  "PYTHONPATH",
-  "PYTHONHOME",
-  "RUBYLIB",
-  "PERL5LIB",
-  "BASH_ENV",
-  "ENV",
-  "GCONV_PATH",
-  "IFS",
-  "SSLKEYLOGFILE",
-]);
-const DANGEROUS_HOST_ENV_PREFIXES = ["DYLD_", "LD_"];
-
-// Centralized sanitization helper.
-// Throws an error if dangerous variables or PATH modifications are detected on the host.
-function validateHostEnv(env: Record<string, string>): void {
-  for (const key of Object.keys(env)) {
-    const upperKey = key.toUpperCase();
-
-    // 1. Block known dangerous variables (Fail Closed)
-    if (DANGEROUS_HOST_ENV_PREFIXES.some((prefix) => upperKey.startsWith(prefix))) {
-      throw new Error(
-        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
-      );
-    }
-    if (DANGEROUS_HOST_ENV_VARS.has(upperKey)) {
-      throw new Error(
-        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
-      );
-    }
-
-    // 2. Strictly block PATH modification on host
-    // Allowing custom PATH on the gateway/node can lead to binary hijacking.
-    if (upperKey === "PATH") {
-      throw new Error(
-        "Security Violation: Custom 'PATH' variable is forbidden during host execution.",
-      );
-    }
-  }
-}
 const DEFAULT_MAX_OUTPUT = clampWithDefault(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
   200_000,
@@ -124,15 +81,6 @@ const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
-
-type PtyExitEvent = { exitCode: number; signal?: number };
-type PtyListener<T> = (event: T) => void;
-type PtyHandle = {
-  pid: number;
-  write: (data: string | Buffer) => void;
-  onData: (listener: PtyListener<string>) => void;
-  onExit: (listener: PtyListener<PtyExitEvent>) => void;
-};
 type PtySpawn = (
   file: string,
   args: string[] | string,
@@ -144,24 +92,6 @@ type PtySpawn = (
     env?: Record<string, string>;
   },
 ) => PtyHandle;
-
-type ExecProcessOutcome = {
-  status: "completed" | "failed";
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | number | null;
-  durationMs: number;
-  aggregated: string;
-  timedOut: boolean;
-  reason?: string;
-};
-
-type ExecProcessHandle = {
-  session: ProcessSession;
-  startedAt: number;
-  pid?: number;
-  promise: Promise<ExecProcessOutcome>;
-  kill: () => void;
-};
 
 export type ExecToolDefaults = {
   host?: ExecHost;
@@ -1304,17 +1234,15 @@ export function createExecTool(
 
         if (requiresAsk) {
           const approvalId = crypto.randomUUID();
-          const approvalSlug = createApprovalSlug(approvalId);
-          const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
           const contextKey = `exec:${approvalId}`;
           const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
           const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
           const commandText = params.command;
           const effectiveTimeout =
             typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
-          const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
+          const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
 
-          void (async () => {
+          return (async (): Promise<AgentToolResult<ExecToolDetails>> => {
             let decision: string | null = null;
             try {
               const decisionResult = await callGatewayTool<{ decision: string }>(
@@ -1343,7 +1271,21 @@ export function createExecTool(
                 `Exec denied (gateway id=${approvalId}, approval-request-failed): ${commandText}`,
                 { sessionKey: notifySessionKey, contextKey },
               );
-              return;
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}Exec denied (approval-request-failed).`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  exitCode: null,
+                  durationMs: 0,
+                  aggregated: "",
+                  cwd: workdir,
+                },
+              };
             }
 
             let approvedByAsk = false;
@@ -1390,7 +1332,21 @@ export function createExecTool(
                 `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${commandText}`,
                 { sessionKey: notifySessionKey, contextKey },
               );
-              return;
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}Exec denied (${deniedReason}).`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  exitCode: null,
+                  durationMs: 0,
+                  aggregated: "",
+                  cwd: workdir,
+                },
+              };
             }
 
             if (allowlistMatches.length > 0) {
@@ -1410,7 +1366,7 @@ export function createExecTool(
               }
             }
 
-            let run: ExecProcessHandle | null = null;
+            let run: ExecProcessHandle;
             try {
               run = await runExecProcess({
                 command: commandText,
@@ -1426,60 +1382,104 @@ export function createExecTool(
                 scopeKey: defaults?.scopeKey,
                 sessionKey: notifySessionKey,
                 timeoutSec: effectiveTimeout,
+                onUpdate,
               });
+              markBackgrounded(run.session);
             } catch {
               emitExecSystemEvent(
                 `Exec denied (gateway id=${approvalId}, spawn-failed): ${commandText}`,
                 { sessionKey: notifySessionKey, contextKey },
               );
-              return;
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}Exec denied (spawn-failed).`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  exitCode: null,
+                  durationMs: 0,
+                  aggregated: "",
+                  cwd: workdir,
+                },
+              };
             }
 
-            markBackgrounded(run.session);
+            const onAbortSignal = () => {
+              if (!run.session.backgrounded) {
+                run.kill();
+              }
+            };
+            if (signal?.aborted) {
+              onAbortSignal();
+            } else if (signal) {
+              signal.addEventListener("abort", onAbortSignal, { once: true });
+            }
 
             let runningTimer: NodeJS.Timeout | null = null;
             if (approvalRunningNoticeMs > 0) {
               runningTimer = setTimeout(() => {
                 emitExecSystemEvent(
-                  `Exec running (gateway id=${approvalId}, session=${run?.session.id}, >${noticeSeconds}s): ${commandText}`,
+                  `Exec running (gateway id=${approvalId}, session=${run.session.id}, >${noticeSeconds}s): ${commandText}`,
                   { sessionKey: notifySessionKey, contextKey },
                 );
               }, approvalRunningNoticeMs);
             }
 
-            const outcome = await run.promise;
-            if (runningTimer) {
-              clearTimeout(runningTimer);
-            }
-            const output = normalizeNotifyOutput(
-              tail(outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-            );
-            const exitLabel = outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
-            const summary = output
-              ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
-              : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
-            emitExecSystemEvent(summary, { sessionKey: notifySessionKey, contextKey });
-          })();
+            try {
+              const outcome = await run.promise;
+              const output = normalizeNotifyOutput(
+                tail(outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
+              );
+              const exitLabel = outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
+              const summary = output
+                ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
+                : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
+              emitExecSystemEvent(summary, { sessionKey: notifySessionKey, contextKey });
 
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `${warningText}Approval required (id ${approvalSlug}). ` +
-                  "Approve to run; updates will arrive after completion.",
-              },
-            ],
-            details: {
-              status: "approval-pending",
-              approvalId,
-              approvalSlug,
-              expiresAtMs,
-              host: "gateway",
-              command: params.command,
-              cwd: workdir,
-            },
-          };
+              if (outcome.status === "failed") {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `${getWarningText()}${outcome.aggregated || outcome.reason || "Command failed."}`,
+                    },
+                  ],
+                  details: {
+                    status: "failed",
+                    exitCode: outcome.exitCode ?? null,
+                    durationMs: outcome.durationMs,
+                    aggregated: outcome.aggregated ?? "",
+                    cwd: run.session.cwd,
+                  },
+                };
+              }
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
+                  },
+                ],
+                details: {
+                  status: "completed",
+                  exitCode: outcome.exitCode ?? 0,
+                  durationMs: outcome.durationMs,
+                  aggregated: outcome.aggregated ?? "",
+                  cwd: run.session.cwd,
+                },
+              };
+            } finally {
+              if (runningTimer) {
+                clearTimeout(runningTimer);
+              }
+              if (signal && !signal.aborted) {
+                signal.removeEventListener("abort", onAbortSignal);
+              }
+            }
+          })();
         }
 
         if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied)) {

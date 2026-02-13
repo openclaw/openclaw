@@ -154,15 +154,10 @@ describe("exec approvals", () => {
   it("requires approval for elevated ask when allowlist misses", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const calls: string[] = [];
-    let resolveApproval: (() => void) | undefined;
-    const approvalSeen = new Promise<void>((resolve) => {
-      resolveApproval = resolve;
-    });
 
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
       calls.push(method);
       if (method === "exec.approval.request") {
-        resolveApproval?.();
         return { decision: "deny" };
       }
       return { ok: true };
@@ -177,8 +172,32 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call4", { command: "echo ok", elevated: true });
-    expect(result.details.status).toBe("approval-pending");
-    await approvalSeen;
     expect(calls).toContain("exec.approval.request");
+    expect(result.details.status).toBe("failed");
+    const text = result.content?.[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("Exec denied (user-denied)");
+  });
+
+  it("returns exec output when gateway approval is allow-always (Always Allow)", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      if (method === "exec.approval.request") {
+        return { decision: "allow-always" };
+      }
+      return { ok: true };
+    });
+
+    const { createExecTool } = await import("./bash-tools.exec.js");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call5", { command: "echo test" });
+    expect(result.details.status).toBe("completed");
+    const text = result.content?.[0]?.type === "text" ? result.content[0].text : "";
+    expect(text.trim()).toBe("test");
   });
 });
