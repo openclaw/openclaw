@@ -1,60 +1,92 @@
-import { describe, expect, it } from "vitest";
+import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
+import { describe, expect, it, vi } from "vitest";
+import { resolvePermissionRequest } from "./client.js";
 
-// Structural tests verify security-critical code exists in client.ts.
-// Full integration tests with ACP SDK mocks deferred to future enhancement.
+function makePermissionRequest(
+  overrides: Partial<RequestPermissionRequest> = {},
+): RequestPermissionRequest {
+  const { toolCall: toolCallOverride, options: optionsOverride, ...restOverrides } = overrides;
+  const base: RequestPermissionRequest = {
+    sessionId: "session-1",
+    toolCall: {
+      toolCallId: "tool-1",
+      title: "read: src/index.ts",
+      status: "pending",
+    },
+    options: [
+      { kind: "allow_once", name: "Allow once", optionId: "allow" },
+      { kind: "reject_once", name: "Reject once", optionId: "reject" },
+    ],
+  };
 
-describe("ACP client permission classification", () => {
-  it("should define dangerous tools that include exec and sessions_spawn", async () => {
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    const source = await fs.readFile(
-      path.resolve(__dirname, "client.ts"),
-      "utf-8",
-    );
+  return {
+    ...base,
+    ...restOverrides,
+    toolCall: toolCallOverride ? { ...base.toolCall, ...toolCallOverride } : base.toolCall,
+    options: optionsOverride ?? base.options,
+  };
+}
 
-    expect(source).toContain("DANGEROUS_ACP_TOOLS");
-    expect(source).toContain('"exec"');
-    expect(source).toContain('"sessions_spawn"');
-    expect(source).toContain('"sessions_send"');
-    expect(source).toContain('"gateway"');
+describe("resolvePermissionRequest", () => {
+  it("auto-approves safe tools without prompting", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(makePermissionRequest(), { prompt, log: () => {} });
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    expect(prompt).not.toHaveBeenCalled();
   });
 
-  it("should not auto-approve when options array is empty", async () => {
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    const source = await fs.readFile(
-      path.resolve(__dirname, "client.ts"),
-      "utf-8",
+  it("prompts for dangerous tool names inferred from title", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: { toolCallId: "tool-2", title: "exec: uname -a", status: "pending" },
+      }),
+      { prompt, log: () => {} },
     );
-
-    // Verify the empty-options guard exists
-    expect(source).toContain("options.length === 0");
-    // Verify it denies rather than approves
-    expect(source).toContain("no options available");
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("exec", "exec: uname -a");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
   });
 
-  it("should use stderr for permission logging (not stdout)", async () => {
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    const source = await fs.readFile(
-      path.resolve(__dirname, "client.ts"),
-      "utf-8",
+  it("uses allow_always and reject_always when once options are absent", async () => {
+    const options: RequestPermissionRequest["options"] = [
+      { kind: "allow_always", name: "Always allow", optionId: "allow-always" },
+      { kind: "reject_always", name: "Always reject", optionId: "reject-always" },
+    ];
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: { toolCallId: "tool-3", title: "gateway: reload", status: "pending" },
+        options,
+      }),
+      { prompt, log: () => {} },
     );
-
-    // Permission logs should go to stderr to avoid corrupting ACP protocol on stdout
-    expect(source).toContain("console.error");
-    expect(source).toContain("[permission");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject-always" } });
   });
 
-  it("should have a 30-second timeout for interactive prompts", async () => {
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    const source = await fs.readFile(
-      path.resolve(__dirname, "client.ts"),
-      "utf-8",
+  it("prompts when tool identity is unknown and can still approve", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-4",
+          title: "Modifying critical configuration file",
+          status: "pending",
+        },
+      }),
+      { prompt, log: () => {} },
     );
+    expect(prompt).toHaveBeenCalledWith(undefined, "Modifying critical configuration file");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+  });
 
-    expect(source).toContain("30_000");
-    expect(source).toContain("[permission timeout]");
+  it("returns cancelled when no permission options are present", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(makePermissionRequest({ options: [] }), {
+      prompt,
+      log: () => {},
+    });
+    expect(prompt).not.toHaveBeenCalled();
+    expect(res).toEqual({ outcome: { outcome: "cancelled" } });
   });
 });
