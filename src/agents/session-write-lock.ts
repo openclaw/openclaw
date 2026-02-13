@@ -25,7 +25,12 @@ function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
+  } catch (err) {
+    // EPERM means the process exists but we lack permission to signal it —
+    // treat as alive to avoid deleting locks held by other users.
+    if ((err as NodeJS.ErrnoException).code === "EPERM") {
+      return true;
+    }
     return false;
   }
 }
@@ -199,6 +204,52 @@ export async function acquireSessionWriteLock(params: {
   const payload = await readLockPayload(lockPath);
   const owner = payload?.pid ? `pid=${payload.pid}` : "unknown";
   throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
+}
+
+/**
+ * Removes orphaned `.lock` files from a directory.
+ *
+ * A lock file is considered orphaned when:
+ * - The PID recorded in it is no longer running, OR
+ * - The lock payload cannot be parsed (corrupted file)
+ *
+ * Call this once during gateway startup to clean up locks left behind
+ * by previous crashes. Only cleans files matching `*.lock`.
+ *
+ * Returns the number of orphaned lock files removed.
+ */
+export async function cleanupOrphanedLocks(directory: string): Promise<number> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(directory);
+  } catch {
+    return 0;
+  }
+
+  const lockFiles = entries.filter((name) => name.endsWith(".lock"));
+  let removed = 0;
+
+  for (const lockFile of lockFiles) {
+    const lockPath = path.join(directory, lockFile);
+
+    // Skip locks held by the current process (in-memory HELD_LOCKS check).
+    const sessionFile = lockPath.replace(/\.lock$/, "");
+    if (HELD_LOCKS.has(sessionFile)) {
+      continue;
+    }
+
+    const payload = await readLockPayload(lockPath);
+    if (!payload || !isAlive(payload.pid)) {
+      try {
+        await fs.rm(lockPath, { force: true });
+        removed += 1;
+      } catch {
+        // Best-effort cleanup; skip files we can't remove.
+      }
+    }
+  }
+
+  return removed;
 }
 
 export const __testing = {
