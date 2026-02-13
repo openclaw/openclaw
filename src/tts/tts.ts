@@ -842,13 +842,18 @@ function isCustomOpenAIEndpoint(): boolean {
 export const OPENAI_TTS_VOICES = [
   "alloy",
   "ash",
+  "ballad",
+  "cedar",
   "coral",
   "echo",
   "fable",
+  "juniper",
+  "marin",
   "onyx",
   "nova",
   "sage",
   "shimmer",
+  "verse",
 ] as const;
 
 type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
