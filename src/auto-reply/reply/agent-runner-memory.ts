@@ -69,6 +69,7 @@ export async function runMemoryFlushIfNeeded(params: {
         (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined),
       contextWindowTokens: resolveMemoryFlushContextWindowTokens({
         modelId: params.followupRun.run.model ?? params.defaultModel,
+        providerId: params.followupRun.run.provider,
         agentCfgContextTokens: params.agentCfgContextTokens,
       }),
       reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,

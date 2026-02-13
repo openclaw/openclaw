@@ -5,7 +5,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-type ModelEntry = { id: string; contextWindow?: number };
+type ModelEntry = { id: string; provider?: string; contextWindow?: number };
 
 const MODEL_CACHE = new Map<string, number>();
 const loadPromise = (async () => {
@@ -22,6 +22,16 @@ const loadPromise = (async () => {
         continue;
       }
       if (typeof m.contextWindow === "number" && m.contextWindow > 0) {
+        // Store with provider-qualified key (e.g. "rdsec/claude-4.6-opus") so
+        // models that share the same id across providers but differ in context
+        // window are resolved correctly.
+        if (m.provider) {
+          MODEL_CACHE.set(`${m.provider}/${m.id}`, m.contextWindow);
+        }
+        // Also store by bare model id as a fallback for callers that only have
+        // the model name.  When multiple providers define the same id the last
+        // one wins (matching original behavior), but a provider-qualified
+        // lookup (above) will always take precedence.
         MODEL_CACHE.set(m.id, m.contextWindow);
       }
     }
