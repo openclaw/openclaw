@@ -1,14 +1,16 @@
-import OpenClawIPC
 import Foundation
+import OpenClawIPC
 import OSLog
 
-// Lightweight SemVer helper (major.minor.patch only) for gateway compatibility checks.
+/// Lightweight SemVer helper (major.minor.patch only) for gateway compatibility checks.
 struct Semver: Comparable, CustomStringConvertible, Sendable {
     let major: Int
     let minor: Int
     let patch: Int
 
-    var description: String { "\(self.major).\(self.minor).\(self.patch)" }
+    var description: String {
+        "\(self.major).\(self.minor).\(self.patch)"
+    }
 
     static func < (lhs: Semver, rhs: Semver) -> Bool {
         if lhs.major != rhs.major { return lhs.major < rhs.major }
@@ -93,7 +95,7 @@ enum GatewayEnvironment {
         return (trimmed?.isEmpty == false) ? trimmed : nil
     }
 
-    // Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
+    /// Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
     static func expectedGatewayVersion(from versionString: String?) -> Semver? {
         Semver.parse(versionString)
     }

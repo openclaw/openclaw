@@ -10,7 +10,9 @@ struct RuntimeVersion: Comparable, CustomStringConvertible {
     let minor: Int
     let patch: Int
 
-    var description: String { "\(self.major).\(self.minor).\(self.patch)" }
+    var description: String {
+        "\(self.major).\(self.minor).\(self.patch)"
+    }
 
     static func < (lhs: RuntimeVersion, rhs: RuntimeVersion) -> Bool {
         if lhs.major != rhs.major { return lhs.major < rhs.major }
@@ -52,7 +54,7 @@ enum RuntimeResolutionError: Error {
 
 enum RuntimeLocator {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "runtime")
-    private static let minNode = RuntimeVersion(major: 22, minor: 0, patch: 0)
+    private static let minNode = RuntimeVersion(major: 22, minor: 12, patch: 0)
 
     static func resolve(
         searchPaths: [String] = CommandResolver.preferredPaths()) -> Result<RuntimeResolution, RuntimeResolutionError>
@@ -89,7 +91,7 @@ enum RuntimeLocator {
         switch error {
         case let .notFound(searchPaths):
             [
-                "openclaw needs Node >=22.0.0 but found no runtime.",
+                "openclaw needs Node >=22.12.0 but found no runtime.",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
                 "Install Node: https://nodejs.org/en/download",
             ].joined(separator: "\n")
@@ -103,7 +105,7 @@ enum RuntimeLocator {
             [
                 "Could not parse \(kind.rawValue) version output \"\(raw)\" from \(path).",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
-                "Try reinstalling or pinning a supported version (Node >=22.0.0).",
+                "Try reinstalling or pinning a supported version (Node >=22.12.0).",
             ].joined(separator: "\n")
         }
     }
@@ -163,5 +165,7 @@ enum RuntimeLocator {
 }
 
 extension RuntimeKind {
-    fileprivate var binaryName: String { "node" }
+    fileprivate var binaryName: String {
+        "node"
+    }
 }
