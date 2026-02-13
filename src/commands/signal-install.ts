@@ -9,12 +9,12 @@ import { resolveBrewExecutable } from "../infra/brew.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { CONFIG_DIR } from "../utils.js";
 
-type ReleaseAsset = {
+export type ReleaseAsset = {
   name?: string;
   browser_download_url?: string;
 };
 
-type NamedAsset = {
+export type NamedAsset = {
   name: string;
   browser_download_url: string;
 };
@@ -31,7 +31,8 @@ export type SignalInstallResult = {
   error?: string;
 };
 
-function looksLikeArchive(name: string): boolean {
+/** @internal Exported for testing. */
+export function looksLikeArchive(name: string): boolean {
   return name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip");
 }
 
@@ -43,7 +44,8 @@ function looksLikeArchive(name: string): boolean {
  * returns `undefined` so the caller can fall back to a different install
  * strategy (e.g. Homebrew).
  */
-function pickAsset(
+/** @internal Exported for testing. */
+export function pickAsset(
   assets: ReleaseAsset[],
   platform: NodeJS.Platform,
   arch: string,
