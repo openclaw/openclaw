@@ -226,7 +226,10 @@
         },
         "channel-info": { "label": "channel", "detailKeys": ["provider", "channelId"] },
         "channel-list": { "label": "channels", "detailKeys": ["provider", "guildId"] },
-        "channel-create": { "label": "channel create", "detailKeys": ["provider", "name", "guildId"] },
+        "channel-create": {
+          "label": "channel create",
+          "detailKeys": ["provider", "name", "guildId"]
+        },
         "voice-status": { "label": "voice", "detailKeys": ["provider", "guildId", "userId"] },
         "event-list": { "label": "events", "detailKeys": ["provider", "guildId"] },
         "event-create": {

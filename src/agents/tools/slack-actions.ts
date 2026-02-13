@@ -282,7 +282,9 @@ export async function handleSlackAction(
       }
       return jsonResult({ ok: true });
     }
-    const pins = readOpts ? await listSlackPins(channelId, readOpts) : await listSlackPins(channelId);
+    const pins = readOpts
+      ? await listSlackPins(channelId, readOpts)
+      : await listSlackPins(channelId);
     const normalizedPins = pins.map((pin) => {
       const message = pin.message
         ? withNormalizedTimestamp(
@@ -301,10 +303,9 @@ export async function handleSlackAction(
     }
     const name = readStringParam(params, "name", { required: true });
     const topic = readStringParam(params, "topic");
-    const isPrivate =
-      readBooleanParam(params, "private") ?? readBooleanParam(params, "isPrivate");
+    const isPrivate = readBooleanParam(params, "private") ?? readBooleanParam(params, "isPrivate");
     const result = await createSlackChannel(name, {
-      ...(writeOpts ?? {}),
+      ...writeOpts,
       isPrivate: isPrivate ?? undefined,
       topic: topic ?? undefined,
     });
@@ -316,7 +317,9 @@ export async function handleSlackAction(
       throw new Error("Slack member info is disabled.");
     }
     const userId = readStringParam(params, "userId", { required: true });
-    const info = readOpts ? await getSlackMemberInfo(userId, readOpts) : await getSlackMemberInfo(userId);
+    const info = readOpts
+      ? await getSlackMemberInfo(userId, readOpts)
+      : await getSlackMemberInfo(userId);
     return jsonResult({ ok: true, info });
   }
 
