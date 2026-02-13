@@ -80,6 +80,62 @@ describe("sendMessage channel normalization", () => {
   });
 });
 
+describe("sendMessage replyToId threading", () => {
+  beforeEach(async () => {
+    callGatewayMock.mockReset();
+    vi.resetModules();
+    await setRegistry(emptyRegistry);
+  });
+
+  afterEach(async () => {
+    await setRegistry(emptyRegistry);
+  });
+
+  it("passes replyToId through to the outbound adapter", async () => {
+    const { sendMessage } = await loadMessage();
+    const capturedCtx: Record<string, unknown>[] = [];
+    const plugin = createMattermostLikePlugin({
+      onSendText: (ctx) => {
+        capturedCtx.push(ctx);
+      },
+    });
+    await setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
+
+    await sendMessage({
+      cfg: {},
+      to: "channel:town-square",
+      content: "thread reply",
+      channel: "mattermost",
+      replyToId: "post123",
+    });
+
+    expect(capturedCtx).toHaveLength(1);
+    expect(capturedCtx[0]?.replyToId).toBe("post123");
+  });
+
+  it("passes threadId through to the outbound adapter", async () => {
+    const { sendMessage } = await loadMessage();
+    const capturedCtx: Record<string, unknown>[] = [];
+    const plugin = createMattermostLikePlugin({
+      onSendText: (ctx) => {
+        capturedCtx.push(ctx);
+      },
+    });
+    await setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
+
+    await sendMessage({
+      cfg: {},
+      to: "channel:town-square",
+      content: "topic reply",
+      channel: "mattermost",
+      threadId: "topic456",
+    });
+
+    expect(capturedCtx).toHaveLength(1);
+    expect(capturedCtx[0]?.threadId).toBe("topic456");
+  });
+});
+
 describe("sendPoll channel normalization", () => {
   beforeEach(async () => {
     callGatewayMock.mockReset();
@@ -149,6 +205,32 @@ const createMSTeamsOutbound = (opts?: { includePoll?: boolean }): ChannelOutboun
         sendPoll: async () => ({ channel: "msteams", messageId: "p1" }),
       }
     : {}),
+});
+
+const createMattermostLikePlugin = (opts: {
+  onSendText: (ctx: Record<string, unknown>) => void;
+}): ChannelPlugin => ({
+  id: "mattermost",
+  meta: {
+    id: "mattermost",
+    label: "Mattermost",
+    selectionLabel: "Mattermost",
+    docsPath: "/channels/mattermost",
+    blurb: "Mattermost test stub.",
+  },
+  capabilities: { chatTypes: ["direct", "channel"] },
+  config: {
+    listAccountIds: () => ["default"],
+    resolveAccount: () => ({}),
+  },
+  outbound: {
+    deliveryMode: "direct",
+    sendText: async (ctx) => {
+      opts.onSendText(ctx as unknown as Record<string, unknown>);
+      return { channel: "mattermost", messageId: "m1" };
+    },
+    sendMedia: async () => ({ channel: "mattermost", messageId: "m2" }),
+  },
 });
 
 const createMSTeamsPlugin = (params: {
