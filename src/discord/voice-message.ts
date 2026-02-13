@@ -50,9 +50,8 @@ export async function getAudioDuration(filePath: string): Promise<number> {
     }
     return Math.round(duration * 100) / 100; // Round to 2 decimal places
   } catch (err) {
-    throw new Error(`Failed to get audio duration: ${err instanceof Error ? err.message : err}`, {
-      cause: err,
-    });
+    const errMessage = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to get audio duration: ${errMessage}`, { cause: err });
   }
 }
 
