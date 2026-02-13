@@ -59,7 +59,7 @@ describe("compaction hook wiring", () => {
 
     const ctx = {
       params: { runId: "r2", session: { messages: [1, 2] } },
-      state: { compactionInFlight: true },
+      state: { compactionInFlight: true, compactionStartMessageCount: 3 },
       log: { debug: vi.fn(), warn: vi.fn() },
       maybeResolveCompactionWait: vi.fn(),
       getCompactionCount: () => 1,
@@ -80,7 +80,7 @@ describe("compaction hook wiring", () => {
     expect(event.compactedCount).toBe(1);
   });
 
-  it("does not call runAfterCompaction when willRetry is true", async () => {
+  it("calls runAfterCompaction when willRetry is true", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const { handleAutoCompactionEnd } =
@@ -103,6 +103,13 @@ describe("compaction hook wiring", () => {
       } as never,
     );
 
-    expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
+    });
+    const [event] = hookMocks.runner.runAfterCompaction.mock.calls[0];
+    expect(event.messageCount).toBe(0);
+    expect(event.compactedCount).toBe(0);
+    expect(ctx.noteCompactionRetry).toHaveBeenCalledTimes(1);
+    expect(ctx.resetForCompactionRetry).toHaveBeenCalledTimes(1);
   });
 });
