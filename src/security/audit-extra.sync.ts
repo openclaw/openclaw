@@ -1189,9 +1189,7 @@ export function collectDenyCommandsDefaultsFindings(cfg: OpenClawConfig): Securi
   const findings: SecurityAuditFinding[] = [];
   const denyCommands = cfg.gateway?.nodes?.denyCommands ?? [];
 
-  const missing = HARDENED_DENY_COMMANDS.filter(
-    (cmd) => !denyCommands.some((denied) => denied.includes(cmd) || cmd.includes(denied)),
-  );
+  const missing = HARDENED_DENY_COMMANDS.filter((cmd) => !denyCommands.includes(cmd));
 
   if (missing.length === 0) {
     return findings;
