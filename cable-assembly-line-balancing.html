@@ -651,6 +651,12 @@
 
 <!-- SheetJS for Excel export/import -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script>
+  if (typeof XLSX === 'undefined') {
+    // Fallback CDN if primary fails
+    document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"><\/script>');
+  }
+</script>
 
 <script>
 // ══════════════════════════════════════════════════════════════
@@ -2731,31 +2737,55 @@ function exportAllDataExcel() {
   XLSX.writeFile(wb, filename);
 }
 
+// Convert Excel time serial number (e.g., 0.25 = 06:00) to HH:MM string
+function excelTimeToString(val) {
+  if (typeof val === 'string' && val.includes(':')) return val;
+  if (typeof val === 'number' && val >= 0 && val < 1) {
+    const totalMinutes = Math.round(val * 24 * 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
+  }
+  if (val instanceof Date) {
+    return String(val.getHours()).padStart(2, '0') + ':' + String(val.getMinutes()).padStart(2, '0');
+  }
+  return String(val || '08:00');
+}
+
 function importAllDataExcel(input) {
   if (!input.files || !input.files[0]) return;
+
+  if (typeof XLSX === 'undefined') {
+    alert('Excel library not loaded. Please check your internet connection and refresh the page.');
+    return;
+  }
 
   const file = input.files[0];
   const reader = new FileReader();
 
+  reader.onerror = function() {
+    alert('Failed to read the file. Please try again.');
+  };
+
   reader.onload = function(e) {
     try {
       const data = new Uint8Array(e.target.result);
-      const wb = XLSX.read(data, { type: 'array' });
+      const wb = XLSX.read(data, { type: 'array', cellDates: false, raw: false });
 
       // Read Processes sheet
       const wsProcesses = wb.Sheets['Processes'];
       if (wsProcesses) {
-        const processRows = XLSX.utils.sheet_to_json(wsProcesses, { header: 1 });
+        const processRows = XLSX.utils.sheet_to_json(wsProcesses, { header: 1, defval: '' });
         if (processRows.length > 1) {
           processes = [];
           taskResources = {};
           for (let i = 1; i < processRows.length; i++) {
             const row = processRows[i];
-            if (!row || row.length < 4) continue;
+            if (!row || !row[2]) continue;
             const p = {
-              uid: row[1] || `p${i}`,
-              sapNo: row[2] || '',
-              desc: row[3] || '',
+              uid: String(row[1] || `p${i}`),
+              sapNo: String(row[2] || ''),
+              desc: String(row[3] || ''),
               cycle: parseFloat(row[4]) || 0,
               eff: parseFloat(row[5]) || 80,
               mult: parseFloat(row[6]) || 1
@@ -2763,7 +2793,7 @@ function importAllDataExcel(input) {
             processes.push(p);
 
             // Parse machines
-            const machineStr = row[7] || '';
+            const machineStr = String(row[7] || '');
             const machines = [];
             if (machineStr) {
               const parts = machineStr.split(';');
@@ -2774,7 +2804,7 @@ function importAllDataExcel(input) {
                 }
               });
             }
-            taskResources[i - 1] = { machines };
+            taskResources[processes.length - 1] = { machines };
           }
         }
       }
@@ -2782,22 +2812,22 @@ function importAllDataExcel(input) {
       // Read Workers sheet
       const wsWorkers = wb.Sheets['Workers'];
       if (wsWorkers) {
-        const workerRows = XLSX.utils.sheet_to_json(wsWorkers, { header: 1 });
+        const workerRows = XLSX.utils.sheet_to_json(wsWorkers, { header: 1, defval: '' });
         if (workerRows.length > 1) {
           workers = [];
           for (let i = 1; i < workerRows.length; i++) {
             const row = workerRows[i];
-            if (!row || row.length < 4) continue;
+            if (!row || !row[2]) continue;
 
             // Parse skills
-            const skillsStr = row[10] || '';
-            const skills = skillsStr ? skillsStr.toString().split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : [];
+            const skillsStr = String(row[10] || '');
+            const skills = skillsStr.length > 0 ? skillsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : [];
 
             // Parse assignments
-            const assignStr = row[11] || '';
+            const assignStr = String(row[11] || '');
             const assignments = [];
-            if (assignStr) {
-              const parts = assignStr.toString().split(';');
+            if (assignStr.length > 0) {
+              const parts = assignStr.split(';');
               parts.forEach(part => {
                 const match = part.trim().match(/^(\d+):(\d+)%?$/);
                 if (match) {
@@ -2807,11 +2837,11 @@ function importAllDataExcel(input) {
             }
 
             const w = {
-              uid: row[1] || `w${i}`,
-              code: row[2] || '',
-              name: row[3] || '',
-              shiftStart: row[4] || '08:00',
-              shiftEnd: row[5] || '17:00',
+              uid: String(row[1] || `w${i}`),
+              code: String(row[2] || ''),
+              name: String(row[3] || ''),
+              shiftStart: excelTimeToString(row[4]),
+              shiftEnd: excelTimeToString(row[5]),
               breakMin: parseInt(row[6]) || 30,
               participationRate: parseFloat(row[7]) || 100,
               workingDaysPerYear: parseInt(row[8]) || 210,
@@ -2827,14 +2857,13 @@ function importAllDataExcel(input) {
       // Read Info sheet for header
       const wsInfo = wb.Sheets['Info'];
       if (wsInfo) {
-        const infoRows = XLSX.utils.sheet_to_json(wsInfo, { header: 1 });
+        const infoRows = XLSX.utils.sheet_to_json(wsInfo, { header: 1, defval: '' });
         infoRows.forEach(row => {
-          if (row[0] === 'SAP No.') headerData.sapNo = row[1] || '';
-          if (row[0] === 'Product No.') headerData.productNo = row[1] || '';
-          if (row[0] === 'Product Description') headerData.productDesc = row[1] || '';
-          if (row[0] === 'Calculation By') headerData.calcBy = row[1] || '';
+          if (row[0] === 'SAP No.') headerData.sapNo = String(row[1] || '');
+          if (row[0] === 'Product No.') headerData.productNo = String(row[1] || '');
+          if (row[0] === 'Product Description') headerData.productDesc = String(row[1] || '');
+          if (row[0] === 'Calculation By') headerData.calcBy = String(row[1] || '');
         });
-        // Update header inputs
         if (document.getElementById('headerSapNo')) document.getElementById('headerSapNo').value = headerData.sapNo;
         if (document.getElementById('headerProductNo')) document.getElementById('headerProductNo').value = headerData.productNo;
         if (document.getElementById('headerProductDesc')) document.getElementById('headerProductDesc').value = headerData.productDesc;
@@ -2845,7 +2874,7 @@ function importAllDataExcel(input) {
       // Read Analysis sheet
       const wsAnalysis = wb.Sheets['Analysis'];
       if (wsAnalysis) {
-        const analysisRows = XLSX.utils.sheet_to_json(wsAnalysis, { header: 1 });
+        const analysisRows = XLSX.utils.sheet_to_json(wsAnalysis, { header: 1, defval: '' });
         analysisRows.forEach(row => {
           if (row[0] === 'Target Stations' && document.getElementById('stationSlider')) {
             document.getElementById('stationSlider').value = row[1];
@@ -2866,15 +2895,15 @@ function importAllDataExcel(input) {
       initStations();
       renderAll();
 
-      alert('Data imported successfully!');
+      alert('Data imported successfully! Loaded ' + processes.length + ' processes and ' + workers.length + ' workers.');
     } catch (err) {
       console.error('Import error:', err);
-      alert('Failed to import data. Please check the file format.');
+      alert('Import failed: ' + err.message);
     }
   };
 
   reader.readAsArrayBuffer(file);
-  input.value = ''; // Reset file input
+  input.value = '';
 }
 
 // ══════════════════════════════════════════════════════════════
