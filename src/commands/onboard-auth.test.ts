@@ -18,12 +18,16 @@ import {
   applyXaiProviderConfig,
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
+  applyZaiConfig,
+  applyZaiProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
   setMinimaxApiKey,
   writeOAuthCredentials,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
 
 const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
@@ -297,6 +301,48 @@ describe("applyMinimaxApiConfig", () => {
 describe("applyMinimaxApiProviderConfig", () => {
   it("does not overwrite existing primary model", () => {
     const cfg = applyMinimaxApiProviderConfig({
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    });
+    expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+  });
+});
+
+describe("applyZaiConfig", () => {
+  it("adds zai provider with correct settings", () => {
+    const cfg = applyZaiConfig({});
+    expect(cfg.models?.providers?.zai).toMatchObject({
+      // Default: general (non-coding) endpoint. Coding Plan endpoint is detected during onboarding.
+      baseUrl: ZAI_GLOBAL_BASE_URL,
+      api: "openai-completions",
+    });
+    const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
+    expect(ids).toContain("glm-5");
+    expect(ids).toContain("glm-4.7");
+    expect(ids).toContain("glm-4.7-flash");
+    expect(ids).toContain("glm-4.7-flashx");
+  });
+
+  it("sets correct primary model", () => {
+    const cfg = applyZaiConfig({}, { modelId: "glm-5" });
+    expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
+  });
+
+  it("supports CN endpoint", () => {
+    const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flash" });
+    expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
+    expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7-flash");
+  });
+
+  it("supports CN endpoint with glm-4.7-flashx", () => {
+    const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flashx" });
+    expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
+    expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7-flashx");
+  });
+});
+
+describe("applyZaiProviderConfig", () => {
+  it("does not overwrite existing primary model", () => {
+    const cfg = applyZaiProviderConfig({
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
     });
     expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");

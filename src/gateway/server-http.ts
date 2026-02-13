@@ -18,6 +18,7 @@ import {
   handleA2uiHttpRequest,
 } from "../canvas-host/a2ui.js";
 import { loadConfig } from "../config/config.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import { authorizeGatewayConnect, isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -37,6 +38,7 @@ import {
   normalizeHookHeaders,
   normalizeWakePayload,
   readJsonBody,
+  resolveHookSessionKey,
   resolveHookTargetAgentId,
   resolveHookChannel,
   resolveHookDeliver,
@@ -49,6 +51,11 @@ import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+type HookAuthFailure = { count: number; windowStartedAtMs: number };
+
+const HOOK_AUTH_FAILURE_LIMIT = 20;
+const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
+const HOOK_AUTH_FAILURE_TRACK_MAX = 2048;
 
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
@@ -140,6 +147,39 @@ export function createHooksRequestHandler(
   } & HookDispatchers,
 ): HooksRequestHandler {
   const { getHooksConfig, bindHost, port, logHooks, dispatchAgentHook, dispatchWakeHook } = opts;
+  const hookAuthFailures = new Map<string, HookAuthFailure>();
+
+  const resolveHookClientKey = (req: IncomingMessage): string => {
+    return req.socket?.remoteAddress?.trim() || "unknown";
+  };
+
+  const recordHookAuthFailure = (
+    clientKey: string,
+    nowMs: number,
+  ): { throttled: boolean; retryAfterSeconds?: number } => {
+    if (!hookAuthFailures.has(clientKey) && hookAuthFailures.size >= HOOK_AUTH_FAILURE_TRACK_MAX) {
+      hookAuthFailures.clear();
+    }
+    const current = hookAuthFailures.get(clientKey);
+    const expired = !current || nowMs - current.windowStartedAtMs >= HOOK_AUTH_FAILURE_WINDOW_MS;
+    const next: HookAuthFailure = expired
+      ? { count: 1, windowStartedAtMs: nowMs }
+      : { count: current.count + 1, windowStartedAtMs: current.windowStartedAtMs };
+    hookAuthFailures.set(clientKey, next);
+    if (next.count <= HOOK_AUTH_FAILURE_LIMIT) {
+      return { throttled: false };
+    }
+    const retryAfterMs = Math.max(1, next.windowStartedAtMs + HOOK_AUTH_FAILURE_WINDOW_MS - nowMs);
+    return {
+      throttled: true,
+      retryAfterSeconds: Math.ceil(retryAfterMs / 1000),
+    };
+  };
+
+  const clearHookAuthFailure = (clientKey: string) => {
+    hookAuthFailures.delete(clientKey);
+  };
+
   return async (req, res) => {
     const hooksConfig = getHooksConfig();
     if (!hooksConfig) {
@@ -161,12 +201,24 @@ export function createHooksRequestHandler(
     }
 
     const token = extractHookToken(req);
-    if (!token || token !== hooksConfig.token) {
+    const clientKey = resolveHookClientKey(req);
+    if (!safeEqualSecret(token, hooksConfig.token)) {
+      const throttle = recordHookAuthFailure(clientKey, Date.now());
+      if (throttle.throttled) {
+        const retryAfter = throttle.retryAfterSeconds ?? 1;
+        res.statusCode = 429;
+        res.setHeader("Retry-After", String(retryAfter));
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Too Many Requests");
+        logHooks.warn(`hook auth throttled for ${clientKey}; retry-after=${retryAfter}s`);
+        return true;
+      }
       res.statusCode = 401;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Unauthorized");
       return true;
     }
+    clearHookAuthFailure(clientKey);
 
     if (req.method !== "POST") {
       res.statusCode = 405;
@@ -215,8 +267,18 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
         return true;
       }
+      const sessionKey = resolveHookSessionKey({
+        hooksConfig,
+        source: "request",
+        sessionKey: normalized.value.sessionKey,
+      });
+      if (!sessionKey.ok) {
+        sendJson(res, 400, { ok: false, error: sessionKey.error });
+        return true;
+      }
       const runId = dispatchAgentHook({
         ...normalized.value,
+        sessionKey: sessionKey.value,
         agentId: resolveHookTargetAgentId(hooksConfig, normalized.value.agentId),
       });
       sendJson(res, 202, { ok: true, runId });
@@ -258,12 +320,21 @@ export function createHooksRequestHandler(
             sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
             return true;
           }
+          const sessionKey = resolveHookSessionKey({
+            hooksConfig,
+            source: "mapping",
+            sessionKey: mapped.action.sessionKey,
+          });
+          if (!sessionKey.ok) {
+            sendJson(res, 400, { ok: false, error: sessionKey.error });
+            return true;
+          }
           const runId = dispatchAgentHook({
             message: mapped.action.message,
             name: mapped.action.name ?? "Hook",
             agentId: resolveHookTargetAgentId(hooksConfig, mapped.action.agentId),
             wakeMode: mapped.action.wakeMode,
-            sessionKey: mapped.action.sessionKey ?? "",
+            sessionKey: sessionKey.value,
             deliver: resolveHookDeliver(mapped.action.deliver),
             channel,
             to: mapped.action.to,
@@ -333,6 +404,7 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
       if (await handleHooksRequest(req, res)) {
         return;
       }
@@ -347,8 +419,26 @@ export function createGatewayHttpServer(opts: {
       if (await handleSlackHttpRequest(req, res)) {
         return;
       }
-      if (handlePluginRequest && (await handlePluginRequest(req, res))) {
-        return;
+      if (handlePluginRequest) {
+        // Channel HTTP endpoints are gateway-auth protected by default.
+        // Non-channel plugin routes remain plugin-owned and must enforce
+        // their own auth when exposing sensitive functionality.
+        if (requestPath.startsWith("/api/channels/")) {
+          const token = getBearerToken(req);
+          const authResult = await authorizeGatewayConnect({
+            auth: resolvedAuth,
+            connectAuth: token ? { token, password: token } : null,
+            req,
+            trustedProxies,
+          });
+          if (!authResult.ok) {
+            sendUnauthorized(res);
+            return;
+          }
+        }
+        if (await handlePluginRequest(req, res)) {
+          return;
+        }
       }
       if (openResponsesEnabled) {
         if (
@@ -372,8 +462,7 @@ export function createGatewayHttpServer(opts: {
         }
       }
       if (canvasHost) {
-        const url = new URL(req.url ?? "/", "http://localhost");
-        if (isCanvasPath(url.pathname)) {
+        if (isCanvasPath(requestPath)) {
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,
