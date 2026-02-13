@@ -63,8 +63,8 @@ services:
       - ${OPENCLAW_CONFIG_DIR}/op_config:/home/node/.config/op
       - ${OPENCLAW_CONFIG_DIR}/ssh:/home/node/.ssh:ro
       - /var/run/docker.sock:/var/run/docker.sock
-    # group_add:
-    #   - "${DOCKER_GID:-999}"
+    group_add:
+      - "988"  # Docker group ID - check yours with: getent group docker | cut -d: -f3
     extra_hosts:
       - "host.docker.internal:host-gateway"
     init: true
