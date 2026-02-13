@@ -45,6 +45,7 @@ import {
   createDiscordCommandArgFallbackButton,
   createDiscordNativeCommand,
 } from "./native-command.js";
+import { resolveDiscordPresenceUpdate } from "./presence.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
