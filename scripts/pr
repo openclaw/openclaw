@@ -2,6 +2,18 @@
 
 set -euo pipefail
 
+# If invoked from a linked worktree copy of this script, re-exec the canonical
+# script from the repository root so behavior stays consistent across worktrees.
+script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+script_parent_dir="$(dirname "$script_self")"
+if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  canonical_repo_root="$(dirname "$common_git_dir")"
+  canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
+  if [ "$script_self" != "$canonical_self" ] && [ -x "$canonical_self" ]; then
+    exec "$canonical_self" "$@"
+  fi
+fi
+
 usage() {
   cat <<USAGE
 Usage:
@@ -38,9 +50,18 @@ require_cmds() {
 }
 
 repo_root() {
-  # Resolve canonical root from script location so wrappers work from root or worktree cwd.
+  # Resolve canonical repository root from git common-dir so wrappers work
+  # the same from main checkout or any linked worktree.
   local script_dir
+  local common_git_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  if common_git_dir=$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    (cd "$(dirname "$common_git_dir")" && pwd)
+    return
+  fi
+
+  # Fallback for environments where git common-dir is unavailable.
   (cd "$script_dir/.." && pwd)
 }
 
