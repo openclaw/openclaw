@@ -373,8 +373,9 @@ export const validateAgentShieldApprovalRequestParams =
   ajv.compile<AgentShieldApprovalRequestParams>(AgentShieldApprovalRequestParamsSchema);
 export const validateAgentShieldApprovalResolveParams =
   ajv.compile<AgentShieldApprovalResolveParams>(AgentShieldApprovalResolveParamsSchema);
-export const validateAgentShieldApprovalListParams =
-  ajv.compile<AgentShieldApprovalListParams>(AgentShieldApprovalListParamsSchema);
+export const validateAgentShieldApprovalListParams = ajv.compile<AgentShieldApprovalListParams>(
+  AgentShieldApprovalListParamsSchema,
+);
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );

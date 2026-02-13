@@ -46,11 +46,7 @@ describe("AgentShieldApprovalManager", () => {
 
     it("uses explicit id when provided", () => {
       const mgr = new AgentShieldApprovalManager();
-      const record = mgr.create(
-        { toolName: "t", paramsJSON: "{}" },
-        5000,
-        "my-custom-id",
-      );
+      const record = mgr.create({ toolName: "t", paramsJSON: "{}" }, 5000, "my-custom-id");
       expect(record.id).toBe("my-custom-id");
     });
 
@@ -132,7 +128,7 @@ describe("AgentShieldApprovalManager", () => {
       await p1;
       const pending = mgr.listPending();
       expect(pending).toHaveLength(1);
-      expect(pending[0]!.toolName).toBe("t2");
+      expect(pending[0].toolName).toBe("t2");
       // Clean up
       mgr.resolve(r2.id, "deny");
     });
