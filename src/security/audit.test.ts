@@ -1709,7 +1709,7 @@ description: test skill
     );
   });
 
-  it("flags dangerous tools not denied", async () => {
+  it("flags dangerous tools when available (no profile, no deny)", async () => {
     const cfg: OpenClawConfig = {
       tools: { deny: [] },
     };
@@ -1755,6 +1755,38 @@ description: test skill
     });
 
     expect(res.findings.some((f) => f.checkId === "tools.dangerous_not_denied")).toBe(false);
+  });
+
+  it("does not flag dangerous tools when profile is minimal (restricts all dangerous)", async () => {
+    const cfg: OpenClawConfig = {
+      tools: { profile: "minimal" }, // minimal only allows session_status
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings.some((f) => f.checkId === "tools.dangerous_not_denied")).toBe(false);
+  });
+
+  it("flags dangerous tools when profile is coding (allows exec, write, etc.)", async () => {
+    const cfg: OpenClawConfig = {
+      tools: { profile: "coding" }, // coding allows group:fs and group:runtime
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    const finding = res.findings.find((f) => f.checkId === "tools.dangerous_not_denied");
+    expect(finding).toBeDefined();
+    // Should list the tools allowed by coding profile
+    expect(finding?.detail).toContain("exec");
+    expect(finding?.detail).toContain("write");
   });
 
   it("flags elevated mode enabled without allowlist", async () => {

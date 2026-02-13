@@ -887,35 +887,89 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
 // Hardening gap audit checks (EarlyCore findings)
 // --------------------------------------------------------------------------
 
-// Profiles that allow exec (group:runtime includes exec)
-const PROFILES_ALLOWING_EXEC = new Set(["coding", "full"]);
+// Tool groups from src/agents/tool-policy.ts
+const TOOL_GROUPS: Record<string, string[]> = {
+  "group:fs": ["read", "write", "edit", "apply_patch"],
+  "group:runtime": ["exec", "process"],
+  "group:ui": ["browser", "canvas"],
+  "group:automation": ["cron", "gateway"],
+  "group:nodes": ["nodes"],
+};
+
+// Profile allow lists from src/agents/tool-policy.ts
+const PROFILE_ALLOW_LISTS: Record<string, string[]> = {
+  minimal: ["session_status"],
+  coding: ["group:fs", "group:runtime", "group:sessions", "group:memory", "image"],
+  messaging: [
+    "group:messaging",
+    "sessions_list",
+    "sessions_history",
+    "sessions_send",
+    "session_status",
+  ],
+  full: [], // Empty means all tools allowed
+};
 
 /**
- * Check if exec tool is available based on profile + allow/deny lists.
+ * Expand tool groups to individual tool names.
+ */
+function expandGroups(list: string[]): string[] {
+  const expanded: string[] = [];
+  for (const entry of list) {
+    const group = TOOL_GROUPS[entry];
+    if (group) {
+      expanded.push(...group);
+    } else {
+      expanded.push(entry);
+    }
+  }
+  return expanded;
+}
+
+/**
+ * Check if a specific tool is available based on profile + allow/deny lists.
  * Tool availability is: (profile allows OR explicit allow) AND NOT denied.
  */
-function isExecAvailable(cfg: OpenClawConfig): boolean {
+function isToolAvailable(cfg: OpenClawConfig, toolName: string): boolean {
   const profile = cfg.tools?.profile;
   const allowList = cfg.tools?.allow ?? [];
   const denyList = cfg.tools?.deny ?? [];
 
+  // Expand groups in deny/allow lists
+  const expandedDeny = expandGroups(denyList);
+  const expandedAllow = expandGroups(allowList);
+
   // Explicitly denied always wins
-  if (denyList.includes("exec") || denyList.includes("group:runtime")) {
+  if (expandedDeny.includes(toolName)) {
     return false;
   }
 
-  // Explicitly allowed
-  if (allowList.includes("exec") || allowList.includes("group:runtime")) {
+  // Explicitly allowed overrides profile restrictions
+  if (expandedAllow.includes(toolName)) {
     return true;
   }
 
-  // Check profile: minimal/messaging don't allow exec, coding/full do
+  // Check profile
   // If no profile set, defaults to full (all tools available)
-  if (!profile) {
-    return true; // Default: full profile, exec available
+  if (!profile || profile === "full") {
+    return true;
   }
 
-  return PROFILES_ALLOWING_EXEC.has(profile);
+  // Get the profile's allow list and expand it
+  const profileAllowList = PROFILE_ALLOW_LISTS[profile];
+  if (!profileAllowList) {
+    return true; // Unknown profile, assume full
+  }
+
+  const expandedProfileAllow = expandGroups(profileAllowList);
+  return expandedProfileAllow.includes(toolName);
+}
+
+/**
+ * Check if exec tool is available (convenience wrapper).
+ */
+function isExecAvailable(cfg: OpenClawConfig): boolean {
+  return isToolAvailable(cfg, "exec");
 }
 
 /**
@@ -987,7 +1041,7 @@ export function collectSandboxNetworkFindings(cfg: OpenClawConfig): SecurityAudi
 }
 
 /**
- * Check if dangerous tools are not explicitly denied.
+ * Check if dangerous tools are available (not restricted by profile/allow/deny).
  * harden-config.ts explicitly denies exec, process, write, edit, apply_patch, gateway, cron, nodes, browser, canvas.
  */
 const DANGEROUS_TOOLS = [
@@ -1005,34 +1059,22 @@ const DANGEROUS_TOOLS = [
 
 export function collectDangerousToolsFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const denyList = cfg.tools?.deny ?? [];
 
-  let notDenied = DANGEROUS_TOOLS.filter((tool) => !denyList.includes(tool));
+  // Check which dangerous tools are actually available based on profile + allow/deny
+  const availableDangerous = DANGEROUS_TOOLS.filter((tool) => isToolAvailable(cfg, tool));
 
-  if (notDenied.length === 0) {
-    return findings;
-  }
-
-  // Check if profile restricts these already
-  const profile = cfg.tools?.profile;
-  if (profile === "minimal") {
-    // Minimal profile already restricts most dangerous tools
-    // Only warn about exec/process which minimal allows
-    const minimalDangerous = notDenied.filter((t) => ["exec", "process"].includes(t));
-    if (minimalDangerous.length === 0) {
-      return findings;
-    }
-    notDenied = minimalDangerous;
+  if (availableDangerous.length === 0) {
+    return findings; // All dangerous tools restricted by profile or deny list
   }
 
   findings.push({
     checkId: "tools.dangerous_not_denied",
     severity: "warn",
-    title: "Dangerous tools not explicitly denied",
+    title: "Dangerous tools available",
     detail:
-      `The following tools are not in tools.deny: ${notDenied.join(", ")}. ` +
+      `The following dangerous tools are available: ${availableDangerous.join(", ")}. ` +
       "These tools enable code execution, file modification, or system access.",
-    remediation: `Add to tools.deny: ${JSON.stringify(notDenied)}`,
+    remediation: `Add to tools.deny: ${JSON.stringify(availableDangerous)} or use a restrictive profile.`,
   });
 
   return findings;
