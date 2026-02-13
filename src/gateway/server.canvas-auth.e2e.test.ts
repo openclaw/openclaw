@@ -7,6 +7,7 @@ import type { CanvasHostHandler } from "../canvas-host/server.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../canvas-host/a2ui.js";
+import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 
 async function withTempConfig(params: { cfg: unknown; run: () => Promise<void> }): Promise<void> {
@@ -54,7 +55,11 @@ async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promi
   };
 }
 
-async function expectWsRejected(url: string, headers: Record<string, string>): Promise<void> {
+async function expectWsRejected(
+  url: string,
+  headers: Record<string, string>,
+  expectedStatus = 401,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(url, { headers });
     const timer = setTimeout(() => reject(new Error("timeout")), 10_000);
@@ -65,7 +70,7 @@ async function expectWsRejected(url: string, headers: Record<string, string>): P
     });
     ws.once("unexpected-response", (_req, res) => {
       clearTimeout(timer);
-      expect(res.statusCode).toBe(401);
+      expect(res.statusCode).toBe(expectedStatus);
       resolve();
     });
     ws.once("error", () => {
@@ -203,6 +208,92 @@ describe("gateway canvas host auth", () => {
           });
         } finally {
           await listener.close();
+          canvasWss.close();
+          wss.close();
+        }
+      },
+    });
+  }, 60_000);
+
+  test("returns 429 for repeated failed canvas auth attempts (HTTP + WS upgrade)", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: {
+        gateway: {
+          trustedProxies: ["127.0.0.1"],
+        },
+      },
+      run: async () => {
+        const clients = new Set<GatewayWsClient>();
+        const rateLimiter = createAuthRateLimiter({
+          maxAttempts: 1,
+          windowMs: 60_000,
+          lockoutMs: 60_000,
+        });
+        const canvasWss = new WebSocketServer({ noServer: true });
+        const canvasHost: CanvasHostHandler = {
+          rootDir: "test",
+          close: async () => {},
+          handleUpgrade: (req, socket, head) => {
+            const url = new URL(req.url ?? "/", "http://localhost");
+            if (url.pathname !== CANVAS_WS_PATH) {
+              return false;
+            }
+            canvasWss.handleUpgrade(req, socket, head, (ws) => ws.close());
+            return true;
+          },
+          handleHttpRequest: async (_req, _res) => false,
+        };
+
+        const httpServer = createGatewayHttpServer({
+          canvasHost,
+          clients,
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          resolvedAuth,
+          rateLimiter,
+        });
+
+        const wss = new WebSocketServer({ noServer: true });
+        attachGatewayUpgradeHandler({
+          httpServer,
+          wss,
+          canvasHost,
+          clients,
+          resolvedAuth,
+          rateLimiter,
+        });
+
+        const listener = await listen(httpServer);
+        try {
+          const headers = {
+            authorization: "Bearer wrong",
+            "x-forwarded-for": "203.0.113.99",
+          };
+          const first = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
+            headers,
+          });
+          expect(first.status).toBe(401);
+
+          const second = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
+            headers,
+          });
+          expect(second.status).toBe(429);
+          expect(second.headers.get("retry-after")).toBeTruthy();
+
+          await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, headers, 429);
+        } finally {
+          await listener.close();
+          rateLimiter.dispose();
           canvasWss.close();
           wss.close();
         }

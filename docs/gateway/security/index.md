@@ -801,22 +801,6 @@ Commit the updated `.secrets.baseline` once it reflects the intended state.
 ## The Trust Hierarchy
 
 ```mermaid
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#ffffff',
-    'primaryTextColor': '#000000',
-    'primaryBorderColor': '#000000',
-    'lineColor': '#000000',
-    'secondaryColor': '#f9f9fb',
-    'tertiaryColor': '#ffffff',
-    'clusterBkg': '#f9f9fb',
-    'clusterBorder': '#000000',
-    'nodeBorder': '#000000',
-    'mainBkg': '#ffffff',
-    'edgeLabelBackground': '#ffffff'
-  }
-}}%%
 flowchart TB
     A["Owner (Peter)"] -- Full trust --> B["AI (Clawd)"]
     B -- Trust but verify --> C["Friends in allowlist"]

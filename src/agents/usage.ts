@@ -134,9 +134,10 @@ export function deriveSessionTotalTokens(params: {
     return undefined;
   }
 
-  const contextTokens = params.contextTokens;
-  if (typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0) {
-    total = Math.min(total, contextTokens);
-  }
+  // NOTE: Do NOT clamp total to contextTokens here. The stored totalTokens
+  // should reflect the actual token count (or best estimate). Clamping causes
+  // /status to display contextTokens/contextTokens (100%) when the accumulated
+  // input exceeds the context window, hiding the real usage. The display layer
+  // (formatTokens in status.ts) already caps the percentage at 999%.
   return total;
 }

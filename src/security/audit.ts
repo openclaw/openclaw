@@ -383,6 +383,19 @@ function collectGatewayConfigFindings(
     });
   }
 
+  if (bind !== "loopback" && !cfg.gateway?.auth?.rateLimit) {
+    findings.push({
+      checkId: "gateway.auth_no_rate_limit",
+      severity: "warn",
+      title: "No auth rate limiting configured",
+      detail:
+        "gateway.bind is not loopback but no gateway.auth.rateLimit is configured. " +
+        "Without rate limiting, brute-force auth attacks are not mitigated.",
+      remediation:
+        "Set gateway.auth.rateLimit (e.g. { maxAttempts: 10, windowMs: 60000, lockoutMs: 300000 }).",
+    });
+  }
+
   return findings;
 }
 

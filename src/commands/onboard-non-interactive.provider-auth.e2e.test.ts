@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
 type RuntimeMock = {
@@ -104,7 +104,6 @@ async function withOnboardEnv(
   process.env.HOME = tempHome;
   process.env.OPENCLAW_STATE_DIR = tempHome;
   process.env.OPENCLAW_CONFIG_PATH = configPath;
-  vi.resetModules();
 
   const runtime: RuntimeMock = {
     log: () => {},
@@ -212,11 +211,12 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("stores xAI API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-xai-", async ({ configPath, runtime }) => {
+      const rawKey = "xai-test-\r\nkey";
       await runNonInteractive(
         {
           nonInteractive: true,
           authChoice: "xai-api-key",
-          xaiApiKey: "xai-test-key",
+          xaiApiKey: rawKey,
           skipHealth: true,
           skipChannels: true,
           skipSkills: true,
@@ -272,7 +272,8 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("stores token auth profile", async () => {
     await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
-      const token = `sk-ant-oat01-${"a".repeat(80)}`;
+      const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
+      const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
       await runNonInteractive(
         {
@@ -301,7 +302,7 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(profile?.type).toBe("token");
       if (profile?.type === "token") {
         expect(profile.provider).toBe("anthropic");
-        expect(profile.token).toBe(token);
+        expect(profile.token).toBe(cleanToken);
       }
     });
   }, 60_000);
@@ -326,6 +327,37 @@ describe("onboard (non-interactive): provider auth", () => {
       }>(configPath);
 
       expect(cfg.agents?.defaults?.model?.primary).toBe(OPENAI_DEFAULT_MODEL);
+    });
+  }, 60_000);
+
+  it("stores LiteLLM API key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-litellm-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          authChoice: "litellm-api-key",
+          litellmApiKey: "litellm-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["litellm:default"]?.provider).toBe("litellm");
+      expect(cfg.auth?.profiles?.["litellm:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("litellm/claude-opus-4-6");
+      await expectApiKeyProfile({
+        profileId: "litellm:default",
+        provider: "litellm",
+        key: "litellm-test-key",
+      });
     });
   }, 60_000);
 

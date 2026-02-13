@@ -67,6 +67,47 @@ describe("security audit", () => {
     ).toBe(true);
   });
 
+  it("warns when non-loopback bind has auth but no auth rate limit", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { token: "secret" },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      res.findings.some((f) => f.checkId === "gateway.auth_no_rate_limit" && f.severity === "warn"),
+    ).toBe(true);
+  });
+
+  it("does not warn for auth rate limiting when configured", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {
+          token: "secret",
+          rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings.some((f) => f.checkId === "gateway.auth_no_rate_limit")).toBe(false);
+  });
+
   it("warns when loopback control UI lacks trusted proxies", async () => {
     const cfg: OpenClawConfig = {
       gateway: {

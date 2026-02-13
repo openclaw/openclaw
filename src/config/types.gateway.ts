@@ -87,6 +87,19 @@ export type GatewayAuthConfig = {
   password?: string;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /** Rate-limit configuration for failed authentication attempts. */
+  rateLimit?: GatewayAuthRateLimitConfig;
+};
+
+export type GatewayAuthRateLimitConfig = {
+  /** Maximum failed attempts per IP before blocking.  @default 10 */
+  maxAttempts?: number;
+  /** Sliding window duration in milliseconds.  @default 60000 (1 min) */
+  windowMs?: number;
+  /** Lockout duration in milliseconds after the limit is exceeded.  @default 300000 (5 min) */
+  lockoutMs?: number;
+  /** Exempt localhost/loopback addresses from auth rate limiting.  @default true */
+  exemptLoopback?: boolean;
 };
 
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";
@@ -226,6 +239,13 @@ export type GatewayNodesConfig = {
   denyCommands?: string[];
 };
 
+export type GatewayToolsConfig = {
+  /** Tools to deny via gateway HTTP /tools/invoke (extends defaults). */
+  deny?: string[];
+  /** Tools to explicitly allow (removes from default deny list). */
+  allow?: string[];
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -260,4 +280,6 @@ export type GatewayConfig = {
    * `x-real-ip`) to determine the client IP for local pairing and HTTP checks.
    */
   trustedProxies?: string[];
+  /** Tool access restrictions for HTTP /tools/invoke endpoint. */
+  tools?: GatewayToolsConfig;
 };

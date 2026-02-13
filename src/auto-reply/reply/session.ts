@@ -55,12 +55,13 @@ export type SessionInitResult = {
 
 function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
+  agentId: string;
   sessionsDir: string;
 }): { sessionId: string; sessionFile: string } | null {
   const parentSessionFile = resolveSessionFilePath(
     params.parentEntry.sessionId,
     params.parentEntry,
-    { sessionsDir: params.sessionsDir },
+    { agentId: params.agentId, sessionsDir: params.sessionsDir },
   );
   if (!parentSessionFile || !fs.existsSync(parentSessionFile)) {
     return null;
@@ -331,6 +332,7 @@ export async function initSessionState(params: {
     );
     const forked = forkSessionFromParent({
       parentEntry: sessionStore[parentSessionKey],
+      agentId,
       sessionsDir: path.dirname(storePath),
     });
     if (forked) {

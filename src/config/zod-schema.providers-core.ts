@@ -447,6 +447,7 @@ export const SlackThreadSchema = z
   .object({
     historyScope: z.enum(["thread", "channel"]).optional(),
     inheritParent: z.boolean().optional(),
+    initialHistoryLimit: z.number().int().min(0).optional(),
   })
   .strict();
 
