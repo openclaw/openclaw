@@ -1,12 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import {
-  loadConfig,
-  migrateLegacyConfig,
-  readConfigFileSnapshot,
-  validateConfigObject,
-} from "./config.js";
+import { describe, expect, it, vi } from "vitest";
+
+const { loadConfig, migrateLegacyConfig, readConfigFileSnapshot, validateConfigObject } =
+  await vi.importActual<typeof import("./config.js")>("./config.js");
 import { withTempHome } from "./test-helpers.js";
 
 describe("legacy config detection", () => {
