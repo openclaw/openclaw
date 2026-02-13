@@ -35,11 +35,21 @@ function getMimeType(filePath: string): string {
 }
 
 function isLocalPath(candidate: string): boolean {
-  if (/^[a-zA-Z]:[\\/]/.test(candidate)) { return true; }
-  if (candidate.startsWith("/")) { return true; }
-  if (candidate.startsWith("./") || candidate.startsWith("../")) { return true; }
-  if (candidate.startsWith("\\\\")) { return true; }
-  if (candidate.startsWith("file://")) { return true; }
+  if (/^[a-zA-Z]:[\\/]/.test(candidate)) {
+    return true;
+  }
+  if (candidate.startsWith("/")) {
+    return true;
+  }
+  if (candidate.startsWith("./") || candidate.startsWith("../")) {
+    return true;
+  }
+  if (candidate.startsWith("\\\\")) {
+    return true;
+  }
+  if (candidate.startsWith("file://")) {
+    return true;
+  }
   return false;
 }
 
@@ -51,12 +61,18 @@ function tryInlineAudio(rawPath: string): string | null {
   // Strip wrapping quotes
   filePath = filePath.replace(/^["']+|["']+$/g, "");
 
-  if (!isLocalPath(filePath) && !isAudioPath(filePath)) { return null; }
-  if (!isAudioPath(filePath)) { return null; }
+  if (!isLocalPath(filePath) && !isAudioPath(filePath)) {
+    return null;
+  }
+  if (!isAudioPath(filePath)) {
+    return null;
+  }
 
   try {
     const stat = fs.statSync(filePath);
-    if (!stat.isFile() || stat.size > MAX_AUDIO_BYTES || stat.size === 0) { return null; }
+    if (!stat.isFile() || stat.size > MAX_AUDIO_BYTES || stat.size === 0) {
+      return null;
+    }
     const data = fs.readFileSync(filePath);
     const mime = getMimeType(filePath);
     const b64 = data.toString("base64");
@@ -72,12 +88,18 @@ function tryInlineAudio(rawPath: string): string | null {
  * Non-audio MEDIA: lines and unreachable files are left untouched.
  */
 export function inlineAudioInText(text: string): string {
-  if (!text || !text.includes("MEDIA:")) { return text; }
+  if (!text || !text.includes("MEDIA:")) {
+    return text;
+  }
 
   return text.replace(MEDIA_LINE_RE, (match, rawPath: string) => {
     const candidate = rawPath.trim();
-    if (!isLocalPath(candidate) && !isAudioPath(candidate)) { return match; }
-    if (!isAudioPath(candidate)) { return match; }
+    if (!isLocalPath(candidate) && !isAudioPath(candidate)) {
+      return match;
+    }
+    if (!isAudioPath(candidate)) {
+      return match;
+    }
     const inlined = tryInlineAudio(candidate);
     return inlined ?? match;
   });
