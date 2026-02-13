@@ -406,6 +406,68 @@ describe("buildStatusMessage", () => {
       { prefix: "openclaw-status-" },
     );
   });
+
+  it("reads transcript usage for non-default agents", async () => {
+    await withTempHome(
+      async (dir) => {
+        vi.resetModules();
+        const { buildStatusMessage: buildStatusMessageDynamic } = await import("./status.js");
+
+        const sessionId = "sess-worker1";
+        const logPath = path.join(
+          dir,
+          ".openclaw",
+          "agents",
+          "worker1",
+          "sessions",
+          `${sessionId}.jsonl`,
+        );
+        fs.mkdirSync(path.dirname(logPath), { recursive: true });
+
+        fs.writeFileSync(
+          logPath,
+          [
+            JSON.stringify({
+              type: "message",
+              message: {
+                role: "assistant",
+                model: "claude-opus-4-5",
+                usage: {
+                  input: 1,
+                  output: 2,
+                  cacheRead: 1000,
+                  cacheWrite: 0,
+                  totalTokens: 1003,
+                },
+              },
+            }),
+          ].join("\n"),
+          "utf-8",
+        );
+
+        const text = buildStatusMessageDynamic({
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            contextTokens: 32_000,
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            totalTokens: 3,
+            contextTokens: 32_000,
+          },
+          sessionKey: "agent:worker1:telegram:12345",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+
+        expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
 });
 
 describe("buildCommandsMessage", () => {

@@ -438,6 +438,7 @@ export function createSessionStatusTool(opts?: {
         },
         sessionEntry: resolved.entry,
         sessionKey: resolved.key,
+        sessionStorePath: storePath,
         groupActivation,
         modelAuth: resolveModelAuthLabel({
           provider: providerForCard,
