@@ -86,7 +86,7 @@ describe("handleCompactCommand", () => {
         sessionFile: "/tmp/sess",
         groupId: null,
         groupChannel: null,
-        groupSpace: null,
+        space: null,
         spawnedBy: null,
         totalTokens: 0,
         inputTokens: 0,
@@ -192,5 +192,14 @@ describe("handleCompactCommand", () => {
 
     expect(runWithModelFallback).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+
+  it("rethrows AbortError without retrying", async () => {
+    const abortError = new Error("aborted");
+    abortError.name = "AbortError";
+    vi.mocked(runWithModelFallback).mockRejectedValueOnce(abortError);
+
+    await expect(handleCompactCommand(makeParams(), true)).rejects.toBe(abortError);
+    expect(runWithModelFallback).toHaveBeenCalledTimes(1);
   });
 });
