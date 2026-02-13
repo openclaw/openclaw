@@ -121,6 +121,18 @@ describe("parseMentions", () => {
     expect(result.entities[0]?.mentioned.id).toBe("28:abc-123");
   });
 
+  it("accepts Bot Framework IDs with non-hex payloads (29:xxx)", () => {
+    const result = parseMentions("@[Bot](29:08q2j2o3jc09au90eucae)");
+    expect(result.entities).toHaveLength(1);
+    expect(result.entities[0]?.mentioned.id).toBe("29:08q2j2o3jc09au90eucae");
+  });
+
+  it("accepts org-scoped IDs with extra segments (8:orgid:...)", () => {
+    const result = parseMentions("@[User](8:orgid:2d8c2d2c-1111-2222-3333-444444444444)");
+    expect(result.entities).toHaveLength(1);
+    expect(result.entities[0]?.mentioned.id).toBe("8:orgid:2d8c2d2c-1111-2222-3333-444444444444");
+  });
+
   it("accepts AAD object IDs (UUIDs)", () => {
     const result = parseMentions("@[User](a1b2c3d4-e5f6-7890-abcd-ef1234567890)");
     expect(result.entities).toHaveLength(1);

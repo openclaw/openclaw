@@ -25,17 +25,17 @@ export type MentionInfo = {
 /**
  * Check whether an ID looks like a valid Teams user/bot identifier.
  * Accepts:
- * - Bot Framework IDs: "28:xxx..." or "29:xxx..."
+ * - Bot Framework IDs: "28:xxx..." / "29:xxx..." / "8:orgid:..."
  * - AAD object IDs (UUIDs): "d5318c29-33ac-4e6b-bd42-57b8b793908f"
  *
- * This prevents false positives from text like `@[表示名](ユーザーID)`
- * that appears in code snippets or documentation within messages.
+ * Keep this permissive enough for real Teams IDs while still rejecting
+ * documentation placeholders like `@[表示名](ユーザーID)`.
  */
-const TEAMS_ID_PATTERN =
-  /^(?:\d+:[a-f0-9-]+|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i;
+const TEAMS_BOT_ID_PATTERN = /^\d+:[a-z0-9._=-]+(?::[a-z0-9._=-]+)*$/i;
+const AAD_OBJECT_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
 function isValidTeamsId(id: string): boolean {
-  return TEAMS_ID_PATTERN.test(id);
+  return TEAMS_BOT_ID_PATTERN.test(id) || AAD_OBJECT_ID_PATTERN.test(id);
 }
 
 /**
