@@ -19,9 +19,9 @@ const INPUT_PATHS = [
 ];
 
 async function walk(entryPath: string, files: string[]) {
-  let st: Awaited<ReturnType<typeof fs.lstat>>;
+  let st: Awaited<ReturnType<typeof fs.stat>>;
   try {
-    st = await fs.lstat(entryPath);
+    st = await fs.stat(entryPath);
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err?.code === "ENOENT") {
@@ -74,11 +74,10 @@ async function computeHash() {
 
 function run(command: string, args: string[]) {
   return new Promise<void>((resolve, reject) => {
-    const resolvedCommand =
-      process.platform === "win32" && !command.endsWith(".cmd") ? `${command}.cmd` : command;
-    const child = spawn(resolvedCommand, args, {
+    const child = spawn(command, args, {
       cwd: ROOT_DIR,
       stdio: "inherit",
+      shell: true,
     });
     child.on("error", reject);
     child.on("close", (code) => {
@@ -96,8 +95,14 @@ async function main() {
     await fs.access(A2UI_RENDERER_DIR);
     await fs.access(A2UI_APP_DIR);
   } catch {
-    console.log("A2UI sources missing; keeping prebuilt bundle.");
-    return;
+    try {
+      await fs.access(OUTPUT_FILE);
+      console.log("A2UI sources missing; keeping prebuilt bundle.");
+      return;
+    } catch {
+      console.error(`A2UI sources missing and no prebuilt bundle found at: ${OUTPUT_FILE}`);
+      process.exit(1);
+    }
   }
 
   const currentHash = await computeHash();
@@ -116,11 +121,12 @@ async function main() {
 
   try {
     await run("pnpm", ["-s", "exec", "tsc", "-p", path.join(A2UI_RENDERER_DIR, "tsconfig.json")]);
-    await run("rolldown", ["-c", path.join(A2UI_APP_DIR, "rolldown.config.mjs")]);
+    await run("pnpm", ["exec", "rolldown", "-c", path.join(A2UI_APP_DIR, "rolldown.config.mjs")]);
 
     await fs.mkdir(path.dirname(HASH_FILE), { recursive: true });
     await fs.writeFile(HASH_FILE, currentHash);
-  } catch {
+  } catch (error) {
+    console.error(error);
     console.error("A2UI bundling failed. Re-run with: pnpm canvas:a2ui:bundle");
     console.error("If this persists, verify pnpm deps and try again.");
     process.exit(1);
