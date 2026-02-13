@@ -23,9 +23,11 @@ export function wrapStreamFnWithSystemCacheControl(streamFn: StreamFn): StreamFn
 
     const originalOnPayload = options?.onPayload;
 
-    const patchedOnPayload = (params: Record<string, unknown>) => {
-      addCacheControlToSystemMessage(params);
-      originalOnPayload?.(params);
+    const patchedOnPayload = (payload: unknown) => {
+      if (payload && typeof payload === "object") {
+        addCacheControlToSystemMessage(payload as Record<string, unknown>);
+      }
+      originalOnPayload?.(payload);
     };
 
     return streamFn(model, context, {
