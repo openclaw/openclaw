@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCronJobCreate } from "./normalize.js";
+import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
 
 describe("normalizeCronJobCreate", () => {
   it("maps legacy payload.provider to payload.channel and strips provider", () => {
@@ -291,5 +291,19 @@ describe("normalizeCronJobCreate", () => {
     const delivery = normalized.delivery as Record<string, unknown>;
     expect(delivery.mode).toBeUndefined();
     expect(delivery.to).toBe("123");
+  });
+});
+
+describe("normalizeCronJobPatch", () => {
+  it("infers agentTurn kind for model-only payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        model: "anthropic/claude-sonnet-4-5",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.model).toBe("anthropic/claude-sonnet-4-5");
   });
 });
