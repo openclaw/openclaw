@@ -7,6 +7,7 @@ import { safeEqualSecret } from "../security/secret-equal.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./control-auth.js";
 import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
+import { isPwAiLoaded } from "./pw-ai-state.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
 
@@ -196,11 +197,13 @@ export async function stopBrowserControlServer(): Promise<void> {
   }
   state = null;
 
-  // Optional: Playwright is not always available (e.g. embedded gateway builds).
-  try {
-    const mod = await import("./pw-ai.js");
-    await mod.closePlaywrightBrowserConnection();
-  } catch {
-    // ignore
+  // Optional: avoid importing heavy Playwright bridge when this process never used it.
+  if (isPwAiLoaded()) {
+    try {
+      const mod = await import("./pw-ai.js");
+      await mod.closePlaywrightBrowserConnection();
+    } catch {
+      // ignore
+    }
   }
 }

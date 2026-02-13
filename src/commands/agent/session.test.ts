@@ -22,21 +22,17 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
 }));
 
+const { resolveSessionKeyForRequest } = await import("./session.js");
+
 describe("resolveSessionKeyForRequest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listAgentIds.mockReturnValue(["main"]);
   });
 
-  async function importFresh() {
-    return await import("./session.js");
-  }
-
   const baseCfg: OpenClawConfig = {};
 
   it("returns sessionKey when --to resolves a session key via context", async () => {
-    const { resolveSessionKeyForRequest } = await importFresh();
-
     mocks.resolveStorePath.mockReturnValue("/tmp/main-store.json");
     mocks.loadSessionStore.mockReturnValue({
       "agent:main:main": { sessionId: "sess-1", updatedAt: 0 },
@@ -50,8 +46,6 @@ describe("resolveSessionKeyForRequest", () => {
   });
 
   it("finds session by sessionId via reverse lookup in primary store", async () => {
-    const { resolveSessionKeyForRequest } = await importFresh();
-
     mocks.resolveStorePath.mockReturnValue("/tmp/main-store.json");
     mocks.loadSessionStore.mockReturnValue({
       "agent:main:main": { sessionId: "target-session-id", updatedAt: 0 },
@@ -65,8 +59,6 @@ describe("resolveSessionKeyForRequest", () => {
   });
 
   it("finds session by sessionId in non-primary agent store", async () => {
-    const { resolveSessionKeyForRequest } = await importFresh();
-
     mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
     mocks.resolveStorePath.mockImplementation(
       (_store: string | undefined, opts?: { agentId?: string }) => {
@@ -94,8 +86,6 @@ describe("resolveSessionKeyForRequest", () => {
   });
 
   it("returns correct sessionStore when session found in non-primary agent store", async () => {
-    const { resolveSessionKeyForRequest } = await importFresh();
-
     const mybotStore = {
       "agent:mybot:main": { sessionId: "target-session-id", updatedAt: 0 },
     };
@@ -123,8 +113,6 @@ describe("resolveSessionKeyForRequest", () => {
   });
 
   it("returns undefined sessionKey when sessionId not found in any store", async () => {
-    const { resolveSessionKeyForRequest } = await importFresh();
-
     mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
     mocks.resolveStorePath.mockImplementation(
       (_store: string | undefined, opts?: { agentId?: string }) => {
@@ -144,8 +132,6 @@ describe("resolveSessionKeyForRequest", () => {
   });
 
   it("does not search other stores when explicitSessionKey is set", async () => {
-    const { resolveSessionKeyForRequest } = await importFresh();
-
     mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
     mocks.resolveStorePath.mockReturnValue("/tmp/main-store.json");
     mocks.loadSessionStore.mockReturnValue({
@@ -162,8 +148,6 @@ describe("resolveSessionKeyForRequest", () => {
   });
 
   it("searches other stores when --to derives a key that does not match --session-id", async () => {
-    const { resolveSessionKeyForRequest } = await importFresh();
-
     mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
     mocks.resolveStorePath.mockImplementation(
       (_store: string | undefined, opts?: { agentId?: string }) => {
@@ -199,8 +183,6 @@ describe("resolveSessionKeyForRequest", () => {
   });
 
   it("skips already-searched primary store when iterating agents", async () => {
-    const { resolveSessionKeyForRequest } = await importFresh();
-
     mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
     mocks.resolveStorePath.mockImplementation(
       (_store: string | undefined, opts?: { agentId?: string }) => {
