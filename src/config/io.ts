@@ -25,7 +25,11 @@ import {
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
-import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
+import {
+  MissingEnvVarError,
+  containsEnvVarReference,
+  resolveConfigEnvVars,
+} from "./env-substitution.js";
 import { collectConfigEnvVars } from "./env-vars.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
@@ -138,6 +142,132 @@ function createMergePatch(base: unknown, target: unknown): unknown {
     }
   }
   return patch;
+}
+
+function collectEnvRefPaths(value: unknown, path: string, output: Map<string, string>): void {
+  if (typeof value === "string") {
+    if (containsEnvVarReference(value)) {
+      output.set(path, value);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      collectEnvRefPaths(item, `${path}[${index}]`, output);
+    });
+    return;
+  }
+  if (isPlainObject(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = path ? `${path}.${key}` : key;
+      collectEnvRefPaths(child, childPath, output);
+    }
+  }
+}
+
+function collectChangedPaths(
+  base: unknown,
+  target: unknown,
+  path: string,
+  output: Set<string>,
+): void {
+  if (Array.isArray(base) && Array.isArray(target)) {
+    const max = Math.max(base.length, target.length);
+    for (let index = 0; index < max; index += 1) {
+      const childPath = path ? `${path}[${index}]` : `[${index}]`;
+      if (index >= base.length || index >= target.length) {
+        output.add(childPath);
+        continue;
+      }
+      collectChangedPaths(base[index], target[index], childPath, output);
+    }
+    return;
+  }
+  if (isPlainObject(base) && isPlainObject(target)) {
+    const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
+    for (const key of keys) {
+      const childPath = path ? `${path}.${key}` : key;
+      const hasBase = key in base;
+      const hasTarget = key in target;
+      if (!hasTarget || !hasBase) {
+        output.add(childPath);
+        continue;
+      }
+      collectChangedPaths(base[key], target[key], childPath, output);
+    }
+    return;
+  }
+  if (!isDeepStrictEqual(base, target)) {
+    output.add(path);
+  }
+}
+
+function parentPath(value: string): string {
+  if (!value) {
+    return "";
+  }
+  if (value.endsWith("]")) {
+    const index = value.lastIndexOf("[");
+    return index > 0 ? value.slice(0, index) : "";
+  }
+  const index = value.lastIndexOf(".");
+  return index >= 0 ? value.slice(0, index) : "";
+}
+
+function isPathChanged(path: string, changedPaths: Set<string>): boolean {
+  if (changedPaths.has(path)) {
+    return true;
+  }
+  let current = parentPath(path);
+  while (current) {
+    if (changedPaths.has(current)) {
+      return true;
+    }
+    current = parentPath(current);
+  }
+  return changedPaths.has("");
+}
+
+function restoreEnvRefsFromMap(
+  value: unknown,
+  path: string,
+  envRefMap: Map<string, string>,
+  changedPaths: Set<string>,
+): unknown {
+  if (typeof value === "string") {
+    if (!isPathChanged(path, changedPaths)) {
+      const original = envRefMap.get(path);
+      if (original !== undefined) {
+        return original;
+      }
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item, index) => {
+      const updated = restoreEnvRefsFromMap(item, `${path}[${index}]`, envRefMap, changedPaths);
+      if (updated !== item) {
+        changed = true;
+      }
+      return updated;
+    });
+    return changed ? next : value;
+  }
+  if (isPlainObject(value)) {
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = path ? `${path}.${key}` : key;
+      const updated = restoreEnvRefsFromMap(child, childPath, envRefMap, changedPaths);
+      if (updated !== child) {
+        changed = true;
+      }
+      next[key] = updated;
+    }
+    return changed ? next : value;
+  }
+  return value;
 }
 
 async function rotateConfigBackups(configPath: string, ioFs: typeof fs.promises): Promise<void> {
@@ -552,9 +682,26 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     clearConfigCache();
     let persistCandidate: unknown = cfg;
     const snapshot = await readConfigFileSnapshot();
+    let envRefMap: Map<string, string> | null = null;
+    let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {
       const patch = createMergePatch(snapshot.config, cfg);
       persistCandidate = applyMergePatch(snapshot.resolved, patch);
+      try {
+        const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
+          readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+          parseJson: (raw) => deps.json5.parse(raw),
+        });
+        const collected = new Map<string, string>();
+        collectEnvRefPaths(resolvedIncludes, "", collected);
+        if (collected.size > 0) {
+          envRefMap = collected;
+          changedPaths = new Set<string>();
+          collectChangedPaths(snapshot.config, cfg, "", changedPaths);
+        }
+      } catch {
+        envRefMap = null;
+      }
     }
 
     const validated = validateConfigObjectRawWithPlugins(persistCandidate);
@@ -571,11 +718,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+    const outputConfig =
+      envRefMap && changedPaths
+        ? (restoreEnvRefsFromMap(validated.config, "", envRefMap, changedPaths) as OpenClawConfig)
+        : validated.config;
     // Do NOT apply runtime defaults when writing — user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
-    const json = JSON.stringify(stampConfigVersion(validated.config), null, 2)
-      .trimEnd()
-      .concat("\n");
+    const json = JSON.stringify(stampConfigVersion(outputConfig), null, 2).trimEnd().concat("\n");
 
     const tmp = path.join(
       dir,

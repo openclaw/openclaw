@@ -92,6 +92,49 @@ function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: str
   return chunks.join("");
 }
 
+export function containsEnvVarReference(value: string): boolean {
+  if (!value.includes("$")) {
+    return false;
+  }
+
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (char !== "$") {
+      continue;
+    }
+
+    const next = value[i + 1];
+    const afterNext = value[i + 2];
+
+    // Escaped: $${VAR} -> ${VAR}
+    if (next === "$" && afterNext === "{") {
+      const start = i + 3;
+      const end = value.indexOf("}", start);
+      if (end !== -1) {
+        const name = value.slice(start, end);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          i = end;
+          continue;
+        }
+      }
+    }
+
+    // Substitution: ${VAR} -> value
+    if (next === "{") {
+      const start = i + 2;
+      const end = value.indexOf("}", start);
+      if (end !== -1) {
+        const name = value.slice(start, end);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
 function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): unknown {
   if (typeof value === "string") {
     return substituteString(value, env, path);
