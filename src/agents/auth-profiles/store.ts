@@ -198,7 +198,8 @@ export function loadAuthProfileStore(): AuthProfileStore {
   const asStore = coerceAuthStore(raw);
   if (asStore) {
     // Sync from external CLI tools on every load
-    const synced = syncExternalCliCredentials(asStore);
+    // Explicitly disable Keychain prompts for non-auth read paths
+    const synced = syncExternalCliCredentials(asStore, { allowKeychainPrompt: false });
     if (synced) {
       saveJsonFile(authPath, asStore);
     }
@@ -243,25 +244,25 @@ export function loadAuthProfileStore(): AuthProfileStore {
         };
       }
     }
-    syncExternalCliCredentials(store);
+    syncExternalCliCredentials(store, { allowKeychainPrompt: false });
     return store;
   }
 
   const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
-  syncExternalCliCredentials(store);
+  syncExternalCliCredentials(store, { allowKeychainPrompt: false });
   return store;
 }
 
 function loadAuthProfileStoreForAgent(
   agentDir?: string,
-  _options?: { allowKeychainPrompt?: boolean },
+  options?: { allowKeychainPrompt?: boolean },
 ): AuthProfileStore {
   const authPath = resolveAuthStorePath(agentDir);
   const raw = loadJsonFile(authPath);
   const asStore = coerceAuthStore(raw);
   if (asStore) {
     // Sync from external CLI tools on every load
-    const synced = syncExternalCliCredentials(asStore);
+    const synced = syncExternalCliCredentials(asStore, options);
     if (synced) {
       saveJsonFile(authPath, asStore);
     }
@@ -322,7 +323,7 @@ function loadAuthProfileStoreForAgent(
   }
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
-  const syncedCli = syncExternalCliCredentials(store);
+  const syncedCli = syncExternalCliCredentials(store, options);
   const shouldWrite = legacy !== null || mergedOAuth || syncedCli;
   if (shouldWrite) {
     saveJsonFile(authPath, store);

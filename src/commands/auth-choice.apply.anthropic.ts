@@ -1,5 +1,9 @@
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import {
+  CLAUDE_CLI_PROFILE_ID,
+  ensureAuthProfileStore,
+  upsertAuthProfile,
+} from "../agents/auth-profiles.js";
 import {
   formatApiKeyPreview,
   normalizeApiKeyInput,
@@ -11,6 +15,82 @@ import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";
 export async function applyAuthChoiceAnthropic(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
+  if (params.authChoice === "claude-cli") {
+    let nextConfig = params.config;
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const hasClaudeCli = Boolean(store.profiles[CLAUDE_CLI_PROFILE_ID]);
+    if (!hasClaudeCli && process.platform === "darwin") {
+      await params.prompter.note(
+        [
+          "macOS will show a Keychain prompt next.",
+          'Choose "Always Allow" so the launchd gateway can start without prompts.',
+          'If you choose "Allow" or "Deny", each restart will block on a Keychain alert.',
+        ].join("\n"),
+        "Claude Code CLI Keychain",
+      );
+      const proceed = await params.prompter.confirm({
+        message: "Check Keychain for Claude Code CLI credentials now?",
+        initialValue: true,
+      });
+      if (!proceed) {
+        return { config: nextConfig };
+      }
+    }
+
+    const storeWithKeychain = hasClaudeCli
+      ? store
+      : ensureAuthProfileStore(params.agentDir, {
+          allowKeychainPrompt: true,
+        });
+
+    if (!storeWithKeychain.profiles[CLAUDE_CLI_PROFILE_ID]) {
+      if (process.stdin.isTTY) {
+        const runNow = await params.prompter.confirm({
+          message: "Run `claude setup-token` now?",
+          initialValue: true,
+        });
+        if (runNow) {
+          const res = await (async () => {
+            const { spawnSync } = await import("node:child_process");
+            return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+          })();
+          if (res.error) {
+            await params.prompter.note(
+              `Failed to run claude: ${String(res.error)}`,
+              "Claude setup-token",
+            );
+          }
+        }
+      } else {
+        await params.prompter.note(
+          "`claude setup-token` requires an interactive TTY.",
+          "Claude setup-token",
+        );
+      }
+
+      const refreshed = ensureAuthProfileStore(params.agentDir, {
+        allowKeychainPrompt: true,
+      });
+      if (!refreshed.profiles[CLAUDE_CLI_PROFILE_ID]) {
+        await params.prompter.note(
+          process.platform === "darwin"
+            ? 'No Claude Code CLI credentials found in Keychain ("Claude Code-credentials") or ~/.claude/.credentials.json.'
+            : "No Claude Code CLI credentials found at ~/.claude/.credentials.json.",
+          "Claude Code CLI OAuth",
+        );
+        return { config: nextConfig };
+      }
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      provider: "anthropic",
+      mode: "oauth",
+    });
+    return { config: nextConfig };
+  }
+
   if (
     params.authChoice === "setup-token" ||
     params.authChoice === "oauth" ||

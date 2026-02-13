@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
-  it("removes deprecated CLI auth profiles from store + config", async () => {
+  it("removes deprecated codex-cli profile but preserves claude-cli", async () => {
     if (!tempAgentDir) {
       throw new Error("Missing temp agent dir");
     }
@@ -98,12 +98,14 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
     const raw = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
       profiles?: Record<string, unknown>;
     };
-    expect(raw.profiles?.["anthropic:claude-cli"]).toBeUndefined();
+    // claude-cli is NOT deprecated — it should be preserved
+    expect(raw.profiles?.["anthropic:claude-cli"]).toBeDefined();
+    // codex-cli IS deprecated — it should be removed
     expect(raw.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
 
-    expect(next.auth?.profiles?.["anthropic:claude-cli"]).toBeUndefined();
+    expect(next.auth?.profiles?.["anthropic:claude-cli"]).toBeDefined();
     expect(next.auth?.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
-    expect(next.auth?.order?.anthropic).toBeUndefined();
+    expect(next.auth?.order?.anthropic).toBeDefined();
     expect(next.auth?.order?.["openai-codex"]).toBeUndefined();
   });
 });
