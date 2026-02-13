@@ -348,6 +348,10 @@ export type PluginHookBeforeCompactionEvent = {
   compactingCount?: number;
   tokenCount?: number;
   messages?: unknown[];
+  /** Path to the session JSONL transcript. All messages are already on disk
+   *  before compaction starts, so plugins can read this file asynchronously
+   *  and process in parallel with the compaction LLM call. */
+  sessionFile?: string;
 };
 
 // before_reset hook — fired when /new or /reset clears a session

@@ -447,9 +447,9 @@ export async function compactEmbeddedPiSessionDirect(
           session.agent.replaceMessages(limited);
         }
         // Run before_compaction hooks (fire-and-forget).
-        // Plugins that need the full conversation should persist it themselves
-        // (e.g. write to a temp file) and return quickly. For heavier processing,
-        // use after_compaction which provides the sessionFile path for async reads.
+        // The session JSONL already contains all messages on disk, so plugins
+        // can read sessionFile asynchronously and process in parallel with
+        // the compaction LLM call — no need to block or wait for after_compaction.
         const hookRunner = getGlobalHookRunner();
         const hookCtx = {
           agentId: params.sessionKey?.split(":")[0] ?? "main",
@@ -465,6 +465,7 @@ export async function compactEmbeddedPiSessionDirect(
                 messageCount: preCompactionMessages.length,
                 compactingCount: limited.length,
                 messages: preCompactionMessages,
+                sessionFile: params.sessionFile,
               },
               hookCtx,
             )
@@ -490,8 +491,8 @@ export async function compactEmbeddedPiSessionDirect(
           tokensAfter = undefined;
         }
         // Run after_compaction hooks (fire-and-forget).
-        // Includes sessionFile so plugins can read the full JSONL transcript
-        // asynchronously — all pre-compaction messages are preserved on disk.
+        // Also includes sessionFile for plugins that only need to act after
+        // compaction completes (e.g. analytics, cleanup).
         if (hookRunner?.hasHooks("after_compaction")) {
           hookRunner
             .runAfterCompaction(
