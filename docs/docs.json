@@ -372,6 +372,10 @@
       "destination": "/gateway/heartbeat"
     },
     {
+      "source": "/hooks",
+      "destination": "/automation/hooks"
+    },
+    {
       "source": "/hubs",
       "destination": "/start/hubs"
     },
