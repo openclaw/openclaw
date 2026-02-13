@@ -4,7 +4,8 @@ import path from "node:path";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
-import { createOpenClawCodingTools } from "./pi-tools.js";
+import { createMoltbotCodingTools } from "./pi-tools.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const defaultTools = createOpenClawCodingTools();
 
@@ -72,14 +73,16 @@ describe("createOpenClawCodingTools", () => {
     }
   });
   it("filters tools by sandbox policy", () => {
+    const sandboxDir = path.join(os.tmpdir(), "moltbot-sandbox");
     const sandbox = {
       enabled: true,
       sessionKey: "sandbox:test",
-      workspaceDir: path.join(os.tmpdir(), "openclaw-sandbox"),
-      agentWorkspaceDir: path.join(os.tmpdir(), "openclaw-workspace"),
+      workspaceDir: sandboxDir,
+      agentWorkspaceDir: path.join(os.tmpdir(), "moltbot-workspace"),
       workspaceAccess: "none",
       containerName: "openclaw-sbx-test",
       containerWorkdir: "/workspace",
+      fsBridge: createHostSandboxFsBridge(sandboxDir),
       docker: {
         image: "openclaw-sandbox:bookworm-slim",
         containerPrefix: "openclaw-sbx-",
@@ -103,14 +106,16 @@ describe("createOpenClawCodingTools", () => {
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
   });
   it("hard-disables write/edit when sandbox workspaceAccess is ro", () => {
+    const sandboxDir = path.join(os.tmpdir(), "moltbot-sandbox");
     const sandbox = {
       enabled: true,
       sessionKey: "sandbox:test",
-      workspaceDir: path.join(os.tmpdir(), "openclaw-sandbox"),
-      agentWorkspaceDir: path.join(os.tmpdir(), "openclaw-workspace"),
+      workspaceDir: sandboxDir,
+      agentWorkspaceDir: path.join(os.tmpdir(), "moltbot-workspace"),
       workspaceAccess: "ro",
       containerName: "openclaw-sbx-test",
       containerWorkdir: "/workspace",
+      fsBridge: createHostSandboxFsBridge(sandboxDir),
       docker: {
         image: "openclaw-sandbox:bookworm-slim",
         containerPrefix: "openclaw-sbx-",

@@ -798,7 +798,10 @@ export async function runEmbeddedAttempt(
             historyMessages: activeSession.messages,
             maxBytes: MAX_IMAGE_BYTES,
             // Enforce sandbox path restrictions when sandbox is enabled
-            sandboxRoot: sandbox?.enabled ? sandbox.workspaceDir : undefined,
+            sandbox:
+              sandbox?.enabled && sandbox?.fsBridge
+                ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
+                : undefined,
           });
 
           // Inject history images into their original message positions.
