@@ -412,7 +412,7 @@ export async function getHealthSnapshot(params?: {
     buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }));
 
   const start = Date.now();
-  const cappedTimeout = Math.max(1000, timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
   const doProbe = params?.probe !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
   const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
