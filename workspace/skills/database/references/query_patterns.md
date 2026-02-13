@@ -7,54 +7,54 @@
 
 ```bash
 # Filters: exact match (strings auto-ilike unless UUID)
---filters '{"is_active": true, "category_id": "uuid-here"}'
+--filters '{"is_active": true, "category_id": "<uuid>"}'
 
 # Filters: operators
 --filters '{"price": {"gt": 100, "lte": 500}}'
 
 # Filters: IN list
---filters '{"status": ["active", "draft"]}'
+--filters '{"status": ["<active>", "<draft>"]}'
 
 # Search: single pattern
---search '{"name": "%bottle%"}'
+--search '{"name": "%<search_term>%"}'
 
 # Search: OR between patterns
---search '{"name": ["%PET%", "%jar%", "%container%"]}'
+--search '{"name": ["%<term1>%", "%<term2>%", "%<term3>%"]}'
 ```
 
 ## Read Examples
 
 ### Simple filtered read
 ```bash
-python scripts/db_tool.py read products --filters '{"is_active": true}' --limit 10
+python scripts/db_tool.py read <table_name> --filters '{"is_active": true}' --limit 10
 ```
 
 ### Select specific columns
 ```bash
-python scripts/db_tool.py read products --columns 'id,sku,name,price' --limit 50
+python scripts/db_tool.py read <table_name> --columns '<col1>,<col2>,<col3>,<col4>' --limit 50
 ```
 
 ### With relations (PostgREST embedding)
 ```bash
-python scripts/db_tool.py read products --relations 'product_families(name,sku_prefix),product_prices(price,price_lists(name))'
+python scripts/db_tool.py read <table_name> --relations '<related_table>(<col1>,<col2>),<other_table>(<col3>,<nested_table>(<col4>))'
 ```
 
 ### Fuzzy search with pagination
 ```bash
-python scripts/db_tool.py read products --search '{"name": "%PET%"}' --limit 20 --offset 40
+python scripts/db_tool.py read <table_name> --search '{"name": "%<search_term>%"}' --limit 20 --offset 40
 ```
 
 ### Count only
 ```bash
-python scripts/db_tool.py read products --filters '{"is_active": true}' --count-only
+python scripts/db_tool.py read <table_name> --filters '{"is_active": true}' --count-only
 ```
 
 ### Combined filters + search
 ```bash
-python scripts/db_tool.py read products \
+python scripts/db_tool.py read <table_name> \
   --filters '{"is_active": true}' \
-  --search '{"name": ["%bottle%", "%jar%"]}' \
-  --columns 'id,sku,name,price' \
+  --search '{"name": ["%<term1>%", "%<term2>%"]}' \
+  --columns '<col1>,<col2>,<col3>,<col4>' \
   --limit 20
 ```
 
@@ -62,31 +62,31 @@ python scripts/db_tool.py read products \
 
 ### Simple count
 ```bash
-python scripts/db_tool.py aggregate products --aggregates '{"total": "count(*)"}'
+python scripts/db_tool.py aggregate <table_name> --aggregates '{"total": "count(*)"}'
 ```
 
 ### Group by with multiple aggregates
 ```bash
-python scripts/db_tool.py aggregate products \
-  --aggregates '{"count": "count(*)", "avg_price": "avg(price)", "max_price": "max(price)"}' \
-  --group-by 'product_family_id'
+python scripts/db_tool.py aggregate <table_name> \
+  --aggregates '{"count": "count(*)", "avg_value": "avg(<numeric_col>)", "max_value": "max(<numeric_col>)"}' \
+  --group-by '<category_column>'
 ```
 
 ### With HAVING filter
 ```bash
-python scripts/db_tool.py aggregate products \
+python scripts/db_tool.py aggregate <table_name> \
   --aggregates '{"count": "count(*)"}' \
   --filters '{"is_active": true}' \
-  --group-by 'product_family_id' \
+  --group-by '<category_column>' \
   --having '{"count": {"gt": 5}}'
 ```
 
 ### With search patterns
 ```bash
-python scripts/db_tool.py aggregate products \
-  --aggregates '{"count": "count(*)", "total_value": "sum(price)"}' \
-  --search '{"name": "%PET%"}' \
-  --group-by 'product_family_id'
+python scripts/db_tool.py aggregate <table_name> \
+  --aggregates '{"count": "count(*)", "total_value": "sum(<numeric_col>)"}' \
+  --search '{"name": "%<search_term>%"}' \
+  --group-by '<category_column>'
 ```
 
 ## Supported Aggregate Functions

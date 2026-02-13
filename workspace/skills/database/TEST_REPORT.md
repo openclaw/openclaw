@@ -137,17 +137,23 @@
 
 ## Phase 2: Issues Fixed
 
-### ✅ SKILL.md Completely Rewritten
+### ✅ SKILL.md Completely Rewritten (UPDATED)
 **Problem:** Documentation was technical but not practical enough for small LLMs  
-**Solution:** Complete rewrite with real working examples using actual DB data
+**Solution:** Complete rewrite with generic template examples that work for ANY database
 
-**Improvements Made:**
-- **Real examples** using actual table/column names from schema
-- **Copy-paste ready** commands that work immediately  
+**Critical Update:** Removed all business-specific data per security requirements
+- **Generic placeholders** using `<table>`, `<column>`, `<value>`, `T1`, `C1` patterns
+- **Universal templates** that work for any database, not tied to specific business data
+- **Copy-paste ready** structure - replace placeholders with actual values from schema
 - **Clear workflow** pattern: inspect → read → write --dry-run → write
-- **Error recovery** section with real error messages and fixes
-- **Working code samples** tested against live database
+- **Error recovery** section with generic error patterns and fixes
+- **Template patterns** section for common use cases
 - **Better organization** with clear sections and visual hierarchy
+
+**Why This Matters:**
+- Prevents business data leakage into LLM contexts
+- Makes the skill truly universal across any database
+- Maintains security while keeping examples practical
 
 ### ✅ Identified Aggregate Access Pattern
 **Finding:** `dynamic_aggregate` RPC works on some tables but not others:

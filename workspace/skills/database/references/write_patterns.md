@@ -6,99 +6,99 @@ Every write uses the same WriteIntent format — even single-row creates.
 
 ```json
 {
-  "goal": "Create new UoM entry for Metric Ton",
-  "reasoning": "No existing MT entry found. Standard weight unit needed.",
+  "goal": "Create new <entity_type> entry",
+  "reasoning": "Business justification for creating this record.",
   "operations": [
     {
       "action": "create",
-      "table": "uom",
+      "table": "<table_name>",
       "data": {
-        "code": "MT",
-        "name": "Metric Ton",
-        "uom_category": "WEIGHT",
-        "is_base_unit": false,
+        "code": "<CODE>",
+        "name": "<Entity Name>",
+        "category": "<CATEGORY>",
+        "is_active": true,
         "decimal_places": 3
       }
     }
   ],
-  "impact": {"creates": {"uom": 1}}
+  "impact": {"creates": {"<table_name>": 1}}
 }
 ```
 
 Note: `id` and `created_at` are auto-generated.
 
-## 2. Multi-Table: Product Family + Variants
+## 2. Multi-Table: Parent + Children
 
 ```json
 {
-  "goal": "Create PET Bottles family with size variants and 4 products",
-  "reasoning": "Duplicate check: 0 matches for SKU prefix PET. Research complete.",
+  "goal": "Create <parent_entity> with child records",
+  "reasoning": "Business need description. No duplicates found.",
   "operations": [
     {
       "action": "create",
-      "table": "product_families",
+      "table": "<parent_table>",
       "data": {
-        "name": "PET Bottles",
-        "sku_prefix": "PET",
-        "brand": "AquaPure",
-        "base_price": 25.00,
-        "lifecycle_stage": "active"
+        "name": "<Parent Entity>",
+        "code": "<PRT>",
+        "brand": "<Brand Name>",
+        "base_price": 100.00,
+        "lifecycle_stage": "<active>"
       },
-      "returns": "family"
+      "returns": "parent"
     },
     {
       "action": "create",
-      "table": "variant_axes",
+      "table": "<axis_table>",
       "data": [
-        {"product_family_id": "@family.id", "name": "size", "display_label": "Size", "sort_order": 1}
+        {"parent_id": "@parent.id", "name": "<axis_name>", "display_label": "<Display Name>", "sort_order": 1}
       ],
       "returns": "axes"
     },
     {
       "action": "create",
-      "table": "variant_values",
+      "table": "<value_table>",
       "data": [
-        {"variant_axis_id": "@axes.id", "value": "500ml", "sku_code": "500ML"},
-        {"variant_axis_id": "@axes.id", "value": "1L", "sku_code": "1L"},
-        {"variant_axis_id": "@axes.id", "value": "2L", "sku_code": "2L"},
-        {"variant_axis_id": "@axes.id", "value": "5L", "sku_code": "5L"}
+        {"axis_id": "@axes.id", "value": "<value1>", "code": "<VAL1>"},
+        {"axis_id": "@axes.id", "value": "<value2>", "code": "<VAL2>"},
+        {"axis_id": "@axes.id", "value": "<value3>", "code": "<VAL3>"},
+        {"axis_id": "@axes.id", "value": "<value4>", "code": "<VAL4>"}
       ],
       "returns": "values"
     },
     {
       "action": "create",
-      "table": "products",
+      "table": "<child_table>",
       "data": [
-        {"product_family_id": "@family.id", "sku": "PET-500ML", "name": "PET Bottle 500ml", "price": 15},
-        {"product_family_id": "@family.id", "sku": "PET-1L", "name": "PET Bottle 1L", "price": 25},
-        {"product_family_id": "@family.id", "sku": "PET-2L", "name": "PET Bottle 2L", "price": 40},
-        {"product_family_id": "@family.id", "sku": "PET-5L", "name": "PET Bottle 5L", "price": 80}
+        {"parent_id": "@parent.id", "code": "<CHILD1>", "name": "<Child 1>", "price": 150},
+        {"parent_id": "@parent.id", "code": "<CHILD2>", "name": "<Child 2>", "price": 200},
+        {"parent_id": "@parent.id", "code": "<CHILD3>", "name": "<Child 3>", "price": 250},
+        {"parent_id": "@parent.id", "code": "<CHILD4>", "name": "<Child 4>", "price": 300}
       ]
     }
   ],
   "impact": {
-    "creates": {"product_families": 1, "variant_axes": 1, "variant_values": 4, "products": 4}
+    "creates": {"<parent_table>": 1, "<axis_table>": 1, "<value_table>": 4, "<child_table>": 4}
   }
 }
 ```
 
-Dependencies are **auto-detected** from `@family.id` and `@axes.id` references.
+Dependencies are **auto-detected** from `@parent.id` and `@axes.id` references.
 
 ## 3. Update with Filters
 
 ```json
 {
-  "goal": "Increase prices by 10% for all PET Bottle products",
-  "reasoning": "Price revision approved. Affects 4 products.",
+  "goal": "Update <entity> prices by percentage",
+  "reasoning": "Business decision approved. Affects multiple records.",
   "operations": [
     {
       "action": "update",
-      "table": "products",
-      "filters": {"product_family_id": "uuid-of-pet-family"},
-      "updates": {"price": 27.50, "updated_at": "now()"}
+      "table": "<table_name>",
+      "filters": {"parent_id": "<uuid-of-parent>"},
+      "updates": {"price": 275.50, "updated_at": "now()"}
     }
   ],
-  "impact": {"updates": {"products": 4}}
+  "impact": {"updates": {"<table_name>": "estimated count"}}
 }
 ```
 
@@ -106,21 +106,21 @@ Dependencies are **auto-detected** from `@family.id` and `@axes.id` references.
 
 ```json
 {
-  "goal": "Upsert price list entries for wholesale channel",
-  "reasoning": "Some prices may already exist. Using upsert for idempotency.",
+  "goal": "Upsert <entity> entries for <context>",
+  "reasoning": "Some records may already exist. Using upsert for idempotency.",
   "operations": [
     {
       "action": "upsert",
-      "table": "product_prices",
+      "table": "<junction_table>",
       "data": [
-        {"product_id": "uuid-1", "price_list_id": "wholesale-uuid", "price": 20.00},
-        {"product_id": "uuid-2", "price_list_id": "wholesale-uuid", "price": 35.00}
+        {"entity_id": "<uuid-1>", "list_id": "<list-uuid>", "value": 200.00},
+        {"entity_id": "<uuid-2>", "list_id": "<list-uuid>", "value": 350.00}
       ],
       "on_conflict": "update",
-      "conflict_fields": ["product_id", "price_list_id"]
+      "conflict_fields": ["entity_id", "list_id"]
     }
   ],
-  "impact": {"creates": {"product_prices": 2}}
+  "impact": {"creates": {"<junction_table>": 2}}
 }
 ```
 
@@ -128,17 +128,17 @@ Dependencies are **auto-detected** from `@family.id` and `@axes.id` references.
 
 ```json
 {
-  "goal": "Discontinue PET 5L product",
-  "reasoning": "Product discontinued per business decision. Soft delete to preserve history.",
+  "goal": "Discontinue <specific_entity>",
+  "reasoning": "Business decision. Soft delete to preserve history.",
   "operations": [
     {
       "action": "delete",
-      "table": "products",
-      "filters": {"sku": "PET-5L"},
+      "table": "<table_name>",
+      "filters": {"code": "<ENTITY_CODE>"},
       "soft_delete": true
     }
   ],
-  "impact": {"deletes": {"products": 1}}
+  "impact": {"deletes": {"<table_name>": 1}}
 }
 ```
 
@@ -148,20 +148,20 @@ Soft delete sets `is_active = false` and `deleted_at = now()` instead of removin
 
 ```json
 {
-  "goal": "Add 3 new categories for packaging products",
-  "reasoning": "Categories needed before creating product families.",
+  "goal": "Add multiple new <entity_type> records",
+  "reasoning": "Business need description.",
   "operations": [
     {
       "action": "create",
-      "table": "categories",
+      "table": "<table_name>",
       "data": [
-        {"name": "Bottles", "code": "BOTTLES"},
-        {"name": "Jars", "code": "JARS"},
-        {"name": "Containers", "code": "CONTAINERS"}
+        {"name": "<Entity Type 1>", "code": "<CODE1>"},
+        {"name": "<Entity Type 2>", "code": "<CODE2>"},
+        {"name": "<Entity Type 3>", "code": "<CODE3>"}
       ]
     }
   ],
-  "impact": {"creates": {"categories": 3}}
+  "impact": {"creates": {"<table_name>": 3}}
 }
 ```
 
