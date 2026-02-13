@@ -26,6 +26,15 @@ ${body ?? `# ${name}\n`}
   );
 }
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("buildWorkspaceSkillsPrompt", () => {
   it("syncs merged skills into a target workspace", async () => {
     const sourceWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
@@ -73,6 +82,63 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Bundled version");
     expect(prompt).not.toContain("Extra version");
     expect(prompt).toContain(path.join(targetWorkspace, "skills", "demo-skill", "SKILL.md"));
+  });
+  it("keeps synced skills confined under target workspace when frontmatter name uses traversal", async () => {
+    const sourceWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const targetWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const escapeId = `${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
+    const traversalName = `../../../skill-sync-escape-${escapeId}`;
+    const escapedDest = path.resolve(targetWorkspace, "skills", traversalName);
+
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "safe-traversal-skill"),
+      name: traversalName,
+      description: "Traversal skill",
+    });
+
+    expect(path.relative(path.join(targetWorkspace, "skills"), escapedDest).startsWith("..")).toBe(
+      true,
+    );
+    expect(await pathExists(escapedDest)).toBe(false);
+
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+      managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+    });
+
+    expect(
+      await pathExists(path.join(targetWorkspace, "skills", "safe-traversal-skill", "SKILL.md")),
+    ).toBe(true);
+    expect(await pathExists(escapedDest)).toBe(false);
+  });
+  it("keeps synced skills confined under target workspace when frontmatter name is absolute", async () => {
+    const sourceWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const targetWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const escapeId = `${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
+    const absoluteDest = path.join(os.tmpdir(), `skill-sync-abs-escape-${escapeId}`);
+
+    await fs.rm(absoluteDest, { recursive: true, force: true });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "safe-absolute-skill"),
+      name: absoluteDest,
+      description: "Absolute skill",
+    });
+
+    expect(await pathExists(absoluteDest)).toBe(false);
+
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+      managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+    });
+
+    expect(
+      await pathExists(path.join(targetWorkspace, "skills", "safe-absolute-skill", "SKILL.md")),
+    ).toBe(true);
+    expect(await pathExists(absoluteDest)).toBe(false);
   });
   it("filters skills based on env/config gates", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
