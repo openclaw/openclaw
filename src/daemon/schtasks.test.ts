@@ -245,4 +245,63 @@ describe("readScheduledTaskCommand", () => {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
+  it("parses command with Windows backslash paths", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    try {
+      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(
+        scriptPath,
+        [
+          "@echo off",
+          '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway --port 18789',
+        ].join("\r\n"),
+        "utf8",
+      );
+
+      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const result = await readScheduledTaskCommand(env);
+      expect(result).toEqual({
+        programArguments: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+          "gateway",
+          "--port",
+          "18789",
+        ],
+      });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves UNC paths in command arguments", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    try {
+      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(
+        scriptPath,
+        [
+          "@echo off",
+          '"\\\\fileserver\\OpenClaw Share\\node.exe" "\\\\fileserver\\OpenClaw Share\\dist\\index.js" gateway --port 18789',
+        ].join("\r\n"),
+        "utf8",
+      );
+
+      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const result = await readScheduledTaskCommand(env);
+      expect(result).toEqual({
+        programArguments: [
+          "\\\\fileserver\\OpenClaw Share\\node.exe",
+          "\\\\fileserver\\OpenClaw Share\\dist\\index.js",
+          "gateway",
+          "--port",
+          "18789",
+        ],
+      });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
