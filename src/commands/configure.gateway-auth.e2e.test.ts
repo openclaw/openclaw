@@ -44,6 +44,15 @@ describe("buildGatewayAuthConfig", () => {
     expect(result).toEqual({ mode: "password", password: "secret" });
   });
 
+  it("does not silently omit password when literal string is provided", () => {
+    const result = buildGatewayAuthConfig({
+      mode: "password",
+      password: "undefined",
+    });
+
+    expect(result).toEqual({ mode: "password", password: "undefined" });
+  });
+
   it("generates random token when token param is undefined", () => {
     const result = buildGatewayAuthConfig({
       mode: "token",
@@ -79,6 +88,32 @@ describe("buildGatewayAuthConfig", () => {
     expect(result?.mode).toBe("token");
     expect(result?.token).toBeDefined();
     expect(result?.token).not.toBe("undefined");
+    expect(typeof result?.token).toBe("string");
+    expect(result?.token?.length).toBeGreaterThan(0);
+  });
+
+  it('generates random token when token param is the literal string "undefined"', () => {
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: "undefined",
+    });
+
+    expect(result?.mode).toBe("token");
+    expect(result?.token).toBeDefined();
+    expect(result?.token).not.toBe("undefined");
+    expect(typeof result?.token).toBe("string");
+    expect(result?.token?.length).toBeGreaterThan(0);
+  });
+
+  it('generates random token when token param is the literal string "null"', () => {
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: "null",
+    });
+
+    expect(result?.mode).toBe("token");
+    expect(result?.token).toBeDefined();
+    expect(result?.token).not.toBe("null");
     expect(typeof result?.token).toBe("string");
     expect(result?.token?.length).toBeGreaterThan(0);
   });
