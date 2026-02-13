@@ -1452,6 +1452,32 @@ public struct TalkModeParams: Codable, Sendable {
     }
 }
 
+public struct TalkConfigParams: Codable, Sendable {
+    public let includesecrets: Bool?
+
+    public init(
+        includesecrets: Bool?
+    ) {
+        self.includesecrets = includesecrets
+    }
+    private enum CodingKeys: String, CodingKey {
+        case includesecrets = "includeSecrets"
+    }
+}
+
+public struct TalkConfigResult: Codable, Sendable {
+    public let config: [String: AnyCodable]
+
+    public init(
+        config: [String: AnyCodable]
+    ) {
+        self.config = config
+    }
+    private enum CodingKeys: String, CodingKey {
+        case config
+    }
+}
+
 public struct ChannelsStatusParams: Codable, Sendable {
     public let probe: Bool?
     public let timeoutms: Int?
