@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
+import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -18,6 +19,7 @@ const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
+export const MAX_LAST_TURN_TOKENS = 4000;
 const MAX_TOOL_FAILURE_CHARS = 240;
 
 type ToolFailure = {
@@ -156,6 +158,134 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
     return "";
   }
   return `\n\n${sections.join("\n\n")}`;
+}
+
+/**
+ * Extract the last conversation turn from messages.
+ * A "turn" starts at the last user message and includes everything after it
+ * (assistant responses, tool calls, tool results).
+ * If no user message is found, returns the last assistant message (if any).
+ */
+export function extractLastTurn(messages: AgentMessage[]): AgentMessage[] {
+  if (messages.length === 0) {
+    return [];
+  }
+
+  // Walk backwards to find the last user message
+  let lastUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg && typeof msg === "object" && (msg as { role?: unknown }).role === "user") {
+      lastUserIndex = i;
+      break;
+    }
+  }
+
+  if (lastUserIndex >= 0) {
+    // Return everything from the last user message to the end
+    return messages.slice(lastUserIndex);
+  }
+
+  // No user message found — return the last assistant message if present
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg && typeof msg === "object" && (msg as { role?: unknown }).role === "assistant") {
+      return [msg];
+    }
+  }
+
+  return [];
+}
+
+/**
+ * Serialize a set of messages (typically the last turn) into human-readable text.
+ * Truncates if the estimated token count exceeds maxTokens.
+ *
+ * Uses the same serialization format as the upstream compaction serializer:
+ *   [User]: ..., [Assistant]: ..., [Tool result]: ...
+ */
+export function serializeLastTurn(messages: AgentMessage[], maxTokens: number): string {
+  if (messages.length === 0) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role === "user") {
+      const content = (msg as { content?: unknown }).content;
+      const text =
+        typeof content === "string"
+          ? content
+          : Array.isArray(content)
+            ? (content as Array<{ type?: string; text?: string }>)
+                .filter((c) => c.type === "text")
+                .map((c) => c.text ?? "")
+                .join("")
+            : "";
+      if (text) {
+        parts.push(`[User]: ${text}`);
+      }
+    } else if (role === "assistant") {
+      const content = (msg as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        const textParts: string[] = [];
+        const toolCalls: string[] = [];
+        for (const block of content as Array<{
+          type?: string;
+          text?: string;
+          name?: string;
+          arguments?: Record<string, unknown>;
+        }>) {
+          if (block.type === "text" && block.text) {
+            textParts.push(block.text);
+          } else if (block.type === "toolCall" && block.name) {
+            const args = block.arguments ?? {};
+            const argsStr = Object.entries(args)
+              .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+              .join(", ");
+            toolCalls.push(`${block.name}(${argsStr})`);
+          }
+        }
+        if (textParts.length > 0) {
+          parts.push(`[Assistant]: ${textParts.join("\n")}`);
+        }
+        if (toolCalls.length > 0) {
+          parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
+        }
+      }
+    } else if (role === "toolResult") {
+      const content = (msg as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        const text = (content as Array<{ type?: string; text?: string }>)
+          .filter((c) => c.type === "text")
+          .map((c) => c.text ?? "")
+          .join("");
+        if (text) {
+          parts.push(`[Tool result]: ${text}`);
+        }
+      }
+    }
+  }
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  let serialized = parts.join("\n\n");
+
+  // Estimate tokens and truncate if needed
+  // estimateTokens uses chars/4 heuristic, so maxTokens * 4 ≈ max chars
+  const maxChars = maxTokens * 4;
+  if (serialized.length > maxChars) {
+    const truncated = serialized.slice(0, Math.max(0, maxChars - 20));
+    serialized = truncated + "\n\n[truncated]";
+  }
+
+  return serialized;
 }
 
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
@@ -306,6 +436,18 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         summary = `${historySummary}\n\n---\n\n**Turn Context (split turn):**\n\n${prefixSummary}`;
       }
 
+      // Inject raw last turn for continuity after compaction.
+      // This preserves the exact last exchange so the agent doesn't lose track
+      // of where the conversation was when compaction fired.
+      const allSummarizedMessages = [...messagesToSummarize, ...turnPrefixMessages];
+      const lastTurn = extractLastTurn(allSummarizedMessages);
+      if (lastTurn.length > 0) {
+        const lastTurnText = serializeLastTurn(lastTurn, MAX_LAST_TURN_TOKENS);
+        if (lastTurnText) {
+          summary += `\n\n---\n\n<last-turn>\n${lastTurnText}\n</last-turn>`;
+        }
+      }
+
       summary += toolFailureSection;
       summary += fileOpsSummary;
 
@@ -340,7 +482,10 @@ export const __testing = {
   formatToolFailuresSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  extractLastTurn,
+  serializeLastTurn,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  MAX_LAST_TURN_TOKENS,
 } as const;

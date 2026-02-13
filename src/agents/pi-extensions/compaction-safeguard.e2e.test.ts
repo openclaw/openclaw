@@ -11,9 +11,12 @@ const {
   formatToolFailuresSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  extractLastTurn,
+  serializeLastTurn,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  MAX_LAST_TURN_TOKENS,
 } = __testing;
 
 describe("compaction-safeguard tool failures", () => {
@@ -209,6 +212,177 @@ describe("isOversizedForSummary", () => {
     const isOversized = isOversizedForSummary(msg, CONTEXT_WINDOW);
     // Due to token estimation, this could be either true or false at the boundary
     expect(typeof isOversized).toBe("boolean");
+  });
+});
+
+describe("extractLastTurn", () => {
+  it("extracts the last user + assistant exchange", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "First question", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "First answer" }],
+        timestamp: 2,
+      },
+      { role: "user", content: "Second question", timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Second answer" }],
+        timestamp: 4,
+      },
+    ];
+
+    const turn = extractLastTurn(messages);
+    expect(turn).toHaveLength(2);
+    expect((turn[0] as { content: string }).content).toBe("Second question");
+    expect(
+      ((turn[1] as { content: Array<{ text: string }> }).content[0] as { text: string }).text,
+    ).toBe("Second answer");
+  });
+
+  it("includes tool calls and tool results in the last turn", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Old message", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Old response" }],
+        timestamp: 2,
+      },
+      { role: "user", content: "Do something", timestamp: 3 },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I'll help" },
+          { type: "toolCall", name: "exec", id: "call-1", arguments: { command: "ls" } },
+        ],
+        timestamp: 4,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        isError: false,
+        content: [{ type: "text", text: "file1.txt\nfile2.txt" }],
+        timestamp: 5,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Here are the files" }],
+        timestamp: 6,
+      },
+    ];
+
+    const turn = extractLastTurn(messages);
+    expect(turn).toHaveLength(4); // user + assistant(tool call) + toolResult + assistant(final)
+    expect(turn[0].role).toBe("user");
+    expect(turn[1].role).toBe("assistant");
+    expect(turn[2].role).toBe("toolResult");
+    expect(turn[3].role).toBe("assistant");
+  });
+
+  it("returns empty array for empty messages", () => {
+    expect(extractLastTurn([])).toEqual([]);
+  });
+
+  it("returns just assistant if no user message found", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I'm here" }],
+        timestamp: 1,
+      },
+    ];
+
+    const turn = extractLastTurn(messages);
+    expect(turn).toHaveLength(1);
+    expect(turn[0].role).toBe("assistant");
+  });
+
+  it("handles messages with only user messages", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Hello", timestamp: 1 },
+      { role: "user", content: "Are you there?", timestamp: 2 },
+    ];
+
+    const turn = extractLastTurn(messages);
+    expect(turn).toHaveLength(1);
+    expect((turn[0] as { content: string }).content).toBe("Are you there?");
+  });
+});
+
+describe("serializeLastTurn", () => {
+  it("serializes user text and assistant text", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "What is 2+2?", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The answer is 4." }],
+        timestamp: 2,
+      },
+    ];
+
+    const result = serializeLastTurn(messages, 4000);
+    expect(result).toContain("[User]:");
+    expect(result).toContain("What is 2+2?");
+    expect(result).toContain("[Assistant]:");
+    expect(result).toContain("The answer is 4.");
+  });
+
+  it("truncates when exceeding maxTokens", () => {
+    // Create a very long assistant response
+    const longText = "x".repeat(20000 * 4); // ~20K tokens
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Tell me everything", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: longText }],
+        timestamp: 2,
+      },
+    ];
+
+    const result = serializeLastTurn(messages, 1000);
+    // Should be truncated — the full text would be >> 1000 tokens
+    // The serialized output should be roughly 1000 * 4 = 4000 chars max
+    expect(result.length).toBeLessThan(longText.length);
+    expect(result).toContain("[truncated]");
+  });
+
+  it("handles tool calls in assistant messages", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "List files", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me check" },
+          { type: "toolCall", name: "exec", id: "call-1", arguments: { command: "ls" } },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        isError: false,
+        content: [{ type: "text", text: "file.txt" }],
+        timestamp: 3,
+      },
+    ];
+
+    const result = serializeLastTurn(messages, 4000);
+    expect(result).toContain("[User]:");
+    expect(result).toContain("List files");
+    expect(result).toContain("[Assistant]:");
+    expect(result).toContain("Let me check");
+    expect(result).toContain("[Tool result]:");
+    expect(result).toContain("file.txt");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(serializeLastTurn([], 4000)).toBe("");
+  });
+
+  it("respects MAX_LAST_TURN_TOKENS default", () => {
+    expect(MAX_LAST_TURN_TOKENS).toBe(4000);
   });
 });
 
