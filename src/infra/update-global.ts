@@ -22,46 +22,6 @@ async function tryRealpath(targetPath: string): Promise<string> {
   }
 }
 
-/**
- * Resolve the actual package root by following symlinks from the binary.
- *
- * On Homebrew+Node setups, the binary at `/opt/homebrew/Cellar/node/X.Y.Z/bin/openclaw`
- * is a symlink to `../lib/node_modules/openclaw/openclaw.mjs`, which is DIFFERENT from
- * where `npm root -g` points (`/opt/homebrew/lib/node_modules`).
- *
- * This causes `npm i -g` to install to the wrong location.
- */
-export async function resolveBinaryPackageRoot(binaryPath: string): Promise<string | null> {
-  try {
-    // Follow symlinks to get the real path
-    const realBinary = await fs.realpath(binaryPath);
-
-    // The binary should be in node_modules/openclaw/openclaw.mjs (or similar)
-    // Walk up to find the package root
-    let current = path.dirname(realBinary);
-    for (let i = 0; i < 5; i++) {
-      const pkgPath = path.join(current, "package.json");
-      try {
-        const raw = await fs.readFile(pkgPath, "utf-8");
-        const parsed = JSON.parse(raw) as { name?: string };
-        if (parsed?.name === PRIMARY_PACKAGE_NAME) {
-          return current;
-        }
-      } catch {
-        // ignore
-      }
-      const parent = path.dirname(current);
-      if (parent === current) {
-        break;
-      }
-      current = parent;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 function resolveBunGlobalRoot(): string {
   const bunInstall = process.env.BUN_INSTALL?.trim() || path.join(os.homedir(), ".bun");
   return path.join(bunInstall, "install", "global", "node_modules");
@@ -127,16 +87,16 @@ export async function detectGlobalInstallManagerForRoot(
         return manager;
       }
     }
+  }
 
-    // Homebrew+Node workaround: Check if pkgRoot is under a Cellar path that corresponds
-    // to this manager's global root. On Homebrew, npm installs to /opt/homebrew/lib/node_modules
-    // but the binary symlinks point to /opt/homebrew/Cellar/node/X.Y.Z/lib/node_modules
-    if (pkgReal.includes("/Cellar/node/") && pkgReal.includes("/lib/node_modules/")) {
-      // This looks like a Homebrew Cellar npm path
-      for (const name of ALL_PACKAGE_NAMES) {
-        if (pkgReal.endsWith(`/node_modules/${name}`)) {
-          return manager;
-        }
+  // Homebrew+Node workaround: Check if pkgRoot is under a Cellar path.
+  // On Homebrew, npm installs to /opt/homebrew/lib/node_modules but the binary
+  // symlinks point to /opt/homebrew/Cellar/node/X.Y.Z/lib/node_modules.
+  // This is always an npm install, regardless of what managers are available.
+  if (pkgReal.includes("/Cellar/node/") && pkgReal.includes("/lib/node_modules/")) {
+    for (const name of ALL_PACKAGE_NAMES) {
+      if (pkgReal.endsWith(`/node_modules/${name}`)) {
+        return "npm";
       }
     }
   }
