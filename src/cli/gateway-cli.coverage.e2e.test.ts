@@ -38,7 +38,6 @@ async function withEnvOverride<T>(
       process.env[key] = overrides[key];
     }
   }
-  vi.resetModules();
   try {
     return await fn();
   } finally {
@@ -49,7 +48,6 @@ async function withEnvOverride<T>(
         process.env[key] = saved[key];
       }
     }
-    vi.resetModules();
   }
 }
 

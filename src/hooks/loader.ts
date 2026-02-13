@@ -36,6 +36,10 @@ import { loadWorkspaceHookEntries } from "./workspace.js";
 export async function loadInternalHooks(
   cfg: OpenClawConfig,
   workspaceDir: string,
+  opts?: {
+    managedHooksDir?: string;
+    bundledHooksDir?: string;
+  },
 ): Promise<number> {
   // Check if hooks are enabled
   if (!cfg.hooks?.internal?.enabled) {
@@ -46,7 +50,11 @@ export async function loadInternalHooks(
 
   // 1. Load hooks from directories (new system)
   try {
-    const hookEntries = loadWorkspaceHookEntries(workspaceDir, { config: cfg });
+    const hookEntries = loadWorkspaceHookEntries(workspaceDir, {
+      config: cfg,
+      managedHooksDir: opts?.managedHooksDir,
+      bundledHooksDir: opts?.bundledHooksDir,
+    });
 
     // Filter by eligibility
     const eligible = hookEntries.filter((entry) => shouldIncludeHook({ entry, config: cfg }));

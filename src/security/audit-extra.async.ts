@@ -9,6 +9,7 @@ import path from "node:path";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import type { SkillScanFinding } from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
@@ -31,7 +32,7 @@ import {
   inspectPathPermissions,
   safeStat,
 } from "./audit-fs.js";
-import { scanDirectoryWithSummary, type SkillScanFinding } from "./skill-scanner.js";
+import * as skillScanner from "./skill-scanner.js";
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -812,19 +813,21 @@ export async function collectPluginsCodeSafetyFindings(params: {
       });
     }
 
-    const summary = await scanDirectoryWithSummary(pluginPath, {
-      includeFiles: forcedScanEntries,
-    }).catch((err) => {
-      findings.push({
-        checkId: "plugins.code_safety.scan_failed",
-        severity: "warn",
-        title: `Plugin "${pluginName}" code scan failed`,
-        detail: `Static code scan could not complete: ${String(err)}`,
-        remediation:
-          "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
+    const summary = await skillScanner
+      .scanDirectoryWithSummary(pluginPath, {
+        includeFiles: forcedScanEntries,
+      })
+      .catch((err) => {
+        findings.push({
+          checkId: "plugins.code_safety.scan_failed",
+          severity: "warn",
+          title: `Plugin "${pluginName}" code scan failed`,
+          detail: `Static code scan could not complete: ${String(err)}`,
+          remediation:
+            "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
+        });
+        return null;
       });
-      return null;
-    });
     if (!summary) {
       continue;
     }
@@ -885,7 +888,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       scannedSkillDirs.add(skillDir);
 
       const skillName = entry.skill.name;
-      const summary = await scanDirectoryWithSummary(skillDir).catch((err) => {
+      const summary = await skillScanner.scanDirectoryWithSummary(skillDir).catch((err) => {
         findings.push({
           checkId: "skills.code_safety.scan_failed",
           severity: "warn",

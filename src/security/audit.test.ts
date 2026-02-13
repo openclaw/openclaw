@@ -7,7 +7,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { discordPlugin } from "../../extensions/discord/src/channel.js";
 import { slackPlugin } from "../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { collectPluginsCodeSafetyFindings } from "./audit-extra.js";
 import { runSecurityAudit } from "./audit.js";
+import * as skillScanner from "./skill-scanner.js";
 
 const isWindows = process.platform === "win32";
 
@@ -1492,17 +1494,9 @@ description: test skill
   });
 
   it("reports scan_failed when plugin code scanner throws during deep audit", async () => {
-    vi.resetModules();
-    vi.doMock("./skill-scanner.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./skill-scanner.js")>("./skill-scanner.js");
-      return {
-        ...actual,
-        scanDirectoryWithSummary: async () => {
-          throw new Error("boom");
-        },
-      };
-    });
+    const scanSpy = vi
+      .spyOn(skillScanner, "scanDirectoryWithSummary")
+      .mockRejectedValueOnce(new Error("boom"));
 
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-scanner-"));
     try {
@@ -1517,12 +1511,10 @@ description: test skill
       );
       await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
 
-      const { collectPluginsCodeSafetyFindings } = await import("./audit-extra.js");
       const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
       expect(findings.some((f) => f.checkId === "plugins.code_safety.scan_failed")).toBe(true);
     } finally {
-      vi.doUnmock("./skill-scanner.js");
-      vi.resetModules();
+      scanSpy.mockRestore();
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
     }
   });

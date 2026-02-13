@@ -120,8 +120,6 @@ describe("legacy config detection", () => {
     expect(res.config?.routing).toBeUndefined();
   });
   it("migrates audio.transcription with custom script names", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       audio: {
         transcription: {
@@ -144,8 +142,6 @@ describe("legacy config detection", () => {
     expect(res.config?.audio).toBeUndefined();
   });
   it("rejects audio.transcription when command contains non-string parts", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       audio: {
         transcription: {
