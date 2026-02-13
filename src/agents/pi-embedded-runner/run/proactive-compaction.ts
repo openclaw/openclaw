@@ -11,7 +11,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import type { SettingsManager } from "@mariozechner/pi-coding-agent";
+import { lookupContextTokens } from "../../context.js";
 
 /**
  * Check if session needs proactive compaction based on contextTokens and maxHistoryShare.
@@ -22,12 +22,12 @@ export function needsProactiveCompaction(params: {
   messages: AgentMessage[];
   contextTokens?: number;
   maxHistoryShare?: number;
-  settingsManager: SettingsManager;
+  modelId?: string;
 }): boolean {
-  const { messages, contextTokens, maxHistoryShare, settingsManager } = params;
+  const { messages, contextTokens, maxHistoryShare, modelId } = params;
 
-  // Get effective contextTokens from config or default
-  const effectiveContextTokens = contextTokens ?? settingsManager.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
+  // Get effective contextTokens from config, model lookup, or default
+  const effectiveContextTokens = contextTokens ?? lookupContextTokens(modelId) ?? DEFAULT_CONTEXT_TOKENS;
   const effectiveMaxHistoryShare = maxHistoryShare ?? 0.5;
 
   // Calculate budget: contextTokens * maxHistoryShare

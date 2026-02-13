@@ -6,6 +6,8 @@ import { needsProactiveCompaction } from "./proactive-compaction.js";
 import { lookupContextTokens } from "../../context.js";
 import fs from "node:fs/promises";
 import os from "node:os";
+import type { CompactEmbeddedPiSessionParams } from "../compact.js";
+import { compactEmbeddedPiSession } from "../compact.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
@@ -823,7 +825,7 @@ export async function runEmbeddedAttempt(
             messages: activeSession.messages,
             contextTokens: lookupContextTokens(params.modelId),
             maxHistoryShare: params.config?.agents?.defaults?.compaction?.maxHistoryShare,
-            settingsManager,
+            modelId: params.modelId,
           });
 
           if (needsCompaction) {
