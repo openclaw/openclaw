@@ -12,6 +12,11 @@ vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
 
+const loginOpenAICodexOAuth = vi.hoisted(() => vi.fn(async () => null));
+vi.mock("./openai-codex-oauth.js", () => ({
+  loginOpenAICodexOAuth,
+}));
+
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 vi.mock("../plugins/providers.js", () => ({
   resolvePluginProviders,
@@ -46,6 +51,8 @@ describe("applyAuthChoice", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     resolvePluginProviders.mockReset();
+    loginOpenAICodexOAuth.mockReset();
+    loginOpenAICodexOAuth.mockResolvedValue(null);
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
@@ -110,6 +117,43 @@ describe("applyAuthChoice", () => {
     } else {
       process.env.CHUTES_CLIENT_ID = previousChutesClientId;
     }
+  });
+
+  it("does not throw when openai-codex oauth fails", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+
+    loginOpenAICodexOAuth.mockRejectedValueOnce(new Error("oauth failed"));
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select: vi.fn(async () => "" as never),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      applyAuthChoice({
+        authChoice: "openai-codex",
+        config: {},
+        prompter,
+        runtime,
+        setDefaultModel: false,
+      }),
+    ).resolves.toEqual({ config: {} });
   });
 
   it("prompts and writes MiniMax API key when selecting minimax-api", async () => {
