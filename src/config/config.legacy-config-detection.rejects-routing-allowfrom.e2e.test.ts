@@ -1,9 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { migrateLegacyConfig, validateConfigObject } from "./config.js";
 
 describe("legacy config detection", () => {
   it("rejects routing.allowFrom", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       routing: { allowFrom: ["+15555550123"] },
     });
@@ -13,8 +12,6 @@ describe("legacy config detection", () => {
     }
   });
   it("rejects routing.groupChat.requireMention", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       routing: { groupChat: { requireMention: false } },
     });
@@ -24,8 +21,6 @@ describe("legacy config detection", () => {
     }
   });
   it("migrates routing.allowFrom to channels.whatsapp.allowFrom when whatsapp configured", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       routing: { allowFrom: ["+15555550123"] },
       channels: { whatsapp: {} },
@@ -35,8 +30,6 @@ describe("legacy config detection", () => {
     expect(res.config?.routing?.allowFrom).toBeUndefined();
   });
   it("drops routing.allowFrom when whatsapp missing", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       routing: { allowFrom: ["+15555550123"] },
     });
@@ -45,8 +38,6 @@ describe("legacy config detection", () => {
     expect(res.config?.routing?.allowFrom).toBeUndefined();
   });
   it("migrates routing.groupChat.requireMention to channels whatsapp/telegram/imessage groups when whatsapp configured", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       routing: { groupChat: { requireMention: false } },
       channels: { whatsapp: {} },
@@ -66,8 +57,6 @@ describe("legacy config detection", () => {
     expect(res.config?.routing?.groupChat?.requireMention).toBeUndefined();
   });
   it("migrates routing.groupChat.requireMention to telegram/imessage when whatsapp missing", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       routing: { groupChat: { requireMention: false } },
     });
@@ -86,8 +75,6 @@ describe("legacy config detection", () => {
     expect(res.config?.routing?.groupChat?.requireMention).toBeUndefined();
   });
   it("migrates routing.groupChat.mentionPatterns to messages.groupChat.mentionPatterns", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       routing: { groupChat: { mentionPatterns: ["@openclaw"] } },
     });
@@ -98,8 +85,6 @@ describe("legacy config detection", () => {
     expect(res.config?.routing?.groupChat?.mentionPatterns).toBeUndefined();
   });
   it("migrates routing agentToAgent/queue/transcribeAudio to tools/messages/media", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       routing: {
         agentToAgent: { enabled: true, allow: ["main"] },
@@ -174,8 +159,6 @@ describe("legacy config detection", () => {
     expect(res.config?.audio).toBeUndefined();
   });
   it("migrates agent config into agents.defaults and tools", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       agent: {
         model: "openai/gpt-5.2",
@@ -213,8 +196,6 @@ describe("legacy config detection", () => {
     expect((res.config as { agent?: unknown }).agent).toBeUndefined();
   });
   it("migrates top-level memorySearch to agents.defaults.memorySearch", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       memorySearch: {
         provider: "local",
@@ -231,8 +212,6 @@ describe("legacy config detection", () => {
     expect((res.config as { memorySearch?: unknown }).memorySearch).toBeUndefined();
   });
   it("merges top-level memorySearch into agents.defaults.memorySearch", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       memorySearch: {
         provider: "local",
@@ -259,8 +238,6 @@ describe("legacy config detection", () => {
     });
   });
   it("keeps nested agents.defaults.memorySearch values when merging legacy defaults", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       memorySearch: {
         query: {
@@ -290,8 +267,6 @@ describe("legacy config detection", () => {
     });
   });
   it("migrates tools.bash to tools.exec", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       tools: {
         bash: { timeoutSec: 12 },
@@ -302,8 +277,6 @@ describe("legacy config detection", () => {
     expect((res.config?.tools as { bash?: unknown } | undefined)?.bash).toBeUndefined();
   });
   it("accepts per-agent tools.elevated overrides", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       tools: {
         elevated: {
@@ -334,8 +307,6 @@ describe("legacy config detection", () => {
     }
   });
   it("rejects telegram.requireMention", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       telegram: { requireMention: true },
     });
@@ -345,8 +316,6 @@ describe("legacy config detection", () => {
     }
   });
   it("rejects gateway.token", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       gateway: { token: "legacy-token" },
     });
@@ -356,8 +325,6 @@ describe("legacy config detection", () => {
     }
   });
   it("migrates gateway.token to gateway.auth.token", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       gateway: { token: "legacy-token" },
     });
@@ -367,8 +334,6 @@ describe("legacy config detection", () => {
     expect((res.config?.gateway as { token?: string })?.token).toBeUndefined();
   });
   it("keeps gateway.bind tailnet", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig, validateConfigObject } = await import("./config.js");
     const res = migrateLegacyConfig({
       gateway: { bind: "tailnet" as const },
     });
@@ -382,8 +347,6 @@ describe("legacy config detection", () => {
     }
   });
   it('rejects telegram.dmPolicy="open" without allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { telegram: { dmPolicy: "open", allowFrom: ["123456789"] } },
     });
@@ -393,8 +356,6 @@ describe("legacy config detection", () => {
     }
   });
   it('accepts telegram.dmPolicy="open" with allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
     });
@@ -404,8 +365,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults telegram.dmPolicy to pairing when telegram section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { telegram: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -413,8 +372,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults telegram.groupPolicy to allowlist when telegram section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { telegram: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -422,8 +379,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults telegram.streamMode to partial when telegram section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { telegram: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -431,8 +386,6 @@ describe("legacy config detection", () => {
     }
   });
   it('rejects whatsapp.dmPolicy="open" without allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: {
         whatsapp: { dmPolicy: "open", allowFrom: ["+15555550123"] },
@@ -444,8 +397,6 @@ describe("legacy config detection", () => {
     }
   });
   it('accepts whatsapp.dmPolicy="open" with allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { whatsapp: { dmPolicy: "open", allowFrom: ["*"] } },
     });
@@ -455,8 +406,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults whatsapp.dmPolicy to pairing when whatsapp section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { whatsapp: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -464,8 +413,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults whatsapp.groupPolicy to allowlist when whatsapp section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { whatsapp: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -473,8 +420,6 @@ describe("legacy config detection", () => {
     }
   });
   it('rejects signal.dmPolicy="open" without allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { signal: { dmPolicy: "open", allowFrom: ["+15555550123"] } },
     });
@@ -484,8 +429,6 @@ describe("legacy config detection", () => {
     }
   });
   it('accepts signal.dmPolicy="open" with allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
     });
@@ -495,8 +438,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults signal.dmPolicy to pairing when signal section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { signal: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -504,8 +445,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults signal.groupPolicy to allowlist when signal section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { signal: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -513,8 +452,6 @@ describe("legacy config detection", () => {
     }
   });
   it("accepts historyLimit overrides per provider and account", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       messages: { groupChat: { historyLimit: 12 } },
       channels: {
@@ -542,8 +479,6 @@ describe("legacy config detection", () => {
     }
   });
   it('rejects imessage.dmPolicy="open" without allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: {
         imessage: { dmPolicy: "open", allowFrom: ["+15555550123"] },
