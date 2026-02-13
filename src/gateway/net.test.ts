@@ -1,6 +1,10 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isPrivateOrLoopbackAddress, pickPrimaryLanIPv4, resolveGatewayListenHosts } from "./net.js";
+import {
+  isPrivateOrLoopbackAddress,
+  pickPrimaryLanIPv4,
+  resolveGatewayListenHosts,
+} from "./net.js";
 
 describe("resolveGatewayListenHosts", () => {
   it("returns the input host when not loopback", async () => {

@@ -215,9 +215,12 @@ describe("gateway canvas host auth", () => {
             connId: "c-cgnat",
             clientIp: cgnatIp,
           });
-          const cgnatAllowed = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
-            headers: { "x-forwarded-for": cgnatIp },
-          });
+          const cgnatAllowed = await fetch(
+            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            {
+              headers: { "x-forwarded-for": cgnatIp },
+            },
+          );
           expect(cgnatAllowed.status).toBe(200);
 
           await new Promise<void>((resolve, reject) => {
