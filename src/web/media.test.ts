@@ -2,19 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../infra/net/ssrf.js";
 import { optimizeImageToPng } from "../media/image-ops.js";
 import { loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } from "./media.js";
 
-const tmpFiles: string[] = [];
+let fixtureRoot = "";
+let fixtureFileCount = 0;
 
 async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
-  const file = path.join(
-    os.tmpdir(),
-    `openclaw-media-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`,
-  );
-  tmpFiles.push(file);
+  const file = path.join(fixtureRoot, `media-${fixtureFileCount++}${ext}`);
   await fs.writeFile(file, buffer);
   return file;
 }
@@ -45,9 +42,15 @@ async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> 
   return { buffer, file };
 }
 
-afterEach(async () => {
-  await Promise.all(tmpFiles.map((file) => fs.rm(file, { force: true })));
-  tmpFiles.length = 0;
+beforeAll(async () => {
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
+});
+
+afterAll(async () => {
+  await fs.rm(fixtureRoot, { recursive: true, force: true });
+});
+
+afterEach(() => {
   vi.restoreAllMocks();
 });
 
