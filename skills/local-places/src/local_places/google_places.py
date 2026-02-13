@@ -69,7 +69,7 @@ _RESOLVE_FIELD_MASK = (
 
 
 def _validate_place_id(place_id: str) -> None:
-    """
+    r"""
     Validate Google Places API place_id format to prevent path traversal.
     
     Google Place IDs are base64-like alphanumeric strings that may contain
@@ -99,7 +99,8 @@ def _validate_place_id(place_id: str) -> None:
             detail="Invalid place_id: must be a non-empty string.",
         )
     
-    # Google place IDs are typically 20-200 characters
+    # Google place IDs are typically 20-200 characters, but we allow 10-300
+    # to accommodate edge cases and future format changes
     if len(place_id) < 10 or len(place_id) > 300:
         raise HTTPException(
             status_code=400,
@@ -112,7 +113,8 @@ def _validate_place_id(place_id: str) -> None:
     #   - Alphanumeric: A-Z, a-z, 0-9
     #   - Base64-like chars: +, =
     #   - Word separators: _, -
-    if not re.match(r'^[A-Za-z0-9+=_-]+$', place_id):
+    # Note: Hyphen is escaped to avoid being interpreted as a range operator
+    if not re.match(r'^[A-Za-z0-9+=_\-]+$', place_id):
         raise HTTPException(
             status_code=400,
             detail="Invalid place_id format: must contain only alphanumeric characters and +, =, _, -",
