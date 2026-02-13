@@ -10,115 +10,96 @@ read_when:
 
 # Convos Channel Guide
 
-Convos provides E2E encrypted messaging via XMTP using the convos-node-sdk. This guide explains how OpenClaw can use Convos to communicate with users.
+Convos provides E2E encrypted messaging via XMTP using the `convos` CLI binary. This guide explains how OpenClaw can use Convos to communicate with users.
 
 ## Architecture Overview
 
-### SDK-Based Implementation
-OpenClaw uses convos-node-sdk directly (no external daemon required):
-- Runs in-process within the gateway
-- Cross-platform (macOS, Linux, Windows)
-- Private keys stored in config file
+### CLI-Based Implementation
 
-### Per-Conversation Identity
-Each Convos conversation has its own unique XMTP inbox identity. This means:
-- No single identity is reused across conversations
-- Cross-conversation correlation/tracking is impossible
-- Each conversation is cryptographically isolated
-- Compromising one conversation doesn't affect others
+OpenClaw shells out to the `convos` CLI binary for all XMTP operations:
+
+- One process = one conversation (no pool, no routing)
+- Long-lived child processes for streaming and join-request processing
+- One-shot commands for send, react, lock, explode, etc.
+- Identity management handled by the CLI (`~/.convos/identities/`)
 
 ### Owner Channel
+
 When OpenClaw is connected to Convos, there's a special "owner conversation" where you communicate with OpenClaw's operator. This conversation is set during onboarding when the owner pastes an invite link.
 
 The owner conversation ID is stored in `channels.convos.ownerConversationId`.
 
 ## Conversation Operations
 
-### Listing Conversations
-Use the SDK client to list available conversations:
-```
-client.listConversations() → [{ id, displayName, memberCount, ... }]
-```
-
 ### Creating New Conversations
-OpenClaw can create new conversations for specific purposes:
-```
-client.createConversation(name?) → { conversationId, inviteSlug }
-```
 
-Use cases:
-- Creating a dedicated conversation for a project/topic
-- Separating concerns (work vs personal vs alerts)
-- Onboarding new users with fresh conversations
+Via HTTP route `POST /convos/conversation`:
 
-### Generating Invites
-To invite someone to a conversation:
-```
-client.getInvite(conversationId) → { inviteSlug }
+```json
+{ "name": "My Conversation" }
 ```
 
-The invite URL format is: `https://convos.app/join/<slug>`
+Returns `{ conversationId, inviteUrl, inviteSlug }`.
 
-Invites are:
-- Cryptographically signed by the conversation creator
-- Revocable by updating the conversation's invite tag
-- Optionally time-limited or single-use
+### Joining Conversations
+
+Via HTTP route `POST /convos/join`:
+
+```json
+{ "inviteUrl": "https://convos.app/join/<slug>" }
+```
 
 ### Sending Messages
-```
-client.sendMessage(conversationId, message) → { success }
+
+Via message action `send` with `message` param, or HTTP route `POST /convos/conversation/send`:
+
+```json
+{ "message": "Hello!" }
 ```
 
 ### Adding Reactions
+
+Via message action `react` with `messageId` and `emoji` params.
+
+### Locking Conversations
+
+Via HTTP route `POST /convos/lock`:
+
+```json
+{ "unlock": false }
 ```
-client.react(conversationId, messageId, emoji, remove?) → { success, action }
-```
+
+### Destroying Conversations
+
+Via HTTP route `POST /convos/explode` (irreversible).
 
 ## Communication Guidelines
 
 ### Owner Channel
+
 The owner conversation (`ownerConversationId`) is your primary communication channel with the operator. Use it for:
+
 - Status updates and notifications
 - Requesting approvals for actions
 - Reporting errors or issues
 - Asking clarifying questions
 
-### Creating Purpose-Specific Conversations
-When the operator asks you to communicate with others or manage different topics:
-1. Create a new conversation with a descriptive name
-2. Generate an invite link
-3. Share the invite with the intended recipients
-4. Use that conversation for its designated purpose
-
-Example workflow:
-```
-"I need you to coordinate with my team on Project X"
-
-1. Create conversation: client.createConversation("Project X Coordination")
-2. Get invite: client.getInvite(newConversationId)
-3. Reply: "I've created a conversation for Project X.
-   Share this invite link with your team: https://convos.app/join/..."
-4. Use that conversation for all Project X discussions
-```
-
-### Privacy Considerations
-- Each conversation has an isolated identity - users in one conversation cannot link you to another
-- Display names and avatars are per-conversation (no global profile)
-- The owner can configure different personas in different conversations
-
 ## Message Targeting
 
 When sending messages via Convos:
-- Target by conversation ID (32-char hex): `a3aa5c564c072b6be8478409d72aa091`
-- The ID is returned when creating or listing conversations
-- To reply in the owner channel, use the `ownerConversationId` from config
+
+- Messages are sent to the single bound conversation
+- The conversation ID is set during setup/onboarding
+- To send: use action `send` with `message` param
 
 ## Error Handling
 
 Common scenarios:
+
 - **Invalid invite**: The invite may be expired or revoked
 - **Join pending**: Some joins require approval from the conversation creator
 - **Connection issues**: Check network, try `env: "dev"` for testing
+- **Instance already bound**: Returns 409 — terminate process and provision a new one
 
 ## Configuration Reference
 
@@ -127,7 +108,7 @@ Common scenarios:
   "channels": {
     "convos": {
       "enabled": true,
-      "privateKey": "0x...",
+      "identityId": "cli-managed-id",
       "env": "production",
       "ownerConversationId": "abc123...",
       "dmPolicy": "pairing"
@@ -137,7 +118,8 @@ Common scenarios:
 ```
 
 Key fields:
-- `privateKey`: XMTP identity key (hex, auto-generated on first run)
+
+- `identityId`: CLI-managed identity reference (stored in `~/.convos/identities/`)
 - `env`: XMTP environment (production/dev)
 - `ownerConversationId`: The conversation for operator communication
-- `dmPolicy`: Sender access policy (pairing/allowlist/open/disabled). Controls who can message the agent in group conversations.
+- `dmPolicy`: Sender access policy (pairing/allowlist/open/disabled)

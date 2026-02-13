@@ -4,8 +4,7 @@
   "description": "OpenClaw Convos channel plugin (E2E encrypted messaging via XMTP)",
   "type": "module",
   "dependencies": {
-    "convos-node-sdk": "github:xmtplabs/convos-node-sdk",
-    "@xmtp/agent-sdk": "^2.0.1",
+    "@convos/cli": "github:xmtplabs/convos-cli",
     "zod": "^4.3.6"
   },
   "devDependencies": {

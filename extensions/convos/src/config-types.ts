@@ -13,8 +13,8 @@ export type ConvosAccountConfig = {
   name?: string;
   /** If false, do not start this Convos account. Default: true. */
   enabled?: boolean;
-  /** Hex-encoded XMTP private key (auto-generated on first run). */
-  privateKey?: string;
+  /** CLI-managed identity ID (stored in ~/.convos/identities/). */
+  identityId?: string;
   /** XMTP environment: production (default) or dev. */
   env?: "production" | "dev";
   /** Enable debug logging for this account. */

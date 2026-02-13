@@ -5,17 +5,14 @@ import {
 } from "openclaw/plugin-sdk";
 import type { DmPolicy } from "./config-types.js";
 import { resolveConvosAccount, listConvosAccountIds, type CoreConfig } from "./accounts.js";
-import { ConvosSDKClient } from "./sdk-client.js";
+import { ConvosInstance } from "./sdk-client.js";
 
 const channel = "convos" as const;
 
 // Convos invite URLs can be:
 // - Full URL: https://convos.app/join/SLUG or convos://join/SLUG
 // - Just the slug: a base64-encoded string with asterisks for iMessage compatibility
-const INVITE_URL_PATTERNS = [
-  /^https?:\/\/convos\.app\/join\/(.+)$/i,
-  /^convos:\/\/join\/(.+)$/i,
-];
+const INVITE_URL_PATTERNS = [/^https?:\/\/convos\.app\/join\/(.+)$/i, /^convos:\/\/join\/(.+)$/i];
 
 function extractInviteSlug(input: string): string {
   const trimmed = input.trim();
@@ -34,7 +31,6 @@ function isValidInviteInput(input: string): boolean {
   if (!trimmed) {
     return false;
   }
-  // Check if it's a URL or a slug (base64-ish with asterisks)
   for (const pattern of INVITE_URL_PATTERNS) {
     if (pattern.test(trimmed)) {
       return true;
@@ -70,8 +66,8 @@ export const convosOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
 
   getStatus: async ({ cfg }) => {
-    const configured = listConvosAccountIds(cfg as CoreConfig).some((accountId) =>
-      resolveConvosAccount({ cfg: cfg as CoreConfig, accountId }).configured,
+    const configured = listConvosAccountIds(cfg as CoreConfig).some(
+      (accountId) => resolveConvosAccount({ cfg: cfg as CoreConfig, accountId }).configured,
     );
     const account = resolveConvosAccount({ cfg: cfg as CoreConfig });
     const ownerConversation = (cfg.channels as CoreConfig["channels"])?.convos?.ownerConversationId;
@@ -85,7 +81,7 @@ export const convosOnboardingAdapter: ChannelOnboardingAdapter = {
         ownerConversation ? `Owner conversation: ${ownerConversation.slice(0, 8)}...` : "",
       ].filter(Boolean),
       selectionHint: configured ? "ready" : "paste invite link",
-      quickstartScore: 0, // Requires manual invite flow
+      quickstartScore: 0,
     };
   },
 
@@ -94,7 +90,7 @@ export const convosOnboardingAdapter: ChannelOnboardingAdapter = {
     const account = resolveConvosAccount({ cfg: next as CoreConfig });
 
     // Check for existing configuration
-    if (account.privateKey && account.ownerConversationId) {
+    if (account.ownerConversationId) {
       const keep = await prompter.confirm({
         message: `Convos already configured (conversation: ${account.ownerConversationId.slice(0, 12)}...). Keep it?`,
         initialValue: true,
@@ -139,45 +135,44 @@ export const convosOnboardingAdapter: ChannelOnboardingAdapter = {
 
     const inviteSlug = extractInviteSlug(String(inviteInput));
 
-    // Join the conversation using SDK client
+    // Join the conversation via CLI
     await prompter.note("Creating XMTP identity and joining conversation...", "Convos");
 
-    let client: ConvosSDKClient | undefined;
     try {
-      // Create a new SDK client (will generate a new private key)
-      client = await ConvosSDKClient.create({
-        env: account.env,
-        debug: account.debug,
-      });
+      const { instance, status, conversationId, identityId } = await ConvosInstance.join(
+        account.env,
+        inviteSlug,
+        { profileName: "OpenClaw" },
+      );
 
-      const result = await client.joinConversation(inviteSlug);
-
-      if (!result.conversationId) {
+      if (!conversationId) {
         await prompter.note(
-          result.status === "waiting_for_acceptance"
+          status === "waiting_for_acceptance"
             ? "Join request sent. The conversation owner needs to approve your request in the Convos iOS app."
             : "Failed to join conversation. The invite may be invalid or expired.",
           "Convos",
         );
 
-        // Still save the private key so we can retry later
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            convos: {
-              ...(next.channels as CoreConfig["channels"])?.convos,
-              enabled: true,
-              privateKey: client.getPrivateKey(),
-              env: account.env,
+        // Save identityId so we can retry later with the same identity
+        if (identityId) {
+          next = {
+            ...next,
+            channels: {
+              ...next.channels,
+              convos: {
+                ...(next.channels as CoreConfig["channels"])?.convos,
+                enabled: true,
+                identityId,
+                env: account.env,
+              },
             },
-          },
-        };
+          };
+        }
 
         return { cfg: next };
       }
 
-      // Save privateKey and ownerConversationId
+      // Save identityId and ownerConversationId
       next = {
         ...next,
         channels: {
@@ -185,9 +180,9 @@ export const convosOnboardingAdapter: ChannelOnboardingAdapter = {
           convos: {
             ...(next.channels as CoreConfig["channels"])?.convos,
             enabled: true,
-            privateKey: client.getPrivateKey(),
+            identityId: instance?.identityId ?? identityId,
             env: account.env,
-            ownerConversationId: result.conversationId,
+            ownerConversationId: conversationId,
           },
         },
       };
@@ -196,7 +191,7 @@ export const convosOnboardingAdapter: ChannelOnboardingAdapter = {
         [
           "Successfully joined conversation!",
           "",
-          `Conversation ID: ${result.conversationId}`,
+          `Conversation ID: ${conversationId}`,
           "",
           "This is now your owner channel. OpenClaw will:",
           "- Send status updates here",
@@ -210,11 +205,6 @@ export const convosOnboardingAdapter: ChannelOnboardingAdapter = {
         `Failed to join: ${err instanceof Error ? err.message : String(err)}`,
         "Convos Error",
       );
-    } finally {
-      // Stop the temporary client
-      if (client) {
-        await client.stop();
-      }
     }
 
     return { cfg: next };

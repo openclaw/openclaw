@@ -13,8 +13,8 @@ export type ResolvedConvosAccount = {
   enabled: boolean;
   name?: string;
   configured: boolean;
-  /** Hex-encoded XMTP private key (undefined until first run) */
-  privateKey?: string;
+  /** CLI-managed identity ID (stored in ~/.convos/identities/) */
+  identityId?: string;
   /** XMTP environment */
   env: "production" | "dev";
   debug: boolean;
@@ -43,15 +43,15 @@ export function resolveConvosAccount(params: {
   const base = params.cfg.channels?.convos ?? {};
   const enabled = base.enabled !== false;
 
-  // Convos is "configured" if we have a private key (identity established)
-  const configured = Boolean(base.privateKey);
+  // Convos is "configured" if we have an owner conversation (identity + conversation established)
+  const configured = Boolean(base.ownerConversationId);
 
   return {
     accountId,
     enabled,
     name: base.name?.trim() || undefined,
     configured,
-    privateKey: base.privateKey,
+    identityId: base.identityId,
     env: base.env ?? "production",
     debug: base.debug ?? false,
     ownerConversationId: base.ownerConversationId,

@@ -1,37 +1,27 @@
 /**
- * SDK client for Convos using convos-node-sdk
- * Replaces the daemon HTTP client with direct SDK integration
+ * ConvosInstance — thin wrapper around the `convos` CLI binary.
+ *
+ * 1 process = 1 conversation. No pool. No routing. No library imports.
+ * All operations shell out to `convos <command> --json`.
+ * Streaming uses long-lived child processes with JSONL stdout parsing.
  */
 
-import { Agent, createUser, createSigner, encodeText, type MessageContext } from "@xmtp/agent-sdk";
-import { ConvosMiddleware, type InviteContext } from "convos-node-sdk";
-import fs from "node:fs";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import type {
-  ConversationInfo,
-  JoinConversationResult,
-  CreateConversationResult,
-  InviteResult,
-  MessageInfo,
-} from "./types.js";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import type { CreateConversationResult, InviteResult } from "./types.js";
 
-export interface ConvosSDKClientOptions {
-  /** Hex-encoded private key (generated if not provided) */
-  privateKey?: string;
-  /** XMTP environment */
-  env?: "production" | "dev";
-  /**
-   * Path to the XMTP local database directory.
-   * - `string`: persistent DB at that path (directory created if missing).
-   * - `null`: in-memory DB (for setup/probe temporary clients).
-   * - `undefined`: SDK default (avoid — prefer explicit path or null).
-   */
-  dbPath?: string | null;
-  /** Handler for incoming messages */
+const execFileAsync = promisify(execFile);
+
+// ---- Types ----
+
+export interface ConvosInstanceOptions {
   onMessage?: (msg: InboundMessage) => void;
-  /** Handler for incoming invite/join requests */
-  onInvite?: (ctx: InviteContext) => Promise<void>;
-  /** Debug logging */
+  onJoinAccepted?: (info: { joinerInboxId: string }) => void;
   debug?: boolean;
 }
 
@@ -44,487 +34,522 @@ export interface InboundMessage {
   timestamp: Date;
 }
 
-/**
- * XMTP message timestamps are often exposed as nanoseconds (sentAtNs) and may be bigint.
- * This helper normalizes to a safe JS Date.
- */
-function dateFromSentAtNs(sentAtNs: unknown): Date {
+// ---- Binary resolution ----
+
+let cachedBinPath: string | undefined;
+
+/** Resolve the `convos` CLI binary from the installed @convos/cli package. */
+function resolveConvosBin(): string {
+  if (cachedBinPath) {
+    return cachedBinPath;
+  }
+
+  // Strategy 1: createRequire from this file's URL
   try {
-    if (typeof sentAtNs === "bigint") {
-      const ms = sentAtNs / 1_000_000n;
-      const n = Number(ms);
-      return Number.isFinite(n) ? new Date(n) : new Date();
+    const require = createRequire(import.meta.url);
+    const pkgPath = require.resolve("@convos/cli/package.json");
+    const binPath = path.join(path.dirname(pkgPath), "bin", "run.js");
+    if (existsSync(binPath)) {
+      cachedBinPath = binPath;
+      return binPath;
     }
-    if (typeof sentAtNs === "number") {
-      const n = Math.floor(sentAtNs / 1_000_000);
-      return Number.isFinite(n) ? new Date(n) : new Date();
-    }
-    return new Date();
   } catch {
-    return new Date();
+    // import.meta.url may not resolve when loaded via jiti
   }
-}
 
-function readSentAtNs(obj: unknown): unknown {
-  if (!obj || typeof obj !== "object") return undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (obj as any).sentAtNs;
-}
-
-/**
- * Derive a short hash from the private key so that changing the key
- * produces a fresh DB directory, avoiding "identity rowid=1" crashes.
- */
-function keyHash8(privateKey: string): string {
-  const hex = privateKey.startsWith("0x") ? privateKey.slice(2) : privateKey;
-  return hex.slice(0, 8).toLowerCase();
-}
-
-/**
- * Build a deterministic dbPath file under the OpenClaw state directory.
- * Agent.create() expects a **file** path (SQLite DB), not a directory.
- *
- *   <stateDir>/convos/xmtp/<env>/<accountId>/<keyHash8>/xmtp.db
- */
-export function resolveConvosDbPath(params: {
-  stateDir: string;
-  env: "production" | "dev";
-  accountId: string;
-  privateKey: string;
-}): string {
-  const hash = keyHash8(params.privateKey);
-  const dir = path.join(params.stateDir, "convos", "xmtp", params.env, params.accountId, hash);
-  return path.join(dir, "xmtp.db");
-}
-
-/**
- * Ensure the parent directory of a dbPath file exists and is writable.
- * Throws a clear error (instead of the opaque libxmtp "Pool error …
- * Unable to open database file") if the directory cannot be written to.
- */
-export function ensureDbPathWritable(dbPath: string): void {
-  const dir = path.dirname(dbPath);
-  fs.mkdirSync(dir, { recursive: true });
-  const probe = path.join(dir, `.probe-${process.pid}`);
+  // Strategy 2: walk up from this file to find extension's node_modules
+  // This file lives at extensions/convos/src/sdk-client.ts (or .js)
   try {
-    fs.writeFileSync(probe, "");
-    fs.unlinkSync(probe);
-  } catch (err) {
-    throw new Error(
-      `XMTP dbPath parent dir is not writable: ${dir} — ${err instanceof Error ? err.message : String(err)}`,
-    );
+    const thisDir = path.dirname(fileURLToPath(import.meta.url));
+    const extRoot = path.resolve(thisDir, "..");
+    const binPath = path.join(extRoot, "node_modules", "@convos", "cli", "bin", "run.js");
+    if (existsSync(binPath)) {
+      cachedBinPath = binPath;
+      return binPath;
+    }
+  } catch {
+    // fileURLToPath may fail for non-file: URLs
   }
+
+  // Fallback: assume `convos` is on PATH
+  cachedBinPath = "convos";
+  return "convos";
 }
 
-/**
- * Convos SDK Client - wraps convos-node-sdk for OpenClaw use
- */
-export class ConvosSDKClient {
-  private agent: Agent;
-  private convos: ConvosMiddleware;
-  private userKey: string;
+// ---- Constants ----
+
+/** Max number of automatic restarts per child process label (stream, join-requests). */
+const MAX_CHILD_RESTARTS = 3;
+/** Base delay between restarts (multiplied by attempt number). */
+const RESTART_BASE_DELAY_MS = 2000;
+
+// ---- ConvosInstance ----
+
+export class ConvosInstance {
+  /** The one conversation this instance is bound to. */
+  readonly conversationId: string;
+  readonly identityId: string;
+  readonly label: string | undefined;
+
+  private env: "production" | "dev";
+  private children: ChildProcess[] = [];
+  private streamChild: ChildProcess | null = null;
   private running = false;
+  private restartCounts = new Map<string, number>();
+  private onMessage?: (msg: InboundMessage) => void;
+  private onJoinAccepted?: (info: { joinerInboxId: string }) => void;
   private debug: boolean;
 
-  private constructor(agent: Agent, convos: ConvosMiddleware, userKey: string, debug: boolean) {
-    this.agent = agent;
-    this.convos = convos;
-    this.userKey = userKey;
-    this.debug = debug;
+  private constructor(params: {
+    conversationId: string;
+    identityId: string;
+    label?: string;
+    env: "production" | "dev";
+    options?: ConvosInstanceOptions;
+  }) {
+    this.conversationId = params.conversationId;
+    this.identityId = params.identityId;
+    this.label = params.label;
+    this.env = params.env;
+    this.onMessage = params.options?.onMessage;
+    this.onJoinAccepted = params.options?.onJoinAccepted;
+    this.debug = params.options?.debug ?? false;
   }
 
-  /**
-   * Create a new SDK client
-   */
-  static async create(options: ConvosSDKClientOptions): Promise<ConvosSDKClient> {
-    const debug = options.debug ?? false;
+  // ---- CLI helpers ----
 
-    // Create or restore user from privateKey
-    let user: ReturnType<typeof createUser>;
-    if (options.privateKey) {
-      // Restore from existing key
-      user = createUser(options.privateKey);
-      if (debug) {
-        console.log("[convos-sdk] Restored user from private key");
-      }
-    } else {
-      // Generate new user
-      user = createUser();
-      if (debug) {
-        console.log("[convos-sdk] Generated new user");
+  /** Run a convos command and return raw stdout. */
+  private async exec(args: string[]): Promise<string> {
+    const bin = resolveConvosBin();
+    const finalArgs = [...args, "--env", this.env];
+    if (this.debug) {
+      console.log(`[convos] exec: convos ${finalArgs.join(" ")}`);
+    }
+    const { stdout } = await execFileAsync(
+      bin === "convos" ? bin : process.execPath,
+      bin === "convos" ? finalArgs : [bin, ...finalArgs],
+      { env: { ...process.env, CONVOS_ENV: this.env } },
+    );
+    return stdout;
+  }
+
+  /** Run a convos command with --json and parse the JSON output.
+   *  The CLI prints human-readable log lines before the pretty-printed
+   *  JSON object, so we find the last top-level JSON block in stdout. */
+  private async execJson<T>(args: string[]): Promise<T> {
+    const stdout = await this.exec([...args, "--json"]);
+    // Find the last { and its matching } to extract the JSON object
+    const lastBrace = stdout.lastIndexOf("}");
+    if (lastBrace !== -1) {
+      // Walk backwards from lastBrace to find the matching opening {
+      let depth = 0;
+      for (let i = lastBrace; i >= 0; i--) {
+        if (stdout[i] === "}") depth++;
+        else if (stdout[i] === "{") depth--;
+        if (depth === 0) {
+          return JSON.parse(stdout.slice(i, lastBrace + 1)) as T;
+        }
       }
     }
+    // Fallback: try parsing the whole thing (will throw a clear error)
+    return JSON.parse(stdout.trim()) as T;
+  }
 
-    const resolvedEnv = options.env ?? "production";
-    const signer = createSigner(user);
+  /** Spawn a long-lived convos command and return the child process. */
+  private spawnChild(args: string[]): ChildProcess {
+    const bin = resolveConvosBin();
+    const finalArgs = [...args, "--env", this.env, "--json"];
+    if (this.debug) {
+      console.log(`[convos] spawn: convos ${finalArgs.join(" ")}`);
+    }
+    const child = spawn(
+      bin === "convos" ? bin : process.execPath,
+      bin === "convos" ? finalArgs : [bin, ...finalArgs],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, CONVOS_ENV: this.env },
+      },
+    );
+    this.children.push(child);
+    child.on("error", (err) => {
+      console.error(`[convos] spawn error: ${String(err)}`);
+    });
+    return child;
+  }
 
-    // Build Agent options with explicit dbPath when provided.
-    // string → persistent (ensure dir exists + writable); null → in-memory; undefined → SDK default.
-    const agentOpts: Record<string, unknown> = { env: resolvedEnv };
-    if (options.dbPath !== undefined) {
-      if (typeof options.dbPath === "string") {
-        ensureDbPathWritable(options.dbPath);
+  // ==== Factory Methods ====
+
+  /** Restore from config (gateway restart). No CLI call needed — just construct. */
+  static fromExisting(
+    conversationId: string,
+    identityId: string,
+    env: "production" | "dev",
+    options?: ConvosInstanceOptions,
+    label?: string,
+  ): ConvosInstance {
+    return new ConvosInstance({ conversationId, identityId, label, env, options });
+  }
+
+  /** Create a new conversation via `convos conversations create`. */
+  static async create(
+    env: "production" | "dev",
+    params?: {
+      name?: string;
+      profileName?: string;
+      description?: string;
+      imageUrl?: string;
+      permissions?: "all-members" | "admin-only";
+    },
+    options?: ConvosInstanceOptions,
+  ): Promise<{ instance: ConvosInstance; result: CreateConversationResult }> {
+    const args = ["conversations", "create"];
+    if (params?.name) {
+      args.push("--name", params.name);
+    }
+    if (params?.profileName) {
+      args.push("--profile-name", params.profileName);
+    }
+    if (params?.description) {
+      args.push("--description", params.description);
+    }
+    if (params?.imageUrl) {
+      args.push("--image-url", params.imageUrl);
+    }
+    if (params?.permissions) {
+      args.push("--permissions", params.permissions);
+    }
+
+    // Use a temporary instance to access exec helpers
+    const tmp = new ConvosInstance({
+      conversationId: "",
+      identityId: "",
+      env,
+      options,
+    });
+    const data = await tmp.execJson<{
+      conversationId: string;
+      identityId: string;
+      name?: string;
+      invite: { slug: string; url: string };
+    }>(args);
+
+    const instance = new ConvosInstance({
+      conversationId: data.conversationId,
+      identityId: data.identityId,
+      label: params?.name,
+      env,
+      options,
+    });
+
+    return {
+      instance,
+      result: {
+        conversationId: data.conversationId,
+        inviteSlug: data.invite.slug,
+        inviteUrl: data.invite.url,
+      },
+    };
+  }
+
+  /** Join a conversation via `convos conversations join`. */
+  static async join(
+    env: "production" | "dev",
+    invite: string,
+    params?: { profileName?: string; timeout?: number },
+    options?: ConvosInstanceOptions,
+  ): Promise<{
+    instance: ConvosInstance | null;
+    status: "joined" | "waiting_for_acceptance";
+    conversationId: string | null;
+    identityId: string | null;
+  }> {
+    const args = ["conversations", "join", invite];
+    if (params?.profileName) {
+      args.push("--profile-name", params.profileName);
+    }
+    args.push("--timeout", String(params?.timeout ?? 60));
+
+    const tmp = new ConvosInstance({
+      conversationId: "",
+      identityId: "",
+      env,
+      options,
+    });
+    const data = await tmp.execJson<{
+      status: string;
+      conversationId?: string;
+      identityId: string;
+      tag?: string;
+      name?: string;
+    }>(args);
+
+    if (data.status === "joined" && data.conversationId) {
+      const instance = new ConvosInstance({
+        conversationId: data.conversationId,
+        identityId: data.identityId,
+        label: data.name,
+        env,
+        options,
+      });
+      return {
+        instance,
+        status: "joined",
+        conversationId: data.conversationId,
+        identityId: data.identityId,
+      };
+    }
+
+    return {
+      instance: null,
+      status: "waiting_for_acceptance",
+      conversationId: null,
+      identityId: data.identityId,
+    };
+  }
+
+  // ==== Lifecycle ====
+
+  async start(): Promise<void> {
+    if (this.running) {
+      return;
+    }
+    this.running = true;
+    this.restartCounts.clear();
+
+    this.startStreamChild();
+    this.startJoinRequestsChild();
+
+    if (this.debug) {
+      console.log(`[convos] Started: ${this.conversationId.slice(0, 12)}...`);
+    }
+  }
+
+  /** Spawn (or re-spawn) the message stream child process. */
+  private startStreamChild(): void {
+    const streamChild = this.spawnChild(["conversation", "stream", this.conversationId]);
+    this.streamChild = streamChild;
+    this.pumpJsonLines(streamChild, "stream", (data) => {
+      // Skip empty/non-text content
+      const content = typeof data.content === "string" ? data.content : "";
+      if (!content.trim()) {
+        return;
       }
-      agentOpts.dbPath = options.dbPath;
-    }
 
-    const agent = await Agent.create(signer, agentOpts);
-    const convos = ConvosMiddleware.create(agent, { privateKey: user.key, env: resolvedEnv });
-    agent.use(convos.middleware());
-
-    console.log(`[convos-sdk] XMTP env: ${resolvedEnv}, inboxId: ${agent.client.inboxId}`);
-
-    const client = new ConvosSDKClient(agent, convos, user.key, debug);
-
-    // Wire up event handlers
-    if (options.onInvite) {
-      convos.on("invite", options.onInvite);
-    }
-
-    if (options.onMessage) {
-      agent.on("message", (ctx: MessageContext) => {
+      const msg: InboundMessage = {
+        conversationId: this.conversationId,
+        messageId: typeof data.id === "string" ? data.id : "",
+        senderId: typeof data.senderInboxId === "string" ? data.senderInboxId : "",
+        senderName: "",
+        content,
+        timestamp: typeof data.sentAt === "string" ? new Date(data.sentAt) : new Date(),
+      };
+      queueMicrotask(() => {
         try {
-          const senderId = ctx.message.senderInboxId;
-
-          // Prevent echo-loops / double-processing: ignore our own outbound messages
-          if (senderId === agent.client.inboxId) {
-            return;
-          }
-
-          const content = typeof ctx.message.content === "string" ? ctx.message.content : "";
-          const trimmed = content.trim();
-
-          // Ignore empty or non-text messages for now (reactions/attachments/etc.)
-          if (!trimmed) {
-            if (debug && content === "") {
-              console.log("[convos-sdk] Ignoring non-text/empty message");
-            }
-            return;
-          }
-
-          const msg: InboundMessage = {
-            conversationId: ctx.conversation.id,
-            messageId: ctx.message.id,
-            senderId,
-            senderName: "", // SDK doesn't expose display name; channel.ts falls back to truncated senderId
-            content,
-            timestamp: dateFromSentAtNs(readSentAtNs(ctx.message)),
-          };
-
-          // Avoid synchronous re-entrancy into the OpenClaw reply pipeline.
-          queueMicrotask(() => {
-            try {
-              options.onMessage?.(msg);
-            } catch (err) {
-              if (debug) {
-                console.error("[convos-sdk] onMessage handler threw:", err);
-              }
-            }
-          });
+          this.onMessage?.(msg);
         } catch (err) {
-          if (debug) {
-            console.error("[convos-sdk] Failed processing inbound message event:", err);
+          if (this.debug) {
+            console.error("[convos] onMessage error:", err);
           }
         }
       });
-    }
-
-    return client;
+    });
   }
 
-  /**
-   * Start listening for messages
-   */
-  async start(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-
-    if (this.debug) {
-      console.log("[convos-sdk] Starting agent...");
-    }
-
-    await this.agent.start();
-
-    if (this.debug) {
-      console.log("[convos-sdk] Agent started");
-    }
-  }
-
-  /**
-   * Stop the client and cleanup
-   */
-  async stop(): Promise<void> {
-    if (!this.running) return;
-    this.running = false;
-
-    if (this.debug) {
-      console.log("[convos-sdk] Stopping agent...");
-    }
-
-    await this.agent.stop();
-
-    if (this.debug) {
-      console.log("[convos-sdk] Agent stopped");
-    }
-  }
-
-  /**
-   * Join a conversation via invite URL or slug
-   */
-  async joinConversation(invite: string, name?: string): Promise<JoinConversationResult> {
-    if (this.debug) {
-      console.log(`[convos-sdk] Joining conversation with invite: ${invite.slice(0, 20)}...`);
-    }
-
-    try {
-      // Snapshot existing group IDs before joining so we can diff after
-      await this.agent.client.conversations.sync();
-      const beforeIds = new Set(this.agent.client.conversations.listGroups().map((g) => g.id));
-
-      const result = await this.convos.join(invite);
-
-      if (this.debug) {
-        console.log(`[convos-sdk] Join result:`, result);
-      }
-
-      if (!result.conversationId) {
-        return { status: "waiting_for_acceptance", conversationId: null };
-      }
-
-      // convos.join() returns the invite token as conversationId (not the XMTP
-      // group ID). The join is asynchronous — the creator agent needs time to
-      // process the join request DM and add us to the group. Poll until the
-      // new group appears in our conversation list.
-      let conversationId: string = result.conversationId;
-      const MAX_ATTEMPTS = 15;
-      const POLL_INTERVAL_MS = 1000;
-
-      for (let i = 0; i < MAX_ATTEMPTS; i++) {
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-        try {
-          await this.agent.client.conversations.sync();
-          const groups = this.agent.client.conversations.listGroups();
-          const newGroup = groups.find((g) => !beforeIds.has(g.id));
-          if (newGroup) {
-            conversationId = newGroup.id;
-            console.log(
-              `[convos-sdk] Resolved group ID: ${newGroup.id} (after ${i + 1} attempt(s))`,
-            );
-            if (name) {
-              const convosGroup = this.convos.group(newGroup);
-              await convosGroup.setConversationProfile({ name });
-              console.log(`[convos-sdk] Set profile name: "${name}"`);
-            }
-            break;
-          }
-        } catch (err) {
-          console.warn(`[convos-sdk] Poll attempt ${i + 1} failed:`, err);
+  /** Spawn (or re-spawn) the join-requests watcher child process. */
+  private startJoinRequestsChild(): void {
+    const joinChild = this.spawnChild([
+      "conversations",
+      "process-join-requests",
+      "--watch",
+      "--conversation",
+      this.conversationId,
+    ]);
+    this.pumpJsonLines(joinChild, "join-requests", (data) => {
+      if (data.event === "join_request_accepted" && data.joinerInboxId) {
+        const joinerInboxId = typeof data.joinerInboxId === "string" ? data.joinerInboxId : "";
+        if (this.debug) {
+          console.log(`[convos] Join accepted: ${joinerInboxId}`);
         }
+        this.onJoinAccepted?.({ joinerInboxId });
       }
-
-      if (conversationId === result.conversationId) {
-        console.warn(
-          `[convos-sdk] Could not resolve group ID after ${MAX_ATTEMPTS} attempts, using raw token`,
-        );
-      }
-
-      return { status: "joined", conversationId };
-    } catch (err) {
-      if (this.debug) {
-        console.error(`[convos-sdk] Join failed:`, err);
-      }
-      throw err;
-    }
+    });
   }
 
-  /**
-   * List all conversations
-   */
-  async listConversations(): Promise<ConversationInfo[]> {
-    const conversations = await this.agent.conversations.list();
-
-    return conversations.map((conv) => ({
-      id: conv.id,
-      displayName: conv.name ?? conv.id.slice(0, 8),
-      memberCount: conv.members?.length ?? 0,
-      isUnread: false,
-      isPinned: false,
-      isMuted: false,
-      kind: "group",
-      createdAt: new Date().toISOString(),
-      lastMessagePreview: undefined,
-    }));
-  }
-
-  /**
-   * Create a new conversation with invite URL
-   */
-  async createConversation(name?: string): Promise<CreateConversationResult> {
-    if (this.debug) {
-      console.log(`[convos-sdk] Creating conversation: ${name ?? "OpenClaw"}`);
+  async stop(): Promise<void> {
+    if (!this.running) {
+      return;
     }
-
-    // Create XMTP group first
-    const group = await this.agent.client.conversations.createGroup([]);
-
-    if (this.debug) {
-      console.log(`[convos-sdk] Created XMTP group: ${group.id}`);
-    }
-
-    // Wrap with Convos to get invite functionality
-    const convosGroup = this.convos.group(group);
-
-    // Set the agent's display name in the conversation so it shows
-    // the agent name instead of "Somebody" in the Convos app.
-    if (name) {
+    this.running = false;
+    this.streamChild = null;
+    for (const child of this.children) {
       try {
-        await convosGroup.setConversationProfile({ name });
-      } catch (err) {
-        console.warn(`[convos-sdk] Failed to set profile name:`, err);
+        child.kill("SIGTERM");
+      } catch {
+        /* ignore */
       }
     }
-
-    // Create invite (automatically manages metadata)
-    const invite = await convosGroup.createInvite({ name });
-
-    // Always log invite details for diagnostics
-    console.log(`[convos-sdk] Created invite: url=${invite.url}`);
-    console.log(`[convos-sdk] Invite slug length: ${invite.slug.length}`);
-    console.log(`[convos-sdk] Agent inboxId: ${this.agent.client.inboxId}`);
-
-    return {
-      conversationId: group.id,
-      inviteSlug: invite.slug,
-      inviteUrl: invite.url,
-    };
-  }
-
-  /**
-   * Rename a conversation and update the agent's profile name within it.
-   */
-  async renameConversation(conversationId: string, name: string): Promise<void> {
-    const conversation = await this.agent.client.conversations.getConversationById(conversationId);
-    if (!conversation) {
-      throw new Error(`Conversation not found: ${conversationId}`);
-    }
-
-    const convosGroup = this.convos.group(conversation);
-
-    // Update the agent's member display name in the conversation
-    await convosGroup.setConversationProfile({ name });
-
+    this.children = [];
     if (this.debug) {
-      console.log(`[convos-sdk] Renamed conversation ${conversationId} to "${name}"`);
+      console.log(`[convos] Stopped: ${this.conversationId.slice(0, 12)}...`);
     }
   }
 
-  /**
-   * Get or create invite slug for a conversation
-   */
-  async getInvite(conversationId: string): Promise<InviteResult> {
-    const conversation = await this.agent.client.conversations.getConversationById(conversationId);
-    if (!conversation) {
-      throw new Error(`Conversation not found: ${conversationId}`);
-    }
-
-    // Wrap with Convos and create a new invite
-    // Note: SDK doesn't have a "get existing invite" method, so we create a new one
-    const convosGroup = this.convos.group(conversation);
-    const invite = await convosGroup.createInvite();
-
-    return {
-      inviteSlug: invite.slug,
-    };
-  }
-
-  /**
-   * List messages in a conversation
-   */
-  async listMessages(conversationId: string, limit?: number): Promise<MessageInfo[]> {
-    const conversation = await this.agent.client.conversations.getConversationById(conversationId);
-    if (!conversation) {
-      return [];
-    }
-
-    const messages = await conversation.messages({ limit: limit ?? 50 });
-
-    return messages
-      .map((msg) => {
-        const content = typeof msg.content === "string" ? msg.content : "";
-        return {
-          id: msg.id,
-          conversationId,
-          senderId: msg.senderInboxId,
-          senderName: "",
-          content,
-          timestamp: dateFromSentAtNs(readSentAtNs(msg)).toISOString(),
-        };
-      })
-      .filter((m) => m.content.trim().length > 0);
-  }
-
-  /**
-   * Send a message to a conversation
-   */
-  async sendMessage(
-    conversationId: string,
-    message: string,
-  ): Promise<{ success: boolean; messageId?: string }> {
-    if (this.debug) {
-      console.log(`[convos-sdk] Sending message to ${conversationId.slice(0, 8)}...`);
-    }
-
-    const conversation = await this.agent.client.conversations.getConversationById(conversationId);
-    if (!conversation) {
-      throw new Error(`Conversation not found: ${conversationId}`);
-    }
-
-    // send() expects encoded content (type + content bytes), not a raw string.
-    await conversation.send(encodeText(message));
-
-    return { success: true };
-  }
-
-  /**
-   * Add or remove a reaction
-   */
-  async react(
-    conversationId: string,
-    messageId: string,
-    emoji: string,
-    remove?: boolean,
-  ): Promise<{ success: boolean; action: "added" | "removed" }> {
-    if (this.debug) {
-      console.log(
-        `[convos-sdk] ${remove ? "Removing" : "Adding"} reaction ${emoji} on ${messageId}`,
-      );
-    }
-
-    const conversation = await this.agent.client.conversations.getConversationById(conversationId);
-    if (!conversation) {
-      throw new Error(`Conversation not found: ${conversationId}`);
-    }
-
-    if (remove) {
-      await conversation.removeReaction(messageId, emoji);
-    } else {
-      await conversation.addReaction(messageId, emoji);
-    }
-
-    return { success: true, action: remove ? "removed" : "added" };
-  }
-
-  /**
-   * Get the private key for config storage
-   */
-  getPrivateKey(): string {
-    return this.userKey;
-  }
-
-  /**
-   * Check if the client is running
-   */
   isRunning(): boolean {
     return this.running;
+  }
+
+  /** True when the XMTP message stream child process is alive. */
+  isStreaming(): boolean {
+    return this.running && this.streamChild !== null && this.streamChild.exitCode === null;
+  }
+
+  get envName(): "production" | "dev" {
+    return this.env;
+  }
+
+  // ==== Operations (all shell out to CLI) ====
+
+  async sendMessage(text: string): Promise<{ success: boolean; messageId?: string }> {
+    const data = await this.execJson<{ success: boolean; messageId?: string }>([
+      "conversation",
+      "send-text",
+      this.conversationId,
+      "--text",
+      text,
+    ]);
+    return data;
+  }
+
+  async react(
+    messageId: string,
+    emoji: string,
+    action: "add" | "remove" = "add",
+  ): Promise<{ success: boolean; action: "added" | "removed" }> {
+    await this.execJson([
+      "conversation",
+      "send-reaction",
+      this.conversationId,
+      messageId,
+      action,
+      emoji,
+    ]);
+    return { success: true, action: action === "add" ? "added" : "removed" };
+  }
+
+  async getInvite(): Promise<InviteResult> {
+    const data = await this.execJson<{ slug: string; url: string }>([
+      "conversation",
+      "invite",
+      this.conversationId,
+      "--no-qr",
+    ]);
+    return { inviteSlug: data.slug };
+  }
+
+  async updateProfile(profile: { name?: string; image?: string }): Promise<void> {
+    const args = ["conversation", "update-profile", this.conversationId];
+    if (profile.name !== undefined) {
+      args.push("--name", profile.name);
+    }
+    if (profile.image !== undefined) {
+      args.push("--image", profile.image);
+    }
+    await this.execJson(args);
+  }
+
+  /** Shorthand for updateProfile({ name }). */
+  async rename(name: string): Promise<void> {
+    await this.updateProfile({ name });
+  }
+
+  async lock(): Promise<void> {
+    await this.execJson(["conversation", "lock", this.conversationId, "--force"]);
+  }
+
+  async unlock(): Promise<void> {
+    await this.execJson(["conversation", "lock", this.conversationId, "--unlock", "--force"]);
+  }
+
+  async explode(): Promise<void> {
+    await this.execJson(["conversation", "explode", this.conversationId, "--force"]);
+    await this.stop();
+  }
+
+  // ==== Private: JSONL stream parsing ====
+
+  private pumpJsonLines(
+    child: ChildProcess,
+    label: string,
+    handler: (data: Record<string, unknown>) => void,
+  ): void {
+    if (!child.stdout) {
+      return;
+    }
+
+    const rl = createInterface({ input: child.stdout });
+    rl.on("line", (line) => {
+      try {
+        const data = JSON.parse(line);
+        handler(data);
+      } catch {
+        // Non-JSON line (e.g. human-readable output) — skip
+        if (this.debug) {
+          console.log(`[convos:${label}] non-JSON: ${line}`);
+        }
+      }
+    });
+
+    child.on("exit", (code) => {
+      // Remove from children list
+      const idx = this.children.indexOf(child);
+      if (idx !== -1) {
+        this.children.splice(idx, 1);
+      }
+      if (child === this.streamChild) {
+        this.streamChild = null;
+      }
+
+      if (this.running) {
+        // Unexpected exit — log always (not just in debug mode)
+        console.error(`[convos:${label}] exited unexpectedly with code ${code}`);
+
+        // Auto-restart stream/join-requests children after a delay
+        const attempt = (this.restartCounts.get(label) ?? 0) + 1;
+        if (attempt <= MAX_CHILD_RESTARTS) {
+          this.restartCounts.set(label, attempt);
+          const delayMs = RESTART_BASE_DELAY_MS * attempt;
+          console.error(
+            `[convos:${label}] restarting in ${delayMs}ms (attempt ${attempt}/${MAX_CHILD_RESTARTS})`,
+          );
+          setTimeout(() => {
+            if (!this.running) {
+              return;
+            }
+            if (label === "stream") {
+              this.startStreamChild();
+            } else if (label === "join-requests") {
+              this.startJoinRequestsChild();
+            }
+          }, delayMs);
+        } else {
+          console.error(
+            `[convos:${label}] max restarts reached (${MAX_CHILD_RESTARTS}), giving up`,
+          );
+          // If all children are gone, mark instance as no longer running
+          if (this.children.length === 0) {
+            this.running = false;
+            console.error("[convos] All child processes exited — instance stopped");
+          }
+        }
+      }
+    });
+
+    if (child.stderr) {
+      const errRl = createInterface({ input: child.stderr });
+      errRl.on("line", (line) => {
+        // Always log stderr for diagnostics (crash messages, XMTP errors)
+        console.error(`[convos:${label}:stderr] ${line}`);
+      });
+    }
   }
 }

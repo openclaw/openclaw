@@ -1,48 +1,48 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { emptyPluginConfigSchema, renderQrPngBase64 } from "openclaw/plugin-sdk";
-import type { ConvosSDKClient } from "./src/sdk-client.js";
 import { resolveConvosAccount, type CoreConfig } from "./src/accounts.js";
-import { convosPlugin } from "./src/channel.js";
-import { getClientForAccount } from "./src/outbound.js";
+import { convosPlugin, startWiredInstance } from "./src/channel.js";
+import { getConvosInstance, setConvosInstance } from "./src/outbound.js";
 import { getConvosRuntime, setConvosRuntime, setConvosSetupActive } from "./src/runtime.js";
-import { resolveConvosDbPath } from "./src/sdk-client.js";
+import { ConvosInstance } from "./src/sdk-client.js";
 import { setupConvosWithInvite } from "./src/setup.js";
 
-// Module-level state for setup agent (accepts join requests during setup flow)
-let setupAgent: ConvosSDKClient | null = null;
+// Module-level state for setup instance (accepts join requests during setup flow)
+let setupInstance: ConvosInstance | null = null;
 let setupJoinState = { joined: false, joinerInboxId: null as string | null };
 let setupCleanupTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Deferred config: stored after setup, written on convos.setup.complete
 let setupResult: {
-  privateKey: string;
+  identityId: string;
   conversationId: string;
   env: "production" | "dev";
   accountId?: string;
 } | null = null;
 
-// Cached setup response (so repeated calls don't destroy the running agent)
+// Cached setup response (so repeated calls don't destroy the running instance)
 let cachedSetupResponse: {
   inviteUrl: string;
   conversationId: string;
   qrDataUrl: string;
 } | null = null;
 
-async function cleanupSetupAgent() {
+async function cleanupSetupInstance() {
   if (setupCleanupTimer) {
     clearTimeout(setupCleanupTimer);
     setupCleanupTimer = null;
   }
-  if (setupAgent) {
+  if (setupInstance) {
     try {
-      await setupAgent.stop();
+      await setupInstance.stop();
     } catch {
       // Ignore cleanup errors
     }
-    setupAgent = null;
+    setupInstance = null;
   }
   cachedSetupResponse = null;
   setConvosSetupActive(false);
@@ -50,98 +50,54 @@ async function cleanupSetupAgent() {
 
 // --- Core handlers shared by WebSocket gateway methods and HTTP routes ---
 
-/**
- * Delete the old XMTP DB directory for the current account/env/key.
- * Only deletes if the resolved path is inside the expected stateDir prefix.
- */
-function deleteOldDbFiles(accountId?: string, env?: "production" | "dev") {
-  try {
-    const runtime = getConvosRuntime();
-    const cfg = runtime.config.loadConfig() as OpenClawConfig;
-    const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
-    if (!account.privateKey) return;
-
-    const stateDir = runtime.state.resolveStateDir();
-    const dbPath = resolveConvosDbPath({
-      stateDir,
-      env: env ?? account.env,
-      accountId: account.accountId,
-      privateKey: account.privateKey,
-    });
-
-    // Delete the hash directory (parent of xmtp.db file)
-    const hashDir = path.dirname(dbPath);
-    const safePrefix = path.join(stateDir, "convos", "xmtp");
-    if (!hashDir.startsWith(safePrefix)) {
-      console.error(`[convos-reset] Refusing to delete path outside safe prefix: ${hashDir}`);
-      return;
-    }
-
-    fs.rmSync(hashDir, { recursive: true, force: true });
-    console.log(`[convos-reset] Deleted old DB directory: ${hashDir}`);
-  } catch (err) {
-    console.error(`[convos-reset] Failed to delete old DB files:`, err);
-  }
-}
-
 async function handleSetup(params: {
   accountId?: string;
   env?: "production" | "dev";
   name?: string;
   force?: boolean;
-  forceNewKey?: boolean;
-  deleteDb?: boolean;
 }) {
-  // If a setup agent is already running and we have a cached response, return it
-  // (prevents repeated calls from destroying the listening agent)
-  if (!params.force && setupAgent?.isRunning() && cachedSetupResponse) {
-    console.log("[convos-setup] Returning cached setup (agent already running)");
+  // If a setup instance is already running and we have a cached response, return it
+  if (!params.force && setupInstance?.isRunning() && cachedSetupResponse) {
+    console.log("[convos-setup] Returning cached setup (instance already running)");
     return cachedSetupResponse;
   }
 
-  await cleanupSetupAgent();
+  await cleanupSetupInstance();
   setupJoinState = { joined: false, joinerInboxId: null };
   cachedSetupResponse = null;
 
-  // Optionally delete old XMTP DB files before starting fresh setup
-  if (params.deleteDb) {
-    deleteOldDbFiles(params.accountId, params.env);
-  }
-
-  const result = await setupConvosWithInvite({
-    accountId: params.accountId,
-    env: params.env,
-    name: params.name,
-    forceNewKey: params.forceNewKey,
-    keepRunning: true,
-    onInvite: async (ctx) => {
-      console.log(`[convos-setup] Join request from ${ctx.joinerInboxId}`);
-      try {
-        await ctx.accept();
-        setupJoinState = { joined: true, joinerInboxId: ctx.joinerInboxId };
-        console.log(`[convos-setup] Accepted join from ${ctx.joinerInboxId}`);
-      } catch (err) {
-        console.error(`[convos-setup] Failed to accept join:`, err);
-      }
+  const result = await setupConvosWithInvite(
+    {
+      accountId: params.accountId,
+      env: params.env,
+      name: params.name,
     },
-  });
+    {
+      onJoinAccepted: (info) => {
+        setupJoinState = { joined: true, joinerInboxId: info.joinerInboxId };
+        console.log(`[convos-setup] Join accepted: ${info.joinerInboxId}`);
+      },
+    },
+  );
 
-  if (result.client) {
-    setupAgent = result.client;
+  if (result.instance) {
+    setupInstance = result.instance;
+    // Start the instance so it processes join requests via CLI child process
+    await setupInstance.start();
     setConvosSetupActive(true);
-    console.log("[convos-setup] Agent kept running to accept join requests");
+    console.log("[convos-setup] Instance running to accept join requests");
     setupCleanupTimer = setTimeout(
       async () => {
-        console.log("[convos-setup] Timeout - stopping setup agent");
+        console.log("[convos-setup] Timeout - stopping setup instance");
         setupResult = null;
-        await cleanupSetupAgent();
+        await cleanupSetupInstance();
       },
       10 * 60 * 1000,
     );
   }
 
   setupResult = {
-    privateKey: result.privateKey,
+    identityId: result.identityId,
     conversationId: result.conversationId,
     env: params.env ?? "production",
     accountId: params.accountId,
@@ -160,16 +116,16 @@ async function handleSetup(params: {
 
 function handleStatus() {
   return {
-    active: setupAgent !== null,
+    active: setupInstance !== null,
     joined: setupJoinState.joined,
     joinerInboxId: setupJoinState.joinerInboxId,
   };
 }
 
 async function handleCancel() {
-  const wasActive = setupAgent !== null;
+  const wasActive = setupInstance !== null;
   setupResult = null;
-  await cleanupSetupAgent();
+  await cleanupSetupInstance();
   setupJoinState = { joined: false, joinerInboxId: null };
   return { cancelled: wasActive };
 }
@@ -180,7 +136,7 @@ async function handleComplete() {
   }
 
   const runtime = getConvosRuntime();
-  const cfg = runtime.config.loadConfig() as OpenClawConfig;
+  const cfg = runtime.config.loadConfig();
 
   const existingChannels = (cfg as Record<string, unknown>).channels as
     | Record<string, unknown>
@@ -204,7 +160,7 @@ async function handleComplete() {
       ...existingChannels,
       convos: {
         ...existingConvos,
-        privateKey: setupResult.privateKey,
+        identityId: setupResult.identityId,
         ownerConversationId: setupResult.conversationId,
         env: setupResult.env,
         enabled: true,
@@ -218,18 +174,29 @@ async function handleComplete() {
 
   const saved = { ...setupResult };
   setupResult = null;
-  await cleanupSetupAgent();
+  await cleanupSetupInstance();
 
   return { saved: true, conversationId: saved.conversationId };
 }
 
 // --- HTTP helpers ---
 
+const MAX_BODY_BYTES = 1024 * 1024; // 1 MB
+
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let totalSize = 0;
+  for await (const chunk of req) {
+    totalSize += (chunk as Buffer).length;
+    if (totalSize > MAX_BODY_BYTES) {
+      throw new Error("Request body too large");
+    }
+    chunks.push(chunk as Buffer);
+  }
   const raw = Buffer.concat(chunks).toString();
-  if (!raw.trim()) return {};
+  if (!raw.trim()) {
+    return {};
+  }
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
@@ -237,6 +204,17 @@ function jsonResponse(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(body));
+}
+
+function checkPoolAuth(req: IncomingMessage): boolean {
+  const runtime = getConvosRuntime();
+  const cfg = runtime.config.loadConfig() as Record<string, unknown>;
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const convos = channels?.convos as Record<string, unknown> | undefined;
+  const poolApiKey = convos?.poolApiKey as string | undefined;
+  if (!poolApiKey) return true; // No poolApiKey configured — allow all
+  const authHeader = req.headers.authorization;
+  return authHeader === `Bearer ${poolApiKey}`;
 }
 
 // --- Plugin ---
@@ -254,16 +232,15 @@ const plugin = {
 
     api.registerGatewayMethod("convos.setup", async ({ params, respond }) => {
       try {
-        const p = params as Record<string, unknown>;
         const result = await handleSetup({
-          accountId: typeof p.accountId === "string" ? p.accountId : undefined,
-          env: typeof p.env === "string" ? (p.env as "production" | "dev") : undefined,
-          name: typeof p.name === "string" ? p.name : undefined,
-          force: p.force === true,
+          accountId: typeof params.accountId === "string" ? params.accountId : undefined,
+          env: typeof params.env === "string" ? (params.env as "production" | "dev") : undefined,
+          name: typeof params.name === "string" ? params.name : undefined,
+          force: params.force === true,
         });
         respond(true, result, undefined);
       } catch (err) {
-        await cleanupSetupAgent();
+        await cleanupSetupInstance();
         respond(false, undefined, {
           code: -1,
           message: err instanceof Error ? err.message : String(err),
@@ -294,17 +271,14 @@ const plugin = {
 
     api.registerGatewayMethod("convos.reset", async ({ params, respond }) => {
       try {
-        const p = params as Record<string, unknown>;
         const result = await handleSetup({
-          accountId: typeof p.accountId === "string" ? p.accountId : undefined,
-          env: typeof p.env === "string" ? (p.env as "production" | "dev") : undefined,
+          accountId: typeof params.accountId === "string" ? params.accountId : undefined,
+          env: typeof params.env === "string" ? (params.env as "production" | "dev") : undefined,
           force: true,
-          forceNewKey: true,
-          deleteDb: p.deleteDb === true,
         });
         respond(true, result, undefined);
       } catch (err) {
-        await cleanupSetupAgent();
+        await cleanupSetupInstance();
         respond(false, undefined, {
           code: -1,
           message: err instanceof Error ? err.message : String(err),
@@ -321,6 +295,10 @@ const plugin = {
           jsonResponse(res, 405, { error: "Method Not Allowed" });
           return;
         }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
+          return;
+        }
         try {
           const body = await readJsonBody(req);
           const result = await handleSetup({
@@ -331,7 +309,7 @@ const plugin = {
           });
           jsonResponse(res, 200, result);
         } catch (err) {
-          await cleanupSetupAgent();
+          await cleanupSetupInstance();
           jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
         }
       },
@@ -344,6 +322,10 @@ const plugin = {
           jsonResponse(res, 405, { error: "Method Not Allowed" });
           return;
         }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
+          return;
+        }
         jsonResponse(res, 200, handleStatus());
       },
     });
@@ -353,6 +335,10 @@ const plugin = {
       handler: async (req, res) => {
         if (req.method !== "POST") {
           jsonResponse(res, 405, { error: "Method Not Allowed" });
+          return;
+        }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
           return;
         }
         try {
@@ -371,13 +357,16 @@ const plugin = {
           jsonResponse(res, 405, { error: "Method Not Allowed" });
           return;
         }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
+          return;
+        }
         const result = await handleCancel();
         jsonResponse(res, 200, result);
       },
     });
 
-    // Fast conversation creation using the running channel client (no temporary XMTP client).
-    // Used by pool mode to avoid the slow setup flow when a runtime client is already active.
+    // Create a new conversation via CLI. Used by pool manager for provisioning.
     api.registerHttpRoute({
       path: "/convos/conversation",
       handler: async (req, res) => {
@@ -385,29 +374,86 @@ const plugin = {
           jsonResponse(res, 405, { error: "Method Not Allowed" });
           return;
         }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
+          return;
+        }
         try {
-          const body = await readJsonBody(req);
-          const name = typeof body.name === "string" ? body.name : undefined;
-          const accountId = typeof body.accountId === "string" ? body.accountId : undefined;
-
-          const runtime = getConvosRuntime();
-          const cfg = runtime.config.loadConfig() as OpenClawConfig;
-          const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
-          const client = getClientForAccount(account.accountId);
-          if (!client) {
-            jsonResponse(res, 503, {
-              error: "Convos channel client not running. Start the channel first.",
+          // Guard: reject if instance already bound
+          if (getConvosInstance()) {
+            jsonResponse(res, 409, {
+              error:
+                "Instance already bound to a conversation. Terminate process and provision a new one.",
             });
             return;
           }
 
-          const result = await client.createConversation(name);
-          const qrDataUrl = await renderQrPngBase64(result.inviteUrl);
+          const body = await readJsonBody(req);
+          const name = typeof body.name === "string" ? body.name : "Convos Agent";
+          const profileName = typeof body.profileName === "string" ? body.profileName : name;
+          const profileImage =
+            typeof body.profileImage === "string" ? body.profileImage : undefined;
+          const description = typeof body.description === "string" ? body.description : undefined;
+          const imageUrl = typeof body.imageUrl === "string" ? body.imageUrl : undefined;
+          const permissions =
+            body.permissions === "all-members" || body.permissions === "admin-only"
+              ? body.permissions
+              : undefined;
+          const accountId = typeof body.accountId === "string" ? body.accountId : undefined;
+
+          // Write instructions file for the agent if provided
+          const instructions =
+            typeof body.instructions === "string" ? body.instructions : undefined;
+          if (instructions && instructions.trim()) {
+            const wsDir = path.join(os.homedir(), ".openclaw", "workspace");
+            fs.mkdirSync(wsDir, { recursive: true });
+            fs.writeFileSync(path.join(wsDir, "INSTRUCTIONS.md"), instructions);
+          }
+
+          const runtime = getConvosRuntime();
+          const cfg = runtime.config.loadConfig();
+          const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
+          const env = body.env === "dev" || body.env === "production" ? body.env : account.env;
+
+          const { instance, result } = await ConvosInstance.create(env, {
+            name,
+            profileName,
+            description,
+            imageUrl,
+            permissions,
+          });
+
+          // Save to config so startAccount can restore on restart
+          const existingChannels = (cfg as Record<string, unknown>).channels as
+            | Record<string, unknown>
+            | undefined;
+          const existingConvos = (existingChannels?.convos ?? {}) as Record<string, unknown>;
+          await runtime.config.writeConfigFile({
+            ...cfg,
+            channels: {
+              ...existingChannels,
+              convos: {
+                ...existingConvos,
+                identityId: instance.identityId,
+                ownerConversationId: result.conversationId,
+                env,
+                enabled: true,
+              },
+            },
+          });
+
+          // Start with full message handling pipeline (must happen before
+          // updateProfile so the join-approval stream handler is active)
+          await startWiredInstance({
+            conversationId: result.conversationId,
+            identityId: instance.identityId,
+            env,
+          });
+
           jsonResponse(res, 200, {
             conversationId: result.conversationId,
             inviteUrl: result.inviteUrl,
             inviteSlug: result.inviteSlug,
-            qrDataUrl,
           });
         } catch (err) {
           jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
@@ -416,7 +462,7 @@ const plugin = {
     });
 
     // Join an existing conversation via invite URL.
-    // Used by pool mode / concierge to join a user-created conversation.
+    // Used by pool manager to join a user-created conversation.
     api.registerHttpRoute({
       path: "/convos/join",
       handler: async (req, res) => {
@@ -424,40 +470,90 @@ const plugin = {
           jsonResponse(res, 405, { error: "Method Not Allowed" });
           return;
         }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
+          return;
+        }
         try {
+          // Guard: reject if instance already bound
+          if (getConvosInstance()) {
+            jsonResponse(res, 409, {
+              error:
+                "Instance already bound to a conversation. Terminate process and provision a new one.",
+            });
+            return;
+          }
+
           const body = await readJsonBody(req);
           const inviteUrl = typeof body.inviteUrl === "string" ? body.inviteUrl : undefined;
           if (!inviteUrl) {
             jsonResponse(res, 400, { error: "inviteUrl (string) is required" });
             return;
           }
-          const name = typeof body.name === "string" ? body.name : undefined;
+          const profileName =
+            typeof body.profileName === "string" ? body.profileName : "Convos Agent";
+          const profileImage =
+            typeof body.profileImage === "string" ? body.profileImage : undefined;
           const accountId = typeof body.accountId === "string" ? body.accountId : undefined;
 
+          // Write instructions file for the agent if provided
+          const instructions =
+            typeof body.instructions === "string" ? body.instructions : undefined;
+          if (instructions && instructions.trim()) {
+            const wsDir = path.join(os.homedir(), ".openclaw", "workspace");
+            fs.mkdirSync(wsDir, { recursive: true });
+            fs.writeFileSync(path.join(wsDir, "INSTRUCTIONS.md"), instructions);
+          }
+
           const runtime = getConvosRuntime();
-          const cfg = runtime.config.loadConfig() as OpenClawConfig;
+          const cfg = runtime.config.loadConfig();
           const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
-          const client = getClientForAccount(account.accountId);
-          if (!client) {
-            jsonResponse(res, 503, {
-              error: "Convos channel client not running. Start the channel first.",
-            });
+          const env = body.env === "dev" || body.env === "production" ? body.env : account.env;
+
+          const { instance, status, conversationId } = await ConvosInstance.join(env, inviteUrl, {
+            profileName,
+            timeout: 60,
+          });
+
+          if (status !== "joined" || !conversationId || !instance) {
+            jsonResponse(res, 200, { status: "waiting_for_acceptance" });
             return;
           }
 
-          const result = await client.joinConversation(inviteUrl, name);
-          jsonResponse(res, 200, {
-            conversationId: result.conversationId,
-            status: result.status,
+          // Save to config
+          const existingChannels = (cfg as Record<string, unknown>).channels as
+            | Record<string, unknown>
+            | undefined;
+          const existingConvos = (existingChannels?.convos ?? {}) as Record<string, unknown>;
+          await runtime.config.writeConfigFile({
+            ...cfg,
+            channels: {
+              ...existingChannels,
+              convos: {
+                ...existingConvos,
+                identityId: instance.identityId,
+                ownerConversationId: conversationId,
+                env,
+                enabled: true,
+              },
+            },
           });
+
+          // Start with full message handling pipeline
+          await startWiredInstance({
+            conversationId,
+            identityId: instance.identityId,
+            env,
+          });
+
+          jsonResponse(res, 200, { status: "joined", conversationId });
         } catch (err) {
           jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
         }
       },
     });
 
-    // Send a message into a conversation.
-    // Used by clawdbot template to send messages into an active conversation.
+    // Send a message into the active conversation.
     api.registerHttpRoute({
       path: "/convos/conversation/send",
       handler: async (req, res) => {
@@ -465,29 +561,26 @@ const plugin = {
           jsonResponse(res, 405, { error: "Method Not Allowed" });
           return;
         }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
+          return;
+        }
         try {
+          const inst = getConvosInstance();
+          if (!inst) {
+            jsonResponse(res, 400, { error: "No active conversation" });
+            return;
+          }
+
           const body = await readJsonBody(req);
-          const conversationId = typeof body.conversationId === "string" ? body.conversationId : undefined;
           const message = typeof body.message === "string" ? body.message : undefined;
-          if (!conversationId || !message) {
-            jsonResponse(res, 400, { error: "conversationId and message (strings) are required" });
-            return;
-          }
-          const accountId = typeof body.accountId === "string" ? body.accountId : undefined;
-
-          const runtime = getConvosRuntime();
-          const cfg = runtime.config.loadConfig() as OpenClawConfig;
-          const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
-          const client = getClientForAccount(account.accountId);
-          if (!client) {
-            jsonResponse(res, 503, {
-              error: "Convos channel client not running. Start the channel first.",
-            });
+          if (!message) {
+            jsonResponse(res, 400, { error: "message (string) is required" });
             return;
           }
 
-          await client.sendMessage(conversationId, message);
-          jsonResponse(res, 200, { ok: true });
+          const result = await inst.sendMessage(message);
+          jsonResponse(res, 200, result);
         } catch (err) {
           jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
         }
@@ -495,7 +588,6 @@ const plugin = {
     });
 
     // Rename conversation + agent profile name.
-    // Used by pool mode after pre-creating a conversation during warm-up.
     api.registerHttpRoute({
       path: "/convos/rename",
       handler: async (req, res) => {
@@ -503,33 +595,25 @@ const plugin = {
           jsonResponse(res, 405, { error: "Method Not Allowed" });
           return;
         }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
+          return;
+        }
         try {
-          const body = await readJsonBody(req);
-          const conversationId = typeof body.conversationId === "string" ? body.conversationId : undefined;
-          const name = typeof body.name === "string" ? body.name : undefined;
-
-          if (!conversationId) {
-            jsonResponse(res, 400, { error: "conversationId (string) is required" });
+          const inst = getConvosInstance();
+          if (!inst) {
+            jsonResponse(res, 400, { error: "No active conversation" });
             return;
           }
+
+          const body = await readJsonBody(req);
+          const name = typeof body.name === "string" ? body.name : undefined;
           if (!name) {
             jsonResponse(res, 400, { error: "name (string) is required" });
             return;
           }
 
-          const accountId = typeof body.accountId === "string" ? body.accountId : undefined;
-          const runtime = getConvosRuntime();
-          const cfg = runtime.config.loadConfig() as OpenClawConfig;
-          const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
-          const client = getClientForAccount(account.accountId);
-          if (!client) {
-            jsonResponse(res, 503, {
-              error: "Convos channel client not running. Start the channel first.",
-            });
-            return;
-          }
-
-          await client.renameConversation(conversationId, name);
+          await inst.rename(name);
           jsonResponse(res, 200, { ok: true });
         } catch (err) {
           jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
@@ -537,11 +621,102 @@ const plugin = {
       },
     });
 
+    // Lock/unlock the conversation.
+    api.registerHttpRoute({
+      path: "/convos/lock",
+      handler: async (req, res) => {
+        if (req.method !== "POST") {
+          jsonResponse(res, 405, { error: "Method Not Allowed" });
+          return;
+        }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
+          return;
+        }
+        try {
+          const inst = getConvosInstance();
+          if (!inst) {
+            jsonResponse(res, 400, { error: "No active conversation" });
+            return;
+          }
+
+          const body = await readJsonBody(req);
+          const unlock = body.unlock === true;
+          if (unlock) {
+            await inst.unlock();
+          } else {
+            await inst.lock();
+          }
+          jsonResponse(res, 200, { ok: true, locked: !unlock });
+        } catch (err) {
+          jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+      },
+    });
+
+    // Explode (destroy) the conversation.
+    api.registerHttpRoute({
+      path: "/convos/explode",
+      handler: async (req, res) => {
+        if (req.method !== "POST") {
+          jsonResponse(res, 405, { error: "Method Not Allowed" });
+          return;
+        }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
+          return;
+        }
+        try {
+          const inst = getConvosInstance();
+          if (!inst) {
+            jsonResponse(res, 400, { error: "No active conversation" });
+            return;
+          }
+
+          await inst.explode();
+          setConvosInstance(null);
+          jsonResponse(res, 200, { ok: true, exploded: true });
+        } catch (err) {
+          jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+      },
+    });
+
+    // Health/status: reports whether the instance is bound and streaming.
+    api.registerHttpRoute({
+      path: "/convos/status",
+      handler: async (req, res) => {
+        if (req.method !== "GET") {
+          jsonResponse(res, 405, { error: "Method Not Allowed" });
+          return;
+        }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
+          return;
+        }
+        const inst = getConvosInstance();
+        if (!inst) {
+          jsonResponse(res, 200, { ready: true, conversation: null, streaming: false });
+          return;
+        }
+        jsonResponse(res, 200, {
+          ready: true,
+          conversation: { id: inst.conversationId },
+          streaming: inst.isStreaming(),
+        });
+      },
+    });
+
+    // Reset: re-run setup with a fresh identity.
     api.registerHttpRoute({
       path: "/convos/reset",
       handler: async (req, res) => {
         if (req.method !== "POST") {
           jsonResponse(res, 405, { error: "Method Not Allowed" });
+          return;
+        }
+        if (!checkPoolAuth(req)) {
+          jsonResponse(res, 401, { error: "Unauthorized" });
           return;
         }
         try {
@@ -550,12 +725,10 @@ const plugin = {
             accountId: typeof body.accountId === "string" ? body.accountId : undefined,
             env: typeof body.env === "string" ? (body.env as "production" | "dev") : undefined,
             force: true,
-            forceNewKey: true,
-            deleteDb: body.deleteDb === true,
           });
           jsonResponse(res, 200, result);
         } catch (err) {
-          await cleanupSetupAgent();
+          await cleanupSetupInstance();
           jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
         }
       },
