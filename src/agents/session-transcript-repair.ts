@@ -116,7 +116,7 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
       continue;
     }
 
-    const nextContent = [];
+    const nextContent: any[] = [];
     let droppedInMessage = 0;
     let messageChanged = false;
 
