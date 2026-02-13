@@ -135,6 +135,7 @@ export function createFollowupRunner(params: {
 
   return async (queued: FollowupRun) => {
     try {
+      let followupAutoCompactionCompleted = false;
       const runId = crypto.randomUUID();
       if (queued.run.sessionKey) {
         registerAgentRunContext(runId, {
@@ -209,13 +210,15 @@ export function createFollowupRunner(params: {
                 }
 
                 if (phase === "end" && !willRetry) {
+                  followupAutoCompactionCompleted = true;
+                  const count = await incrementCompactionCount({
+                    sessionEntry,
+                    sessionStore,
+                    sessionKey,
+                    storePath,
+                    tokensAfter: 0,
+                  });
                   if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
-                    const count = await incrementCompactionCount({
-                      sessionEntry,
-                      sessionStore,
-                      sessionKey,
-                      storePath,
-                    });
                     const suffix = typeof count === "number" ? ` (count ${count})` : "";
                     await sendFollowupPayloads(
                       [{ text: `🧹 Auto-compaction complete${suffix}.` }],
@@ -248,7 +251,7 @@ export function createFollowupRunner(params: {
         await persistSessionUsageUpdate({
           storePath,
           sessionKey,
-          usage,
+          usage: followupAutoCompactionCompleted ? undefined : usage,
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,

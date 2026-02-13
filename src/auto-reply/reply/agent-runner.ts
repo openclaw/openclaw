@@ -392,7 +392,7 @@ export async function runReplyAgent(params: {
     await persistSessionUsageUpdate({
       storePath,
       sessionKey,
-      usage,
+      usage: autoCompactionCompleted ? undefined : usage,
       modelUsed,
       providerUsed,
       contextTokensUsed,

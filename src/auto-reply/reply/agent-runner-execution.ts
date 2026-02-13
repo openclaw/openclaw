@@ -359,13 +359,14 @@ export async function runAgentTurnWithFallback(params: {
 
                 if (phase === "end" && !willRetry) {
                   autoCompactionCompleted = true;
+                  const count = await incrementCompactionCount({
+                    sessionEntry: params.getActiveSessionEntry(),
+                    sessionStore: params.activeSessionStore,
+                    sessionKey: params.sessionKey,
+                    storePath: params.storePath,
+                    tokensAfter: 0,
+                  });
                   if (params.resolvedVerboseLevel !== "off") {
-                    const count = await incrementCompactionCount({
-                      sessionEntry: params.getActiveSessionEntry(),
-                      sessionStore: params.activeSessionStore,
-                      sessionKey: params.sessionKey,
-                      storePath: params.storePath,
-                    });
                     const suffix = typeof count === "number" ? ` (count ${count})` : "";
                     params.opts?.onBlockReply?.({ text: `🧹 Auto-compaction complete${suffix}.` });
                   }
