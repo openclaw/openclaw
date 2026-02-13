@@ -23,6 +23,7 @@ import {
   enqueueCommandInLane,
   getActiveTaskCount,
   getQueueSize,
+  resetAllLanes,
   setCommandLaneConcurrency,
   waitForActiveTasks,
 } from "./command-queue.js";
@@ -34,6 +35,12 @@ describe("command queue", () => {
     diagnosticMocks.diag.debug.mockClear();
     diagnosticMocks.diag.warn.mockClear();
     diagnosticMocks.diag.error.mockClear();
+  });
+
+  it("resetAllLanes is safe when no lanes have been created", () => {
+    expect(getActiveTaskCount()).toBe(0);
+    expect(() => resetAllLanes()).not.toThrow();
+    expect(getActiveTaskCount()).toBe(0);
   });
 
   it("runs tasks one at a time in order", async () => {
@@ -160,6 +167,49 @@ describe("command queue", () => {
 
     resolve1();
     await task;
+  });
+
+  it("resetAllLanes drains queued work immediately after reset", async () => {
+    const lane = `reset-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    let resolve1!: () => void;
+    const blocker = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+
+    // Start a task that blocks the lane
+    const task1 = enqueueCommandInLane(lane, async () => {
+      await blocker;
+    });
+
+    await vi.waitFor(() => {
+      expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
+    });
+
+    // Enqueue another task — it should be stuck behind the blocker
+    let task2Ran = false;
+    const task2 = enqueueCommandInLane(lane, async () => {
+      task2Ran = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
+    });
+    expect(task2Ran).toBe(false);
+
+    // Simulate SIGUSR1: reset all lanes. Queued work (task2) should be
+    // drained immediately — no fresh enqueue needed.
+    resetAllLanes();
+
+    // Complete the stale in-flight task; generation mismatch makes its
+    // completion path a no-op for queue bookkeeping.
+    resolve1();
+    await task1;
+
+    // task2 should have been pumped by resetAllLanes's drain pass.
+    await task2;
+    expect(task2Ran).toBe(true);
   });
 
   it("waitForActiveTasks ignores tasks that start after the call", async () => {
