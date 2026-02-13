@@ -1,9 +1,77 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import os from "node:os";
+import path from "node:path";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { resolveStateDir } from "../config/paths.js";
 import { detectMime } from "../media/mime.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
+
+const SENSITIVE_CONFIG_BASENAMES = new Set([
+  "openclaw.json",
+  "clawdbot.json",
+  "moltbot.json",
+  "moldbot.json",
+]);
+
+const SENSITIVE_STATE_SUBDIRS = new Set(["credentials"]);
+
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+
+function expandHomePath(filePath: string): string {
+  const normalized = filePath.replace(UNICODE_SPACES, " ");
+  if (normalized === "~") {
+    return os.homedir();
+  }
+  if (normalized.startsWith("~/")) {
+    return path.join(os.homedir(), normalized.slice(2));
+  }
+  return normalized;
+}
+
+export function isSensitiveOpenClawPath(filePath: string): boolean {
+  const expanded = expandHomePath(filePath.trim());
+  const resolved = path.resolve(expanded);
+  const stateDir = path.resolve(resolveStateDir());
+
+  const relative = path.relative(stateDir, resolved);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+
+  const parentDir = path.dirname(resolved);
+  if (parentDir === stateDir && SENSITIVE_CONFIG_BASENAMES.has(path.basename(resolved))) {
+    return true;
+  }
+
+  const topSegment = relative.split(path.sep)[0];
+  if (topSegment && SENSITIVE_STATE_SUBDIRS.has(topSegment)) {
+    return true;
+  }
+
+  return false;
+}
+
+function assertNotSensitivePath(filePath: string): void {
+  if (isSensitiveOpenClawPath(filePath)) {
+    throw new Error(
+      `read: access denied — this file contains sensitive credentials and cannot be read by the agent (${filePath})`,
+    );
+  }
+}
+
+function resolvePathFromRecord(record: Record<string, unknown> | undefined): string {
+  const p = record?.path;
+  if (typeof p === "string" && p.trim()) {
+    return p;
+  }
+  const fp = record?.file_path;
+  if (typeof fp === "string" && fp.trim()) {
+    return fp;
+  }
+  return "";
+}
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to normalize payloads and sanitize oversized images before they hit providers.
@@ -270,7 +338,21 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
 
 export function createSandboxedReadTool(root: string) {
   const base = createReadTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(createOpenClawReadTool(base), root);
+  const inner = createOpenClawReadTool(base);
+  const guarded = wrapSandboxPathGuard(inner, root);
+  const orig = guarded.execute.bind(guarded);
+  guarded.execute = async (toolCallId, args, signal, onUpdate) => {
+    const normalized = normalizeToolParams(args);
+    const record =
+      normalized ??
+      (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+    const filePath = resolvePathFromRecord(record);
+    if (filePath) {
+      assertNotSensitivePath(filePath);
+    }
+    return orig(toolCallId, args, signal, onUpdate);
+  };
+  return guarded;
 }
 
 export function createSandboxedWriteTool(root: string) {
@@ -293,8 +375,11 @@ export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
+
+      const filePath = resolvePathFromRecord(record) || "<unknown>";
+      assertNotSensitivePath(filePath);
+
       const result = await base.execute(toolCallId, normalized ?? params, signal);
-      const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const normalizedResult = await normalizeReadImageResult(result, filePath);
       return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
     },
