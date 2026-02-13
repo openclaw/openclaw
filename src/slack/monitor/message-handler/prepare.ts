@@ -46,6 +46,23 @@ import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
 
+function buildSlackMediaPayload(
+  mediaList: Array<{ path: string; contentType?: string; placeholder: string }>,
+) {
+  const first = mediaList[0];
+  const mediaPaths = mediaList.map((m) => m.path);
+  const mediaTypes = mediaList.map((m) => m.contentType).filter(Boolean) as string[];
+  return {
+    MediaPath: first?.path,
+    MediaType: first?.contentType,
+    MediaUrl: first?.path,
+    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+    placeholder: mediaList.map((m) => m.placeholder).join(" "),
+  };
+}
+
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -333,11 +350,12 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const media = await resolveSlackMedia({
+  const mediaList = await resolveSlackMedia({
     files: message.files,
     token: ctx.botToken,
     maxBytes: ctx.mediaMaxBytes,
   });
+  const media = mediaList.length > 0 ? buildSlackMediaPayload(mediaList) : null;
   const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
   if (!rawBody) {
     return null;
@@ -458,7 +476,7 @@ export async function prepareSlackMessage(params: {
 
   let threadStarterBody: string | undefined;
   let threadLabel: string | undefined;
-  let threadStarterMedia: Awaited<ReturnType<typeof resolveSlackMedia>> = null;
+  let threadStarterMedia: ReturnType<typeof buildSlackMediaPayload> | null = null;
   if (isThreadReply && threadTs) {
     const starter = await resolveSlackThreadStarter({
       channelId: message.channel,
@@ -472,11 +490,13 @@ export async function prepareSlackMessage(params: {
       threadLabel = `Slack thread ${roomLabel}${snippet ? `: ${snippet}` : ""}`;
       // If current message has no files but thread starter does, fetch starter's files
       if (!media && starter.files && starter.files.length > 0) {
-        threadStarterMedia = await resolveSlackMedia({
+        const starterMediaList = await resolveSlackMedia({
           files: starter.files,
           token: ctx.botToken,
           maxBytes: ctx.mediaMaxBytes,
         });
+        threadStarterMedia = starterMediaList.length > 0
+          ? buildSlackMediaPayload(starterMediaList) : null;
         if (threadStarterMedia) {
           logVerbose(
             `slack: hydrated thread starter file ${threadStarterMedia.placeholder} from root message`,
@@ -528,9 +548,12 @@ export async function prepareSlackMessage(params: {
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
-    MediaPath: effectiveMedia?.path,
-    MediaType: effectiveMedia?.contentType,
-    MediaUrl: effectiveMedia?.path,
+    MediaPath: effectiveMedia?.MediaPath,
+    MediaType: effectiveMedia?.MediaType,
+    MediaUrl: effectiveMedia?.MediaUrl,
+    MediaPaths: effectiveMedia?.MediaPaths,
+    MediaUrls: effectiveMedia?.MediaUrls,
+    MediaTypes: effectiveMedia?.MediaTypes,
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,

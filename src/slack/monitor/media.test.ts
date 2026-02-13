@@ -224,7 +224,7 @@ describe("resolveSlackMedia", () => {
     );
   });
 
-  it("returns null when download fails", async () => {
+  it("returns empty array when download fails", async () => {
     const { resolveSlackMedia } = await import("./media.js");
 
     // Simulate a network error
@@ -236,10 +236,10 @@ describe("resolveSlackMedia", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
   });
 
-  it("returns null when no files are provided", async () => {
+  it("returns empty array when no files are provided", async () => {
     const { resolveSlackMedia } = await import("./media.js");
 
     const result = await resolveSlackMedia({
@@ -248,7 +248,7 @@ describe("resolveSlackMedia", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
   });
 
   it("skips files without url_private", async () => {
@@ -260,7 +260,7 @@ describe("resolveSlackMedia", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -294,7 +294,48 @@ describe("resolveSlackMedia", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("processes all files when multiple are provided", async () => {
+    vi.doMock("../../media/store.js", () => ({
+      saveMediaBuffer: vi
+        .fn()
+        .mockResolvedValueOnce({ path: "/tmp/a.png", contentType: "image/png" })
+        .mockResolvedValueOnce({ path: "/tmp/b.jpg", contentType: "image/jpeg" })
+        .mockResolvedValueOnce({ path: "/tmp/c.pdf", contentType: "application/pdf" }),
+    }));
+
+    const { resolveSlackMedia } = await import("./media.js");
+
+    const makeResponse = () =>
+      new Response(Buffer.from("data"), {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      });
+
+    mockFetch
+      .mockResolvedValueOnce(makeResponse())
+      .mockResolvedValueOnce(makeResponse())
+      .mockResolvedValueOnce(makeResponse());
+
+    const result = await resolveSlackMedia({
+      files: [
+        { url_private: "https://files.slack.com/a.png", name: "a.png" },
+        { url_private: "https://files.slack.com/b.jpg", name: "b.jpg" },
+        { url_private: "https://files.slack.com/c.pdf", name: "c.pdf" },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toHaveLength(3);
+    expect(result[0]?.path).toBe("/tmp/a.png");
+    expect(result[1]?.path).toBe("/tmp/b.jpg");
+    expect(result[2]?.path).toBe("/tmp/c.pdf");
+    expect(result[0]?.placeholder).toBe("[Slack file: a.png]");
+    expect(result[1]?.placeholder).toBe("[Slack file: b.jpg]");
+    expect(result[2]?.placeholder).toBe("[Slack file: c.pdf]");
   });
 });

@@ -119,12 +119,9 @@ export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
   maxBytes: number;
-}): Promise<{
-  path: string;
-  contentType?: string;
-  placeholder: string;
-} | null> {
+}): Promise<Array<{ path: string; contentType?: string; placeholder: string }>> {
   const files = params.files ?? [];
+  const results: Array<{ path: string; contentType?: string; placeholder: string }> = [];
   for (const file of files) {
     const url = file.url_private_download ?? file.url_private;
     if (!url) {
@@ -151,16 +148,16 @@ export async function resolveSlackMedia(params: {
         params.maxBytes,
       );
       const label = fetched.fileName ?? file.name;
-      return {
+      results.push({
         path: saved.path,
         contentType: saved.contentType,
         placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
-      };
+      });
     } catch {
       // Ignore download failures and fall through to the next file.
     }
   }
-  return null;
+  return results;
 }
 
 export type SlackThreadStarter = {
