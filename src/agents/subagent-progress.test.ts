@@ -266,7 +266,7 @@ describe("subscribeSubagentProgress", () => {
       requesterOrigin: { channel: "slack", to: "C123" },
     });
 
-    // Simulate a claude_code internal tool event with parentTool field
+    // Simulate a claude_code internal tool event with parentTool field and args
     emitToolEvent("run-1", "start", "Read", {
       args: { path: "src/foo.ts" },
       parentTool: "claude_code",
@@ -276,6 +276,8 @@ describe("subscribeSubagentProgress", () => {
     expect(routeReplyMock).toHaveBeenCalledTimes(1);
     const callArgs = routeReplyMock.mock.calls[0][0] as { payload: { text: string } };
     expect(callArgs.payload.text).toContain("Read");
+    // args.path should be resolved by resolveToolDisplay into the summary
+    expect(callArgs.payload.text).toContain("src/foo.ts");
   });
 
   it("tracks tool counts correctly across multiple starts", async () => {

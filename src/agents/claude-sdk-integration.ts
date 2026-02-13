@@ -25,7 +25,11 @@ const log = createSubsystemLogger("agent/claude-sdk");
 export type SDKProgressEvent =
   | { phase: "init"; model: string; toolCount: number }
   | { phase: "tool_progress"; toolName: string; elapsedSeconds: number }
-  | { phase: "tool_use"; toolNames: string[] }
+  | {
+      phase: "tool_use";
+      toolNames: string[];
+      tools: Array<{ name: string; input?: Record<string, unknown> }>;
+    }
   | { phase: "complete"; durationMs: number; numTurns: number };
 
 export interface SDKAgentParams {
@@ -169,12 +173,13 @@ export async function runSDKAgent(params: SDKAgentParams): Promise<SDKAgentResul
 
         const toolUses = msg.message?.content?.filter(
           (b: { type: string }) => b.type === "tool_use",
-        ) as Array<{ name: string }> | undefined;
+        ) as Array<{ name: string; input?: Record<string, unknown> }> | undefined;
         if (toolUses?.length) {
           log.info(`sdk tool_use: ${toolUses.map((t) => t.name).join(", ")}`);
           params.onProgress?.({
             phase: "tool_use",
             toolNames: toolUses.map((t) => t.name),
+            tools: toolUses.map((t) => ({ name: t.name, input: t.input })),
           });
         }
         if (msg.error) {

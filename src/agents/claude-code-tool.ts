@@ -79,11 +79,16 @@ export function createClaudeCodeTool(defaults?: {
             if (sessionKey) {
               const runId = resolveRunIdBySessionKey(sessionKey);
               if (runId) {
-                for (const name of evt.toolNames) {
+                for (const tool of evt.tools) {
                   emitAgentEvent({
                     runId,
                     stream: "tool",
-                    data: { phase: "start", name, parentTool: "claude_code" },
+                    data: {
+                      phase: "start",
+                      name: tool.name,
+                      args: tool.input,
+                      parentTool: "claude_code",
+                    },
                   });
                 }
               }
