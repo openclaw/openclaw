@@ -165,8 +165,31 @@ export async function handleWhatsAppAction(
     const chatJid = readStringParam(params, "chatJid", { required: true });
     const countRaw = params.count;
     const count = typeof countRaw === "number" ? countRaw : 50;
+    // Capture message count before fetch to detect new arrivals
+    const beforeCount = listener.getMessages ? (await listener.getMessages(chatJid)).length : 0;
+
     await listener.fetchMessageHistory(chatJid, count);
-    return jsonResult({ ok: true, message: `Requested ${count} messages from ${chatJid}` });
+
+    // Wait for messages to arrive via messaging-history.set (WhatsApp delivers async)
+    // Poll for up to 15 seconds checking if new messages appeared
+    let afterCount = beforeCount;
+    if (listener.getMessages) {
+      for (let i = 0; i < 10; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        afterCount = (await listener.getMessages(chatJid)).length;
+        if (afterCount > beforeCount) {
+          break;
+        }
+      }
+    }
+
+    const newMessages = afterCount - beforeCount;
+    return jsonResult({
+      ok: true,
+      message: `Requested ${count} messages from ${chatJid}`,
+      newMessagesReceived: newMessages,
+      totalMessagesInStore: afterCount,
+    });
   }
 
   throw new Error(`Unsupported WhatsApp action: ${action}`);

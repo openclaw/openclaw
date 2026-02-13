@@ -579,12 +579,16 @@ export async function monitorWebInbox(options: {
               const timestamp = oldestMsg.timestamp || Date.now();
               await sock.fetchMessageHistory(
                 count,
-                { remoteJid: chatJid, id: oldestMsg.id || "" },
+                { remoteJid: chatJid, id: oldestMsg.id || "", fromMe: oldestMsg.fromMe },
                 timestamp,
               );
             } else {
               // If no messages in store, fetch from current time
-              await sock.fetchMessageHistory(count, { remoteJid: chatJid, id: "" }, Date.now());
+              await sock.fetchMessageHistory(
+                count,
+                { remoteJid: chatJid, id: "", fromMe: false },
+                Date.now(),
+              );
             }
           },
           getMessages: async (chatJid: string, limit?: number): Promise<StoredMessage[]> => {
