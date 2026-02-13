@@ -15,6 +15,7 @@ import {
   resolveToolProfilePolicy,
   stripPluginOnlyAllowlist,
 } from "../agents/tool-policy.js";
+import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
@@ -114,6 +115,28 @@ function mergeActionIntoArgsIfSupported(params: {
     return args;
   }
   return { ...args, action };
+}
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message || String(err);
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  return String(err);
+}
+
+function isToolInputError(err: unknown): boolean {
+  if (err instanceof ToolInputError) {
+    return true;
+  }
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "name" in err &&
+    (err as { name?: unknown }).name === "ToolInputError"
+  );
 }
 
 export async function handleToolsInvokeHttpRequest(
@@ -348,6 +371,13 @@ export async function handleToolsInvokeHttpRequest(
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
+    if (isToolInputError(err)) {
+      sendJson(res, 400, {
+        ok: false,
+        error: { type: "tool_error", message: getErrorMessage(err) || "invalid tool arguments" },
+      });
+      return true;
+    }
     logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
     sendJson(res, 500, {
       ok: false,
