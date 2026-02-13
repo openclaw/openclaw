@@ -148,19 +148,44 @@ export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): strin
   return entry?.identity?.name?.trim() || undefined;
 }
 
+/**
+ * Sanitizes a thread ID for safe use in session keys and file paths.
+ * Replaces unsafe characters with hyphens to avoid path traversal and encoding issues.
+ */
+function sanitizeThreadId(threadId: string): string {
+  return threadId
+    .replace(/[/\\:*?"<>|]/g, "-") // Path-unsafe chars
+    .replace(/\s+/g, "-") // Spaces → hyphens
+    .replace(/-+/g, "-") // Collapse multiple hyphens
+    .replace(/^-|-$/g, "") // Trim leading/trailing hyphens
+    .toLowerCase();
+}
+
 export function resolveThreadSessionKeys(params: {
   baseSessionKey: string;
   threadId?: string | null;
   parentSessionKey?: string;
   useSuffix?: boolean;
-}): { sessionKey: string; parentSessionKey?: string } {
-  const threadId = (params.threadId ?? "").trim();
-  if (!threadId) {
-    return { sessionKey: params.baseSessionKey, parentSessionKey: undefined };
+}): { sessionKey: string; parentSessionKey?: string; sanitizedThreadId?: string } {
+  const rawThreadId = (params.threadId ?? "").trim();
+  if (!rawThreadId) {
+    return {
+      sessionKey: params.baseSessionKey,
+      parentSessionKey: undefined,
+      sanitizedThreadId: undefined,
+    };
+  }
+  const sanitizedThreadId = sanitizeThreadId(rawThreadId);
+  if (!sanitizedThreadId) {
+    return {
+      sessionKey: params.baseSessionKey,
+      parentSessionKey: undefined,
+      sanitizedThreadId: undefined,
+    };
   }
   const useSuffix = params.useSuffix ?? true;
   const sessionKey = useSuffix
-    ? `${params.baseSessionKey}:thread:${threadId}`
+    ? `${params.baseSessionKey}:thread:${sanitizedThreadId}`
     : params.baseSessionKey;
-  return { sessionKey, parentSessionKey: params.parentSessionKey };
+  return { sessionKey, parentSessionKey: params.parentSessionKey, sanitizedThreadId };
 }

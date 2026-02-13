@@ -565,7 +565,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       Surface: "zulip" as const,
       MessageSid: messageId,
       ReplyToId: topic !== DEFAULT_TOPIC ? topic : undefined,
-      MessageThreadId: topic !== DEFAULT_TOPIC ? topic : undefined,
+      MessageThreadId: topic !== DEFAULT_TOPIC ? threadKeys.sanitizedThreadId : undefined,
       Timestamp: timestamp,
       WasMentioned: kind !== "dm" ? effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
