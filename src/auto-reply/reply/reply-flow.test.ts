@@ -30,7 +30,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     expect(text).toContain("Conversation info (untrusted metadata):");
-    expect(text).toContain('"conversation_label": "ops-room"');
+    expect(text).toContain('"conversation_label":"ops-room"');
   });
 });
 

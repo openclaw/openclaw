@@ -20,6 +20,7 @@ import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
+import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
@@ -217,6 +218,7 @@ export async function runPreparedReply(
             : {}),
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
+    { envelope: resolveEnvelopeFormatOptions(cfg) },
   );
   const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
