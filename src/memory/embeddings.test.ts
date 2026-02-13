@@ -172,9 +172,10 @@ describe("embedding provider auto selection", () => {
     vi.resetAllMocks();
     vi.resetModules();
     vi.unstubAllGlobals();
+    vi.doUnmock("./node-llama.js");
   });
 
-  it("prefers openai when a key resolves", async () => {
+  it("prefers local even when openai key resolves", async () => {
     const { createEmbeddingProvider } = await import("./embeddings.js");
     const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
@@ -192,10 +193,18 @@ describe("embedding provider auto selection", () => {
     });
 
     expect(result.requestedProvider).toBe("auto");
-    expect(result.provider.id).toBe("openai");
+    expect(result.provider.id).toBe("local");
   });
 
-  it("uses gemini when openai is missing", async () => {
+  it("uses gemini when local and openai are unavailable", async () => {
+    vi.doMock("./node-llama.js", () => ({
+      importNodeLlamaCpp: async () => {
+        throw Object.assign(new Error("Cannot find package 'node-llama-cpp'"), {
+          code: "ERR_MODULE_NOT_FOUND",
+        });
+      },
+    }));
+
     const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -231,7 +240,15 @@ describe("embedding provider auto selection", () => {
     );
   });
 
-  it("keeps explicit model when openai is selected", async () => {
+  it("keeps explicit model when openai is selected after local is unavailable", async () => {
+    vi.doMock("./node-llama.js", () => ({
+      importNodeLlamaCpp: async () => {
+        throw Object.assign(new Error("Cannot find package 'node-llama-cpp'"), {
+          code: "ERR_MODULE_NOT_FOUND",
+        });
+      },
+    }));
+
     const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,

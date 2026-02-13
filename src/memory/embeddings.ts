@@ -1,8 +1,6 @@
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
-import fsSync from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
@@ -57,22 +55,6 @@ export type EmbeddingProviderOptions = {
 };
 
 const DEFAULT_LOCAL_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
-
-function canAutoSelectLocal(options: EmbeddingProviderOptions): boolean {
-  const modelPath = options.local?.modelPath?.trim();
-  if (!modelPath) {
-    return false;
-  }
-  if (/^(hf:|https?:)/i.test(modelPath)) {
-    return false;
-  }
-  const resolved = resolveUserPath(modelPath);
-  try {
-    return fsSync.statSync(resolved).isFile();
-  } catch {
-    return false;
-  }
-}
 
 function isMissingApiKeyError(err: unknown): boolean {
   const message = formatErrorMessage(err);
@@ -157,13 +139,11 @@ export async function createEmbeddingProvider(
     const missingKeyErrors: string[] = [];
     let localError: string | null = null;
 
-    if (canAutoSelectLocal(options)) {
-      try {
-        const local = await createProvider("local");
-        return { ...local, requestedProvider };
-      } catch (err) {
-        localError = formatLocalSetupError(err);
-      }
+    try {
+      const local = await createProvider("local");
+      return { ...local, requestedProvider };
+    } catch (err) {
+      localError = formatLocalSetupError(err);
     }
 
     for (const provider of ["openai", "gemini", "voyage"] as const) {
@@ -180,7 +160,7 @@ export async function createEmbeddingProvider(
       }
     }
 
-    const details = [...missingKeyErrors, localError].filter(Boolean) as string[];
+    const details = [...missingKeyErrors, localError].filter(Boolean);
     if (details.length > 0) {
       throw new Error(details.join("\n\n"));
     }
