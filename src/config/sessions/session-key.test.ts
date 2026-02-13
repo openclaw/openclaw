@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { resolveSessionKey } from "./session-key.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { resolveSessionKey } from "./session-key.js";
 
 function makeCtx(overrides: Partial<MsgContext>): MsgContext {
   return {

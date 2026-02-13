@@ -1,5 +1,6 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { SessionScope } from "./types.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -7,7 +8,6 @@ import {
 } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
 import { resolveGroupSessionKey } from "./group.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
 
 // Decide which session bucket to use (per-sender vs global).
 export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
@@ -45,9 +45,10 @@ export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?
       if (match) {
         const from = (ctx.From ?? "").trim().toLowerCase();
         const senderId = (ctx.SenderId ?? "").trim().toLowerCase();
-        const fromDiscordId = from.startsWith("discord:") && !from.includes(":channel:") && !from.includes(":group:")
-          ? from.slice("discord:".length)
-          : "";
+        const fromDiscordId =
+          from.startsWith("discord:") && !from.includes(":channel:") && !from.includes(":group:")
+            ? from.slice("discord:".length)
+            : "";
         const directId = senderId || fromDiscordId;
         if (directId && directId === match[2]) {
           normalized = `${match[1]}discord:direct:${match[2]}`;
