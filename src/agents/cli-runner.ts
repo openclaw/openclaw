@@ -76,16 +76,12 @@ export async function runCliAgent(params: {
   }
   const backend = backendResolved.config;
 
-  // Pre-flight health check for Cloud.ru proxy (when proxy URL is configured)
+  // Pre-flight health check for Cloud.ru proxy (when proxy URL is configured).
+  // Throws plain Error (not FailoverError) — a dead proxy means ALL tiers are
+  // unreachable, so model-level fallback would just cycle through the same dead endpoint.
   const proxyUrl = backend.env?.["ANTHROPIC_BASE_URL"];
   if (proxyUrl && proxyUrl.includes("localhost")) {
-    try {
-      await ensureProxyHealthy(proxyUrl);
-    } catch (healthErr) {
-      // Throw plain Error (not FailoverError) — a dead proxy means ALL tiers are
-      // unreachable, so model-level fallback would just cycle through the same dead endpoint
-      throw healthErr;
-    }
+    await ensureProxyHealthy(proxyUrl);
   }
 
   const modelId = (params.model ?? "default").trim() || "default";
