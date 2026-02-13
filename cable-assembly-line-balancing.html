@@ -2886,16 +2886,14 @@ function importAllDataExcel(input) {
         });
       }
 
-      // Save and refresh
+      // Save to localStorage then reload to ensure all views refresh
       saveToLocalStorage();
       saveHeaderFields();
-      recalcAllProcesses();
-      renderProcessTable();
-      renderWorkerTable();
-      initStations();
-      renderAll();
 
-      alert('Data imported successfully! Loaded ' + processes.length + ' processes and ' + workers.length + ' workers.');
+      const pCount = processes.length;
+      const wCount = workers.length;
+      alert('Data imported successfully! Loaded ' + pCount + ' processes and ' + wCount + ' workers. Page will reload.');
+      location.reload();
     } catch (err) {
       console.error('Import error:', err);
       alert('Import failed: ' + err.message);
