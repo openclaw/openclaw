@@ -1075,21 +1075,20 @@ export function collectElevatedModeFindings(cfg: OpenClawConfig): SecurityAuditF
 export function collectGatewayTlsFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const tlsEnabled = cfg.gateway?.tls?.enabled;
-  const bind = cfg.gateway?.bind ?? "loopback";
 
   if (tlsEnabled === true) {
     return findings; // OK
   }
 
-  const isLoopback = bind === "loopback";
+  const remotelyExposed = isGatewayRemotelyExposed(cfg);
 
   findings.push({
     checkId: "gateway.tls_disabled",
-    severity: isLoopback ? "warn" : "critical",
+    severity: remotelyExposed ? "critical" : "warn",
     title: "Gateway TLS is not enabled",
-    detail: isLoopback
-      ? "TLS is disabled on loopback gateway. Local traffic is unencrypted but contained to this machine."
-      : `TLS is disabled with bind="${bind}". Gateway traffic including auth tokens is unencrypted.`,
+    detail: remotelyExposed
+      ? "TLS is disabled on a remotely-exposed gateway. Traffic including auth tokens is unencrypted."
+      : "TLS is disabled on loopback gateway. Local traffic is unencrypted but contained to this machine.",
     remediation: "Set gateway.tls.enabled=true and gateway.tls.autoGenerate=true.",
   });
 
