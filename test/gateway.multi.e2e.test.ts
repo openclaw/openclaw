@@ -231,7 +231,7 @@ const runCliJson = async (args: string[], env: NodeJS.ProcessEnv): Promise<unkno
   }
 };
 
-const postJson = async (url: string, body: unknown) => {
+const postJson = async (url: string, body: unknown, headers?: Record<string, string>) => {
   const payload = JSON.stringify(body);
   const parsed = new URL(url);
   return await new Promise<{ status: number; json: unknown }>((resolve, reject) => {
@@ -244,6 +244,7 @@ const postJson = async (url: string, body: unknown) => {
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(payload),
+          ...headers,
         },
       },
       (res) => {
@@ -440,14 +441,22 @@ describe("gateway multi-instance e2e", () => {
       expect(healthB.ok).toBe(true);
 
       const [hookResA, hookResB] = await Promise.all([
-        postJson(`http://127.0.0.1:${gwA.port}/hooks/wake?token=${gwA.hookToken}`, {
-          text: "wake a",
-          mode: "now",
-        }),
-        postJson(`http://127.0.0.1:${gwB.port}/hooks/wake?token=${gwB.hookToken}`, {
-          text: "wake b",
-          mode: "now",
-        }),
+        postJson(
+          `http://127.0.0.1:${gwA.port}/hooks/wake`,
+          {
+            text: "wake a",
+            mode: "now",
+          },
+          { "x-openclaw-token": gwA.hookToken },
+        ),
+        postJson(
+          `http://127.0.0.1:${gwB.port}/hooks/wake`,
+          {
+            text: "wake b",
+            mode: "now",
+          },
+          { "x-openclaw-token": gwB.hookToken },
+        ),
       ]);
       expect(hookResA.status).toBe(200);
       expect((hookResA.json as { ok?: boolean } | undefined)?.ok).toBe(true);
