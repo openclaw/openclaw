@@ -20,6 +20,7 @@ type InlineProviderConfig = {
 };
 
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
+const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
@@ -39,7 +40,11 @@ function resolveOpenAICodexGpt53FallbackModel(
   if (normalizedProvider !== "openai-codex") {
     return undefined;
   }
-  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
+  const loweredModelId = trimmedModelId.toLowerCase();
+  if (
+    loweredModelId !== OPENAI_CODEX_GPT_53_MODEL_ID &&
+    loweredModelId !== OPENAI_CODEX_GPT_53_SPARK_MODEL_ID
+  ) {
     return undefined;
   }
 
