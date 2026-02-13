@@ -10,6 +10,48 @@ import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 
+/**
+ * Tools that require explicit user approval in ACP sessions.
+ * These tools can execute arbitrary code, modify the filesystem,
+ * or access sensitive resources.
+ */
+const DANGEROUS_ACP_TOOLS = new Set([
+  "exec",
+  "spawn",
+  "shell",
+  "sessions_spawn",
+  "sessions_send",
+  "gateway",
+  "fs_write",
+  "fs_delete",
+  "fs_move",
+  "apply_patch",
+]);
+
+function promptUserPermission(toolName: string, toolTitle?: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stderr,
+    });
+
+    const timeout = setTimeout(() => {
+      console.error(`\n[permission timeout] denied: ${toolName}`);
+      rl.close();
+      resolve(false);
+    }, 30_000);
+
+    const label = toolTitle ? `${toolTitle} (${toolName})` : toolName;
+    rl.question(`\n[permission] Allow "${label}"? (y/N) `, (answer) => {
+      clearTimeout(timeout);
+      rl.close();
+      const approved = answer.trim().toLowerCase() === "y";
+      console.error(`[permission ${approved ? "approved" : "denied"}] ${toolName}`);
+      resolve(approved);
+    });
+  });
+}
+
 export type AcpClientOptions = {
   cwd?: string;
   serverCommand?: string;
@@ -104,16 +146,42 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
         printSessionUpdate(params);
       },
       requestPermission: async (params: RequestPermissionRequest) => {
-        console.log("\n[permission requested]", params.toolCall?.title ?? "tool");
+        // toolCall may include a `name` field not in the SDK type
+        const toolCall = params.toolCall as Record<string, unknown> | undefined;
+        const toolName = (typeof toolCall?.name === "string" ? toolCall.name : "") as string;
+        const toolTitle = (params.toolCall?.title ?? "tool") as string;
         const options = params.options ?? [];
-        const allowOnce = options.find((option) => option.kind === "allow_once");
-        const fallback = options[0];
-        return {
-          outcome: {
-            outcome: "selected",
-            optionId: allowOnce?.optionId ?? fallback?.optionId ?? "allow",
-          },
-        };
+        const allowOnce = options.find((o) => o.kind === "allow_once");
+        const rejectOption = options.find((o) => o.kind === "reject_once");
+
+        // No options available — deny by default (fixes empty-options exploit)
+        if (options.length === 0) {
+          console.error(`[permission denied] ${toolName}: no options available`);
+          return { outcome: { outcome: "selected", optionId: "deny" } };
+        }
+
+        // Safe tools: auto-approve (backward compatible)
+        if (!DANGEROUS_ACP_TOOLS.has(toolName)) {
+          console.error(`[permission auto-approved] ${toolName}`);
+          return {
+            outcome: {
+              outcome: "selected",
+              optionId: allowOnce?.optionId ?? options[0]?.optionId ?? "allow",
+            },
+          };
+        }
+
+        // Dangerous tools: require interactive confirmation
+        console.error(`\n[permission requested] ${toolTitle} (${toolName})`);
+        const approved = await promptUserPermission(toolName, toolTitle);
+
+        if (approved && allowOnce) {
+          return { outcome: { outcome: "selected", optionId: allowOnce.optionId } };
+        }
+
+        // Denied — use reject option if available, otherwise reject
+        const rejectId = rejectOption?.optionId ?? "deny";
+        return { outcome: { outcome: "selected", optionId: rejectId } };
       },
     }),
     stream,
