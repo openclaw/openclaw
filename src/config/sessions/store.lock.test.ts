@@ -10,6 +10,7 @@ import {
   loadSessionStore,
   updateSessionStore,
   updateSessionStoreEntry,
+  withSessionStoreLockForTest,
 } from "../sessions.js";
 
 describe("session store lock (Promise chain mutex)", () => {
@@ -246,15 +247,47 @@ describe("session store lock (Promise chain mutex)", () => {
     expect((store[key] as Record<string, unknown>).order).toBe("01234");
   });
 
-  it("no .lock file is created on disk", async () => {
+  it("times out queued operations strictly and does not run them later", async () => {
+    const { storePath } = await makeTmpStore({
+      x: { sessionId: "x", updatedAt: 100 },
+    });
+    let timedOutRan = false;
+
+    const lockHolder = withSessionStoreLockForTest(
+      storePath,
+      async () => {
+        await sleep(80);
+      },
+      { timeoutMs: 2_000 },
+    );
+    const timedOut = withSessionStoreLockForTest(
+      storePath,
+      async () => {
+        timedOutRan = true;
+      },
+      { timeoutMs: 20 },
+    );
+
+    await expect(timedOut).rejects.toThrow("timeout waiting for session store lock");
+    await lockHolder;
+    await sleep(30);
+    expect(timedOutRan).toBe(false);
+  });
+
+  it("creates and removes lock file while operation runs", async () => {
     const key = "agent:main:no-lock-file";
     const { dir, storePath } = await makeTmpStore({
       [key]: { sessionId: "s1", updatedAt: 100 },
     });
 
-    await updateSessionStore(storePath, async (store) => {
+    const write = updateSessionStore(storePath, async (store) => {
+      await sleep(60);
       store[key] = { ...store[key], modelOverride: "v" } as unknown as SessionEntry;
     });
+
+    await sleep(10);
+    await expect(fs.access(`${storePath}.lock`)).resolves.toBeUndefined();
+    await write;
 
     const files = await fs.readdir(dir);
     const lockFiles = files.filter((f) => f.endsWith(".lock"));

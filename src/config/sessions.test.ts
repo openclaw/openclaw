@@ -495,6 +495,6 @@ describe("sessions", () => {
     const store = loadSessionStore(storePath);
     expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
-    // Lock file no longer used (in-process Promise chain mutex).
+    await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
   });
 });
