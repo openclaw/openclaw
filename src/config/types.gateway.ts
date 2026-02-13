@@ -226,6 +226,13 @@ export type GatewayNodesConfig = {
   denyCommands?: string[];
 };
 
+export type GatewayToolsConfig = {
+  /** Tools to deny via gateway HTTP /tools/invoke (extends defaults). */
+  deny?: string[];
+  /** Tools to explicitly allow (removes from default deny list). */
+  allow?: string[];
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -260,4 +267,6 @@ export type GatewayConfig = {
    * `x-real-ip`) to determine the client IP for local pairing and HTTP checks.
    */
   trustedProxies?: string[];
+  /** Tool access restrictions for HTTP /tools/invoke endpoint. */
+  tools?: GatewayToolsConfig;
 };
