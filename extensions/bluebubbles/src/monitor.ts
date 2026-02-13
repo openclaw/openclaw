@@ -2,11 +2,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   createReplyPrefixOptions,
+  isRequestBodyLimitError,
   logAckFailure,
   logInboundDrop,
   logTypingFailure,
+  readRequestBodyWithLimit,
   resolveAckReaction,
   resolveControlCommandGate,
+  requestBodyErrorToText,
 } from "openclaw/plugin-sdk";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import type { BlueBubblesAccountConfig, BlueBubblesAttachment } from "./types.js";
@@ -511,63 +514,40 @@ export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => v
 }
 
 async function readJsonBody(req: IncomingMessage, maxBytes: number, timeoutMs = 30_000) {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  return await new Promise<{ ok: boolean; value?: unknown; error?: string }>((resolve) => {
-    let done = false;
-    const finish = (result: { ok: boolean; value?: unknown; error?: string }) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
+  let rawBody = "";
+  try {
+    rawBody = await readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
+  } catch (error) {
+    if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
+      return { ok: false, error: "payload too large" };
+    }
+    if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+      return { ok: false, error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") };
+    }
+    if (isRequestBodyLimitError(error, "CONNECTION_CLOSED")) {
+      return { ok: false, error: requestBodyErrorToText("CONNECTION_CLOSED") };
+    }
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 
-    const timer = setTimeout(() => {
-      finish({ ok: false, error: "request body timeout" });
-      req.destroy();
-    }, timeoutMs);
-
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > maxBytes) {
-        finish({ ok: false, error: "payload too large" });
-        req.destroy();
-        return;
+  try {
+    const raw = rawBody.toString();
+    if (!raw.trim()) {
+      return { ok: false, error: "empty payload" };
+    }
+    try {
+      return { ok: true, value: JSON.parse(raw) as unknown };
+    } catch {
+      const params = new URLSearchParams(raw);
+      const payload = params.get("payload") ?? params.get("data") ?? params.get("message");
+      if (payload) {
+        return { ok: true, value: JSON.parse(payload) as unknown };
       }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      try {
-        const raw = Buffer.concat(chunks).toString("utf8");
-        if (!raw.trim()) {
-          finish({ ok: false, error: "empty payload" });
-          return;
-        }
-        try {
-          finish({ ok: true, value: JSON.parse(raw) as unknown });
-          return;
-        } catch {
-          const params = new URLSearchParams(raw);
-          const payload = params.get("payload") ?? params.get("data") ?? params.get("message");
-          if (payload) {
-            finish({ ok: true, value: JSON.parse(payload) as unknown });
-            return;
-          }
-          throw new Error("invalid json");
-        }
-      } catch (err) {
-        finish({ ok: false, error: err instanceof Error ? err.message : String(err) });
-      }
-    });
-    req.on("error", (err) => {
-      finish({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    });
-    req.on("close", () => {
-      finish({ ok: false, error: "connection closed" });
-    });
-  });
+      throw new Error("invalid json");
+    }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1461,7 +1441,12 @@ export async function handleBlueBubblesWebhookRequest(
 
   const body = await readJsonBody(req, 1024 * 1024);
   if (!body.ok) {
-    res.statusCode = body.error === "payload too large" ? 413 : 400;
+    res.statusCode =
+      body.error === "payload too large"
+        ? 413
+        : body.error === requestBodyErrorToText("REQUEST_BODY_TIMEOUT")
+          ? 408
+          : 400;
     res.end(body.error ?? "invalid payload");
     console.warn(`[bluebubbles] webhook rejected: ${body.error ?? "invalid payload"}`);
     return true;

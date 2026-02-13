@@ -287,7 +287,12 @@ export function createHooksRequestHandler(
 
     const body = await readJsonBody(req, hooksConfig.maxBodyBytes);
     if (!body.ok) {
-      const status = body.error === "payload too large" ? 413 : 400;
+      const status =
+        body.error === "payload too large"
+          ? 413
+          : body.error === "request body timeout"
+            ? 408
+            : 400;
       sendJson(res, status, { ok: false, error: body.error });
       return true;
     }
