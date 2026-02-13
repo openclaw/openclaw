@@ -44,6 +44,62 @@ export const AgentsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentsCreateParamsSchema = Type.Object(
+  {
+    name: NonEmptyString,
+    workspace: NonEmptyString,
+    emoji: Type.Optional(Type.String()),
+    avatar: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsCreateResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    agentId: NonEmptyString,
+    name: NonEmptyString,
+    workspace: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsUpdateParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    name: Type.Optional(NonEmptyString),
+    workspace: Type.Optional(NonEmptyString),
+    model: Type.Optional(NonEmptyString),
+    avatar: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsUpdateResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    agentId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsDeleteParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    deleteFiles: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsDeleteResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    agentId: NonEmptyString,
+    removedBindings: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentsFileEntrySchema = Type.Object(
   {
     name: NonEmptyString,

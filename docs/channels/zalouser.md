@@ -18,7 +18,7 @@ Zalo Personal ships as a plugin and is not bundled with the core install.
 
 - Install via CLI: `openclaw plugins install @openclaw/zalouser`
 - Or from a source checkout: `openclaw plugins install ./extensions/zalouser`
-- Details: [Plugins](/plugin)
+- Details: [Plugins](/tools/plugin)
 
 ## Prerequisite: zca-cli
 

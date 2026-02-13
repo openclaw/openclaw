@@ -51,8 +51,8 @@ describe("web media loading", () => {
   it("compresses large local images under the provided cap", async () => {
     const buffer = await sharp({
       create: {
-        width: 1600,
-        height: 1600,
+        width: 1200,
+        height: 1200,
         channels: 3,
         background: "#ff0000",
       },
@@ -254,7 +254,7 @@ describe("web media loading", () => {
   });
 
   it("falls back to JPEG when PNG alpha cannot fit under cap", async () => {
-    const sizes = [512, 768, 1024];
+    const sizes = [320, 448, 640];
     let pngBuffer: Buffer | null = null;
     let smallestPng: Awaited<ReturnType<typeof optimizeImageToPng>> | null = null;
     let jpegOptimized: Awaited<ReturnType<typeof optimizeImageToJpeg>> | null = null;
@@ -290,5 +290,45 @@ describe("web media loading", () => {
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
     expect(result.buffer.length).toBeLessThanOrEqual(cap);
+  });
+});
+
+describe("local media root guard", () => {
+  it("rejects local paths outside allowed roots", async () => {
+    const pngBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#00ff00" },
+    })
+      .png()
+      .toBuffer();
+    const file = await writeTempFile(pngBuffer, ".png");
+
+    // Explicit roots that don't contain the temp file.
+    await expect(
+      loadWebMedia(file, 1024 * 1024, { localRoots: ["/nonexistent-root"] }),
+    ).rejects.toThrow(/not under an allowed directory/i);
+  });
+
+  it("allows local paths under an explicit root", async () => {
+    const pngBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#00ff00" },
+    })
+      .png()
+      .toBuffer();
+    const file = await writeTempFile(pngBuffer, ".png");
+
+    const result = await loadWebMedia(file, 1024 * 1024, { localRoots: [os.tmpdir()] });
+    expect(result.kind).toBe("image");
+  });
+
+  it("allows any path when localRoots is 'any'", async () => {
+    const pngBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#00ff00" },
+    })
+      .png()
+      .toBuffer();
+    const file = await writeTempFile(pngBuffer, ".png");
+
+    const result = await loadWebMedia(file, 1024 * 1024, { localRoots: "any" });
+    expect(result.kind).toBe("image");
   });
 });

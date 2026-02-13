@@ -21,8 +21,10 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
+import { throwIfAborted } from "./abort.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
@@ -73,12 +75,6 @@ type ChannelHandler = {
   sendText: (text: string) => Promise<OutboundDeliveryResult>;
   sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
 };
-
-function throwIfAborted(abortSignal?: AbortSignal): void {
-  if (abortSignal?.aborted) {
-    throw new Error("Outbound delivery aborted");
-  }
-}
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
 async function createChannelHandler(params: {
@@ -317,18 +313,91 @@ export async function deliverOutboundPayloads(params: {
       })),
     };
   };
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads);
+  const normalizeWhatsAppPayload = (payload: ReplyPayload): ReplyPayload | null => {
+    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    const rawText = typeof payload.text === "string" ? payload.text : "";
+    const normalizedText = rawText.replace(/^(?:[ \t]*\r?\n)+/, "");
+    if (!normalizedText.trim()) {
+      if (!hasMedia) {
+        return null;
+      }
+      return {
+        ...payload,
+        text: "",
+      };
+    }
+    return {
+      ...payload,
+      text: normalizedText,
+    };
+  };
+  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads).flatMap((payload) => {
+    if (channel !== "whatsapp") {
+      return [payload];
+    }
+    const normalized = normalizeWhatsAppPayload(payload);
+    return normalized ? [normalized] : [];
+  });
+  const hookRunner = getGlobalHookRunner();
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
       channelData: payload.channelData,
     };
+    const emitMessageSent = (success: boolean, error?: string) => {
+      if (!hookRunner?.hasHooks("message_sent")) {
+        return;
+      }
+      void hookRunner
+        .runMessageSent(
+          {
+            to,
+            content: payloadSummary.text,
+            success,
+            ...(error ? { error } : {}),
+          },
+          {
+            channelId: channel,
+            accountId: accountId ?? undefined,
+          },
+        )
+        .catch(() => {});
+    };
     try {
       throwIfAborted(abortSignal);
+
+      // Run message_sending plugin hook (may modify content or cancel)
+      let effectivePayload = payload;
+      if (hookRunner?.hasHooks("message_sending")) {
+        try {
+          const sendingResult = await hookRunner.runMessageSending(
+            {
+              to,
+              content: payloadSummary.text,
+              metadata: { channel, accountId, mediaUrls: payloadSummary.mediaUrls },
+            },
+            {
+              channelId: channel,
+              accountId: accountId ?? undefined,
+            },
+          );
+          if (sendingResult?.cancel) {
+            continue;
+          }
+          if (sendingResult?.content != null) {
+            effectivePayload = { ...payload, text: sendingResult.content };
+            payloadSummary.text = sendingResult.content;
+          }
+        } catch {
+          // Don't block delivery on hook failure
+        }
+      }
+
       params.onPayload?.(payloadSummary);
-      if (handler.sendPayload && payload.channelData) {
-        results.push(await handler.sendPayload(payload));
+      if (handler.sendPayload && effectivePayload.channelData) {
+        results.push(await handler.sendPayload(effectivePayload));
+        emitMessageSent(true);
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
@@ -337,6 +406,7 @@ export async function deliverOutboundPayloads(params: {
         } else {
           await sendTextChunks(payloadSummary.text);
         }
+        emitMessageSent(true);
         continue;
       }
 
@@ -351,7 +421,9 @@ export async function deliverOutboundPayloads(params: {
           results.push(await handler.sendMedia(caption, url));
         }
       }
+      emitMessageSent(true);
     } catch (err) {
+      emitMessageSent(false, err instanceof Error ? err.message : String(err));
       if (!params.bestEffort) {
         throw err;
       }

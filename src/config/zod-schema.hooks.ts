@@ -12,6 +12,7 @@ export const HookMappingSchema = z
     action: z.union([z.literal("wake"), z.literal("agent")]).optional(),
     wakeMode: z.union([z.literal("now"), z.literal("next-heartbeat")]).optional(),
     name: z.string().optional(),
+    agentId: z.string().optional(),
     sessionKey: z.string().optional(),
     messageTemplate: z.string().optional(),
     textTemplate: z.string().optional(),
@@ -23,6 +24,7 @@ export const HookMappingSchema = z
         z.literal("whatsapp"),
         z.literal("telegram"),
         z.literal("discord"),
+        z.literal("irc"),
         z.literal("slack"),
         z.literal("signal"),
         z.literal("imessage"),
@@ -57,7 +59,10 @@ const HookConfigSchema = z
     enabled: z.boolean().optional(),
     env: z.record(z.string(), z.string()).optional(),
   })
-  .strict();
+  // Hook configs are intentionally open-ended (handlers can define their own keys).
+  // Keep enabled/env typed, but allow additional per-hook keys without marking the
+  // whole config invalid (which triggers doctor/best-effort loads).
+  .passthrough();
 
 const HookInstallRecordSchema = z
   .object({

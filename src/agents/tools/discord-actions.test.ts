@@ -234,6 +234,25 @@ describe("handleDiscordMessagingAction", () => {
       new Date(expectedMs).toISOString(),
     );
   });
+
+  it("forwards optional thread content", async () => {
+    createThreadDiscord.mockClear();
+    await handleDiscordMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "Forum thread",
+        content: "Initial forum post body",
+      },
+      enableAllActions,
+    );
+    expect(createThreadDiscord).toHaveBeenCalledWith("C1", {
+      name: "Forum thread",
+      messageId: undefined,
+      autoArchiveMinutes: undefined,
+      content: "Initial forum post body",
+    });
+  });
 });
 
 const channelsEnabled = (key: keyof DiscordActionConfig) => key === "channels";
@@ -296,6 +315,34 @@ describe("handleDiscordGuildAction - channel management", () => {
       parentId: undefined,
       nsfw: undefined,
       rateLimitPerUser: undefined,
+      archived: undefined,
+      locked: undefined,
+      autoArchiveDuration: undefined,
+    });
+  });
+
+  it("forwards thread edit fields", async () => {
+    await handleDiscordGuildAction(
+      "channelEdit",
+      {
+        channelId: "C1",
+        archived: true,
+        locked: false,
+        autoArchiveDuration: 1440,
+      },
+      channelsEnabled,
+    );
+    expect(editChannelDiscord).toHaveBeenCalledWith({
+      channelId: "C1",
+      name: undefined,
+      topic: undefined,
+      position: undefined,
+      parentId: undefined,
+      nsfw: undefined,
+      rateLimitPerUser: undefined,
+      archived: true,
+      locked: false,
+      autoArchiveDuration: 1440,
     });
   });
 
@@ -316,6 +363,9 @@ describe("handleDiscordGuildAction - channel management", () => {
       parentId: null,
       nsfw: undefined,
       rateLimitPerUser: undefined,
+      archived: undefined,
+      locked: undefined,
+      autoArchiveDuration: undefined,
     });
   });
 
@@ -336,6 +386,9 @@ describe("handleDiscordGuildAction - channel management", () => {
       parentId: null,
       nsfw: undefined,
       rateLimitPerUser: undefined,
+      archived: undefined,
+      locked: undefined,
+      autoArchiveDuration: undefined,
     });
   });
 

@@ -101,7 +101,8 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
         #expect(presentRes.ok == true)
         #expect(appModel.screen.urlString.isEmpty)
 
-        let navigateParams = OpenClawCanvasNavigateParams(url: "http://localhost:18789/")
+        // Loopback URLs are rejected (they are not meaningful for a remote gateway).
+        let navigateParams = OpenClawCanvasNavigateParams(url: "http://example.com/")
         let navData = try JSONEncoder().encode(navigateParams)
         let navJSON = String(decoding: navData, as: UTF8.self)
         let navigate = BridgeInvokeRequest(
@@ -110,7 +111,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
             paramsJSON: navJSON)
         let navRes = await appModel._test_handleInvoke(navigate)
         #expect(navRes.ok == true)
-        #expect(appModel.screen.urlString == "http://localhost:18789/")
+        #expect(appModel.screen.urlString == "http://example.com/")
 
         let evalParams = OpenClawCanvasEvalParams(javaScript: "1+1")
         let evalData = try JSONEncoder().encode(evalParams)

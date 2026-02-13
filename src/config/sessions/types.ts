@@ -1,6 +1,6 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import crypto from "node:crypto";
-import type { NormalizedChatType } from "../../channels/chat-type.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -9,7 +9,7 @@ export type SessionScope = "per-sender" | "global";
 
 export type SessionChannelId = ChannelId | "webchat";
 
-export type SessionChatType = NormalizedChatType;
+export type SessionChatType = ChatType;
 
 export type SessionOrigin = {
   label?: string;
@@ -70,6 +70,12 @@ export type SessionEntry = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  /**
+   * Whether totalTokens reflects a fresh context snapshot for the latest run.
+   * Undefined means legacy/unknown freshness; false forces consumers to treat
+   * totalTokens as stale/unknown for context-utilization displays.
+   */
+  totalTokensFresh?: boolean;
   modelProvider?: string;
   model?: string;
   contextTokens?: number;
@@ -105,6 +111,25 @@ export function mergeSessionEntry(
     return { ...patch, sessionId, updatedAt };
   }
   return { ...existing, ...patch, sessionId, updatedAt };
+}
+
+export function resolveFreshSessionTotalTokens(
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+): number | undefined {
+  const total = entry?.totalTokens;
+  if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
+    return undefined;
+  }
+  if (entry?.totalTokensFresh === false) {
+    return undefined;
+  }
+  return total;
+}
+
+export function isSessionTotalTokensFresh(
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+): boolean {
+  return resolveFreshSessionTotalTokens(entry) !== undefined;
 }
 
 export type GroupKeyResolution = {

@@ -49,17 +49,19 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  let cursor = nowMs;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const next = cron.nextRun(new Date(cursor));
-    if (!next) {
-      return undefined;
-    }
-    const nextMs = next.getTime();
-    if (Number.isFinite(nextMs) && nextMs > nowMs) {
-      return nextMs;
-    }
-    cursor += 1_000;
+  // Cron operates at second granularity, so floor nowMs to the start of the
+  // current second.  We ask croner for the next occurrence strictly *after*
+  // nowSecondMs so that a job whose schedule matches the current second is
+  // never re-scheduled into the same (already-elapsed) second.
+  //
+  // Previous code used `nowSecondMs - 1` which caused croner to return the
+  // current second as a valid next-run, leading to rapid duplicate fires when
+  // multiple jobs triggered simultaneously (see #14164).
+  const nowSecondMs = Math.floor(nowMs / 1000) * 1000;
+  const next = cron.nextRun(new Date(nowSecondMs));
+  if (!next) {
+    return undefined;
   }
-  return undefined;
+  const nextMs = next.getTime();
+  return Number.isFinite(nextMs) && nextMs > nowSecondMs ? nextMs : undefined;
 }

@@ -4,11 +4,13 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-rep
 import type { AgentStreamParams } from "../../../commands/agent/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { AuthStorage, ModelRegistry } from "../../pi-model-discovery.js";
 import type { SkillSnapshot } from "../../skills.js";
+import type { NormalizedUsage } from "../../usage.js";
 import type { ClientToolDefinition } from "./params.js";
 
 export type EmbeddedRunAttemptParams = {
@@ -86,6 +88,7 @@ export type EmbeddedRunAttemptParams = {
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   extraSystemPrompt?: string;
+  inputProvenance?: InputProvenance;
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
@@ -106,6 +109,8 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentTexts: string[];
   messagingToolSentTargets: MessagingToolSend[];
   cloudCodeAssistFormatError: boolean;
+  attemptUsage?: NormalizedUsage;
+  compactionCount?: number;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
 };

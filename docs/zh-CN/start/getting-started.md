@@ -28,7 +28,7 @@ x-i18n:
 - 工作区引导 + Skills
 - 可选的后台服务
 
-如果你想要更深入的参考页面，跳转到：[向导](/start/wizard)、[设置](/start/setup)、[配对](/start/pairing)、[安全](/gateway/security)。
+如果你想要更深入的参考页面，跳转到：[向导](/start/wizard)、[设置](/start/setup)、[配对](/channels/pairing)、[安全](/gateway/security)。
 
 沙箱注意事项：`agents.defaults.sandbox.mode: "non-main"` 使用 `session.mainKey`（默认 `"main"`），因此群组/渠道会话会被沙箱隔离。如果你想要主智能体始终在主机上运行，设置显式的每智能体覆盖：
 
@@ -162,7 +162,7 @@ openclaw pairing list whatsapp
 openclaw pairing approve whatsapp <code>
 ```
 
-配对文档：[配对](/start/pairing)
+配对文档：[配对](/channels/pairing)
 
 ## 从源代码（开发）
 

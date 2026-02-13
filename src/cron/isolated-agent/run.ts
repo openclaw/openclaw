@@ -12,11 +12,7 @@ import {
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
-import {
-  formatUserTime,
-  resolveUserTimeFormat,
-  resolveUserTimezone,
-} from "../../agents/date-time.js";
+import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -31,8 +27,9 @@ import {
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { hasNonzeroUsage } from "../../agents/usage.js";
+import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
   normalizeThinkLevel,
@@ -40,7 +37,11 @@ import {
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveSessionTranscriptPath,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
@@ -123,7 +124,10 @@ export async function runCronIsolatedAgentTurn(params: {
     ? resolveAgentConfig(params.cfg, normalizedRequested)
     : undefined;
   const { model: overrideModel, ...agentOverrideRest } = agentConfigOverride ?? {};
-  const agentId = agentConfigOverride ? (normalizedRequested ?? defaultAgentId) : defaultAgentId;
+  // Use the requested agentId even when there is no explicit agent config entry.
+  // This ensures auth-profiles, workspace, and agentDir all resolve to the
+  // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
+  const agentId = normalizedRequested ?? defaultAgentId;
   const agentCfg: AgentDefaultsConfig = Object.assign(
     {},
     params.cfg.agents?.defaults,
@@ -169,6 +173,7 @@ export async function runCronIsolatedAgentTurn(params: {
   };
   // Resolve model - prefer hooks.gmail.model for Gmail hooks.
   const isGmailHook = baseSessionKey.startsWith("hook:gmail:");
+  let hooksGmailModelApplied = false;
   const hooksGmailModelRef = isGmailHook
     ? resolveHooksGmailModel({
         cfg: params.cfg,
@@ -186,6 +191,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (status.allowed) {
       provider = hooksGmailModelRef.provider;
       model = hooksGmailModelRef.model;
+      hooksGmailModelApplied = true;
     }
   }
   const modelOverrideRaw =
@@ -243,6 +249,28 @@ export async function runCronIsolatedAgentTurn(params: {
     cronSession.sessionEntry.label = `Cron: ${labelSuffix}`;
   }
 
+  // Respect session model override — check session.modelOverride before falling
+  // back to the default config model. This ensures /model changes are honoured
+  // by cron and isolated agent runs.
+  if (!modelOverride && !hooksGmailModelApplied) {
+    const sessionModelOverride = cronSession.sessionEntry.modelOverride?.trim();
+    if (sessionModelOverride) {
+      const sessionProviderOverride =
+        cronSession.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
+      const resolvedSessionOverride = resolveAllowedModelRef({
+        cfg: cfgWithAgentDefaults,
+        catalog: await loadCatalog(),
+        raw: `${sessionProviderOverride}/${sessionModelOverride}`,
+        defaultProvider: resolvedDefault.provider,
+        defaultModel: resolvedDefault.model,
+      });
+      if (!("error" in resolvedSessionOverride)) {
+        provider = resolvedSessionOverride.ref.provider;
+        model = resolvedSessionOverride.ref.model;
+      }
+    }
+  }
+
   // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default
   const hooksGmailThinking = isGmailHook
     ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
@@ -283,11 +311,7 @@ export async function runCronIsolatedAgentTurn(params: {
     to: deliveryPlan.to,
   });
 
-  const userTimezone = resolveUserTimezone(params.cfg.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(params.cfg.agents?.defaults?.timeFormat);
-  const formattedTime =
-    formatUserTime(new Date(now), userTimezone, userTimeFormat) ?? new Date(now).toISOString();
-  const timeLine = `Current time: ${formattedTime} (${userTimezone})`;
+  const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
 
   // SECURITY: Wrap external hook content with security boundaries to prevent prompt injection
@@ -358,6 +382,8 @@ export async function runCronIsolatedAgentTurn(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
   let fallbackModel = model;
+  const runStartedAt = Date.now();
+  let runEndedAt = runStartedAt;
   try {
     const sessionFile = resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId);
     const resolvedVerboseLevel =
@@ -420,6 +446,7 @@ export async function runCronIsolatedAgentTurn(params: {
     runResult = fallbackResult.result;
     fallbackProvider = fallbackResult.provider;
     fallbackModel = fallbackResult.model;
+    runEndedAt = Date.now();
   } catch (err) {
     return withRunSession({ status: "error", error: String(err) });
   }
@@ -429,6 +456,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // Update token+model fields in the session store.
   {
     const usage = runResult.meta.agentMeta?.usage;
+    const promptTokens = runResult.meta.agentMeta?.promptTokens;
     const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? model;
     const providerUsed = runResult.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =
@@ -446,11 +474,16 @@ export async function runCronIsolatedAgentTurn(params: {
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
-      const promptTokens = input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+      const totalTokens =
+        deriveSessionTotalTokens({
+          usage,
+          contextTokens,
+          promptTokens,
+        }) ?? input;
       cronSession.sessionEntry.inputTokens = input;
       cronSession.sessionEntry.outputTokens = output;
-      cronSession.sessionEntry.totalTokens =
-        promptTokens > 0 ? promptTokens : (usage.total ?? input);
+      cronSession.sessionEntry.totalTokens = totalTokens;
+      cronSession.sessionEntry.totalTokensFresh = true;
     }
     await persistSessionEntry();
   }
@@ -465,6 +498,10 @@ export async function runCronIsolatedAgentTurn(params: {
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
+  const deliveryPayloadHasStructuredContent =
+    Boolean(deliveryPayload?.mediaUrl) ||
+    (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
+    Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
@@ -507,20 +544,73 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText });
     }
-    try {
-      await deliverOutboundPayloads({
-        cfg: cfgWithAgentDefaults,
-        channel: resolvedDelivery.channel,
-        to: resolvedDelivery.to,
-        accountId: resolvedDelivery.accountId,
-        threadId: resolvedDelivery.threadId,
-        payloads: deliveryPayloads,
-        bestEffort: deliveryBestEffort,
-        deps: createOutboundSendDeps(params.deps),
+    // Shared subagent announce flow is text-based; keep direct outbound delivery
+    // for media/channel payloads so structured content is preserved.
+    if (deliveryPayloadHasStructuredContent) {
+      try {
+        await deliverOutboundPayloads({
+          cfg: cfgWithAgentDefaults,
+          channel: resolvedDelivery.channel,
+          to: resolvedDelivery.to,
+          accountId: resolvedDelivery.accountId,
+          threadId: resolvedDelivery.threadId,
+          payloads: deliveryPayloads,
+          bestEffort: deliveryBestEffort,
+          deps: createOutboundSendDeps(params.deps),
+        });
+      } catch (err) {
+        if (!deliveryBestEffort) {
+          return withRunSession({ status: "error", summary, outputText, error: String(err) });
+        }
+      }
+    } else if (synthesizedText) {
+      const announceSessionKey = resolveAgentMainSessionKey({
+        cfg: params.cfg,
+        agentId,
       });
-    } catch (err) {
-      if (!deliveryBestEffort) {
-        return withRunSession({ status: "error", summary, outputText, error: String(err) });
+      const taskLabel =
+        typeof params.job.name === "string" && params.job.name.trim()
+          ? params.job.name.trim()
+          : `cron:${params.job.id}`;
+      try {
+        const didAnnounce = await runSubagentAnnounceFlow({
+          childSessionKey: runSessionKey,
+          childRunId: `${params.job.id}:${runSessionId}`,
+          requesterSessionKey: announceSessionKey,
+          requesterOrigin: {
+            channel: resolvedDelivery.channel,
+            to: resolvedDelivery.to,
+            accountId: resolvedDelivery.accountId,
+            threadId: resolvedDelivery.threadId,
+          },
+          requesterDisplayKey: announceSessionKey,
+          task: taskLabel,
+          timeoutMs,
+          cleanup: "keep",
+          roundOneReply: synthesizedText,
+          waitForCompletion: false,
+          startedAt: runStartedAt,
+          endedAt: runEndedAt,
+          outcome: { status: "ok" },
+          announceType: "cron job",
+        });
+        if (!didAnnounce) {
+          const message = "cron announce delivery failed";
+          if (!deliveryBestEffort) {
+            return withRunSession({
+              status: "error",
+              summary,
+              outputText,
+              error: message,
+            });
+          }
+          logWarn(`[cron:${params.job.id}] ${message}`);
+        }
+      } catch (err) {
+        if (!deliveryBestEffort) {
+          return withRunSession({ status: "error", summary, outputText, error: String(err) });
+        }
+        logWarn(`[cron:${params.job.id}] ${String(err)}`);
       }
     }
   }

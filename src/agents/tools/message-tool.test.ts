@@ -162,6 +162,80 @@ describe("message tool description", () => {
   });
 });
 
+describe("message tool reasoning tag sanitization", () => {
+  it("strips <think> tags from text field before sending", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "signal",
+      to: "signal:+15551234567",
+      handledBy: "plugin",
+      payload: {},
+      dryRun: true,
+    } satisfies MessageActionRunResult);
+
+    const tool = createMessageTool({ config: {} as never });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "signal:+15551234567",
+      text: "<think>internal reasoning</think>Hello!",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.params?.text).toBe("Hello!");
+  });
+
+  it("strips <think> tags from content field before sending", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "discord",
+      to: "discord:123",
+      handledBy: "plugin",
+      payload: {},
+      dryRun: true,
+    } satisfies MessageActionRunResult);
+
+    const tool = createMessageTool({ config: {} as never });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "discord:123",
+      content: "<think>reasoning here</think>Reply text",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.params?.content).toBe("Reply text");
+  });
+
+  it("passes through text without reasoning tags unchanged", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "signal",
+      to: "signal:+15551234567",
+      handledBy: "plugin",
+      payload: {},
+      dryRun: true,
+    } satisfies MessageActionRunResult);
+
+    const tool = createMessageTool({ config: {} as never });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "signal:+15551234567",
+      text: "Normal message without any tags",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.params?.text).toBe("Normal message without any tags");
+  });
+});
+
 describe("message tool sandbox passthrough", () => {
   it("forwards sandboxRoot to runMessageAction", async () => {
     mocks.runMessageAction.mockClear();

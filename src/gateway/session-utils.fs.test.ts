@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readSessionMessages,
   readSessionPreviewItemsFromTranscript,
+  resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
 
 describe("readFirstUserMessageFromTranscript", () => {
@@ -88,6 +90,27 @@ describe("readFirstUserMessageFromTranscript", () => {
 
     const result = readFirstUserMessageFromTranscript(sessionId, storePath);
     expect(result).toBe("First user question");
+  });
+
+  test("skips inter-session user messages by default", () => {
+    const sessionId = "test-session-inter-session";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({
+        message: {
+          role: "user",
+          content: "Forwarded by session tool",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      }),
+      JSON.stringify({
+        message: { role: "user", content: "Real user message" },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
+    expect(result).toBe("Real user message");
   });
 
   test("returns null when no user messages exist", () => {
@@ -343,6 +366,53 @@ describe("readLastMessagePreviewFromTranscript", () => {
   });
 });
 
+describe("readSessionMessages", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
+    storePath = path.join(tmpDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("includes synthetic compaction markers for compaction entries", () => {
+    const sessionId = "test-session-compaction";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "Hello" } }),
+      JSON.stringify({
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "2026-02-07T00:00:00.000Z",
+        summary: "Compacted history",
+        firstKeptEntryId: "x",
+        tokensBefore: 123,
+      }),
+      JSON.stringify({ message: { role: "assistant", content: "World" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(3);
+    const marker = out[1] as {
+      role: string;
+      content?: Array<{ text?: string }>;
+      __openclaw?: { kind?: string; id?: string };
+      timestamp?: number;
+    };
+    expect(marker.role).toBe("system");
+    expect(marker.content?.[0]?.text).toBe("Compaction");
+    expect(marker.__openclaw?.kind).toBe("compaction");
+    expect(marker.__openclaw?.id).toBe("comp-1");
+    expect(typeof marker.timestamp).toBe("number");
+  });
+});
+
 describe("readSessionPreviewItemsFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
@@ -439,5 +509,47 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.text.length).toBe(24);
     expect(result[0]?.text.endsWith("...")).toBe(true);
+  });
+});
+
+describe("resolveSessionTranscriptCandidates", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test("fallback candidate uses OPENCLAW_HOME instead of os.homedir()", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+
+    const candidates = resolveSessionTranscriptCandidates("sess-1", undefined);
+    const fallback = candidates[candidates.length - 1];
+    expect(fallback).toBe(
+      path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "sessions", "sess-1.jsonl"),
+    );
+  });
+});
+
+describe("resolveSessionTranscriptCandidates safety", () => {
+  test("drops unsafe session IDs instead of producing traversal paths", () => {
+    const candidates = resolveSessionTranscriptCandidates(
+      "../etc/passwd",
+      "/tmp/openclaw/agents/main/sessions/sessions.json",
+    );
+
+    expect(candidates).toEqual([]);
+  });
+
+  test("drops unsafe sessionFile candidates and keeps safe fallbacks", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const candidates = resolveSessionTranscriptCandidates(
+      "sess-safe",
+      storePath,
+      "../../etc/passwd",
+    );
+    const normalizedCandidates = candidates.map((value) => path.resolve(value));
+    const expectedFallback = path.resolve(path.dirname(storePath), "sess-safe.jsonl");
+
+    expect(candidates.some((value) => value.includes("etc/passwd"))).toBe(false);
+    expect(normalizedCandidates).toContain(expectedFallback);
   });
 });

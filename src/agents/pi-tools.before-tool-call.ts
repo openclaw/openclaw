@@ -1,6 +1,7 @@
 import type { AnyAgentTool } from "./tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 type HookContext = {
@@ -12,23 +13,20 @@ type HookOutcome = { blocked: true; reason: string } | { blocked: false; params:
 
 const log = createSubsystemLogger("agents/tools");
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 export async function runBeforeToolCallHook(args: {
   toolName: string;
   params: unknown;
   toolCallId?: string;
   ctx?: HookContext;
 }): Promise<HookOutcome> {
+  const toolName = normalizeToolName(args.toolName || "tool");
+  const params = args.params;
+
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {
     return { blocked: false, params: args.params };
   }
 
-  const toolName = normalizeToolName(args.toolName || "tool");
-  const params = args.params;
   try {
     const normalizedParams = isPlainObject(params) ? params : {};
     const hookResult = await hookRunner.runBeforeToolCall(

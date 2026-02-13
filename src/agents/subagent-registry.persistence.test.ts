@@ -230,4 +230,53 @@ describe("subagent registry persistence", () => {
     };
     expect(afterSecond.runs["run-3"].cleanupCompletedAt).toBeDefined();
   });
+
+  it("keeps delete-mode runs retryable when announce is deferred", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    const persisted = {
+      version: 2,
+      runs: {
+        "run-4": {
+          runId: "run-4",
+          childSessionKey: "agent:main:subagent:four",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "deferred announce",
+          cleanup: "delete",
+          createdAt: 1,
+          startedAt: 1,
+          endedAt: 2,
+        },
+      },
+    };
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
+
+    announceSpy.mockResolvedValueOnce(false);
+    vi.resetModules();
+    const mod1 = await import("./subagent-registry.js");
+    mod1.initSubagentRegistry();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const afterFirst = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs: Record<string, { cleanupHandled?: boolean }>;
+    };
+    expect(afterFirst.runs["run-4"]?.cleanupHandled).toBe(false);
+
+    announceSpy.mockResolvedValueOnce(true);
+    vi.resetModules();
+    const mod2 = await import("./subagent-registry.js");
+    mod2.initSubagentRegistry();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(announceSpy).toHaveBeenCalledTimes(2);
+    const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs?: Record<string, unknown>;
+    };
+    expect(afterSecond.runs?.["run-4"]).toBeUndefined();
+  });
 });

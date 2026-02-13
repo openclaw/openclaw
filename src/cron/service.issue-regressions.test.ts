@@ -212,7 +212,7 @@ describe("Cron issue regressions", () => {
     await store.cleanup();
   });
 
-  it("does not hot-loop zero-delay timers while a run is already in progress", async () => {
+  it("re-arms timer without hot-looping when a run is already in progress", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const store = await makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
@@ -233,8 +233,15 @@ describe("Cron issue regressions", () => {
 
     await onTimer(state);
 
-    expect(timeoutSpy).not.toHaveBeenCalled();
-    expect(state.timer).toBeNull();
+    // The timer should be re-armed (not null) so the scheduler stays alive,
+    // with a fixed MAX_TIMER_DELAY_MS (60s) delay to avoid a hot-loop when
+    // past-due jobs are waiting.  See #12025.
+    expect(timeoutSpy).toHaveBeenCalled();
+    expect(state.timer).not.toBeNull();
+    const delays = timeoutSpy.mock.calls
+      .map(([, delay]) => delay)
+      .filter((d): d is number => typeof d === "number");
+    expect(delays).toContain(60_000);
     timeoutSpy.mockRestore();
     await store.cleanup();
   });
@@ -264,7 +271,7 @@ describe("Cron issue regressions", () => {
     });
     await cron.start();
 
-    const runAt = Date.now() + 30;
+    const runAt = Date.now() + 5;
     const job = await cron.add({
       name: "timer-overlap",
       enabled: true,
@@ -275,8 +282,8 @@ describe("Cron issue regressions", () => {
       delivery: { mode: "none" },
     });
 
-    for (let i = 0; i < 25 && runIsolatedAgentJob.mock.calls.length === 0; i++) {
-      await delay(20);
+    for (let i = 0; i < 30 && runIsolatedAgentJob.mock.calls.length === 0; i++) {
+      await delay(5);
     }
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
@@ -285,13 +292,106 @@ describe("Cron issue regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
     resolveRun?.({ status: "ok", summary: "done" });
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < 30; i++) {
       const jobs = await cron.list({ includeDisabled: true });
       if (jobs.some((j) => j.id === job.id && j.state.lastStatus === "ok")) {
         break;
       }
-      await delay(20);
+      await delay(5);
     }
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("#13845: one-shot job with lastStatus=skipped does not re-fire on restart", async () => {
+    const store = await makeStorePath();
+    const pastAt = Date.parse("2026-02-06T09:00:00.000Z");
+    // Simulate a one-shot job that was previously skipped (e.g. main session busy).
+    // On the old code, runMissedJobs only checked lastStatus === "ok", so a
+    // skipped job would pass through and fire again on every restart.
+    const skippedJob: CronJob = {
+      id: "oneshot-skipped",
+      name: "reminder",
+      enabled: true,
+      deleteAfterRun: true,
+      createdAtMs: pastAt - 60_000,
+      updatedAtMs: pastAt,
+      schedule: { kind: "at", at: new Date(pastAt).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "⏰ Reminder" },
+      state: {
+        nextRunAtMs: pastAt,
+        lastStatus: "skipped",
+        lastRunAtMs: pastAt,
+      },
+    };
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({ version: 1, jobs: [skippedJob] }, null, 2),
+      "utf-8",
+    );
+
+    const enqueueSystemEvent = vi.fn();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
+    });
+
+    // start() calls runMissedJobs internally
+    await cron.start();
+
+    // The skipped one-shot job must NOT be re-enqueued
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("#13845: one-shot job with lastStatus=error does not re-fire on restart", async () => {
+    const store = await makeStorePath();
+    const pastAt = Date.parse("2026-02-06T09:00:00.000Z");
+    const errorJob: CronJob = {
+      id: "oneshot-errored",
+      name: "reminder",
+      enabled: true,
+      deleteAfterRun: true,
+      createdAtMs: pastAt - 60_000,
+      updatedAtMs: pastAt,
+      schedule: { kind: "at", at: new Date(pastAt).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "⏰ Reminder" },
+      state: {
+        nextRunAtMs: pastAt,
+        lastStatus: "error",
+        lastRunAtMs: pastAt,
+        lastError: "heartbeat failed",
+      },
+    };
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({ version: 1, jobs: [errorJob] }, null, 2),
+      "utf-8",
+    );
+
+    const enqueueSystemEvent = vi.fn();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
+    });
+
+    await cron.start();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
 
     cron.stop();
     await store.cleanup();

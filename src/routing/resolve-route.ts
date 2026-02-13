@@ -1,5 +1,7 @@
+import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { listBindings } from "./bindings.js";
 import {
   buildAgentMainSessionKey,
@@ -10,10 +12,11 @@ import {
   sanitizeAgentId,
 } from "./session-key.js";
 
-export type RoutePeerKind = "dm" | "group" | "channel";
+/** @deprecated Use ChatType from channels/chat-type.js */
+export type RoutePeerKind = ChatType;
 
 export type RoutePeer = {
-  kind: RoutePeerKind;
+  kind: ChatType;
   id: string;
 };
 
@@ -26,6 +29,8 @@ export type ResolveAgentRouteInput = {
   parentPeer?: RoutePeer | null;
   guildId?: string | null;
   teamId?: string | null;
+  /** Discord member role IDs — used for role-based agent routing. */
+  memberRoleIds?: string[];
 };
 
 export type ResolvedAgentRoute = {
@@ -40,6 +45,7 @@ export type ResolvedAgentRoute = {
   matchedBy:
     | "binding.peer"
     | "binding.peer.parent"
+    | "binding.guild+roles"
     | "binding.guild"
     | "binding.team"
     | "binding.account"
@@ -89,7 +95,7 @@ export function buildAgentSessionKey(params: {
     mainKey: DEFAULT_MAIN_KEY,
     channel,
     accountId: params.accountId,
-    peerKind: peer?.kind ?? "dm",
+    peerKind: peer?.kind ?? "direct",
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
     identityLinks: params.identityLinks,
@@ -137,7 +143,8 @@ function matchesPeer(
   if (!m) {
     return false;
   }
-  const kind = normalizeToken(m.kind);
+  // Backward compat: normalize "dm" to "direct" in config match rules
+  const kind = normalizeChatType(m.kind);
   const id = normalizeId(m.id);
   if (!kind || !id) {
     return false;
@@ -164,12 +171,24 @@ function matchesTeam(match: { teamId?: string | undefined } | undefined, teamId:
   return id === teamId;
 }
 
+function matchesRoles(
+  match: { roles?: string[] | undefined } | undefined,
+  memberRoleIds: string[],
+): boolean {
+  const roles = match?.roles;
+  if (!Array.isArray(roles) || roles.length === 0) {
+    return false;
+  }
+  return roles.some((role) => memberRoleIds.includes(role));
+}
+
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer ? { kind: input.peer.kind, id: normalizeId(input.peer.id) } : null;
   const guildId = normalizeId(input.guildId);
   const teamId = normalizeId(input.teamId);
+  const memberRoleIds = input.memberRoleIds ?? [];
 
   const bindings = listBindings(input.cfg).filter((binding) => {
     if (!binding || typeof binding !== "object") {
@@ -226,8 +245,21 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
+  if (guildId && memberRoleIds.length > 0) {
+    const guildRolesMatch = bindings.find(
+      (b) => matchesGuild(b.match, guildId) && matchesRoles(b.match, memberRoleIds),
+    );
+    if (guildRolesMatch) {
+      return choose(guildRolesMatch.agentId, "binding.guild+roles");
+    }
+  }
+
   if (guildId) {
-    const guildMatch = bindings.find((b) => matchesGuild(b.match, guildId));
+    const guildMatch = bindings.find(
+      (b) =>
+        matchesGuild(b.match, guildId) &&
+        (!Array.isArray(b.match?.roles) || b.match.roles.length === 0),
+    );
     if (guildMatch) {
       return choose(guildMatch.agentId, "binding.guild");
     }

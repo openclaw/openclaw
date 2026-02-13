@@ -356,4 +356,45 @@ describe("listSessionsFromStore search", () => {
 
     expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:cron:job-1"]);
   });
+
+  test("exposes unknown totals when freshness is stale or missing", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:fresh": {
+        sessionId: "sess-fresh",
+        updatedAt: now,
+        totalTokens: 1200,
+        totalTokensFresh: true,
+      } as SessionEntry,
+      "agent:main:stale": {
+        sessionId: "sess-stale",
+        updatedAt: now - 1000,
+        totalTokens: 2200,
+        totalTokensFresh: false,
+      } as SessionEntry,
+      "agent:main:missing": {
+        sessionId: "sess-missing",
+        updatedAt: now - 2000,
+        inputTokens: 100,
+        outputTokens: 200,
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const fresh = result.sessions.find((row) => row.key === "agent:main:fresh");
+    const stale = result.sessions.find((row) => row.key === "agent:main:stale");
+    const missing = result.sessions.find((row) => row.key === "agent:main:missing");
+    expect(fresh?.totalTokens).toBe(1200);
+    expect(fresh?.totalTokensFresh).toBe(true);
+    expect(stale?.totalTokens).toBeUndefined();
+    expect(stale?.totalTokensFresh).toBe(false);
+    expect(missing?.totalTokens).toBeUndefined();
+    expect(missing?.totalTokensFresh).toBe(false);
+  });
 });

@@ -59,10 +59,23 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `USER.md`
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (only on brand-new workspaces)
+- `MEMORY.md` and/or `memory.md` (when present in the workspace; either or both may be injected)
+
+All of these files are **injected into the context window** on every turn, which
+means they consume tokens. Keep them concise — especially `MEMORY.md`, which can
+grow over time and lead to unexpectedly high context usage and more frequent
+compaction.
+
+> **Note:** `memory/*.md` daily files are **not** injected automatically. They
+> are accessed on demand via the `memory_search` and `memory_get` tools, so they
+> do not count against the context window unless the model explicitly reads them.
 
 Large files are truncated with a marker. The max per-file size is controlled by
 `agents.defaults.bootstrapMaxChars` (default: 20000). Missing files inject a
 short missing-file marker.
+
+Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
+are filtered out to keep the sub-agent context small).
 
 Internal hooks can intercept this step via `agent:bootstrap` to mutate or replace
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).

@@ -135,16 +135,32 @@ function isEpipeError(err: unknown): boolean {
   return code === "EPIPE" || code === "EIO";
 }
 
-function formatConsoleTimestamp(style: ConsoleStyle): string {
-  const now = new Date().toISOString();
+export function formatConsoleTimestamp(style: ConsoleStyle): string {
+  const now = new Date();
   if (style === "pretty") {
-    return now.slice(11, 19);
+    const h = String(now.getHours()).padStart(2, "0");
+    const m = String(now.getMinutes()).padStart(2, "0");
+    const s = String(now.getSeconds()).padStart(2, "0");
+    return `${h}:${m}:${s}`;
   }
-  return now;
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const h = String(now.getHours()).padStart(2, "0");
+  const m = String(now.getMinutes()).padStart(2, "0");
+  const s = String(now.getSeconds()).padStart(2, "0");
+  const ms = String(now.getMilliseconds()).padStart(3, "0");
+  const tzOffset = now.getTimezoneOffset();
+  const tzSign = tzOffset <= 0 ? "+" : "-";
+  const tzHours = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, "0");
+  const tzMinutes = String(Math.abs(tzOffset) % 60).padStart(2, "0");
+  return `${year}-${month}-${day}T${h}:${m}:${s}.${ms}${tzSign}${tzHours}:${tzMinutes}`;
 }
 
 function hasTimestampPrefix(value: string): boolean {
-  return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)/.test(value);
+  return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)/.test(
+    value,
+  );
 }
 
 function isJsonPayload(value: string): boolean {
@@ -169,6 +185,24 @@ export function enableConsoleCapture(): void {
     return;
   }
   loggingState.consolePatched = true;
+
+  // Handle async EPIPE errors on stdout/stderr. The synchronous try/catch in
+  // the forward() wrapper below only covers errors thrown during write dispatch.
+  // When the receiving pipe closes (e.g. during shutdown), Node emits the error
+  // asynchronously on the stream. Without a listener this becomes an uncaught
+  // exception that crashes the gateway.
+  // Guard separately from consolePatched so test resets don't stack listeners.
+  if (!loggingState.streamErrorHandlersInstalled) {
+    loggingState.streamErrorHandlersInstalled = true;
+    for (const stream of [process.stdout, process.stderr]) {
+      stream.on("error", (err) => {
+        if (isEpipeError(err)) {
+          return;
+        }
+        throw err;
+      });
+    }
+  }
 
   let logger: ReturnType<typeof getLogger> | null = null;
   const getLoggerLazy = () => {

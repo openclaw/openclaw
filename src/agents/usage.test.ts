@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasNonzeroUsage, normalizeUsage } from "./usage.js";
+import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "./usage.js";
 
 describe("normalizeUsage", () => {
   it("normalizes Anthropic-style snake_case usage", () => {
@@ -45,5 +45,48 @@ describe("normalizeUsage", () => {
     expect(hasNonzeroUsage({ input: 0, output: 0 })).toBe(false);
     expect(hasNonzeroUsage({ input: 1 })).toBe(true);
     expect(hasNonzeroUsage({ total: 1 })).toBe(true);
+  });
+
+  it("does not clamp derived session total tokens to the context window", () => {
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 27,
+          cacheRead: 2_400_000,
+          cacheWrite: 0,
+          total: 2_402_300,
+        },
+        contextTokens: 200_000,
+      }),
+    ).toBe(2_400_027);
+  });
+
+  it("uses prompt tokens when within context window", () => {
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 1_200,
+          cacheRead: 300,
+          cacheWrite: 50,
+          total: 2_000,
+        },
+        contextTokens: 200_000,
+      }),
+    ).toBe(1_550);
+  });
+
+  it("prefers explicit prompt token overrides", () => {
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 1_200,
+          cacheRead: 300,
+          cacheWrite: 50,
+          total: 9_999,
+        },
+        promptTokens: 65_000,
+        contextTokens: 200_000,
+      }),
+    ).toBe(65_000);
   });
 });

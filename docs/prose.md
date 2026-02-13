@@ -31,7 +31,7 @@ Restart the Gateway after enabling the plugin.
 
 Dev/local checkout: `openclaw plugins install ./extensions/open-prose`
 
-Related docs: [Plugins](/plugin), [Plugin manifest](/plugins/manifest), [Skills](/tools/skills).
+Related docs: [Plugins](/tools/plugin), [Plugin manifest](/plugins/manifest), [Skills](/tools/skills).
 
 ## Slash command
 

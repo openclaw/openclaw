@@ -9,12 +9,31 @@ import type { ConfigFileSnapshot } from "./types.openclaw.js";
 export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 
 /**
+ * Non-sensitive field names that happen to match sensitive patterns.
+ * These are explicitly excluded from redaction.
+ */
+const SENSITIVE_KEY_WHITELIST = new Set([
+  "maxtokens",
+  "maxoutputtokens",
+  "maxinputtokens",
+  "maxcompletiontokens",
+  "contexttokens",
+  "totaltokens",
+  "tokencount",
+  "tokenlimit",
+  "tokenbudget",
+]);
+
+/**
  * Patterns that identify sensitive config field names.
  * Aligned with the UI-hint logic in schema.ts.
  */
-const SENSITIVE_KEY_PATTERNS = [/token/i, /password/i, /secret/i, /api.?key/i];
+const SENSITIVE_KEY_PATTERNS = [/token$/i, /password/i, /secret/i, /api.?key/i];
 
 function isSensitiveKey(key: string): boolean {
+  if (SENSITIVE_KEY_WHITELIST.has(key.toLowerCase())) {
+    return false;
+  }
   return SENSITIVE_KEY_PATTERNS.some((pattern) => pattern.test(key));
 }
 
@@ -118,12 +137,15 @@ export function redactConfigSnapshot(snapshot: ConfigFileSnapshot): ConfigFileSn
   const redactedConfig = redactConfigObject(snapshot.config);
   const redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config) : null;
   const redactedParsed = snapshot.parsed ? redactConfigObject(snapshot.parsed) : snapshot.parsed;
+  // Also redact the resolved config (contains values after ${ENV} substitution)
+  const redactedResolved = redactConfigObject(snapshot.resolved);
 
   return {
     ...snapshot,
     config: redactedConfig,
     raw: redactedRaw,
     parsed: redactedParsed,
+    resolved: redactedResolved,
   };
 }
 

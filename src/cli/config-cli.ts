@@ -306,7 +306,10 @@ export function registerConfigCli(program: Command) {
         }
         const parsedValue = parseValue(value, opts);
         const snapshot = await loadValidConfig();
-        const next = snapshot.config as Record<string, unknown>;
+        // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
+        // instead of snapshot.config (runtime-merged with defaults).
+        // This prevents runtime defaults from leaking into the written config file (issue #6070)
+        const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
         setAtPath(next, parsedPath, parsedValue);
         await writeConfigFile(next);
         defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
@@ -327,7 +330,10 @@ export function registerConfigCli(program: Command) {
           throw new Error("Path is empty.");
         }
         const snapshot = await loadValidConfig();
-        const next = snapshot.config as Record<string, unknown>;
+        // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
+        // instead of snapshot.config (runtime-merged with defaults).
+        // This prevents runtime defaults from leaking into the written config file (issue #6070)
+        const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
         const removed = unsetAtPath(next, parsedPath);
         if (!removed) {
           defaultRuntime.error(danger(`Config path not found: ${path}`));

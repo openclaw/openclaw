@@ -106,6 +106,11 @@ describe("web auto-reply", () => {
     vi.useRealTimers();
   });
 
+  it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
+    const d = new Date("2025-01-01T00:00:00.000Z");
+    expect(() => formatEnvelopeTimestamp(d, " America/Los_Angeles ")).not.toThrow();
+  });
+
   it("reconnects after a connection close", async () => {
     const closeResolvers: Array<() => void> = [];
     const sleep = vi.fn(async () => {});
