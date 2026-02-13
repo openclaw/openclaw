@@ -58,11 +58,11 @@ services:
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
       ## scripts/docker/setup.sh with OPENCLAW_SANDBOX=1 for automated setup.
       ## Set DOCKER_GID to the host's docker group GID (run: stat -c '%g' /var/run/docker.sock).
-      # - /var/run/docker.sock:/var/run/docker.sock
       # VPS-specific tool persistence
       - ${OPENCLAW_CONFIG_DIR}/gh_config:/home/node/.config/gh
       - ${OPENCLAW_CONFIG_DIR}/op_config:/home/node/.config/op
       - ${OPENCLAW_CONFIG_DIR}/ssh:/home/node/.ssh:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     # group_add:
     #   - "${DOCKER_GID:-999}"
     extra_hosts:
