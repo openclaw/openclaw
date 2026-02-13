@@ -157,6 +157,51 @@ export function resolveDiscordUserAllowed(params: {
   });
 }
 
+export function resolveDiscordRoleAllowed(params: {
+  allowList?: Array<string | number>;
+  memberRoleIds: string[];
+}) {
+  // Role allowlists accept role IDs only (string or number). Names are ignored.
+  const allowList = normalizeDiscordAllowList(params.allowList, ["role:"]);
+  if (!allowList) {
+    return true;
+  }
+  if (allowList.allowAll) {
+    return true;
+  }
+  return params.memberRoleIds.some((roleId) => allowList.ids.has(roleId));
+}
+
+export function resolveDiscordMemberAllowed(params: {
+  userAllowList?: Array<string | number>;
+  roleAllowList?: Array<string | number>;
+  memberRoleIds: string[];
+  userId: string;
+  userName?: string;
+  userTag?: string;
+}) {
+  const hasUserRestriction = Array.isArray(params.userAllowList) && params.userAllowList.length > 0;
+  const hasRoleRestriction = Array.isArray(params.roleAllowList) && params.roleAllowList.length > 0;
+  if (!hasUserRestriction && !hasRoleRestriction) {
+    return true;
+  }
+  const userOk = hasUserRestriction
+    ? resolveDiscordUserAllowed({
+        allowList: params.userAllowList,
+        userId: params.userId,
+        userName: params.userName,
+        userTag: params.userTag,
+      })
+    : false;
+  const roleOk = hasRoleRestriction
+    ? resolveDiscordRoleAllowed({
+        allowList: params.roleAllowList,
+        memberRoleIds: params.memberRoleIds,
+      })
+    : false;
+  return userOk || roleOk;
+}
+
 export function resolveDiscordOwnerAllowFrom(params: {
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
@@ -182,20 +227,6 @@ export function resolveDiscordOwnerAllowFrom(params: {
     return undefined;
   }
   return [match.matchKey];
-}
-
-export function resolveDiscordRoleAllowed(params: {
-  allowList?: Array<string | number>;
-  memberRoleIds: string[];
-}) {
-  const allowList = normalizeDiscordAllowList(params.allowList, ["role:"]);
-  if (!allowList) {
-    return true;
-  }
-  if (allowList.allowAll) {
-    return true;
-  }
-  return params.memberRoleIds.some((roleId) => allowList.ids.has(roleId));
 }
 
 export function resolveDiscordCommandAuthorized(params: {
