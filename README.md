@@ -22,7 +22,7 @@
 
 **What makes SecureClaw different from upstream OpenClaw?**
 
-- **Remote secret storage via Supabase** — API keys, tokens, and credentials are stored in a secure Supabase database with Row Level Security, instead of sitting in plaintext `.env` files on disk. Only two bootstrap variables remain local; everything else lives in the cloud, encrypted at rest.
+- **Encrypted secret vault** — API keys, tokens, and credentials are stored in an AES-256-GCM encrypted SQLite vault (`~/.openclaw/vault.db`) instead of sitting in plaintext `.env` files on disk. Only one bootstrap variable (`OPENCLAW_VAULT_PASSWORD`) remains in the environment; everything else is encrypted at rest with scrypt key derivation. No external services required — the vault ships with the code and works inside Docker.
 - **Same OpenClaw you know** — every feature, channel, tool, and companion app works exactly as before. SecureClaw is a superset, not a fork. Upstream updates merge cleanly.
 
 SecureClaw is a _personal AI assistant_ you run on your own devices.
@@ -111,26 +111,44 @@ pnpm gateway:watch
 
 Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
 
-## Secure environment variable storage (SecureClaw)
+## Encrypted secret vault (SecureClaw)
 
-SecureClaw adds an optional **Supabase-backed secret store** so your API keys and tokens never need to live in plaintext `.env` files. When configured, secrets are fetched at startup from a Supabase `env_vars` table (protected by Row Level Security) and injected into the runtime — local `.env` values still take precedence if present.
+SecureClaw adds an **encrypted secret vault** so your API keys and tokens never need to live in plaintext `.env` files. Secrets are stored in `~/.openclaw/vault.db` — an AES-256-GCM encrypted SQLite database with scrypt key derivation. No external services, no cloud dependencies — it ships with the code and works in Docker out of the box.
 
 Setup:
 
-1. Run `supabase-schema.sql` in your Supabase SQL editor to create the `env_vars` table.
-2. Insert your secrets: `INSERT INTO env_vars (key, value) VALUES ('OPENAI_API_KEY', 'sk-...')`.
-3. Set only two bootstrap vars in your local `.env`:
+1. Set one bootstrap var in your `.env` (or as a Docker/systemd env var):
 
    ```
-   SUPABASE_URL=https://your-project.supabase.co
-   SUPABASE_SERVICE_ROLE_KEY=eyJhbG...
+   OPENCLAW_VAULT_PASSWORD=your-strong-master-password
    ```
 
-4. Start SecureClaw normally — all other secrets load from Supabase automatically.
+2. Store secrets in the vault (they are encrypted automatically):
 
-Precedence (highest to lowest): process env > `./.env` > `~/.openclaw/.env` > **Supabase `env_vars`** > `openclaw.json` `env` block.
+   ```bash
+   # Using the vault CLI helper
+   node -e "
+     const { openVault } = require('./dist/infra/env-vault.js');
+     const v = openVault({ masterPassword: 'your-strong-master-password' });
+     v.set('OPENAI_API_KEY', 'sk-...');
+     v.set('TELEGRAM_BOT_TOKEN', '123456:ABCDEF...');
+     console.log('Stored:', v.listKeys().join(', '));
+     v.close();
+   "
+   ```
 
-If Supabase is unreachable, SecureClaw falls back gracefully to local `.env` files — zero disruption.
+3. Start SecureClaw normally — vault secrets load automatically at startup.
+
+Precedence (highest to lowest): process env > `./.env` > `~/.openclaw/.env` > **encrypted vault** > `openclaw.json` `env` block.
+
+Security properties:
+
+- **AES-256-GCM** encryption with per-value random salt and IV
+- **scrypt** key derivation (N=16384, r=8, p=1) — resistant to brute-force
+- File permissions locked to `0600` (owner read/write only)
+- Wrong master password cannot decrypt any values
+- Fully synchronous — no async gap, no network calls, no external dependencies
+- Docker-native — the vault file mounts via the existing `~/.openclaw` volume
 
 ## Security defaults (DM access)
 

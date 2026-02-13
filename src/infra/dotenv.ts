@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveConfigDir } from "../utils.js";
-import { loadSupabaseEnv } from "./supabase-env.js";
+import { loadVaultEnv } from "./env-vault.js";
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
@@ -21,18 +21,17 @@ export function loadDotEnv(opts?: { quiet?: boolean }) {
 }
 
 /**
- * Async extension of loadDotEnv that also loads env vars from Supabase.
- * The Supabase layer runs AFTER local .env files so local values take
+ * Extension of loadDotEnv that also loads secrets from the encrypted vault.
+ * The vault layer runs AFTER local .env files so local values take
  * precedence (matching the existing "don't override" convention).
  *
- * This is a no-op when SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set.
+ * This is fully synchronous (no async gap) and is a no-op when
+ * OPENCLAW_VAULT_PASSWORD is not set.
  */
-export async function loadDotEnvWithSupabase(opts?: {
-  quiet?: boolean;
-}): Promise<{ supabaseApplied: number }> {
+export function loadDotEnvWithVault(opts?: { quiet?: boolean }): { vaultApplied: number } {
   loadDotEnv(opts);
 
-  const supabaseApplied = await loadSupabaseEnv();
+  const vaultApplied = loadVaultEnv();
 
-  return { supabaseApplied };
+  return { vaultApplied };
 }

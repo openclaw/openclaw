@@ -17,6 +17,7 @@ import {
 } from "./config/sessions.js";
 import { ensureBinary } from "./infra/binaries.js";
 import { loadDotEnv } from "./infra/dotenv.js";
+import { loadVaultEnv } from "./infra/env-vault.js";
 import { normalizeEnv } from "./infra/env.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -28,13 +29,13 @@ import {
   PortInUseError,
 } from "./infra/ports.js";
 import { assertSupportedRuntime } from "./infra/runtime-guard.js";
-import { loadSupabaseEnv } from "./infra/supabase-env.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "./logging.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
 import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
 
 loadDotEnv({ quiet: true });
+loadVaultEnv();
 normalizeEnv();
 ensureOpenClawCliOnPath();
 
@@ -87,12 +88,8 @@ if (isMain) {
     process.exit(1);
   });
 
-  // Load remote env vars from Supabase before any command handler calls
-  // loadConfig(). No-op when bootstrap vars are not set.
-  void loadSupabaseEnv()
-    .then(() => program.parseAsync(process.argv))
-    .catch((err) => {
-      console.error("[openclaw] CLI failed:", formatUncaughtError(err));
-      process.exit(1);
-    });
+  void program.parseAsync(process.argv).catch((err) => {
+    console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+    process.exit(1);
+  });
 }
