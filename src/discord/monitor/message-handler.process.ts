@@ -478,22 +478,27 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   // Status messages: periodic tool feedback and thinking updates sent
   // throughout a long task. Rate-limited with a cooldown to avoid
   // flooding the channel. Messages are never edited or deleted.
+  // Tool result blocks (rich output previews) bypass the cooldown
+  // because they contain substantive content the user needs to see.
   const STATUS_COOLDOWN_MS = 10_000;
-  let statusSending = false;
   let lastStatusSendTime = 0;
+  let sendingStatus = false;
 
-  const sendStatusMessage = async (text: string) => {
-    if (statusSending) {
+  const sendStatusMessage = async (text: string, opts?: { bypassCooldown?: boolean }) => {
+    if (sendingStatus) {
       return;
     }
-    // Cooldown: avoid flooding the channel with rapid status updates.
-    // Upstream filters (unifiedToolFeedback 15s, smartStatus 3s) already
-    // rate-limit, but this is a safety net.
-    const elapsed = Date.now() - lastStatusSendTime;
-    if (lastStatusSendTime > 0 && elapsed < STATUS_COOLDOWN_MS) {
-      return;
+    if (!opts?.bypassCooldown) {
+      // Cooldown: avoid flooding the channel with rapid status
+      // updates. Upstream filters (unifiedToolFeedback 15s,
+      // smartStatus 3s) already rate-limit, but this is a
+      // safety net.
+      const elapsed = Date.now() - lastStatusSendTime;
+      if (lastStatusSendTime > 0 && elapsed < STATUS_COOLDOWN_MS) {
+        return;
+      }
     }
-    statusSending = true;
+    sendingStatus = true;
     try {
       await sendMessageDiscord(deliverTarget, text, {
         token,
@@ -507,7 +512,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     } catch (err) {
       logVerbose(`discord: status message send failed: ${String(err)}`);
     } finally {
-      statusSending = false;
+      sendingStatus = false;
     }
   };
 
@@ -772,7 +777,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
                 lineCount: event.lineCount,
                 isError: event.isError,
               });
-              void sendStatusMessage(block);
+              void sendStatusMessage(block, { bypassCooldown: true });
               // Clean up tracked input.
               toolStartInputs.delete(event.toolCallId);
             }
