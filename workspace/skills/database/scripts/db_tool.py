@@ -311,11 +311,17 @@ def cmd_read(args: argparse.Namespace) -> None:
     # Apply filters (exact match, operators, IN lists)
     # NOTE: filters are for EXACT matching. Strings in filters use .eq(), not .ilike().
     # Use --search for fuzzy/ILIKE matching.
+    SUPPORTED_FILTER_OPS = {"gt", "gte", "lt", "lte", "eq", "neq", "in"}
     for key, value in filters.items():
         if isinstance(value, dict):
             # Operator dict: {"gt": 100, "lte": 500}
             for op, operand in value.items():
                 op_lower = op.lower()
+                if op_lower not in SUPPORTED_FILTER_OPS:
+                    error_exit(
+                        f"Unsupported filter operator '{op}' on column '{key}'.",
+                        hint=f"Supported operators: {sorted(SUPPORTED_FILTER_OPS)}. Use --search for ILIKE/pattern matching.",
+                    )
                 if op_lower == "gt":
                     query = query.gt(key, operand)
                 elif op_lower == "gte":
@@ -347,6 +353,17 @@ def cmd_read(args: argparse.Namespace) -> None:
             query = query.or_(or_conds)
         else:
             query = query.ilike(key, patterns)
+
+    # Ordering
+    if args.order:
+        for order_spec in args.order.split(","):
+            order_spec = order_spec.strip()
+            if "." in order_spec:
+                col, direction = order_spec.rsplit(".", 1)
+                desc = direction.lower() == "desc"
+            else:
+                col, desc = order_spec, False
+            query = query.order(col, desc=desc)
 
     # Pagination
     if not count_only:
@@ -492,6 +509,44 @@ def cmd_write(args: argparse.Namespace) -> None:
             )
         existing_deps = set(op.get("dependencies", []))
         op["dependencies"] = list(existing_deps | (detected_deps & returns_set))
+
+    # Validate @ref.field — check referenced fields exist on the source table
+    returns_table_map = {op["returns"]: op["table"] for op in operations if op.get("returns")}
+    ref_field_pattern = re.compile(r"@([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)")
+    for i, op in enumerate(operations):
+        def _scan_ref_fields(obj: Any) -> list[tuple[str, str]]:
+            """Extract all (alias, field) pairs from @alias.field refs."""
+            pairs = []
+            if isinstance(obj, str):
+                pairs.extend(ref_field_pattern.findall(obj))
+            elif isinstance(obj, dict):
+                for v in obj.values():
+                    pairs.extend(_scan_ref_fields(v))
+            elif isinstance(obj, list):
+                for v in obj:
+                    pairs.extend(_scan_ref_fields(v))
+            return pairs
+
+        ref_pairs = _scan_ref_fields(op.get("data"))
+        ref_pairs.extend(_scan_ref_fields(op.get("filters")))
+        ref_pairs.extend(_scan_ref_fields(op.get("updates")))
+        for alias, field in ref_pairs:
+            if alias in returns_table_map:
+                ref_table = returns_table_map[alias]
+                table_schema = get_table_schema(ref_table)
+                if table_schema:
+                    cols = table_schema.get("columns", {}) if isinstance(table_schema, dict) else {}
+                    if isinstance(cols, dict):
+                        valid_cols = set(cols.keys())
+                    elif isinstance(cols, list):
+                        valid_cols = {c["name"] for c in cols if isinstance(c, dict)}
+                    else:
+                        valid_cols = set()
+                    if valid_cols and field not in valid_cols:
+                        error_exit(
+                            f"Operation {i} ({op.get('action','')} on {op.get('table','')}): @{alias}.{field} — field '{field}' does not exist on table '{ref_table}'.",
+                            hint=f"Valid columns on '{ref_table}': {sorted(valid_cols)}",
+                        )
 
     # Check for duplicate returns names
     returns_list = [op["returns"] for op in operations if op.get("returns")]
@@ -772,6 +827,7 @@ def main() -> None:
     p_read.add_argument("--relations", default=None)
     p_read.add_argument("--limit", type=int, default=None)
     p_read.add_argument("--offset", type=int, default=None)
+    p_read.add_argument("--order", default=None, help="Order by: 'col.desc' or 'col.asc' (comma-separated)")
     p_read.add_argument("--count-only", action="store_true")
 
     # aggregate
