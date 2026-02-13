@@ -66,6 +66,8 @@ describe("sessionsCommand", () => {
         updatedAt: Date.now() - 45 * 60_000,
         inputTokens: 1200,
         outputTokens: 800,
+        totalTokens: 2000,
+        totalTokensFresh: true,
         model: "pi:opus",
       },
     });
@@ -99,8 +101,48 @@ describe("sessionsCommand", () => {
     fs.rmSync(store);
 
     const row = logs.find((line) => line.includes("discord:group:demo")) ?? "";
-    expect(row).toContain("-".padEnd(20));
+    expect(row).toContain("unknown/32k (?%)");
     expect(row).toContain("think:high");
     expect(row).toContain("5m ago");
+  });
+
+  it("exports freshness metadata in JSON output", async () => {
+    const store = writeStore({
+      main: {
+        sessionId: "abc123",
+        updatedAt: Date.now() - 10 * 60_000,
+        inputTokens: 1200,
+        outputTokens: 800,
+        totalTokens: 2000,
+        totalTokensFresh: true,
+        model: "pi:opus",
+      },
+      "discord:group:demo": {
+        sessionId: "xyz",
+        updatedAt: Date.now() - 5 * 60_000,
+        inputTokens: 20,
+        outputTokens: 10,
+        model: "pi:opus",
+      },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store, json: true }, runtime);
+
+    fs.rmSync(store);
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      sessions?: Array<{
+        key: string;
+        totalTokens: number | null;
+        totalTokensFresh: boolean;
+      }>;
+    };
+    const main = payload.sessions?.find((row) => row.key === "main");
+    const group = payload.sessions?.find((row) => row.key === "discord:group:demo");
+    expect(main?.totalTokens).toBe(2000);
+    expect(main?.totalTokensFresh).toBe(true);
+    expect(group?.totalTokens).toBeNull();
+    expect(group?.totalTokensFresh).toBe(false);
   });
 });

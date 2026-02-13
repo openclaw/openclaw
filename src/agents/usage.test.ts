@@ -47,7 +47,7 @@ describe("normalizeUsage", () => {
     expect(hasNonzeroUsage({ total: 1 })).toBe(true);
   });
 
-  it("caps derived session total tokens to the context window", () => {
+  it("does not clamp derived session total tokens to the context window", () => {
     expect(
       deriveSessionTotalTokens({
         usage: {
@@ -58,7 +58,7 @@ describe("normalizeUsage", () => {
         },
         contextTokens: 200_000,
       }),
-    ).toBe(200_000);
+    ).toBe(2_400_027);
   });
 
   it("uses prompt tokens when within context window", () => {
