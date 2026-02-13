@@ -17,6 +17,7 @@ vi.mock("../logging/diagnostic.js", () => ({
 }));
 
 import {
+  clearCommandLane,
   enqueueCommand,
   enqueueCommandInLane,
   getActiveTaskCount,
@@ -193,5 +194,34 @@ describe("command queue", () => {
 
     resolve2();
     await Promise.all([first, second]);
+  });
+
+  it("clearCommandLane rejects pending promises", async () => {
+    let resolve1!: () => void;
+    const blocker = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+
+    // First task blocks the lane.
+    const first = enqueueCommand(async () => {
+      await blocker;
+      return "first";
+    });
+
+    // Second task is queued behind the first.
+    const second = enqueueCommand(async () => "second");
+
+    // Give the first task a tick to start.
+    await new Promise((r) => setTimeout(r, 5));
+
+    const removed = clearCommandLane();
+    expect(removed).toBe(1); // only the queued (not active) entry
+
+    // The queued promise should reject.
+    await expect(second).rejects.toThrow("Command lane cleared");
+
+    // Let the active task finish normally.
+    resolve1();
+    await expect(first).resolves.toBe("first");
   });
 });
