@@ -255,6 +255,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
   }
 
+  if (normalized === "azure-ai-foundry") {
+    return pick("AZURE_AI_FOUNDRY_API_KEY") ?? pick("AZURE_OPENAI_API_KEY");
+  }
+
   if (normalized === "chutes") {
     return pick("CHUTES_OAUTH_TOKEN") ?? pick("CHUTES_API_KEY");
   }
@@ -309,6 +313,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     together: "TOGETHER_API_KEY",
     qianfan: "QIANFAN_API_KEY",
     ollama: "OLLAMA_API_KEY",
+    "azure-ai-foundry": "AZURE_AI_FOUNDRY_API_KEY",
   };
   const envVar = envMap[normalized];
   if (!envVar) {
