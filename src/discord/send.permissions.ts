@@ -10,6 +10,8 @@ import { normalizeDiscordToken } from "./token.js";
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
   ([, value]) => typeof value === "bigint",
 );
+const ALL_PERMISSIONS = PERMISSION_ENTRIES.reduce((acc, [, value]) => acc | value, 0n);
+const ADMINISTRATOR_BIT = PermissionFlagsBits.Administrator;
 
 type DiscordClientOpts = {
   token?: string;
@@ -68,6 +70,10 @@ function bitfieldToPermissions(bitfield: bigint) {
     .toSorted();
 }
 
+function hasAdministrator(bitfield: bigint) {
+  return (bitfield & ADMINISTRATOR_BIT) === ADMINISTRATOR_BIT;
+}
+
 export function isThreadChannelType(channelType?: number) {
   return (
     channelType === ChannelType.GuildNewsThread ||
@@ -119,6 +125,17 @@ export async function fetchChannelPermissionsDiscord(
     if (role?.permissions) {
       base = addPermissionBits(base, role.permissions);
     }
+  }
+
+  if (hasAdministrator(base)) {
+    return {
+      channelId,
+      guildId,
+      permissions: bitfieldToPermissions(ALL_PERMISSIONS),
+      raw: ALL_PERMISSIONS.toString(),
+      isDm: false,
+      channelType,
+    };
   }
 
   let permissions = base;

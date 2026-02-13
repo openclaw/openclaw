@@ -447,6 +447,34 @@ describe("fetchChannelPermissionsDiscord", () => {
     expect(res.permissions).toContain("SendMessages");
     expect(res.isDm).toBe(false);
   });
+
+  it("treats Administrator as all permissions despite overwrites", async () => {
+    const { rest, getMock } = makeRest();
+    getMock
+      .mockResolvedValueOnce({
+        id: "chan1",
+        guild_id: "guild1",
+        permission_overwrites: [
+          {
+            id: "guild1",
+            deny: PermissionFlagsBits.ViewChannel.toString(),
+            allow: "0",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ id: "bot1" })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [{ id: "guild1", permissions: PermissionFlagsBits.Administrator.toString() }],
+      })
+      .mockResolvedValueOnce({ roles: [] });
+    const res = await fetchChannelPermissionsDiscord("chan1", {
+      rest,
+      token: "t",
+    });
+    expect(res.permissions).toContain("Administrator");
+    expect(res.permissions).toContain("ViewChannel");
+  });
 });
 
 describe("readMessagesDiscord", () => {
