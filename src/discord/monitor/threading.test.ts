@@ -210,6 +210,31 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
     );
   });
 
+  it("routes replies to an existing thread channel", async () => {
+    const client = { rest: { post: async () => ({ id: "thread" }) } } as unknown as Client;
+    const plan = await resolveDiscordAutoThreadReplyPlan({
+      client,
+      message: {
+        id: "m1",
+        channelId: "parent",
+      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
+      isGuildMessage: true,
+      channelConfig: {
+        autoThread: true,
+      } as unknown as import("./allow-list.js").DiscordChannelConfigResolved,
+      threadChannel: { id: "thread" },
+      baseText: "hello",
+      combinedBody: "hello",
+      replyToMode: "all",
+      agentId: "agent",
+      channel: "discord",
+    });
+    expect(plan.deliverTarget).toBe("channel:thread");
+    expect(plan.replyTarget).toBe("channel:thread");
+    expect(plan.replyReference.use()).toBe("m1");
+    expect(plan.autoThreadContext).toBeNull();
+  });
+
   it("does nothing when autoThread is disabled", async () => {
     const client = { rest: { post: async () => ({ id: "thread" }) } } as unknown as Client;
     const plan = await resolveDiscordAutoThreadReplyPlan({
