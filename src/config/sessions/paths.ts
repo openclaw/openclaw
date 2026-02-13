@@ -1,6 +1,5 @@
 import os from "node:os";
 import path from "node:path";
-import type { SessionEntry } from "./types.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
@@ -34,11 +33,44 @@ export function resolveDefaultSessionStorePath(agentId?: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 
-export function resolveSessionTranscriptPath(
+export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+
+export function validateSessionId(sessionId: string): string {
+  const trimmed = sessionId.trim();
+  if (!SAFE_SESSION_ID_RE.test(trimmed)) {
+    throw new Error(`Invalid session ID: ${sessionId}`);
+  }
+  return trimmed;
+}
+
+function resolveSessionsDir(opts?: { agentId?: string; sessionsDir?: string }): string {
+  const sessionsDir = opts?.sessionsDir?.trim();
+  if (sessionsDir) {
+    return path.resolve(sessionsDir);
+  }
+  return resolveAgentSessionsDir(opts?.agentId);
+}
+
+function resolvePathWithinSessionsDir(sessionsDir: string, candidate: string): string {
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    throw new Error("Session file path must not be empty");
+  }
+  const resolvedBase = path.resolve(sessionsDir);
+  const resolvedCandidate = path.resolve(resolvedBase, trimmed);
+  const relative = path.relative(resolvedBase, resolvedCandidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Session file path must be within sessions directory");
+  }
+  return resolvedCandidate;
+}
+
+export function resolveSessionTranscriptPathInDir(
   sessionId: string,
-  agentId?: string,
+  sessionsDir: string,
   topicId?: string | number,
 ): string {
+  const safeSessionId = validateSessionId(sessionId);
   const safeTopicId =
     typeof topicId === "string"
       ? encodeURIComponent(topicId)
@@ -46,17 +78,31 @@ export function resolveSessionTranscriptPath(
         ? String(topicId)
         : undefined;
   const fileName =
-    safeTopicId !== undefined ? `${sessionId}-topic-${safeTopicId}.jsonl` : `${sessionId}.jsonl`;
-  return path.join(resolveAgentSessionsDir(agentId), fileName);
+    safeTopicId !== undefined
+      ? `${safeSessionId}-topic-${safeTopicId}.jsonl`
+      : `${safeSessionId}.jsonl`;
+  return resolvePathWithinSessionsDir(sessionsDir, fileName);
+}
+
+export function resolveSessionTranscriptPath(
+  sessionId: string,
+  agentId?: string,
+  topicId?: string | number,
+): string {
+  return resolveSessionTranscriptPathInDir(sessionId, resolveAgentSessionsDir(agentId), topicId);
 }
 
 export function resolveSessionFilePath(
   sessionId: string,
-  entry?: SessionEntry,
-  opts?: { agentId?: string },
+  entry?: { sessionFile?: string },
+  opts?: { agentId?: string; sessionsDir?: string },
 ): string {
+  const sessionsDir = resolveSessionsDir(opts);
   const candidate = entry?.sessionFile?.trim();
-  return candidate ? candidate : resolveSessionTranscriptPath(sessionId, opts?.agentId);
+  if (candidate) {
+    return resolvePathWithinSessionsDir(sessionsDir, candidate);
+  }
+  return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
 }
 
 export function resolveStorePath(store?: string, opts?: { agentId?: string }) {

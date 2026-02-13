@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
@@ -30,21 +32,47 @@ const shardCount = isWindowsCi
     : 2
   : 1;
 const windowsCiArgs = isWindowsCi ? ["--dangerouslyIgnoreUnhandledErrors"] : [];
+const silentArgs =
+  process.env.OPENCLAW_TEST_SHOW_PASSED_LOGS === "1" ? [] : ["--silent=passed-only"];
 const rawPassthroughArgs = process.argv.slice(2);
 const passthroughArgs =
   rawPassthroughArgs[0] === "--" ? rawPassthroughArgs.slice(1) : rawPassthroughArgs;
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
-const parallelRuns = runs.filter((entry) => entry.name !== "gateway");
-const serialRuns = runs.filter((entry) => entry.name === "gateway");
+// Keep gateway serial by default to avoid resource contention with unit/extensions.
+// Allow explicit opt-in parallel runs on non-Windows CI/local when requested.
+const keepGatewaySerial =
+  isWindowsCi ||
+  process.env.OPENCLAW_TEST_SERIAL_GATEWAY === "1" ||
+  process.env.OPENCLAW_TEST_PARALLEL_GATEWAY !== "1";
+const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
+const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
-const parallelCount = Math.max(1, parallelRuns.length);
-const perRunWorkers = Math.max(1, Math.floor(localWorkers / parallelCount));
-const macCiWorkers = isCI && isMacOS ? 1 : perRunWorkers;
+const defaultUnitWorkers = localWorkers;
+const defaultExtensionsWorkers = Math.max(1, Math.min(4, Math.floor(localWorkers / 4)));
+const defaultGatewayWorkers = Math.max(1, Math.min(4, localWorkers));
+
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
 // In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
-const maxWorkers = resolvedOverride ?? (isCI && !isMacOS ? null : macCiWorkers);
+const maxWorkersForRun = (name) => {
+  if (resolvedOverride) {
+    return resolvedOverride;
+  }
+  if (isCI && !isMacOS) {
+    return null;
+  }
+  if (isCI && isMacOS) {
+    return 1;
+  }
+  if (name === "extensions") {
+    return defaultExtensionsWorkers;
+  }
+  if (name === "gateway") {
+    return defaultGatewayWorkers;
+  }
+  return defaultUnitWorkers;
+};
 
 const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=ExperimentalWarning",
@@ -52,11 +80,60 @@ const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=DEP0060",
 ];
 
+function resolveReportDir() {
+  const raw = process.env.OPENCLAW_VITEST_REPORT_DIR?.trim();
+  if (!raw) {
+    return null;
+  }
+  try {
+    fs.mkdirSync(raw, { recursive: true });
+  } catch {
+    return null;
+  }
+  return raw;
+}
+
+function buildReporterArgs(entry, extraArgs) {
+  const reportDir = resolveReportDir();
+  if (!reportDir) {
+    return [];
+  }
+
+  // Vitest supports both `--shard 1/2` and `--shard=1/2`. We use it in the
+  // split-arg form, so we need to read the next arg to avoid overwriting reports.
+  const shardIndex = extraArgs.findIndex((arg) => arg === "--shard");
+  const inlineShardArg = extraArgs.find(
+    (arg) => typeof arg === "string" && arg.startsWith("--shard="),
+  );
+  const shardValue =
+    shardIndex >= 0 && typeof extraArgs[shardIndex + 1] === "string"
+      ? extraArgs[shardIndex + 1]
+      : typeof inlineShardArg === "string"
+        ? inlineShardArg.slice("--shard=".length)
+        : "";
+  const shardSuffix = shardValue
+    ? `-shard${String(shardValue).replaceAll("/", "of").replaceAll(" ", "")}`
+    : "";
+
+  const outputFile = path.join(reportDir, `vitest-${entry.name}${shardSuffix}.json`);
+  return ["--reporter=default", "--reporter=json", "--outputFile", outputFile];
+}
+
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
+    const maxWorkers = maxWorkersForRun(entry.name);
+    const reporterArgs = buildReporterArgs(entry, extraArgs);
     const args = maxWorkers
-      ? [...entry.args, "--maxWorkers", String(maxWorkers), ...windowsCiArgs, ...extraArgs]
-      : [...entry.args, ...windowsCiArgs, ...extraArgs];
+      ? [
+          ...entry.args,
+          "--maxWorkers",
+          String(maxWorkers),
+          ...silentArgs,
+          ...reporterArgs,
+          ...windowsCiArgs,
+          ...extraArgs,
+        ]
+      : [...entry.args, ...silentArgs, ...reporterArgs, ...windowsCiArgs, ...extraArgs];
     const nodeOptions = process.env.NODE_OPTIONS ?? "";
     const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
@@ -98,9 +175,18 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 if (passthroughArgs.length > 0) {
+  const maxWorkers = maxWorkersForRun("unit");
   const args = maxWorkers
-    ? ["vitest", "run", "--maxWorkers", String(maxWorkers), ...windowsCiArgs, ...passthroughArgs]
-    : ["vitest", "run", ...windowsCiArgs, ...passthroughArgs];
+    ? [
+        "vitest",
+        "run",
+        "--maxWorkers",
+        String(maxWorkers),
+        ...silentArgs,
+        ...windowsCiArgs,
+        ...passthroughArgs,
+      ]
+    : ["vitest", "run", ...silentArgs, ...windowsCiArgs, ...passthroughArgs];
   const nodeOptions = process.env.NODE_OPTIONS ?? "";
   const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
     (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
