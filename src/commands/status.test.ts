@@ -536,4 +536,25 @@ describe("statusCommand", () => {
       mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
     }
   });
+
+  it("reports memory status for non-memory-core plugins (#14261)", async () => {
+    const configMod = await import("../config/config.js");
+    const original = configMod.loadConfig;
+    (configMod as Record<string, unknown>).loadConfig = () => ({
+      session: {},
+      plugins: { slots: { memory: "memory-lancedb" } },
+    });
+
+    try {
+      (runtime.log as vi.Mock).mockClear();
+      await statusCommand({ json: true }, runtime as never);
+      const payload = JSON.parse((runtime.log as vi.Mock).mock.calls[0][0]);
+      expect(payload.memoryPlugin.enabled).toBe(true);
+      expect(payload.memoryPlugin.slot).toBe("memory-lancedb");
+      expect(payload.memory).not.toBeNull();
+      expect(payload.memory.vector.available).toBe(true);
+    } finally {
+      (configMod as Record<string, unknown>).loadConfig = original;
+    }
+  });
 });

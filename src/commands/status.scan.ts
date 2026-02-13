@@ -154,9 +154,6 @@ export async function scanStatus(
         if (!memoryPlugin.enabled) {
           return null;
         }
-        if (memoryPlugin.slot !== "memory-core") {
-          return null;
-        }
         const agentId = agentStatus.defaultId ?? "main";
         const { manager } = await getMemorySearchManager({ cfg, agentId });
         if (!manager) {
