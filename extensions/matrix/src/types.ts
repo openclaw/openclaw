@@ -39,10 +39,11 @@ export type MatrixActionConfig = {
   channelInfo?: boolean;
 };
 
-export type MatrixConfig = {
+/** Per-account config fields. Top-level `MatrixConfig` doubles as the default account. */
+export type MatrixAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
-  /** If false, do not start Matrix. Default: true. */
+  /** If false, do not start this account. Default: true. */
   enabled?: boolean;
   /** Matrix homeserver URL (https://matrix.example.org). */
   homeserver?: string;
@@ -89,6 +90,17 @@ export type MatrixConfig = {
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
 };
+
+/**
+ * Top-level Matrix channel config.
+ *
+ * Base fields serve as defaults for all accounts and as the "default" account
+ * config when no `accounts` map is present.
+ */
+export type MatrixConfig = {
+  /** Multi-account map. Keys are account IDs; values override base fields. */
+  accounts?: Record<string, MatrixAccountConfig>;
+} & MatrixAccountConfig;
 
 export type CoreConfig = {
   channels?: {

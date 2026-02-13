@@ -45,6 +45,8 @@ export type MatrixMonitorHandlerParams = {
   runtime: RuntimeEnv;
   logger: RuntimeLogger;
   logVerboseMessage: (message: string) => void;
+  /** Account ID for this handler instance (used for agent route matching). */
+  accountId: string;
   allowFrom: string[];
   roomsConfig: Record<string, MatrixRoomConfig> | undefined;
   mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
@@ -78,6 +80,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     runtime,
     logger,
     logVerboseMessage,
+    accountId,
     allowFrom,
     roomsConfig,
     mentionRegexes,
@@ -435,6 +438,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const baseRoute = core.channel.routing.resolveAgentRoute({
         cfg,
         channel: "matrix",
+        accountId,
         peer: {
           kind: isDirectMessage ? "direct" : "channel",
           id: isDirectMessage ? senderId : roomId,

@@ -34,10 +34,10 @@ const matrixRoomSchema = z
   })
   .optional();
 
-export const MatrixConfigSchema = z.object({
+/** Schema for per-account config fields. */
+const matrixAccountFields = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
-  markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
   userId: z.string().optional(),
   accessToken: z.string().optional(),
@@ -60,4 +60,13 @@ export const MatrixConfigSchema = z.object({
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,
+};
+
+const MatrixAccountConfigSchema = z.object(matrixAccountFields);
+
+export const MatrixConfigSchema = z.object({
+  ...matrixAccountFields,
+  markdown: MarkdownConfigSchema,
+  /** Multi-account map. Keys are account IDs; values override base fields. */
+  accounts: z.record(z.string(), MatrixAccountConfigSchema).optional(),
 });

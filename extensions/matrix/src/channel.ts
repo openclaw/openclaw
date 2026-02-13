@@ -87,6 +87,10 @@ function buildMatrixConfigUpdate(
   };
 }
 
+// Cached dynamic import promise to avoid jiti race conditions when
+// multiple accounts call startAccount concurrently.
+let monitorImportPromise: Promise<typeof import("./matrix/index.js")> | null = null;
+
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   id: "matrix",
   meta,
@@ -142,19 +146,31 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       configured: account.configured,
       baseUrl: account.homeserver,
     }),
-    resolveAllowFrom: ({ cfg }) =>
-      ((cfg as CoreConfig).channels?.matrix?.dm?.allowFrom ?? []).map((entry) => String(entry)),
+    resolveAllowFrom: ({ cfg, accountId }) => {
+      const account = resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId });
+      return (account.config.dm?.allowFrom ?? []).map((entry) => String(entry));
+    },
     formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },
   security: {
-    resolveDmPolicy: ({ account }) => ({
-      policy: account.config.dm?.policy ?? "pairing",
-      allowFrom: account.config.dm?.allowFrom ?? [],
-      policyPath: "channels.matrix.dm.policy",
-      allowFromPath: "channels.matrix.dm.allowFrom",
-      approveHint: formatPairingApproveHint("matrix"),
-      normalizeEntry: (raw) => normalizeMatrixUserId(raw),
-    }),
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        (cfg as CoreConfig).channels?.matrix?.accounts?.[resolvedAccountId],
+      );
+      const basePath = useAccountPath
+        ? `channels.matrix.accounts.${resolvedAccountId}.`
+        : "channels.matrix.";
+      const dmConfig = account.config.dm;
+      return {
+        policy: dmConfig?.policy ?? "pairing",
+        allowFrom: dmConfig?.allowFrom ?? [],
+        policyPath: `${basePath}dm.policy`,
+        allowFromPath: `${basePath}dm.allowFrom`,
+        approveHint: formatPairingApproveHint("matrix"),
+        normalizeEntry: (raw) => normalizeMatrixUserId(raw),
+      };
+    },
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;
       const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
@@ -383,9 +399,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       probe: snapshot.probe,
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
-    probeAccount: async ({ timeoutMs, cfg }) => {
+    probeAccount: async ({ account, timeoutMs, cfg }) => {
       try {
-        const auth = await resolveMatrixAuth({ cfg: cfg as CoreConfig });
+        const env = account.accountId === DEFAULT_ACCOUNT_ID ? process.env : {};
+        const auth = await resolveMatrixAuth({ accountConfig: account.config, env });
         return await probeMatrix({
           homeserver: auth.homeserver,
           accessToken: auth.accessToken,
@@ -425,7 +442,15 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       });
       ctx.log?.info(`[${account.accountId}] starting provider (${account.homeserver ?? "matrix"})`);
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-      const { monitorMatrixProvider } = await import("./matrix/index.js");
+      // Cache the import promise to avoid jiti race conditions when multiple
+      // accounts start concurrently.
+      if (!monitorImportPromise) {
+        monitorImportPromise = import("./matrix/index.js").catch((err) => {
+          monitorImportPromise = null; // Reset on failure to allow retry
+          throw err;
+        });
+      }
+      const { monitorMatrixProvider } = await monitorImportPromise;
       return monitorMatrixProvider({
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,

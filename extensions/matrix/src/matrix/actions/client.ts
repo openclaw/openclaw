@@ -22,7 +22,7 @@ export async function resolveActionClient(
   if (opts.client) {
     return { client: opts.client, stopOnDone: false };
   }
-  const active = getActiveMatrixClient();
+  const active = getActiveMatrixClient(opts.accountId);
   if (active) {
     return { client: active, stopOnDone: false };
   }
@@ -31,6 +31,7 @@ export async function resolveActionClient(
     const client = await resolveSharedMatrixClient({
       cfg: getMatrixRuntime().config.loadConfig() as CoreConfig,
       timeoutMs: opts.timeoutMs,
+      accountId: opts.accountId,
     });
     return { client, stopOnDone: false };
   }

@@ -25,15 +25,24 @@ export function resolveMediaMaxBytes(): number | undefined {
   return undefined;
 }
 
+/**
+ * Resolve a MatrixClient for outbound operations.
+ *
+ * Priority:
+ * 1. Explicitly provided client
+ * 2. Active client for the given accountId (set during monitor startup)
+ * 3. Shared client (gateway mode) or one-off client (CLI mode)
+ */
 export async function resolveMatrixClient(opts: {
   client?: MatrixClient;
   timeoutMs?: number;
+  accountId?: string | null;
 }): Promise<{ client: MatrixClient; stopOnDone: boolean }> {
   ensureNodeRuntime();
   if (opts.client) {
     return { client: opts.client, stopOnDone: false };
   }
-  const active = getActiveMatrixClient();
+  const active = getActiveMatrixClient(opts.accountId);
   if (active) {
     return { client: active, stopOnDone: false };
   }
@@ -41,6 +50,7 @@ export async function resolveMatrixClient(opts: {
   if (shouldShareClient) {
     const client = await resolveSharedMatrixClient({
       timeoutMs: opts.timeoutMs,
+      accountId: opts.accountId,
     });
     return { client, stopOnDone: false };
   }
