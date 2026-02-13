@@ -11,11 +11,6 @@
 # Output: JSON object with `orphaned` array and `ts` timestamp.
 set -euo pipefail
 
-if ! command -v node &>/dev/null; then
-  echo '{"error":"node not found on PATH","orphaned":[],"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
-  exit 0
-fi
-
 usage() {
   cat <<'USAGE'
 Usage: recover-orphaned-processes.sh
@@ -32,6 +27,11 @@ fi
 if [ "$#" -gt 0 ]; then
   usage >&2
   exit 2
+fi
+
+if ! command -v node &>/dev/null; then
+  echo '{"error":"node not found on PATH","orphaned":[],"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+  exit 0
 fi
 
 node <<'NODE'
