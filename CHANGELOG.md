@@ -116,6 +116,7 @@ Docs: https://docs.openclaw.ai
 - Discord: process DM reactions instead of silently dropping them. (#10418) Thanks @mcaxtr.
 - Discord: treat Administrator as full permissions in channel permission checks. Thanks @thewilloftheshadow.
 - Discord: respect replyToMode in threads. (#11062) Thanks @cordx56.
+- Discord: add optional gateway proxy support for WebSocket connections via `channels.discord.proxy`. (#10400) Thanks @winter-loo, @thewilloftheshadow.
 - Browser: add Chrome launch flag `--disable-blink-features=AutomationControlled` to reduce `navigator.webdriver` automation detection issues on reCAPTCHA-protected sites. (#10735) Thanks @Milofax.
 - Heartbeat: filter noise-only system events so scheduled reminder notifications do not fire when cron runs carry only heartbeat markers. (#13317) Thanks @pvtclawn.
 - Signal: render mention placeholders as `@uuid`/`@phone` so mention gating and Clawdbot targeting work. (#2013) Thanks @alexgleason.
