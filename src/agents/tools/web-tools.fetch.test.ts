@@ -49,6 +49,20 @@ function firecrawlError(): MockResponse {
   };
 }
 
+function markdownResponse(
+  markdown: string,
+  url = "https://example.com/",
+  extraHeaders: Record<string, string> = {},
+): MockResponse {
+  return {
+    ok: true,
+    status: 200,
+    url,
+    headers: makeHeaders({ "content-type": "text/markdown; charset=utf-8", ...extraHeaders }),
+    text: async () => markdown,
+  };
+}
+
 function textResponse(
   text: string,
   url = "https://example.com/",
@@ -441,6 +455,121 @@ describe("web_fetch extraction fallbacks", () => {
     expect(message).toContain("Web fetch failed (500):");
     expect(message).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
     expect(message).toContain("Oops");
+  });
+
+  it("uses markdown-native extractor when server returns text/markdown", async () => {
+    const md = "# Hello World\n\nThis is **markdown** from the server.";
+    const mockFetch = vi.fn((input: RequestInfo) =>
+      Promise.resolve(markdownResponse(md, requestUrl(input))) as Promise<Response>,
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/md" });
+    const details = result?.details as {
+      extractor?: string;
+      text?: string;
+      contentType?: string;
+    };
+    expect(details.extractor).toBe("markdown-native");
+    expect(details.text).toContain("Hello World");
+    expect(details.text).toContain("**markdown**");
+    expect(details.contentType).toBe("text/markdown");
+  });
+
+  it("converts markdown to plain text when extractMode is text and server returns text/markdown", async () => {
+    const md = "# Title\n\nSome **bold** text and [a link](https://example.com).";
+    const mockFetch = vi.fn((input: RequestInfo) =>
+      Promise.resolve(markdownResponse(md, requestUrl(input))) as Promise<Response>,
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/md-text",
+      extractMode: "text",
+    });
+    const details = result?.details as { extractor?: string; text?: string };
+    expect(details.extractor).toBe("markdown-native");
+    // Should not contain markdown syntax
+    expect(details.text).not.toContain("](");
+    expect(details.text).toContain("a link");
+  });
+
+  it("logs x-markdown-tokens header when present", async () => {
+    const md = "# Tokens test";
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const mockFetch = vi.fn((input: RequestInfo) =>
+      Promise.resolve(
+        markdownResponse(md, requestUrl(input), { "x-markdown-tokens": "42" }),
+      ) as Promise<Response>,
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    await tool?.execute?.("call", { url: "https://example.com/tokens" });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("x-markdown-tokens: 42"),
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it("sends Accept header preferring text/markdown", async () => {
+    const mockFetch = vi.fn((input: RequestInfo) =>
+      Promise.resolve(textResponse("ok", requestUrl(input))) as Promise<Response>,
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    await tool?.execute?.("call", { url: "https://example.com/accept-test" });
+    const callArgs = mockFetch.mock.calls[0];
+    const init = callArgs?.[1] as RequestInit | undefined;
+    const acceptHeader = (init?.headers as Record<string, string>)?.Accept;
+    expect(acceptHeader).toContain("text/markdown");
   });
 
   it("wraps firecrawl error details", async () => {

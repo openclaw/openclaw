@@ -39,6 +39,15 @@ const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
+/**
+ * Prefer markdown via Cloudflare's Markdown for Agents (content negotiation).
+ * Sites that support it return clean markdown; others ignore the preference
+ * and return HTML as usual.
+ * @see https://developers.cloudflare.com/fundamentals/reference/markdown-for-agents/
+ */
+const DEFAULT_FETCH_ACCEPT =
+  "text/markdown, text/html;q=0.9, */*;q=0.8";
+
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
 const WebFetchSchema = Type.Object({
@@ -409,7 +418,7 @@ async function runWebFetch(params: {
       timeoutMs: params.timeoutSeconds * 1000,
       init: {
         headers: {
-          Accept: "*/*",
+          Accept: DEFAULT_FETCH_ACCEPT,
           "User-Agent": params.userAgent,
           "Accept-Language": "en-US,en;q=0.9",
         },
@@ -519,10 +528,21 @@ async function runWebFetch(params: {
     const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
     const body = await readResponseText(res);
 
+    // Log Cloudflare Markdown for Agents token estimate when available.
+    const markdownTokens = res.headers.get("x-markdown-tokens");
+    if (markdownTokens) {
+      console.log(`[web-fetch] x-markdown-tokens: ${markdownTokens} for ${finalUrl}`);
+    }
+
     let title: string | undefined;
     let extractor = "raw";
     let text = body;
-    if (contentType.includes("text/html")) {
+    if (contentType.includes("text/markdown")) {
+      // Server returned native markdown (e.g. Cloudflare Markdown for Agents).
+      // Use it directly — no HTML parsing needed.
+      text = params.extractMode === "text" ? markdownToText(body) : body;
+      extractor = "markdown-native";
+    } else if (contentType.includes("text/html")) {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,
