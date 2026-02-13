@@ -173,6 +173,7 @@
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260212.1",
     "@vitest/coverage-v8": "^4.0.18",
+    "execa": "^9.6.1",
     "lit": "^3.3.2",
     "ollama": "^0.6.3",
     "oxfmt": "0.32.0",
