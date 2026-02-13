@@ -78,6 +78,7 @@ describe("buildSandboxCreateArgs", () => {
         "1.5",
       ]),
     );
+    expect(args).toEqual(expect.arrayContaining(["--env", "LANG=C.UTF-8"]));
 
     const ulimitValues: string[] = [];
     for (let i = 0; i < args.length; i += 1) {
