@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- CLI/Plugins: add `openclaw plugins uninstall <id>` with `--dry-run`, `--force`, and `--keep-files` options, including safe uninstall path handling and plugin uninstall docs. (#5985) Thanks @JustasMonkev.
 - CLI: add `openclaw logs --local-time` to display log timestamps in local timezone. (#13818) Thanks @xialonglee.
 - Telegram: render blockquotes as native `<blockquote>` tags instead of stripping them. (#14608)
 - Discord: add role-based allowlists and role-based agent routing. (#10650) Thanks @Minidoracat.
