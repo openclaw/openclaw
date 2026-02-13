@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   getTrustEnforcementConfig,
@@ -53,7 +54,7 @@ describe("AgentShield Trust Config", () => {
   it("defaults revocations file to trust_root/revocations.json", () => {
     process.env.AGENTSHIELD_TRUST_ROOT = "/tmp/trust";
     const config = getTrustEnforcementConfig();
-    expect(config.revocationsFile).toBe("/tmp/trust/revocations.json");
+    expect(config.revocationsFile).toBe(path.join("/tmp/trust", "revocations.json"));
   });
 
   it("allows explicit revocations file override", () => {
