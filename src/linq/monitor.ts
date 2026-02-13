@@ -372,7 +372,8 @@ export async function monitorLinqProvider(opts: MonitorLinqOpts = {}): Promise<v
   const port = linqCfg.webhookUrl ? new URL(linqCfg.webhookUrl).port || "0" : "0";
 
   const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.method !== "POST" || !req.url?.startsWith(webhookPath)) {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    if (req.method !== "POST" || !url.pathname.startsWith(webhookPath)) {
       res.writeHead(404);
       res.end();
       return;
