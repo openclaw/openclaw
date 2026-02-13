@@ -20,12 +20,17 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const LOG_HEADER_MAX_LEN = 300;
 const LOG_HEADER_CONTROL_REGEX = /[\u0000-\u001f\u007f-\u009f]/g;
+const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
 
 const sanitizeLogValue = (value: string | undefined): string | undefined => {
   if (!value) {
     return undefined;
   }
-  const cleaned = value.replace(LOG_HEADER_CONTROL_REGEX, " ").replace(/\s+/g, " ").trim();
+  const cleaned = value
+    .replace(LOG_HEADER_CONTROL_REGEX, " ")
+    .replace(LOG_HEADER_FORMAT_REGEX, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!cleaned) {
     return undefined;
   }
