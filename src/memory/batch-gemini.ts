@@ -162,7 +162,8 @@ async function submitGeminiBatch(params: {
       jitter: 0.2,
       shouldRetry: (err) => {
         const status = (err as { status?: number }).status;
-        return status === 429 || (typeof status === "number" && status >= 500);
+        // Retry on network errors (no status), 429, or 5xx
+        return !status || status === 429 || (typeof status === "number" && status >= 500);
       },
     },
   );
@@ -217,7 +218,8 @@ async function submitGeminiBatch(params: {
       jitter: 0.2,
       shouldRetry: (err) => {
         const status = (err as { status?: number }).status;
-        return status === 429 || (typeof status === "number" && status >= 500);
+        // Retry on network errors (no status), 429, or 5xx
+        return !status || status === 429 || (typeof status === "number" && status >= 500);
       },
     },
   );
@@ -256,7 +258,8 @@ async function fetchGeminiBatchStatus(params: {
       jitter: 0.2,
       shouldRetry: (err) => {
         const status = (err as { status?: number }).status;
-        return status === 429 || (typeof status === "number" && status >= 500);
+        // Retry on network errors (no status), 429, or 5xx
+        return !status || status === 429 || (typeof status === "number" && status >= 500);
       },
     },
   );
@@ -295,7 +298,8 @@ async function fetchGeminiFileContent(params: {
       jitter: 0.2,
       shouldRetry: (err) => {
         const status = (err as { status?: number }).status;
-        return status === 429 || (typeof status === "number" && status >= 500);
+        // Retry on network errors (no status), 429, or 5xx
+        return !status || status === 429 || (typeof status === "number" && status >= 500);
       },
     },
   );
