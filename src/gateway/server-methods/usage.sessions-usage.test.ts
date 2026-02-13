@@ -107,40 +107,73 @@ describe("sessions.usage", () => {
 
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
-    const sessionFile = path.join(tempDir, "s-opus.jsonl");
-    fs.writeFileSync(sessionFile, "", "utf-8");
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    try {
+      const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+      fs.mkdirSync(agentSessionsDir, { recursive: true });
+      const sessionFile = path.join(agentSessionsDir, "s-opus.jsonl");
+      fs.writeFileSync(sessionFile, "", "utf-8");
+      const respond = vi.fn();
+
+      // Swap the store mock for this test: the canonical key differs from the discovered key
+      // but points at the same sessionId.
+      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+        storePath: "(multiple)",
+        store: {
+          [storeKey]: {
+            sessionId: "s-opus",
+            sessionFile: "s-opus.jsonl",
+            label: "Named session",
+            updatedAt: 999,
+          },
+        },
+      });
+
+      // Query via discovered key: agent:<id>:<sessionId>
+      await usageHandlers["sessions.usage"]({
+        respond,
+        params: {
+          startDate: "2026-02-01",
+          endDate: "2026-02-02",
+          key: "agent:opus:s-opus",
+          limit: 10,
+        },
+      } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      const result = respond.mock.calls[0]?.[1] as unknown as { sessions: Array<{ key: string }> };
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0]?.key).toBe(storeKey);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects traversal-style keys in specific session usage lookups", async () => {
     const respond = vi.fn();
 
-    // Swap the store mock for this test: the canonical key differs from the discovered key
-    // but points at the same sessionId.
-    vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        [storeKey]: {
-          sessionId: "s-opus",
-          sessionFile,
-          label: "Named session",
-          updatedAt: 999,
-        },
-      },
-    });
-
-    // Query via discovered key: agent:<id>:<sessionId>
     await usageHandlers["sessions.usage"]({
       respond,
       params: {
         startDate: "2026-02-01",
         endDate: "2026-02-02",
-        key: "agent:opus:s-opus",
+        key: "agent:opus:../../etc/passwd",
         limit: 10,
       },
     } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
 
     expect(respond).toHaveBeenCalledTimes(1);
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    const result = respond.mock.calls[0]?.[1] as unknown as { sessions: Array<{ key: string }> };
-    expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]?.key).toBe(storeKey);
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    const error = respond.mock.calls[0]?.[2] as { message?: string } | undefined;
+    expect(error?.message).toContain("Invalid session reference");
   });
 });
