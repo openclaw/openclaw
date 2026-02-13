@@ -1,5 +1,16 @@
 import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic.js";
 import { CommandLane } from "./lanes.js";
+/**
+ * Dedicated error type thrown when a queued command is rejected because
+ * its lane was cleared.  Callers that fire-and-forget enqueued tasks can
+ * catch (or ignore) this specific type to avoid unhandled-rejection noise.
+ */
+export class CommandLaneClearedError extends Error {
+  constructor(lane?: string) {
+    super(lane ? `Command lane "${lane}" cleared` : "Command lane cleared");
+    this.name = "CommandLaneClearedError";
+  }
+}
 
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
@@ -164,7 +175,7 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
   const removed = state.queue.length;
   const pending = state.queue.splice(0);
   for (const entry of pending) {
-    entry.reject(new Error("Command lane cleared"));
+    entry.reject(new CommandLaneClearedError(cleaned));
   }
   return removed;
 }

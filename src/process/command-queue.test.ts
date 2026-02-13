@@ -18,6 +18,7 @@ vi.mock("../logging/diagnostic.js", () => ({
 
 import {
   clearCommandLane,
+  CommandLaneClearedError,
   enqueueCommand,
   enqueueCommandInLane,
   getActiveTaskCount,
@@ -218,7 +219,7 @@ describe("command queue", () => {
     expect(removed).toBe(1); // only the queued (not active) entry
 
     // The queued promise should reject.
-    await expect(second).rejects.toThrow("Command lane cleared");
+    await expect(second).rejects.toBeInstanceOf(CommandLaneClearedError);
 
     // Let the active task finish normally.
     resolve1();
