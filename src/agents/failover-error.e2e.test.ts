@@ -7,11 +7,28 @@ import {
 
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
+    expect(resolveFailoverReasonFromError({ status: 400, message: "bad request" })).toBe(
+      "bad_request",
+    );
+    expect(resolveFailoverReasonFromError({ status: 400, message: "invalid request format" })).toBe(
+      "format",
+    );
+    expect(resolveFailoverReasonFromError({ status: 401 })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
+    expect(resolveFailoverReasonFromError({ status: 404, message: "model not found" })).toBe(
+      "unknown_model",
+    );
+    expect(resolveFailoverReasonFromError({ status: 404, message: "resource not found" })).toBe(
+      "not_found",
+    );
+    expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
-    expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
-    expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
+    expect(resolveFailoverReasonFromError({ status: 451 })).toBe("policy");
+    expect(resolveFailoverReasonFromError({ status: 499 })).toBe("cancelled");
+    expect(resolveFailoverReasonFromError({ status: 502 })).toBe("transport");
+    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("server");
+    expect(resolveFailoverReasonFromError({ status: 521 })).toBe("server");
   });
 
   it("infers format errors from error messages", () => {
@@ -24,7 +41,7 @@ describe("failover-error", () => {
 
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("transport");
   });
 
   it("coerces failover-worthy errors into FailoverError with metadata", () => {

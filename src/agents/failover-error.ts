@@ -40,16 +40,28 @@ export function isFailoverError(err: unknown): err is FailoverError {
 
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
   switch (reason) {
-    case "billing":
-      return 402;
-    case "rate_limit":
-      return 429;
-    case "auth":
-      return 401;
-    case "timeout":
-      return 408;
+    case "bad_request":
     case "format":
       return 400;
+    case "auth":
+      return 401;
+    case "billing":
+      return 402;
+    case "unknown_model":
+    case "not_found":
+      return 404;
+    case "timeout":
+      return 408;
+    case "rate_limit":
+      return 429;
+    case "policy":
+      return 451;
+    case "cancelled":
+      return 499;
+    case "transport":
+      return 502;
+    case "server":
+      return 503;
     default:
       return undefined;
   }
@@ -148,25 +160,51 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
 
   const status = getStatusCode(err);
-  if (status === 402) {
-    return "billing";
-  }
-  if (status === 429) {
-    return "rate_limit";
-  }
-  if (status === 401 || status === 403) {
-    return "auth";
-  }
-  if (status === 408) {
-    return "timeout";
-  }
-  if (status === 400) {
-    return "format";
+  if (status !== undefined) {
+    if (status === 400) {
+      const fromMessage = classifyFailoverReason(getErrorMessage(err));
+      return fromMessage === "format" ? "format" : "bad_request";
+    }
+    if (status === 401 || status === 403) {
+      return "auth";
+    }
+    if (status === 402) {
+      return "billing";
+    }
+    if (status === 404) {
+      const fromMessage = classifyFailoverReason(getErrorMessage(err));
+      return fromMessage === "unknown_model" ? "unknown_model" : "not_found";
+    }
+    if (status === 408) {
+      return "timeout";
+    }
+    if (status === 429) {
+      return "rate_limit";
+    }
+    if (status === 451) {
+      return "policy";
+    }
+    if (status === 499) {
+      return "cancelled";
+    }
+    if (status === 502) {
+      return "transport";
+    }
+    if (status === 503 || (status >= 500 && status < 600)) {
+      return "server";
+    }
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
+  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNABORTED"].includes(code)) {
     return "timeout";
+  }
+  if (
+    ["ECONNRESET", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND", "EPIPE"].includes(
+      code,
+    )
+  ) {
+    return "transport";
   }
   if (isTimeoutError(err)) {
     return "timeout";

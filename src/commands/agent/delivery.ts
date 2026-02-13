@@ -152,6 +152,7 @@ export async function deliverAgentCommandResult(params: {
   }
 
   if (!payloads || payloads.length === 0) {
+    runtime.log("[agent_run_silent] payload_count=0 source=embedded");
     runtime.log("No reply from agent.");
     return { payloads: [], meta: result.meta };
   }

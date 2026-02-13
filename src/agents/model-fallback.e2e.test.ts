@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
-import { runWithModelFallback } from "./model-fallback.js";
+import { formatAttemptTrace, runWithModelFallback } from "./model-fallback.js";
 
 function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
   return {
@@ -564,5 +564,44 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
+  });
+
+  it("does not fallback on fail-fast format errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("invalid request format"), { status: 400 }))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("invalid request format");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("formats attempt traces in a compact and stable order", () => {
+    expect(
+      formatAttemptTrace([
+        {
+          provider: "openai",
+          model: "gpt-4",
+          error: "429 too many requests",
+          status: 429,
+          reason: "rate_limit",
+        },
+        {
+          provider: "anthropic",
+          model: "claude",
+          error: "service unavailable",
+          status: 503,
+          reason: "server",
+        },
+      ]),
+    ).toBe("openai/gpt-4:429(rate_limit) -> anthropic/claude:503(server)");
   });
 });

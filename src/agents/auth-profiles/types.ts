@@ -33,8 +33,15 @@ export type OAuthCredential = OAuthCredentials & {
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
 
 export type AuthProfileFailureReason =
+  | "unknown_model"
   | "auth"
+  | "not_found"
+  | "server"
+  | "transport"
   | "format"
+  | "bad_request"
+  | "policy"
+  | "cancelled"
   | "rate_limit"
   | "billing"
   | "timeout"

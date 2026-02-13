@@ -28,9 +28,9 @@ describe("classifyFailoverReason", () => {
       classifyFailoverReason(
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
       ),
-    ).toBe("timeout");
+    ).toBe("server");
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
-    expect(classifyFailoverReason("bad request")).toBeNull();
+    expect(classifyFailoverReason("bad request")).toBe("bad_request");
     expect(
       classifyFailoverReason(
         "messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels",

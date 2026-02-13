@@ -158,6 +158,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
+    runtime.log("[agent_run_silent] payload_count=0 source=gateway");
     runtime.log(response?.summary ? String(response.summary) : "No reply from agent.");
     return response;
   }

@@ -56,6 +56,11 @@ export {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "./pi-embedded-helpers/turns.js";
+export {
+  FAIL_FAST_REASONS,
+  FALLBACK_TRIGGER_REASONS,
+  shouldTriggerFallback,
+} from "./pi-embedded-helpers/types.js";
 export type { EmbeddedContextFile, FailoverReason } from "./pi-embedded-helpers/types.js";
 
 export type { ToolCallIdMode } from "./tool-call-id.js";

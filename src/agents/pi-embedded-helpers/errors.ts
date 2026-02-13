@@ -550,6 +550,14 @@ const ERROR_PATTERNS = {
   ],
   overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
   timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
+  transport: [
+    "connection reset",
+    "connection refused",
+    "socket hang up",
+    "network error",
+    "upstream connect error",
+    "bad gateway",
+  ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
@@ -575,6 +583,25 @@ const ERROR_PATTERNS = {
     "no credentials found",
     "no api key found",
   ],
+  unknownModel: [
+    "unknown model",
+    "model not found",
+    "unrecognized model",
+    "unsupported model",
+    "invalid model",
+    "registry miss",
+  ],
+  notFound: ["not found", "resource not found", "no such model"],
+  server: [
+    "internal server error",
+    "service unavailable",
+    "temporarily unavailable",
+    "capacity",
+    "overloaded",
+  ],
+  badRequest: ["bad request", "invalid request", "malformed", "unprocessable", "invalid input"],
+  policy: ["policy", "content policy", "safety system", "legal restriction", "451"],
+  cancelled: ["cancelled", "canceled", "request aborted by client"],
   format: [
     "string should match pattern",
     "tool_use.id",
@@ -707,24 +734,86 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
 }
 
 export function classifyFailoverReason(raw: string): FailoverReason | null {
+  const normalized = String(raw ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+
   if (isImageDimensionErrorMessage(raw)) {
     return null;
   }
   if (isImageSizeError(raw)) {
     return null;
   }
-  if (isTransientHttpError(raw)) {
-    // Treat transient 5xx provider failures as retryable transport issues.
-    return "timeout";
+
+  const httpStatus = extractLeadingHttpStatus(normalized)?.code;
+  if (httpStatus !== undefined) {
+    if (httpStatus === 400) {
+      return isCloudCodeAssistFormatError(normalized) ? "format" : "bad_request";
+    }
+    if (httpStatus === 401 || httpStatus === 403) {
+      return "auth";
+    }
+    if (httpStatus === 402) {
+      return "billing";
+    }
+    if (httpStatus === 404) {
+      return matchesErrorPatterns(normalized, ERROR_PATTERNS.unknownModel)
+        ? "unknown_model"
+        : "not_found";
+    }
+    if (httpStatus === 408) {
+      return "timeout";
+    }
+    if (httpStatus === 429) {
+      return "rate_limit";
+    }
+    if (httpStatus === 451) {
+      return "policy";
+    }
+    if (httpStatus === 499) {
+      return "cancelled";
+    }
+    if (httpStatus === 502) {
+      return "transport";
+    }
+    if (httpStatus >= 500 && httpStatus < 600) {
+      return "server";
+    }
+  }
+
+  if (matchesErrorPatterns(normalized, ERROR_PATTERNS.cancelled)) {
+    return "cancelled";
+  }
+  if (matchesErrorPatterns(normalized, ERROR_PATTERNS.policy)) {
+    return "policy";
+  }
+  if (matchesErrorPatterns(normalized, ERROR_PATTERNS.unknownModel)) {
+    return "unknown_model";
+  }
+  if (matchesErrorPatterns(normalized, ERROR_PATTERNS.notFound)) {
+    return "not_found";
   }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
   }
   if (isOverloadedErrorMessage(raw)) {
-    return "rate_limit";
+    return "server";
+  }
+  if (matchesErrorPatterns(normalized, ERROR_PATTERNS.transport)) {
+    return "transport";
+  }
+  if (isTransientHttpError(raw)) {
+    return "server";
+  }
+  if (matchesErrorPatterns(normalized, ERROR_PATTERNS.server)) {
+    return "server";
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";
+  }
+  if (matchesErrorPatterns(normalized, ERROR_PATTERNS.badRequest)) {
+    return "bad_request";
   }
   if (isBillingErrorMessage(raw)) {
     return "billing";

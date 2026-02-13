@@ -19,13 +19,14 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { FAIL_FAST_REASONS, shouldTriggerFallback } from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
   provider: string;
   model: string;
 };
 
-type FallbackAttempt = {
+export type FallbackAttempt = {
   provider: string;
   model: string;
   error: string;
@@ -51,6 +52,42 @@ function isFallbackAbortError(err: unknown): boolean {
 
 function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
+}
+
+function truncateMessage(message: string, max = 160): string {
+  const clean = message.replace(/\s+/g, " ").trim();
+  if (clean.length <= max) {
+    return clean;
+  }
+  return `${clean.slice(0, max - 1)}…`;
+}
+
+export function formatAttemptTrace(attempts: readonly FallbackAttempt[]): string {
+  if (attempts.length === 0) {
+    return "no_attempts";
+  }
+  return attempts
+    .map((attempt) => {
+      let suffix = "";
+      if (attempt.status !== undefined) {
+        suffix += `${attempt.status}`;
+      }
+      if (attempt.reason) {
+        suffix += `(${attempt.reason})`;
+      }
+      if (!suffix && attempt.code) {
+        suffix = attempt.code;
+      }
+      if (!suffix) {
+        suffix = "unknown";
+      }
+      return `${attempt.provider}/${attempt.model}:${suffix}`;
+    })
+    .join(" -> ");
+}
+
+function buildChainFailedErrorMessage(attempts: readonly FallbackAttempt[], total: number): string {
+  return `All models failed (${attempts.length || total}): ${formatAttemptTrace(attempts)}`;
 }
 
 function resolveImageFallbackCandidates(params: {
@@ -221,6 +258,7 @@ export async function runWithModelFallback<T>(params: {
     attempt: number;
     total: number;
   }) => void | Promise<void>;
+  onInfo?: (message: string) => void | Promise<void>;
 }): Promise<{
   result: T;
   provider: string;
@@ -238,9 +276,19 @@ export async function runWithModelFallback<T>(params: {
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  const logInfo = async (message: string) => {
+    if (params.onInfo) {
+      await params.onInfo(message);
+      return;
+    }
+    console.info(message);
+  };
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    await logInfo(
+      `[model_attempt_start] model=${candidate.provider}/${candidate.model} attempt=${i + 1}/${candidates.length}`,
+    );
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -257,6 +305,15 @@ export async function runWithModelFallback<T>(params: {
           error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
           reason: "rate_limit",
         });
+        await logInfo(
+          `[model_attempt_skipped] model=${candidate.provider}/${candidate.model} reason=rate_limit message="provider cooldown"`,
+        );
+        if (i + 1 < candidates.length) {
+          const next = candidates[i + 1];
+          await logInfo(
+            `[model_fallback_next] from=${candidate.provider}/${candidate.model} to=${next.provider}/${next.model}`,
+          );
+        }
         continue;
       }
     }
@@ -283,14 +340,18 @@ export async function runWithModelFallback<T>(params: {
 
       lastError = normalized;
       const described = describeFailoverError(normalized);
-      attempts.push({
+      const attempt: FallbackAttempt = {
         provider: candidate.provider,
         model: candidate.model,
         error: described.message,
         reason: described.reason,
         status: described.status,
         code: described.code,
-      });
+      };
+      attempts.push(attempt);
+      await logInfo(
+        `[model_attempt_failed] model=${candidate.provider}/${candidate.model} reason=${attempt.reason ?? "unknown"} status=${attempt.status ?? "n/a"} code=${attempt.code ?? "n/a"} message="${truncateMessage(attempt.error)}"`,
+      );
       await params.onError?.({
         provider: candidate.provider,
         model: candidate.model,
@@ -298,24 +359,28 @@ export async function runWithModelFallback<T>(params: {
         attempt: i + 1,
         total: candidates.length,
       });
+
+      const reason = attempt.reason ?? "unknown";
+      if (FAIL_FAST_REASONS.has(reason)) {
+        await logInfo(
+          `[model_fail_fast] model=${candidate.provider}/${candidate.model} reason=${reason} trace="${formatAttemptTrace(attempts)}"`,
+        );
+        throw normalized;
+      }
+      if (!shouldTriggerFallback(reason)) {
+        throw normalized;
+      }
+      if (i + 1 < candidates.length) {
+        const next = candidates[i + 1];
+        await logInfo(
+          `[model_fallback_next] from=${candidate.provider}/${candidate.model} to=${next.provider}/${next.model}`,
+        );
+      }
     }
   }
 
-  if (attempts.length <= 1 && lastError) {
-    throw lastError;
-  }
-  const summary =
-    attempts.length > 0
-      ? attempts
-          .map(
-            (attempt) =>
-              `${attempt.provider}/${attempt.model}: ${attempt.error}${
-                attempt.reason ? ` (${attempt.reason})` : ""
-              }`,
-          )
-          .join(" | ")
-      : "unknown";
-  throw new Error(`All models failed (${attempts.length || candidates.length}): ${summary}`, {
+  await logInfo(`[model_chain_failed] trace="${formatAttemptTrace(attempts)}"`);
+  throw new Error(buildChainFailedErrorMessage(attempts, candidates.length), {
     cause: lastError instanceof Error ? lastError : undefined,
   });
 }
