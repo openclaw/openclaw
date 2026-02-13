@@ -495,8 +495,8 @@ export async function prepareSlackMessage(params: {
           token: ctx.botToken,
           maxBytes: ctx.mediaMaxBytes,
         });
-        threadStarterMedia = starterMediaList.length > 0
-          ? buildSlackMediaPayload(starterMediaList) : null;
+        threadStarterMedia =
+          starterMediaList.length > 0 ? buildSlackMediaPayload(starterMediaList) : null;
         if (threadStarterMedia) {
           logVerbose(
             `slack: hydrated thread starter file ${threadStarterMedia.placeholder} from root message`,
