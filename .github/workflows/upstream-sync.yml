@@ -62,9 +62,14 @@ jobs:
       - name: Open PR
         if: steps.check.outputs.needs_sync == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.OPENCLAW_SYNC_PAT }}
+          FALLBACK_GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [[ -z "${GH_TOKEN}" ]]; then
+            GH_TOKEN="${FALLBACK_GH_TOKEN}"
+          fi
+          export GH_TOKEN
           gh pr create \
             --head "${SYNC_BRANCH}" \
             --base main \
