@@ -1,8 +1,7 @@
 import type { Bot } from "grammy";
-import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
-import type { StickerMetadata, TelegramContext } from "./bot/types.js";
+import type { TelegramContext } from "./bot/types.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -22,15 +21,16 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
+import { checkConversationContext } from "../channels/conversation-context.js";
+import { buildCrossChannelContext } from "../channels/cross-channel-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
-import { loadConfig } from "../config/config.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -47,7 +47,6 @@ import {
   buildSenderName,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
-  buildTelegramParentPeer,
   buildTypingThreadParams,
   expandTextLinks,
   normalizeForwardedContext,
@@ -57,10 +56,16 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 
-export type TelegramMediaRef = {
+type TelegramMediaRef = {
   path: string;
   contentType?: string;
-  stickerMetadata?: StickerMetadata;
+  stickerMetadata?: {
+    emoji?: string;
+    setName?: string;
+    fileId?: string;
+    fileUniqueId?: string;
+    cachedDescription?: string;
+  };
 };
 
 type TelegramMessageContextOptions = {
@@ -86,7 +91,7 @@ type ResolveGroupActivation = (params: {
 
 type ResolveGroupRequireMention = (chatId: string | number) => boolean;
 
-export type BuildTelegramMessageContextParams = {
+type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
   storeAllowFrom: string[];
@@ -164,17 +169,14 @@ export const buildTelegramMessageContext = async ({
   const replyThreadId = threadSpec.id;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
-  const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
-  // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const route = resolveAgentRoute({
-    cfg: loadConfig(),
+    cfg,
     channel: "telegram",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "direct",
+      kind: isGroup ? "group" : "dm",
       id: peerId,
     },
-    parentPeer,
   });
   const baseSessionKey = route.sessionKey;
   // DMs: use raw messageThreadId for thread sessions (not forum topic ids)
@@ -204,21 +206,6 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  // Compute requireMention early for preflight transcription gating
-  const activationOverride = resolveGroupActivation({
-    chatId,
-    messageThreadId: resolvedThreadId,
-    sessionKey: sessionKey,
-    agentId: route.agentId,
-  });
-  const baseRequireMention = resolveGroupRequireMention(chatId);
-  const requireMention = firstDefined(
-    activationOverride,
-    topicConfig?.requireMention,
-    groupConfig?.requireMention,
-    baseRequireMention,
-  );
-
   const sendTyping = async () => {
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
@@ -245,9 +232,8 @@ export const buildTelegramMessageContext = async ({
     }
 
     if (dmPolicy !== "open") {
+      const candidate = String(chatId);
       const senderUsername = msg.from?.username ?? "";
-      const senderUserId = msg.from?.id != null ? String(msg.from.id) : null;
-      const candidate = senderUserId ?? String(chatId);
       const allowMatch = resolveSenderAllowMatch({
         allow: effectiveDmAllow,
         senderId: candidate,
@@ -282,8 +268,7 @@ export const buildTelegramMessageContext = async ({
             if (created) {
               logger.info(
                 {
-                  chatId: String(chatId),
-                  senderUserId: senderUserId ?? undefined,
+                  chatId: candidate,
                   username: from?.username,
                   firstName: from?.first_name,
                   lastName: from?.last_name,
@@ -297,11 +282,16 @@ export const buildTelegramMessageContext = async ({
                 fn: () =>
                   bot.api.sendMessage(
                     chatId,
-                    buildPairingReply({
-                      channel: "telegram",
-                      idLine: `Your Telegram user id: ${telegramUserId}`,
-                      code,
-                    }),
+                    [
+                      "OpenClaw: access not configured.",
+                      "",
+                      `Your Telegram user id: ${telegramUserId}`,
+                      "",
+                      `Pairing code: ${code}`,
+                      "",
+                      "Ask the bot owner to approve with:",
+                      formatCliCommand("openclaw pairing approve telegram <code>"),
+                    ].join("\n"),
                   ),
               });
             }
@@ -386,7 +376,6 @@ export const buildTelegramMessageContext = async ({
   const locationText = locationData ? formatLocationText(locationData) : undefined;
   const rawTextSource = msg.text ?? msg.caption ?? "";
   const rawText = expandTextLinks(rawTextSource, msg.entities ?? msg.caption_entities).trim();
-  const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
     rawBody = placeholder;
@@ -403,35 +392,6 @@ export const buildTelegramMessageContext = async ({
     (ent) => ent.type === "mention",
   );
   const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
-
-  // Preflight audio transcription for mention detection in groups
-  // This allows voice notes to be checked for mentions before being dropped
-  let preflightTranscript: string | undefined;
-  const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
-  const needsPreflightTranscription =
-    isGroup && requireMention && hasAudio && !hasUserText && mentionRegexes.length > 0;
-
-  if (needsPreflightTranscription) {
-    try {
-      const { transcribeFirstAudio } = await import("../media-understanding/audio-preflight.js");
-      // Build a minimal context for transcription
-      const tempCtx: MsgContext = {
-        MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-        MediaTypes:
-          allMedia.length > 0
-            ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
-            : undefined,
-      };
-      preflightTranscript = await transcribeFirstAudio({
-        ctx: tempCtx,
-        cfg,
-        agentDir: undefined,
-      });
-    } catch (err) {
-      logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
-    }
-  }
-
   const computedWasMentioned = matchesMentionWithExplicit({
     text: msg.text ?? msg.caption ?? "",
     mentionRegexes,
@@ -440,7 +400,6 @@ export const buildTelegramMessageContext = async ({
       isExplicitlyMentioned: explicitlyMentioned,
       canResolveExplicit: Boolean(botUsername),
     },
-    transcript: preflightTranscript,
   });
   const wasMentioned = options?.forceWasMentioned === true ? true : computedWasMentioned;
   if (isGroup && commandGate.shouldBlock) {
@@ -452,6 +411,19 @@ export const buildTelegramMessageContext = async ({
     });
     return null;
   }
+  const activationOverride = resolveGroupActivation({
+    chatId,
+    messageThreadId: resolvedThreadId,
+    sessionKey: sessionKey,
+    agentId: route.agentId,
+  });
+  const baseRequireMention = resolveGroupRequireMention(chatId);
+  const requireMention = firstDefined(
+    activationOverride,
+    topicConfig?.requireMention,
+    groupConfig?.requireMention,
+    baseRequireMention,
+  );
   // Reply-chain detection: replying to a bot message acts like an implicit mention.
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
@@ -471,21 +443,47 @@ export const buildTelegramMessageContext = async ({
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention) {
     if (mentionGate.shouldSkip) {
-      logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: groupHistories,
-        historyKey: historyKey ?? "",
-        limit: historyLimit,
-        entry: historyKey
-          ? {
-              sender: buildSenderLabel(msg, senderId || chatId),
-              body: rawBody,
-              timestamp: msg.date ? msg.date * 1000 : undefined,
-              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-            }
-          : null,
-      });
-      return null;
+      // Level 102: 對話脈絡救濟檢查
+      // 在決定跳過消息之前，檢查是否在活躍對話中
+      const conversationCheck = await checkConversationContext(
+        chatId,
+        rawBody,
+        senderId,
+        buildSenderName(msg),
+        "telegram",
+        false, // 使用快速規則判斷，不調用 LLM（避免延遲）
+      );
+
+      if (conversationCheck.shouldRespond) {
+        // 對話脈絡判斷應該回應，覆蓋跳過決定
+        logger.info(
+          {
+            chatId,
+            reason: "conversation-context-override",
+            confidence: conversationCheck.confidence,
+            contextReason: conversationCheck.reason,
+          },
+          "overriding skip due to active conversation context",
+        );
+        // 不返回 null，繼續處理消息
+      } else {
+        // 原有邏輯：跳過消息
+        logger.info({ chatId, reason: "no-mention" }, "skipping group message");
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: groupHistories,
+          historyKey: historyKey ?? "",
+          limit: historyLimit,
+          entry: historyKey
+            ? {
+                sender: buildSenderLabel(msg, senderId || chatId),
+                body: rawBody,
+                timestamp: msg.date ? msg.date * 1000 : undefined,
+                messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+              }
+            : null,
+        });
+        return null;
+      }
     }
   }
 
@@ -592,6 +590,21 @@ export const buildTelegramMessageContext = async ({
     });
   }
 
+  // Level 105: inject cross-channel context (other channels handled by the same agent)
+  const crossChannelCtx = await buildCrossChannelContext({
+    currentChannel: "telegram",
+    agentId: route.agentId,
+  });
+  if (crossChannelCtx) {
+    combinedBody = `${crossChannelCtx}\n\n${combinedBody}`;
+  }
+
+  // Session State: inject task context for diagnostic continuity
+  const sessionStateCtx = await injectSessionStateContext(sessionKey, storePath);
+  if (sessionStateCtx) {
+    combinedBody = `${sessionStateCtx}\n\n${combinedBody}`;
+  }
+
   const skillFilter = firstDefined(topicConfig?.skills, groupConfig?.skills);
   const systemPromptParts = [
     groupConfig?.systemPrompt?.trim() || null,
@@ -600,19 +613,8 @@ export const buildTelegramMessageContext = async ({
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
-  const inboundHistory =
-    isGroup && historyKey && historyLimit > 0
-      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
-      : undefined;
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    // Agent prompt should be the raw user text only; metadata/context is provided via system prompt.
-    BodyForAgent: bodyText,
-    InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: commandBody,
     From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
@@ -684,8 +686,6 @@ export const buildTelegramMessageContext = async ({
           channel: "telegram",
           to: String(chatId),
           accountId: route.accountId,
-          // Preserve DM topic threadId for replies (fixes #8891)
-          threadId: dmThreadId != null ? String(dmThreadId) : undefined,
         }
       : undefined,
     onRecordError: (err) => {
@@ -739,6 +739,165 @@ export const buildTelegramMessageContext = async ({
   };
 };
 
-export type TelegramMessageContext = NonNullable<
-  Awaited<ReturnType<typeof buildTelegramMessageContext>>
->;
+// Session State: Inject task context for diagnostic continuity
+// Reads state markers from session history and injects active task context
+async function injectSessionStateContext(
+  sessionKey: string,
+  storePath: string,
+): Promise<string | null> {
+  try {
+    // Only inject for telegram sessions (Wuji's main use case)
+    if (!sessionKey.startsWith("telegram:")) {
+      return null;
+    }
+
+    // Build session file path
+    const sessionFileName = sessionKey.replace(/:/g, "_") + ".jsonl";
+    const sessionFilePath = `${storePath}/${sessionFileName}`;
+
+    // Check if file exists (we'll read it synchronously for performance)
+    const fs = await import("node:fs");
+    if (!fs.existsSync(sessionFilePath)) {
+      return null;
+    }
+
+    // Read and parse session file
+    const content = fs.readFileSync(sessionFilePath, "utf-8");
+    const lines = content.split("\n").filter((line) => line.trim());
+
+    // Parse state markers
+    const STATE_MARKER = "[INTERNAL_STATE]";
+    const TASK_START_MARKER = "[TASK_START]";
+    const TASK_STEP_MARKER = "[TASK_STEP]";
+    const TASK_WAIT_MARKER = "[TASK_WAIT]";
+    const TASK_END_MARKER = "[TASK_END]";
+
+    interface Task {
+      id: string;
+      title: string;
+      service: string;
+      steps: Array<{ step: string; result: string }>;
+      waitingFor: string | null;
+      context: Record<string, string>;
+      ended: boolean;
+    }
+
+    const tasks = new Map<string, Task>();
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type !== "message" || entry.role !== "assistant") {
+          continue;
+        }
+        if (!entry.content?.startsWith(STATE_MARKER)) {
+          continue;
+        }
+
+        const content: string = entry.content;
+
+        // Extract task ID from ID line or task line
+        const idMatch = content.match(/ID[:：]\s*(\S+)/);
+        const taskIdFromId = idMatch?.[1];
+        const taskIdFromTask = content.match(/任务[:：]\s*(\S+)/)?.[1];
+        const taskId = taskIdFromId || taskIdFromTask;
+
+        if (!taskId) {
+          continue;
+        }
+
+        if (content.includes(TASK_START_MARKER)) {
+          const titleMatch = content.match(/任务[:：]\s*(.+?)(?:\n|$)/);
+          const serviceMatch = content.match(/服务[:：]\s*(\S+)/);
+          tasks.set(taskId, {
+            id: taskId,
+            title: titleMatch?.[1]?.trim() || taskId,
+            service: serviceMatch?.[1] || "unknown",
+            steps: [],
+            waitingFor: null,
+            context: {},
+            ended: false,
+          });
+        } else if (tasks.has(taskId)) {
+          const task = tasks.get(taskId)!;
+
+          if (content.includes(TASK_STEP_MARKER)) {
+            const stepMatch = content.match(/步骤[:：]\s*(.+?)(?:\n|$)/);
+            const resultMatch = content.match(/结果[:：]\s*(.+)/s);
+            if (stepMatch) {
+              task.steps.push({
+                step: stepMatch[1].trim(),
+                result: resultMatch?.[1]?.trim() || "",
+              });
+            }
+          } else if (content.includes(TASK_WAIT_MARKER)) {
+            const waitMatch = content.match(/等待[:：]\s*(.+)/);
+            if (waitMatch) {
+              task.waitingFor = waitMatch[1].trim();
+            }
+            // Extract context
+            const contextLines = content.split("\n").slice(3); // Skip header lines
+            for (const ctxLine of contextLines) {
+              const colonIndex = ctxLine.indexOf(":");
+              if (colonIndex > 0) {
+                const key = ctxLine.slice(0, colonIndex).trim();
+                const value = ctxLine.slice(colonIndex + 1).trim();
+                if (key && value && !key.includes("[INTERNAL_STATE]")) {
+                  task.context[key] = value;
+                }
+              }
+            }
+          } else if (content.includes(TASK_END_MARKER)) {
+            task.ended = true;
+          }
+        }
+      } catch {
+        // Skip malformed lines
+        continue;
+      }
+    }
+
+    // Filter to active tasks only
+    const activeTasks = Array.from(tasks.values()).filter((t) => !t.ended);
+    if (activeTasks.length === 0) {
+      return null;
+    }
+
+    // Build context message
+    const contextLines: string[] = ["📋 当前活跃任务状态："];
+
+    for (const task of activeTasks) {
+      contextLines.push(`\n【${task.title}】`);
+      contextLines.push(`服务: ${task.service} | ID: ${task.id}`);
+
+      if (task.steps.length > 0) {
+        contextLines.push("已执行步骤：");
+        for (let i = Math.max(0, task.steps.length - 3); i < task.steps.length; i++) {
+          const step = task.steps[i];
+          const resultPreview = step.result.slice(0, 50) + (step.result.length > 50 ? "..." : "");
+          contextLines.push(`  ${i + 1}. ${step.step} → ${resultPreview}`);
+        }
+      }
+
+      if (task.waitingFor) {
+        contextLines.push(`⏸️ 等待中: ${task.waitingFor}`);
+      }
+
+      if (Object.keys(task.context).length > 0) {
+        contextLines.push("上下文：");
+        for (const [key, value] of Object.entries(task.context)) {
+          const valuePreview = value.slice(0, 100) + (value.length > 100 ? "..." : "");
+          contextLines.push(`  ${key}: ${valuePreview}`);
+        }
+      }
+    }
+
+    contextLines.push("\n[INTERNAL_STATE] 如需继续这些任务，请基于以上状态行动。");
+
+    return contextLines.join("\n");
+  } catch (err) {
+    // Fail silently - don't block message processing
+    logVerbose(`session-state: failed to inject context: ${String(err)}`);
+    return null;
+  }
+}
