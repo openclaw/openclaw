@@ -221,7 +221,7 @@ export async function createEmbeddingProvider(
         fallbackReason: `Embeddings disabled; using keyword-only search.\n\n${reason}`,
       };
     }
-    if (fallback && fallback !== "none" && fallback !== requestedProvider) {
+    if (fallback && fallback !== requestedProvider) {
       try {
         const fallbackResult = await createProvider(fallback);
         return {
