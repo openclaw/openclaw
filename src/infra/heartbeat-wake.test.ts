@@ -174,6 +174,61 @@ describe("heartbeat-wake", () => {
     expect(handler).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
+  it("resets running/scheduled flags when new handler is registered", async () => {
+    vi.useFakeTimers();
+    const wake = await loadWakeModule();
+
+    // Simulate a handler that's mid-execution when SIGUSR1 fires.
+    // We do this by having the handler hang forever (never resolve).
+    let resolveHang: () => void;
+    const hangPromise = new Promise<void>((r) => { resolveHang = r; });
+    const handlerA = vi.fn().mockReturnValue(
+      hangPromise.then(() => ({ status: "ran" as const, durationMs: 1 })),
+    );
+    wake.setHeartbeatWakeHandler(handlerA);
+
+    // Trigger the handler — it starts running but never finishes
+    wake.requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerA).toHaveBeenCalledTimes(1);
+
+    // Now simulate SIGUSR1: register a new handler while handlerA is still running.
+    // Without the fix, `running` would stay true and handlerB would never fire.
+    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    wake.setHeartbeatWakeHandler(handlerB);
+
+    // handlerB should be able to fire (running was reset)
+    wake.requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerB).toHaveBeenCalledTimes(1);
+
+    // Clean up the hanging promise
+    resolveHang!();
+    await Promise.resolve();
+  });
+
+  it("clears stale retry cooldown when a new handler is registered", async () => {
+    vi.useFakeTimers();
+    const wake = await loadWakeModule();
+    const handlerA = vi
+      .fn()
+      .mockResolvedValue({ status: "skipped", reason: "requests-in-flight" });
+    wake.setHeartbeatWakeHandler(handlerA);
+
+    wake.requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerA).toHaveBeenCalledTimes(1);
+
+    // Simulate SIGUSR1 startup with a fresh wake handler.
+    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    wake.setHeartbeatWakeHandler(handlerB);
+
+    wake.requestHeartbeatNow({ reason: "manual", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerB).toHaveBeenCalledTimes(1);
+    expect(handlerB).toHaveBeenCalledWith({ reason: "manual" });
+  });
+
   it("drains pending wake once a handler is registered", async () => {
     vi.useFakeTimers();
     const wake = await loadWakeModule();

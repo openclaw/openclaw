@@ -44,6 +44,11 @@ function getLaneState(lane: string): LaneState {
   return created;
 }
 
+function completeTask(state: LaneState, taskId: number) {
+  state.active = Math.max(0, state.active - 1);
+  state.activeTaskIds.delete(taskId);
+}
+
 function drainLane(lane: string) {
   const state = getLaneState(lane);
   if (state.draining) {
@@ -69,16 +74,14 @@ function drainLane(lane: string) {
         const startTime = Date.now();
         try {
           const result = await entry.task();
-          state.active -= 1;
-          state.activeTaskIds.delete(taskId);
+          completeTask(state, taskId);
           diag.debug(
             `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.active} queued=${state.queue.length}`,
           );
           pump();
           entry.resolve(result);
         } catch (err) {
-          state.active -= 1;
-          state.activeTaskIds.delete(taskId);
+          completeTask(state, taskId);
           const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
           if (!isProbeLane) {
             diag.error(
@@ -164,6 +167,29 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
   const removed = state.queue.length;
   state.queue.length = 0;
   return removed;
+}
+
+/**
+ * Reset all lane runtime state to idle. Used after SIGUSR1 in-process
+ * restarts where interrupted tasks' finally blocks may not run, leaving
+ * stale `active` counts that permanently block new work from draining.
+ *
+ * Resets `active`, `activeTaskIds`, and `draining` for every lane, then
+ * immediately calls `drainLane()` to re-pump any queued work with fresh
+ * counters. Queued entries are intentionally preserved — they represent
+ * pending user work that should still execute after restart.
+ *
+ * Safe to call during lifecycle startup because the old handler has been
+ * disposed (generation-based disposer) and any old in-flight work is
+ * either drained or abandoned.
+ */
+export function resetAllLanes(): void {
+  for (const [lane, state] of lanes) {
+    state.active = 0;
+    state.activeTaskIds.clear();
+    state.draining = false;
+    drainLane(lane);
+  }
 }
 
 /**
