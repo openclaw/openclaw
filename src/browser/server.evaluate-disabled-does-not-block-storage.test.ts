@@ -63,6 +63,9 @@ vi.mock("./server-context.js", async (importOriginal) => {
   };
 });
 
+const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
+  await import("./server.js");
+
 async function getFreePort(): Promise<number> {
   const probe = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -95,12 +98,10 @@ describe("browser control evaluate gating", () => {
       process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
     }
 
-    const { stopBrowserControlServer } = await import("./server.js");
     await stopBrowserControlServer();
   });
 
   it("blocks act:evaluate but still allows cookies/storage reads", async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();
 
     const base = `http://127.0.0.1:${testPort}`;
