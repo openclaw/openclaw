@@ -91,6 +91,9 @@ export async function loadModelCatalog(params?: {
     try {
       const cfg = params?.config ?? loadConfig();
       await ensureOpenClawModelsJson(cfg);
+      await (
+        await import("./pi-auth-json.js")
+      ).ensurePiAuthJsonFromAuthProfiles(resolveOpenClawAgentDir());
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
