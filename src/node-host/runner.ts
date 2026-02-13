@@ -854,7 +854,11 @@ async function handleInvoke(
     return;
   }
 
-  if (!Array.isArray(params.command) || params.command.length === 0) {
+  // Accept command as either a string (raw shell command) or an array (argv).
+  // String commands are shell-wrapped; array commands use spawn directly.
+  const isStringCommand = typeof params.command === "string";
+  const isArrayCommand = Array.isArray(params.command) && params.command.length > 0;
+  if (!isStringCommand && !isArrayCommand) {
     await sendInvokeResult(client, frame, {
       ok: false,
       error: { code: "INVALID_REQUEST", message: "command required" },
@@ -862,8 +866,12 @@ async function handleInvoke(
     return;
   }
 
-  const argv = params.command.map((item) => String(item));
-  const rawCommand = typeof params.rawCommand === "string" ? params.rawCommand.trim() : "";
+  const argv = isArrayCommand ? params.command.map((item) => String(item)) : [];
+  const rawCommand = isStringCommand
+    ? params.command.trim()
+    : typeof params.rawCommand === "string"
+      ? params.rawCommand.trim()
+      : "";
   const cmdText = rawCommand || formatCommand(argv);
   const agentId = params.agentId?.trim() || undefined;
   const cfg = loadConfig();

@@ -1108,8 +1108,9 @@ export function createExecTool(
             nodeId,
             command: "system.run",
             params: {
-              command: argv,
-              rawCommand: params.command,
+              // Pass the raw command string, not the shell-wrapped argv array.
+              // Node's system.run handles shell wrapping internally.
+              command: params.command,
               cwd: workdir,
               env: nodeEnv,
               timeoutMs: typeof params.timeout === "number" ? params.timeout * 1000 : undefined,
