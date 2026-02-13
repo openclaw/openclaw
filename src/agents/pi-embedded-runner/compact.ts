@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
   estimateTokens,
@@ -79,6 +80,7 @@ import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.j
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
+  runId?: string;
   sessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
@@ -105,11 +107,131 @@ export type CompactEmbeddedPiSessionParams = {
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
+  trigger?: "overflow" | "manual" | "cache_ttl" | "safeguard";
+  diagId?: string;
+  attempt?: number;
+  maxAttempts?: number;
   lane?: string;
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
 };
+
+type CompactionMessageMetrics = {
+  messages: number;
+  historyTextChars: number;
+  toolResultChars: number;
+  estTokens?: number;
+  contributors: Array<{ role: string; chars: number; tool?: string }>;
+};
+
+function createCompactionDiagId(): string {
+  return `cmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getMessageTextChars(msg: AgentMessage): number {
+  const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content.length;
+  }
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let total = 0;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string") {
+      total += text.length;
+    }
+  }
+  return total;
+}
+
+function resolveMessageToolLabel(msg: AgentMessage): string | undefined {
+  const candidate =
+    (msg as { toolName?: unknown }).toolName ??
+    (msg as { name?: unknown }).name ??
+    (msg as { tool?: unknown }).tool;
+  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
+}
+
+function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessageMetrics {
+  let historyTextChars = 0;
+  let toolResultChars = 0;
+  const contributors: Array<{ role: string; chars: number; tool?: string }> = [];
+  let estTokens = 0;
+  let tokenEstimationFailed = false;
+
+  for (const msg of messages) {
+    const role = typeof msg.role === "string" ? msg.role : "unknown";
+    const chars = getMessageTextChars(msg);
+    historyTextChars += chars;
+    if (role === "toolResult") {
+      toolResultChars += chars;
+    }
+    contributors.push({ role, chars, tool: resolveMessageToolLabel(msg) });
+    if (!tokenEstimationFailed) {
+      try {
+        estTokens += estimateTokens(msg);
+      } catch {
+        tokenEstimationFailed = true;
+      }
+    }
+  }
+
+  return {
+    messages: messages.length,
+    historyTextChars,
+    toolResultChars,
+    estTokens: tokenEstimationFailed ? undefined : estTokens,
+    contributors: contributors.toSorted((a, b) => b.chars - a.chars).slice(0, 3),
+  };
+}
+
+function classifyCompactionReason(reason?: string): string {
+  const text = (reason ?? "").trim().toLowerCase();
+  if (!text) {
+    return "unknown";
+  }
+  if (text.includes("nothing to compact")) {
+    return "no_compactable_entries";
+  }
+  if (text.includes("below threshold")) {
+    return "below_threshold";
+  }
+  if (text.includes("already compacted")) {
+    return "already_compacted_recently";
+  }
+  if (text.includes("guard")) {
+    return "guard_blocked";
+  }
+  if (text.includes("summary")) {
+    return "summary_failed";
+  }
+  if (text.includes("timed out") || text.includes("timeout")) {
+    return "timeout";
+  }
+  if (
+    text.includes("400") ||
+    text.includes("401") ||
+    text.includes("403") ||
+    text.includes("429")
+  ) {
+    return "provider_error_4xx";
+  }
+  if (
+    text.includes("500") ||
+    text.includes("502") ||
+    text.includes("503") ||
+    text.includes("504")
+  ) {
+    return "provider_error_5xx";
+  }
+  return "unknown";
+}
 
 /**
  * Core compaction logic without lane queueing.
@@ -118,6 +240,12 @@ export type CompactEmbeddedPiSessionParams = {
 export async function compactEmbeddedPiSessionDirect(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
+  const startedAt = Date.now();
+  const diagId = params.diagId?.trim() || createCompactionDiagId();
+  const trigger = params.trigger ?? "manual";
+  const attempt = params.attempt ?? 1;
+  const maxAttempts = params.maxAttempts ?? 1;
+  const runId = params.runId ?? params.sessionId;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
 
@@ -132,10 +260,17 @@ export async function compactEmbeddedPiSessionDirect(
     params.config,
   );
   if (!model) {
+    const reason = error ?? `Unknown model: ${provider}/${modelId}`;
+    log.warn(
+      `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+        `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+        `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${classifyCompactionReason(reason)} ` +
+        `durationMs=${Date.now() - startedAt}`,
+    );
     return {
       ok: false,
       compacted: false,
-      reason: error ?? `Unknown model: ${provider}/${modelId}`,
+      reason,
     };
   }
   try {
@@ -162,10 +297,17 @@ export async function compactEmbeddedPiSessionDirect(
       authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
     }
   } catch (err) {
+    const reason = describeUnknownError(err);
+    log.warn(
+      `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+        `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+        `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${classifyCompactionReason(reason)} ` +
+        `durationMs=${Date.now() - startedAt}`,
+    );
     return {
       ok: false,
       compacted: false,
-      reason: describeUnknownError(err),
+      reason,
     };
   }
 
@@ -475,6 +617,22 @@ export async function compactEmbeddedPiSessionDirect(
             });
         }
 
+        const diagEnabled = log.isEnabled("debug");
+        const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
+        if (diagEnabled && preMetrics) {
+          log.debug(
+            `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+              `attempt=${attempt} maxAttempts=${maxAttempts} ` +
+              `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
+              `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
+          );
+          log.debug(
+            `[compaction-diag] contributors diagId=${diagId} top=${JSON.stringify(preMetrics.contributors)}`,
+          );
+        }
+
+        const compactStartedAt = Date.now();
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
@@ -510,6 +668,21 @@ export async function compactEmbeddedPiSessionDirect(
             });
         }
 
+        const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
+        if (diagEnabled && preMetrics && postMetrics) {
+          log.debug(
+            `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+              `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
+              `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
+              `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
+              `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +
+              `delta.messages=${postMetrics.messages - preMetrics.messages} ` +
+              `delta.historyTextChars=${postMetrics.historyTextChars - preMetrics.historyTextChars} ` +
+              `delta.toolResultChars=${postMetrics.toolResultChars - preMetrics.toolResultChars} ` +
+              `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
+          );
+        }
         return {
           ok: true,
           compacted: true,
@@ -532,10 +705,17 @@ export async function compactEmbeddedPiSessionDirect(
       await sessionLock.release();
     }
   } catch (err) {
+    const reason = describeUnknownError(err);
+    log.warn(
+      `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+        `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+        `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${classifyCompactionReason(reason)} ` +
+        `durationMs=${Date.now() - startedAt}`,
+    );
     return {
       ok: false,
       compacted: false,
-      reason: describeUnknownError(err),
+      reason,
     };
   } finally {
     restoreSkillEnv?.();
