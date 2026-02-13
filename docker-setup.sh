@@ -56,6 +56,7 @@ COMPOSE_ARGS=()
 write_extra_compose() {
   local home_volume="$1"
   shift
+  local -a mounts=("$@")
   local mount
 
   cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
@@ -70,7 +71,7 @@ YAML
     printf '      - %s:/home/node/.openclaw/workspace\n' "$OPENCLAW_WORKSPACE_DIR" >>"$EXTRA_COMPOSE_FILE"
   fi
 
-  for mount in "$@"; do
+  for mount in "${mounts[@]}"; do
     printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
@@ -85,7 +86,7 @@ YAML
     printf '      - %s:/home/node/.openclaw/workspace\n' "$OPENCLAW_WORKSPACE_DIR" >>"$EXTRA_COMPOSE_FILE"
   fi
 
-  for mount in "$@"; do
+  for mount in "${mounts[@]}"; do
     printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 

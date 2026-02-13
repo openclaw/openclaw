@@ -208,23 +208,16 @@ describe("buildAgentSystemPrompt", () => {
   // Agents should use session_status or message timestamps to determine the date/time.
   // Related: https://github.com/moltbot/moltbot/issues/1897
   //          https://github.com/moltbot/moltbot/issues/3658
-  it("does NOT include a date or time in the system prompt (cache stability)", () => {
+  it("includes user time when provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/clawd",
+      workspaceDir: "/tmp/openclaw",
       userTimezone: "America/Chicago",
-      userTime: "Monday, January 5th, 2026 — 3:26 PM",
-      userTimeFormat: "12",
+      userTime: "Monday, January 5th, 2026",
     });
 
-    // The prompt should contain the timezone but NOT the formatted date/time string.
-    // This is intentional for prompt cache stability — the date/time was removed in
-    // commit 66eec295b. If you're here because you want to add it back, please see
-    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
-    // gateway-level timestamp injection into messages, not the system prompt.
+    expect(prompt).toContain("## Current Date & Time");
     expect(prompt).toContain("Time zone: America/Chicago");
-    expect(prompt).not.toContain("Monday, January 5th, 2026");
-    expect(prompt).not.toContain("3:26 PM");
-    expect(prompt).not.toContain("15:26");
+    expect(prompt).toContain("Date: Monday, January 5th, 2026");
   });
 
   it("includes model alias guidance when aliases are provided", () => {
