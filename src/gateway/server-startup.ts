@@ -16,6 +16,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
@@ -29,6 +30,7 @@ export async function startGatewaySidecars(params: {
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
+  port: number;
   startChannels: () => Promise<void>;
   log: { warn: (msg: string) => void };
   logHooks: {
@@ -149,6 +151,13 @@ export async function startGatewaySidecars(params: {
     });
   } catch (err) {
     params.log.warn(`plugin services failed to start: ${String(err)}`);
+  }
+
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner) {
+    hookRunner.runGatewayStart({ port: params.port }, { port: params.port }).catch((err) => {
+      params.logHooks.warn(`gateway_start hook failed: ${String(err)}`);
+    });
   }
 
   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {

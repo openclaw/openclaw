@@ -552,6 +552,7 @@ export async function startGatewayServer(
     pluginRegistry,
     defaultWorkspaceDir,
     deps,
+    port,
     startChannels,
     log,
     logHooks,
@@ -631,6 +632,11 @@ export async function startGatewayServer(
     wss,
     httpServer,
     httpServers,
+    port,
+    getConfig: loadConfig,
+    defaultWorkspaceDir,
+    deps,
+    logHooks,
   });
 
   return {

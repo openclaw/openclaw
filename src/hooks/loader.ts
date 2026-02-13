@@ -47,7 +47,6 @@ export async function loadInternalHooks(
   // 1. Load hooks from directories (new system)
   try {
     const hookEntries = loadWorkspaceHookEntries(workspaceDir, { config: cfg });
-
     // Filter by eligibility
     const eligible = hookEntries.filter((entry) => shouldIncludeHook({ entry, config: cfg }));
 

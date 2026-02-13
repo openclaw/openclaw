@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.2.13 (Unreleased)
 
+### Changes
+
+- Hooks: fire `gateway_start` and `gateway_stop` plugin hooks during gateway lifecycle, allowing plugins to react to startup and shutdown events. Thanks @a-anand-91119.
+
 ### Fixes
 
 - Security/Audit: distinguish external webhooks (`hooks.enabled`) from internal hooks (`hooks.internal.enabled`) in attack-surface summaries to avoid false exposure signals when only internal hooks are enabled. (#13474) Thanks @mcaxtr.
