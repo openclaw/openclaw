@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordChannelActivity = vi.fn();
-vi.mock("../../infra/channel-activity.js", () => ({
+vi.mock("../../../infra/channel-activity.js", () => ({
   recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
 }));
 
