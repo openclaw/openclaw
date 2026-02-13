@@ -404,6 +404,12 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         trustedProxies: z.array(z.string()).optional(),
+        inboundDedupe: z
+          .union([
+            z.literal("memory"),
+            z.object({ file: z.object({ dir: z.string().min(1) }).optional() }).strict(),
+          ])
+          .optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),

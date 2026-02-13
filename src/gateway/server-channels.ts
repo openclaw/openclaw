@@ -1,5 +1,6 @@
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { InboundClaimStore } from "../infra/inbound-claim.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -50,6 +51,8 @@ type ChannelManagerOptions = {
   loadConfig: () => OpenClawConfig;
   channelLogs: Record<ChannelId, SubsystemLogger>;
   channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
+  /** Optional cross-instance inbound claim store (multi-gateway HA). */
+  inboundClaimStore?: InboundClaimStore | null;
 };
 
 export type ChannelManager = {
@@ -62,7 +65,7 @@ export type ChannelManager = {
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
-  const { loadConfig, channelLogs, channelRuntimeEnvs } = opts;
+  const { loadConfig, channelLogs, channelRuntimeEnvs, inboundClaimStore } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
 
@@ -157,6 +160,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           log,
           getStatus: () => getRuntime(channelId, id),
           setStatus: (next) => setRuntime(channelId, id, next),
+          inboundClaimStore: inboundClaimStore ?? undefined,
         });
         const tracked = Promise.resolve(task)
           .catch((err) => {

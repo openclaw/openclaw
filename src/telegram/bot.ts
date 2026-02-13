@@ -4,6 +4,7 @@ import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { type Message, type UserFromGetMe, ReactionTypeEmoji } from "@grammyjs/types";
 import { Bot, webhookCallback } from "grammy";
 import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
+import type { InboundClaimStore } from "../infra/inbound-claim.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -62,6 +63,8 @@ export type TelegramBotOptions = {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
   };
+  /** When set, tryClaim is used for cross-instance deduplication (multi-gateway HA). */
+  inboundClaimStore?: InboundClaimStore | null;
 };
 
 export function getTelegramSequentialKey(ctx: {
@@ -167,7 +170,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     void opts.updateOffset?.onUpdateId?.(updateId);
   };
 
-  const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
+  const INBOUND_CLAIM_TTL_MS = 5 * 60_000;
+
+  const shouldSkipUpdate = (
+    ctx: TelegramUpdateKeyContext & { state?: { inboundClaimedByOther?: boolean } },
+  ) => {
+    if (ctx.state?.inboundClaimedByOther === true) {
+      return true;
+    }
     const updateId = resolveTelegramUpdateId(ctx);
     if (typeof updateId === "number" && lastUpdateId !== null) {
       if (updateId <= lastUpdateId) {
@@ -181,6 +191,30 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     return skipped;
   };
+
+  // Cross-instance claim: first gateway to claim processes the update; others skip (multi-gateway HA).
+  if (opts.inboundClaimStore) {
+    const store = opts.inboundClaimStore;
+    bot.use(async (ctx, next) => {
+      const key = buildTelegramUpdateKey(ctx);
+      if (!key) {
+        await next();
+        return;
+      }
+      const claimKey = `telegram:${account.accountId}:${key}`;
+      const claimed = await store.tryClaim(claimKey, INBOUND_CLAIM_TTL_MS);
+      if (!claimed) {
+        (ctx as { state?: { inboundClaimedByOther?: boolean } }).state = {
+          ...(ctx as { state?: Record<string, unknown> }).state,
+          inboundClaimedByOther: true,
+        };
+        if (shouldLogVerbose()) {
+          logVerbose(`telegram inbound claim: skipped (claimed by other instance) ${claimKey}`);
+        }
+      }
+      await next();
+    });
+  }
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;

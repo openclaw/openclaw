@@ -1,6 +1,7 @@
 import { webhookCallback } from "grammy";
 import { createServer } from "node:http";
 import type { OpenClawConfig } from "../config/config.js";
+import type { InboundClaimStore } from "../infra/inbound-claim.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -29,6 +30,7 @@ export async function startTelegramWebhook(opts: {
   abortSignal?: AbortSignal;
   healthPath?: string;
   publicUrl?: string;
+  inboundClaimStore?: InboundClaimStore | null;
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
@@ -42,6 +44,7 @@ export async function startTelegramWebhook(opts: {
     proxyFetch: opts.fetch,
     config: opts.config,
     accountId: opts.accountId,
+    inboundClaimStore: opts.inboundClaimStore ?? undefined,
   });
   const handler = webhookCallback(bot, "http", {
     secretToken: opts.secret,
