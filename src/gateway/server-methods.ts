@@ -5,6 +5,7 @@ import { agentsHandlers } from "./server-methods/agents.js";
 import { browserHandlers } from "./server-methods/browser.js";
 import { channelsHandlers } from "./server-methods/channels.js";
 import { chatHandlers } from "./server-methods/chat.js";
+import { conductorHandlers } from "./server-methods/conductor.js";
 import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
 import { cronHandlers } from "./server-methods/cron.js";
@@ -32,7 +33,12 @@ const WRITE_SCOPE = "operator.write";
 const APPROVALS_SCOPE = "operator.approvals";
 const PAIRING_SCOPE = "operator.pairing";
 
-const APPROVAL_METHODS = new Set(["exec.approval.request", "exec.approval.resolve"]);
+const APPROVAL_METHODS = new Set([
+  "exec.approval.request",
+  "exec.approval.resolve",
+  "conductor.request",
+  "conductor.resolve",
+]);
 const NODE_ROLE_METHODS = new Set(["node.invoke.result", "node.event", "skills.bins"]);
 const PAIRING_METHODS = new Set([
   "node.pair.request",
@@ -67,6 +73,8 @@ const READ_METHODS = new Set([
   "cron.list",
   "cron.status",
   "cron.runs",
+  "conductor.status",
+  "conductor.history",
   "system-presence",
   "last-heartbeat",
   "node.list",
@@ -171,6 +179,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...chatHandlers,
   ...cronHandlers,
   ...deviceHandlers,
+  ...conductorHandlers,
   ...execApprovalsHandlers,
   ...webHandlers,
   ...modelsHandlers,

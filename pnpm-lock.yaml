@@ -563,6 +563,8 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  packages/conductor: {}
+
   packages/moltbot:
     dependencies:
       openclaw:
