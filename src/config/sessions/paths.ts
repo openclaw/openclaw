@@ -60,6 +60,17 @@ function resolvePathWithinSessionsDir(sessionsDir: string, candidate: string): s
   const resolvedCandidate = path.resolve(resolvedBase, trimmed);
   const relative = path.relative(resolvedBase, resolvedCandidate);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    // Absolute candidates may have been resolved against a different agent's
+    // sessions directory (e.g. stored with agentId "main" but validated with
+    // "default").  Accept them if they still fall within the shared agents
+    // hierarchy — i.e. <stateRoot>/agents/*/sessions/*.
+    if (path.isAbsolute(trimmed)) {
+      const agentsRoot = path.resolve(resolvedBase, "..", "..");
+      const relToAgents = path.relative(agentsRoot, resolvedCandidate);
+      if (!relToAgents.startsWith("..") && !path.isAbsolute(relToAgents)) {
+        return resolvedCandidate;
+      }
+    }
     throw new Error("Session file path must be within sessions directory");
   }
   return resolvedCandidate;
