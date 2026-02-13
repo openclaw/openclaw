@@ -5,9 +5,9 @@
  * Uses @matrix-org/matrix-sdk-crypto-nodejs for E2E encryption.
  */
 
+import type { OpenClawPluginApi } from "./src/openclaw-types.js";
 import { matrixChannelPlugin } from "./src/channel.js";
 import { setMatrixRuntime } from "./src/runtime.js";
-import type { OpenClawPluginApi } from "./src/openclaw-types.js";
 
 const plugin = {
   id: "claw-matrix",

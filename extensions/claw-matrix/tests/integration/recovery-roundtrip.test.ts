@@ -5,8 +5,8 @@
  * HTTP calls to the homeserver are mocked; crypto operations use real logic.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as crypto from "node:crypto";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ── Recovery key encoding helper (inverse of decodeRecoveryKey) ──────
 // Builds a valid recovery key string for testing.
@@ -66,7 +66,7 @@ describe("Recovery Key Round-Trip", () => {
       bad[34] = parity;
 
       await expect(decodeRecoveryKey(bs58.encode(bad))).rejects.toThrow(
-        /Invalid recovery key prefix/
+        /Invalid recovery key prefix/,
       );
     });
 
@@ -77,7 +77,7 @@ describe("Recovery Key Round-Trip", () => {
       // Only 20 bytes — too short
       const short = crypto.randomBytes(20);
       await expect(decodeRecoveryKey(bs58.encode(short))).rejects.toThrow(
-        /Invalid recovery key length/
+        /Invalid recovery key length/,
       );
     });
 
@@ -92,18 +92,14 @@ describe("Recovery Key Round-Trip", () => {
       // Intentionally wrong parity
       payload[34] = 0xff;
 
-      await expect(decodeRecoveryKey(bs58.encode(payload))).rejects.toThrow(
-        /parity check failed/
-      );
+      await expect(decodeRecoveryKey(bs58.encode(payload))).rejects.toThrow(/parity check failed/);
     });
   });
 
   describe("BackupDecryptionKey from decoded bytes", () => {
     it("creates a BackupDecryptionKey from raw 32-byte key", async () => {
       const { decodeRecoveryKey } = await import("../../src/crypto/recovery.js");
-      const { BackupDecryptionKey } = await import(
-        "@matrix-org/matrix-sdk-crypto-nodejs"
-      );
+      const { BackupDecryptionKey } = await import("@matrix-org/matrix-sdk-crypto-nodejs");
 
       const encoded = await encodeRecoveryKey(rawKey);
       const decoded = await decodeRecoveryKey(encoded);
@@ -135,9 +131,7 @@ describe("Recovery Key Round-Trip", () => {
 
       // Mock matrixFetch to throw for room_keys/version (no backup)
       const httpModule = await import("../../src/client/http.js");
-      vi.spyOn(httpModule, "matrixFetch").mockRejectedValue(
-        new Error("M_NOT_FOUND: No backup")
-      );
+      vi.spyOn(httpModule, "matrixFetch").mockRejectedValue(new Error("M_NOT_FOUND: No backup"));
 
       const encoded = await encodeRecoveryKey(rawKey);
       const result = await activateRecoveryKey(encoded);

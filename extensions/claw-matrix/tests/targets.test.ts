@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 /**
  * Tests for targets.ts — target resolution.
  *
@@ -7,7 +8,6 @@
  * passthrough and prefix stripping logic thoroughly.
  */
 import { describe, it } from "node:test";
-import assert from "node:assert/strict";
 import { resolveMatrixTarget } from "../src/client/targets.js";
 
 const OWN_USER_ID = "@bot:example.com";
@@ -59,17 +59,11 @@ describe("resolveMatrixTarget", () => {
 
   describe("invalid target handling", () => {
     it("should throw on empty target", async () => {
-      await assert.rejects(
-        () => resolveMatrixTarget("", OWN_USER_ID),
-        /target is required/
-      );
+      await assert.rejects(() => resolveMatrixTarget("", OWN_USER_ID), /target is required/);
     });
 
     it("should throw on whitespace-only target", async () => {
-      await assert.rejects(
-        () => resolveMatrixTarget("   ", OWN_USER_ID),
-        /target is required/
-      );
+      await assert.rejects(() => resolveMatrixTarget("   ", OWN_USER_ID), /target is required/);
     });
 
     it("should return raw string for non-prefixed non-sigil target", async () => {
@@ -90,9 +84,11 @@ describe("resolveMatrixTarget", () => {
         // Should fail at the HTTP layer, not at target parsing
         (err: Error) => {
           // Either "HTTP client not initialized" or "No DM room found"
-          return err.message.includes("client not initialized") ||
-                 err.message.includes("No DM room found");
-        }
+          return (
+            err.message.includes("client not initialized") ||
+            err.message.includes("No DM room found")
+          );
+        },
       );
     });
 
@@ -100,9 +96,11 @@ describe("resolveMatrixTarget", () => {
       await assert.rejects(
         () => resolveMatrixTarget("user:@friend:example.com", OWN_USER_ID),
         (err: Error) => {
-          return err.message.includes("client not initialized") ||
-                 err.message.includes("No DM room found");
-        }
+          return (
+            err.message.includes("client not initialized") ||
+            err.message.includes("No DM room found")
+          );
+        },
       );
     });
   });
@@ -113,9 +111,11 @@ describe("resolveMatrixTarget", () => {
         () => resolveMatrixTarget("#general:example.com", OWN_USER_ID),
         // Should fail at the HTTP layer
         (err: Error) => {
-          return err.message.includes("client not initialized") ||
-                 err.message.includes("could not be resolved");
-        }
+          return (
+            err.message.includes("client not initialized") ||
+            err.message.includes("could not be resolved")
+          );
+        },
       );
     });
 
@@ -123,9 +123,11 @@ describe("resolveMatrixTarget", () => {
       await assert.rejects(
         () => resolveMatrixTarget("channel:#general:example.com", OWN_USER_ID),
         (err: Error) => {
-          return err.message.includes("client not initialized") ||
-                 err.message.includes("could not be resolved");
-        }
+          return (
+            err.message.includes("client not initialized") ||
+            err.message.includes("could not be resolved")
+          );
+        },
       );
     });
   });

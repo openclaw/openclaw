@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import * as crypto from "node:crypto";
 /**
  * Tests for device self-signing module (src/crypto/self-sign.ts).
  *
@@ -7,8 +9,6 @@
  * with .js extensions in ESM+TypeScript. The logic matches self-sign.ts exactly.
  */
 import { describe, it } from "node:test";
-import assert from "node:assert/strict";
-import * as crypto from "node:crypto";
 
 // ── Reimplemented from self-sign.ts ─────────────────────────────────────
 
@@ -36,10 +36,7 @@ function canonicalJson(obj: unknown): string {
   return JSON.stringify(sortKeys(stripForSigning(obj)));
 }
 
-const ED25519_PKCS8_PREFIX = Buffer.from(
-  "302e020100300506032b657004220420",
-  "hex"
-);
+const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
 function ed25519PrivateKeyFromSeed(seed: Buffer): crypto.KeyObject {
   const pkcs8Der = Buffer.concat([ED25519_PKCS8_PREFIX, seed]);
@@ -63,10 +60,7 @@ describe("canonicalJson", () => {
   });
 
   it("sorts nested objects recursively", () => {
-    assert.equal(
-      canonicalJson({ z: { b: 1, a: 2 }, a: 1 }),
-      '{"a":1,"z":{"a":2,"b":1}}'
-    );
+    assert.equal(canonicalJson({ z: { b: 1, a: 2 }, a: 1 }), '{"a":1,"z":{"a":2,"b":1}}');
   });
 
   it("preserves array order", () => {
@@ -106,7 +100,17 @@ describe("canonicalJson", () => {
   it("matches Matrix spec example", () => {
     // Matrix spec canonical JSON test case
     const input = {
-      auth: { success: true, mxid: "@john.doe:example.com", profile: { display_name: "John Doe", three_pids: [{ medium: "email", address: "john.doe@example.org" }, { medium: "msisdn", address: "123456789" }] } },
+      auth: {
+        success: true,
+        mxid: "@john.doe:example.com",
+        profile: {
+          display_name: "John Doe",
+          three_pids: [
+            { medium: "email", address: "john.doe@example.org" },
+            { medium: "msisdn", address: "123456789" },
+          ],
+        },
+      },
     };
     const result = canonicalJson(input);
     // Verify keys are sorted at all levels
@@ -152,12 +156,14 @@ describe("ed25519 sign/verify round-trip", () => {
     const privateKey = ed25519PrivateKeyFromSeed(seed);
     const publicKey = crypto.createPublicKey(privateKey);
 
-    const message = Buffer.from(canonicalJson({
-      algorithms: ["m.megolm.v1.aes-sha2"],
-      device_id: "TEST",
-      user_id: "@bot:example.com",
-      keys: { "ed25519:TEST": "somekey", "curve25519:TEST": "otherkey" },
-    }));
+    const message = Buffer.from(
+      canonicalJson({
+        algorithms: ["m.megolm.v1.aes-sha2"],
+        device_id: "TEST",
+        user_id: "@bot:example.com",
+        keys: { "ed25519:TEST": "somekey", "curve25519:TEST": "otherkey" },
+      }),
+    );
     const signature = crypto.sign(null, message, privateKey);
 
     assert.ok(crypto.verify(null, message, publicKey, signature));

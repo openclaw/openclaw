@@ -10,9 +10,9 @@
  */
 
 import * as crypto from "node:crypto";
+import type { PluginLogger } from "../openclaw-types.js";
 import { matrixFetch } from "../client/http.js";
 import { createLogger } from "../util/logger.js";
-import type { PluginLogger } from "../openclaw-types.js";
 
 // ── Canonical JSON ──────────────────────────────────────────────────────
 
@@ -60,10 +60,7 @@ function unpaddedBase64(buf: Buffer): string {
  * Using DER import instead of JWK because Node.js >=25 requires
  * the `x` (public key) field in Ed25519 JWK even for private-only import.
  */
-const ED25519_PKCS8_PREFIX = Buffer.from(
-  "302e020100300506032b657004220420",
-  "hex"
-);
+const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
 /** Create a Node.js Ed25519 private key object from a 32-byte seed. */
 function ed25519PrivateKeyFromSeed(seed: Buffer): crypto.KeyObject {
@@ -102,25 +99,15 @@ export interface SelfSignOpts {
  * interactive emoji verification.
  */
 export async function selfSignDevice(opts: SelfSignOpts): Promise<void> {
-  const {
-    userId,
-    deviceId,
-    sskSeed,
-    sskPublicKeyId,
-    deviceEd25519Key,
-    deviceCurve25519Key,
-    log,
-  } = opts;
+  const { userId, deviceId, sskSeed, sskPublicKeyId, deviceEd25519Key, deviceCurve25519Key, log } =
+    opts;
   const slog = createLogger("matrix", log);
 
   // 1. Build device key object
   const deviceKeyObj: Record<string, unknown> = {
     user_id: userId,
     device_id: deviceId,
-    algorithms: [
-      "m.olm.v1.curve25519-aes-sha2",
-      "m.megolm.v1.aes-sha2",
-    ],
+    algorithms: ["m.olm.v1.curve25519-aes-sha2", "m.megolm.v1.aes-sha2"],
     keys: {
       [`ed25519:${deviceId}`]: deviceEd25519Key,
       [`curve25519:${deviceId}`]: deviceCurve25519Key,
@@ -155,11 +142,7 @@ export async function selfSignDevice(opts: SelfSignOpts): Promise<void> {
   };
 
   try {
-    await matrixFetch(
-      "POST",
-      "/_matrix/client/v3/keys/signatures/upload",
-      uploadPayload
-    );
+    await matrixFetch("POST", "/_matrix/client/v3/keys/signatures/upload", uploadPayload);
     slog.info("Uploaded self-signing signature", { deviceId });
   } catch (err: any) {
     slog.error("Failed to upload self-signing signature", {

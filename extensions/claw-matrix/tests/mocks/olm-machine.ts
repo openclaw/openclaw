@@ -41,9 +41,11 @@ export function createMockOlmMachine(): MockOlmMachine {
     getMissingSessions: vi.fn().mockResolvedValue(null),
     shareRoomKey: vi.fn().mockResolvedValue([]),
     markRequestAsSent: vi.fn().mockResolvedValue(undefined),
-    decryptRoomEvent: vi.fn().mockResolvedValue(
-      JSON.stringify({ event: JSON.stringify({ content: { body: "decrypted" } }) })
-    ),
+    decryptRoomEvent: vi
+      .fn()
+      .mockResolvedValue(
+        JSON.stringify({ event: JSON.stringify({ content: { body: "decrypted" } }) }),
+      ),
     identityKeys: {
       curve25519: "mock_curve25519_key",
       ed25519: "mock_ed25519_key",

@@ -5,9 +5,9 @@
  * Every adapter tells OpenClaw how to interact with the Matrix channel.
  */
 
+import type { OpenClawConfig, PluginLogger, GatewayStatus } from "./openclaw-types.js";
 import { resolveMatrixAccount, type ResolvedMatrixAccount } from "./config.js";
 import { getHealthMetrics } from "./health.js";
-import type { OpenClawConfig, PluginLogger, GatewayStatus } from "./openclaw-types.js";
 
 // Guard against config hot-reload racing: track whether an account is already running.
 let _runningAccountPromise: Promise<void> | null = null;
@@ -64,17 +64,14 @@ export const matrixChannelPlugin = {
       // running multiple accounts requires per-account isolation.
       if (ids.length > 1) {
         console.warn(
-          `[claw-matrix] Multiple accounts configured (${ids.length}) but only one is supported. Using "${ids[0]}".`
+          `[claw-matrix] Multiple accounts configured (${ids.length}) but only one is supported. Using "${ids[0]}".`,
         );
         return ids.slice(0, 1);
       }
       return ids;
     },
 
-    resolveAccount(
-      cfg: OpenClawConfig,
-      accountId?: string | null
-    ): ResolvedMatrixAccount {
+    resolveAccount(cfg: OpenClawConfig, accountId?: string | null): ResolvedMatrixAccount {
       return resolveMatrixAccount(cfg, accountId);
     },
 
@@ -83,11 +80,7 @@ export const matrixChannelPlugin = {
     },
 
     isConfigured(account: ResolvedMatrixAccount): boolean {
-      return !!(
-        account.homeserver &&
-        account.userId &&
-        account.accessToken
-      );
+      return !!(account.homeserver && account.userId && account.accessToken);
     },
 
     disabledReason(): string {
@@ -132,7 +125,7 @@ export const matrixChannelPlugin = {
       if (_runningAccountPromise) {
         throw new Error(
           `[claw-matrix] Cannot start account "${ctx.accountId}": another account is already running. ` +
-          `Call stopAccount() first to trigger shutdown via abortSignal.`
+            `Call stopAccount() first to trigger shutdown via abortSignal.`,
         );
       }
 
@@ -287,16 +280,12 @@ export const matrixChannelPlugin = {
   // SECURITY — DM policy and access control
   // ═══════════════════════════════════════════════
   security: {
-    resolveDmPolicy(ctx: {
-      account: ResolvedMatrixAccount;
-      [key: string]: unknown;
-    }) {
+    resolveDmPolicy(ctx: { account: ResolvedMatrixAccount; [key: string]: unknown }) {
       return {
         policy: ctx.account.dm.policy,
         allowFrom: ctx.account.dm.allowFrom,
         allowFromPath: "channels.matrix.dm.allowFrom",
-        approveHint:
-          "Add their Matrix user ID to channels.matrix.dm.allowFrom",
+        approveHint: "Add their Matrix user ID to channels.matrix.dm.allowFrom",
       };
     },
   },
@@ -324,7 +313,22 @@ export const matrixChannelPlugin = {
   // ═══════════════════════════════════════════════
   actions: {
     supportsAction(params: { action: string }): boolean {
-      return ["send", "read", "channel-list", "react", "reactions", "unreact", "edit", "delete", "unsend", "invite", "join", "leave", "kick", "ban"].includes(params.action);
+      return [
+        "send",
+        "read",
+        "channel-list",
+        "react",
+        "reactions",
+        "unreact",
+        "edit",
+        "delete",
+        "unsend",
+        "invite",
+        "join",
+        "leave",
+        "kick",
+        "ban",
+      ].includes(params.action);
     },
 
     async handleAction(ctx: {
@@ -351,11 +355,7 @@ export const matrixChannelPlugin = {
       return {
         accountId: account.accountId,
         enabled: account.enabled,
-        configured: !!(
-          account.homeserver &&
-          account.userId &&
-          account.accessToken
-        ),
+        configured: !!(account.homeserver && account.userId && account.accessToken),
         dmPolicy: account.dm.policy,
         allowFrom: account.dm.allowFrom,
         health: getHealthMetrics(),

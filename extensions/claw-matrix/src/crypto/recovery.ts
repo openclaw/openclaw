@@ -10,9 +10,9 @@
  * from backup on UTD retry.
  */
 
+import { BackupDecryptionKey } from "@matrix-org/matrix-sdk-crypto-nodejs";
 import { matrixFetch } from "../client/http.js";
 import { getMachine } from "./machine.js";
-import { BackupDecryptionKey } from "@matrix-org/matrix-sdk-crypto-nodejs";
 
 // ── Recovery Key Decoding ────────────────────────────────────────────────
 
@@ -38,15 +38,13 @@ export async function decodeRecoveryKey(recoveryKey: string): Promise<Uint8Array
 
   // Must be 2 (prefix) + 32 (key) + 1 (parity) = 35 bytes
   if (decoded.length !== 35) {
-    throw new Error(
-      `Invalid recovery key length: expected 35 bytes, got ${decoded.length}`
-    );
+    throw new Error(`Invalid recovery key length: expected 35 bytes, got ${decoded.length}`);
   }
 
   // Validate 0x8B01 prefix
   if (decoded[0] !== RECOVERY_KEY_PREFIX[0] || decoded[1] !== RECOVERY_KEY_PREFIX[1]) {
     throw new Error(
-      `Invalid recovery key prefix: expected 0x8B01, got 0x${decoded[0].toString(16).padStart(2, "0")}${decoded[1].toString(16).padStart(2, "0")}`
+      `Invalid recovery key prefix: expected 0x8B01, got 0x${decoded[0].toString(16).padStart(2, "0")}${decoded[1].toString(16).padStart(2, "0")}`,
     );
   }
 
@@ -82,7 +80,11 @@ export interface BackupInfo {
  */
 export async function activateRecoveryKey(
   recoveryKey: string,
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void; error?: (msg: string) => void }
+  log?: {
+    info?: (msg: string) => void;
+    warn?: (msg: string) => void;
+    error?: (msg: string) => void;
+  },
 ): Promise<BackupInfo | undefined> {
   // Step 1: Decode
   let rawKey: Uint8Array;
@@ -114,7 +116,9 @@ export async function activateRecoveryKey(
       auth_data: Record<string, unknown>;
     }>("GET", "/_matrix/client/v3/room_keys/version");
     backupVersion = backupData.version;
-    log?.info?.(`[recovery] Found backup version ${backupVersion} (algorithm: ${backupData.algorithm})`);
+    log?.info?.(
+      `[recovery] Found backup version ${backupVersion} (algorithm: ${backupData.algorithm})`,
+    );
   } catch (err: any) {
     log?.warn?.(`[recovery] No key backup found on server: ${err.message}`);
     return undefined;
@@ -143,10 +147,7 @@ export async function activateRecoveryKey(
   }
 
   try {
-    machine.enableBackupV1(
-      (backupData.auth_data as any)?.public_key ?? "",
-      backupVersion
-    );
+    machine.enableBackupV1((backupData.auth_data as any)?.public_key ?? "", backupVersion);
     log?.info?.("[recovery] Backup v1 enabled");
   } catch (err: any) {
     // enableBackupV1 may not exist in all SDK versions
@@ -172,7 +173,7 @@ export async function decryptSessionFromBackup(
   backupVersion: string,
   roomId: string,
   sessionId: string,
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void }
+  log?: { info?: (msg: string) => void; warn?: (msg: string) => void },
 ): Promise<boolean> {
   try {
     // Fetch the specific session from backup
@@ -183,7 +184,7 @@ export async function decryptSessionFromBackup(
       session_data: { ciphertext: string; ephemeral: string; mac: string };
     }>(
       "GET",
-      `/_matrix/client/v3/room_keys/keys/${encodeURIComponent(roomId)}/${encodeURIComponent(sessionId)}?version=${encodeURIComponent(backupVersion)}`
+      `/_matrix/client/v3/room_keys/keys/${encodeURIComponent(roomId)}/${encodeURIComponent(sessionId)}?version=${encodeURIComponent(backupVersion)}`,
     );
 
     if (!backupData?.session_data) {
@@ -195,7 +196,7 @@ export async function decryptSessionFromBackup(
     const decrypted = decryptionKey.decryptV1(
       backupData.session_data.ephemeral,
       backupData.session_data.mac,
-      backupData.session_data.ciphertext
+      backupData.session_data.ciphertext,
     );
 
     // Parse decrypted session data — contains session_key, sender_key, etc.
@@ -215,29 +216,19 @@ export async function decryptSessionFromBackup(
           session_id: sessionId,
           session_key: sessionData.session_key,
           sender_claimed_ed25519_key: sessionData.sender_claimed_keys?.ed25519 ?? "",
-          forwarding_curve25519_key_chain:
-            sessionData.forwarding_curve25519_key_chain ?? [],
+          forwarding_curve25519_key_chain: sessionData.forwarding_curve25519_key_chain ?? [],
         },
       },
     ];
 
     // Inject via receiveSyncChanges with empty device lists and key counts
     const { DeviceLists } = await import("@matrix-org/matrix-sdk-crypto-nodejs");
-    await machine.receiveSyncChanges(
-      JSON.stringify(syntheticToDevice),
-      new DeviceLists(),
-      {},
-      []
-    );
+    await machine.receiveSyncChanges(JSON.stringify(syntheticToDevice), new DeviceLists(), {}, []);
 
-    log?.info?.(
-      `[recovery] Injected session ${sessionId} from backup into crypto store`
-    );
+    log?.info?.(`[recovery] Injected session ${sessionId} from backup into crypto store`);
     return true;
   } catch (err: any) {
-    log?.warn?.(
-      `[recovery] Failed to restore session ${sessionId} from backup: ${err.message}`
-    );
+    log?.warn?.(`[recovery] Failed to restore session ${sessionId} from backup: ${err.message}`);
     return false;
   }
 }

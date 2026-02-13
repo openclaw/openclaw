@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { MatrixError } from "../types.js";
-import { TokenBucket } from "../util/rate-limit.js";
 import { incrementCounter } from "../health.js";
+import { TokenBucket } from "../util/rate-limit.js";
 
 // SINGLETON: multi-account requires refactoring this to per-account state
 const httpRateLimiter = new TokenBucket(10, 2);
@@ -11,7 +11,7 @@ export class MatrixApiError extends Error {
     public readonly errcode: string,
     message: string,
     public readonly statusCode: number,
-    public readonly softLogout?: boolean
+    public readonly softLogout?: boolean,
   ) {
     super(`${errcode}: ${message}`);
     this.name = "MatrixApiError";
@@ -71,7 +71,7 @@ export async function matrixFetch<T = unknown>(
   method: string,
   path: string,
   body?: unknown,
-  opts?: { timeoutMs?: number; noAuth?: boolean; skipRateLimit?: boolean }
+  opts?: { timeoutMs?: number; noAuth?: boolean; skipRateLimit?: boolean },
 ): Promise<T> {
   if (!opts?.skipRateLimit) {
     await httpRateLimiter.acquire();
@@ -111,14 +111,18 @@ async function doFetch<T>(
   url: string,
   headers: Record<string, string>,
   jsonBody: string | undefined,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<{ response: Response; responseText: string; status: number; retryAfterMs?: number }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   // Extract path from URL for error messages
   let pathForError: string;
-  try { pathForError = new URL(url).pathname; } catch { pathForError = url; }
+  try {
+    pathForError = new URL(url).pathname;
+  } catch {
+    pathForError = url;
+  }
 
   try {
     const response = await fetch(url, {
@@ -167,7 +171,7 @@ function handleResponse<T>(response: Response, responseText: string, status: num
       throw new MatrixApiError(
         "M_UNKNOWN",
         `HTTP ${status}: ${responseText.slice(0, 200)}`,
-        status
+        status,
       );
     }
     return responseText as unknown as T;
@@ -179,7 +183,7 @@ function handleResponse<T>(response: Response, responseText: string, status: num
       err.errcode ?? "M_UNKNOWN",
       err.error ?? `HTTP ${status}`,
       status,
-      err.soft_logout
+      err.soft_logout,
     );
   }
 

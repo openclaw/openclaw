@@ -6,29 +6,31 @@ Lets your OpenClaw agents chat over Matrix — encrypted rooms, media, reactions
 
 ## Features
 
-| Capability | Status |
-|------------|--------|
-| E2E encryption (Megolm/Olm) | Working |
-| Text messages (DM + group) | Working |
-| Media (image/audio/video/file) | Working |
-| Reactions (send/list/remove) | Working |
-| Edit + delete messages | Working |
-| Reply threading | Working |
-| Typing indicators | Working |
-| Auto-join invited rooms | Working |
-| Cross-signing verification | Working |
-| Recovery key + backup import | Working |
+| Capability                                   | Status  |
+| -------------------------------------------- | ------- |
+| E2E encryption (Megolm/Olm)                  | Working |
+| Text messages (DM + group)                   | Working |
+| Media (image/audio/video/file)               | Working |
+| Reactions (send/list/remove)                 | Working |
+| Edit + delete messages                       | Working |
+| Reply threading                              | Working |
+| Typing indicators                            | Working |
+| Auto-join invited rooms                      | Working |
+| Cross-signing verification                   | Working |
+| Recovery key + backup import                 | Working |
 | Room management (invite/join/leave/kick/ban) | Working |
-| Health metrics | Working |
+| Health metrics                               | Working |
 
 ## Quick start
 
 1. Install the plugin:
+
    ```bash
    openclaw plugins install https://gitlab.com/nicebit/claw-matrix.git
    ```
 
 2. Add Matrix to your config (`openclaw.json`):
+
    ```json
    {
      "channels": {

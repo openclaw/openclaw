@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import * as crypto from "node:crypto";
 /**
  * Tests for SSSS decryption and key verification (src/crypto/ssss.ts).
  *
@@ -6,8 +8,6 @@
  * SSSS key metadata.
  */
 import { describe, it } from "node:test";
-import assert from "node:assert/strict";
-import * as crypto from "node:crypto";
 
 // ── Helpers: replicate SSSS crypto for test fixture generation ──────────
 
@@ -16,10 +16,7 @@ function unpaddedBase64(buf: Buffer): string {
 }
 
 /** HKDF-SHA-256 derivation matching ssss.ts */
-function deriveKeys(
-  rawKey: Buffer,
-  info: string
-): { aesKey: Buffer; hmacKey: Buffer } {
+function deriveKeys(rawKey: Buffer, info: string): { aesKey: Buffer; hmacKey: Buffer } {
   const salt = Buffer.alloc(32, 0);
   const derived = crypto.hkdfSync("sha256", rawKey, salt, info, 64);
   return {
@@ -32,7 +29,7 @@ function deriveKeys(
 function encryptSecret(
   rawKey: Buffer,
   secretName: string,
-  plaintext: string
+  plaintext: string,
 ): { iv: string; ciphertext: string; mac: string } {
   const { aesKey, hmacKey } = deriveKeys(rawKey, secretName);
   const iv = crypto.randomBytes(16);
@@ -68,7 +65,7 @@ function generateKeyMetadata(rawKey: Buffer): { iv: string; mac: string } {
 function decryptSecret(
   rawKey: Buffer,
   secretName: string,
-  encrypted: { iv: string; ciphertext: string; mac: string }
+  encrypted: { iv: string; ciphertext: string; mac: string },
 ): string {
   const salt = Buffer.alloc(32, 0);
   const derived = crypto.hkdfSync("sha256", rawKey, salt, secretName, 64);
@@ -87,10 +84,7 @@ function decryptSecret(
 
 // ── Verify function (replicated from ssss.ts) ──
 
-function verifyRecoveryKey(
-  rawKey: Buffer,
-  keyMeta: { iv: string; mac: string }
-): boolean {
+function verifyRecoveryKey(rawKey: Buffer, keyMeta: { iv: string; mac: string }): boolean {
   const salt = Buffer.alloc(32, 0);
   const derived = crypto.hkdfSync("sha256", rawKey, salt, "", 64);
   const aesKey = Buffer.from(derived.slice(0, 32));
@@ -124,20 +118,14 @@ describe("SSSS decryption", () => {
     tampered[0] ^= 0xff;
     encrypted.ciphertext = unpaddedBase64(tampered);
 
-    assert.throws(
-      () => decryptSecret(rawKey, secretName, encrypted),
-      /HMAC mismatch/
-    );
+    assert.throws(() => decryptSecret(rawKey, secretName, encrypted), /HMAC mismatch/);
   });
 
   it("rejects wrong key (HMAC mismatch)", () => {
     const encrypted = encryptSecret(rawKey, secretName, plaintext);
     const wrongKey = crypto.randomBytes(32);
 
-    assert.throws(
-      () => decryptSecret(wrongKey, secretName, encrypted),
-      /HMAC mismatch/
-    );
+    assert.throws(() => decryptSecret(wrongKey, secretName, encrypted), /HMAC mismatch/);
   });
 
   it("rejects wrong secret name (HMAC mismatch)", () => {
@@ -145,7 +133,7 @@ describe("SSSS decryption", () => {
 
     assert.throws(
       () => decryptSecret(rawKey, "m.cross_signing.self_signing", encrypted),
-      /HMAC mismatch/
+      /HMAC mismatch/,
     );
   });
 
@@ -158,10 +146,7 @@ describe("SSSS decryption", () => {
     assert.equal(decrypted, plaintext);
 
     // Decrypt with empty info — should fail
-    assert.throws(
-      () => decryptSecret(rawKey, "", encrypted),
-      /HMAC mismatch/
-    );
+    assert.throws(() => decryptSecret(rawKey, "", encrypted), /HMAC mismatch/);
   });
 });
 

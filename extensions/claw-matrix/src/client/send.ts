@@ -1,15 +1,11 @@
-import { matrixFetch, txnId } from "./http.js";
-import { isRoomEncrypted, getRoomMembers } from "./rooms.js";
+import { RoomId, UserId, EncryptionSettings } from "@matrix-org/matrix-sdk-crypto-nodejs";
+import type { SendResult, MatrixEncryptedContent } from "../types.js";
 import { getMachine } from "../crypto/machine.js";
 import { processOutgoingRequests } from "../crypto/outgoing.js";
-import { uploadMedia, mimeToMsgtype, type EncryptedFile } from "./media.js";
-import type { SendResult, MatrixEncryptedContent } from "../types.js";
 import { incrementCounter } from "../health.js";
-import {
-  RoomId,
-  UserId,
-  EncryptionSettings,
-} from "@matrix-org/matrix-sdk-crypto-nodejs";
+import { matrixFetch, txnId } from "./http.js";
+import { uploadMedia, mimeToMsgtype, type EncryptedFile } from "./media.js";
+import { isRoomEncrypted, getRoomMembers } from "./rooms.js";
 
 // Lazy import markdown-it and sanitize-html
 let md: any = null;
@@ -44,9 +40,30 @@ async function formatMessage(text: string): Promise<{
 
   const html = sanitizeHtml(markdown.render(text), {
     allowedTags: [
-      "b", "i", "em", "strong", "a", "p", "br", "ul", "ol", "li",
-      "code", "pre", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6",
-      "hr", "span", "del", "sup", "sub",
+      "b",
+      "i",
+      "em",
+      "strong",
+      "a",
+      "p",
+      "br",
+      "ul",
+      "ol",
+      "li",
+      "code",
+      "pre",
+      "blockquote",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "hr",
+      "span",
+      "del",
+      "sup",
+      "sub",
     ],
     allowedAttributes: {
       a: ["href", "target"],
@@ -69,7 +86,7 @@ async function formatMessage(text: string): Promise<{
  */
 async function fetchEventForReply(
   roomId: string,
-  eventId: string
+  eventId: string,
 ): Promise<{ sender: string; body: string } | undefined> {
   try {
     const raw = await matrixFetch<{
@@ -78,7 +95,7 @@ async function fetchEventForReply(
       content: Record<string, unknown>;
     }>(
       "GET",
-      `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/event/${encodeURIComponent(eventId)}`
+      `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/event/${encodeURIComponent(eventId)}`,
     );
 
     let body: string | undefined;
@@ -87,10 +104,7 @@ async function fetchEventForReply(
     if (raw.type === "m.room.encrypted") {
       try {
         const machine = getMachine();
-        const decrypted = await machine.decryptRoomEvent(
-          JSON.stringify(raw),
-          new RoomId(roomId)
-        );
+        const decrypted = await machine.decryptRoomEvent(JSON.stringify(raw), new RoomId(roomId));
         const parsed = JSON.parse(decrypted.event);
         body = typeof parsed.content?.body === "string" ? parsed.content.body : undefined;
       } catch {
@@ -123,7 +137,7 @@ async function fetchEventForReply(
  */
 async function ensureRoomKeysShared(
   roomId: string,
-  log?: { warn?: (msg: string) => void; info?: (msg: string) => void }
+  log?: { warn?: (msg: string) => void; info?: (msg: string) => void },
 ): Promise<void> {
   const machine = getMachine();
 
@@ -137,7 +151,7 @@ async function ensureRoomKeysShared(
     try {
       const response = await matrixFetch<{ joined: Record<string, unknown> }>(
         "GET",
-        `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/joined_members`
+        `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/joined_members`,
       );
       memberIds = Object.keys(response.joined ?? {});
     } catch (err: any) {
@@ -167,12 +181,12 @@ async function ensureRoomKeysShared(
       const claimResponse = await matrixFetch(
         "POST",
         "/_matrix/client/v3/keys/claim",
-        JSON.parse(claimRequest.body)
+        JSON.parse(claimRequest.body),
       );
       await machine.markRequestAsSent(
         claimRequest.id,
         claimRequest.type,
-        JSON.stringify(claimResponse)
+        JSON.stringify(claimResponse),
       );
     } catch (err: any) {
       log?.warn?.(`[send] Key claim failed: ${err.message}`);
@@ -198,11 +212,7 @@ async function ensureRoomKeysShared(
     try {
       const path = `/_matrix/client/v3/sendToDevice/${encodeURIComponent(toDeviceReq.eventType)}/${encodeURIComponent(toDeviceReq.txnId)}`;
       const response = await matrixFetch("PUT", path, JSON.parse(toDeviceReq.body));
-      await machine.markRequestAsSent(
-        toDeviceReq.id,
-        toDeviceReq.type,
-        JSON.stringify(response)
-      );
+      await machine.markRequestAsSent(toDeviceReq.id, toDeviceReq.type, JSON.stringify(response));
     } catch (err: any) {
       log?.warn?.(`[send] Failed to send room key share: ${err.message}`);
     }
@@ -231,7 +241,7 @@ export async function sendMatrixMessage(opts: {
     // UTF-8-safe truncation: back up from cut point to avoid splitting multi-byte chars
     const buf = Buffer.from(text);
     let end = 59_000;
-    while (end > 0 && (buf[end] & 0xC0) === 0x80) end--;
+    while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
     truncatedText = buf.subarray(0, end).toString("utf-8") + "\n\n[message truncated]";
   }
 
@@ -247,14 +257,20 @@ export async function sendMatrixMessage(opts: {
     const original = await fetchEventForReply(roomId, replyToId);
     if (original) {
       // Plain-text fallback: > <@user:server> original text
-      const quotedLines = original.body.split("\n").map((l) => `> ${l}`).join("\n");
+      const quotedLines = original.body
+        .split("\n")
+        .map((l) => `> ${l}`)
+        .join("\n");
       content.body = `> <${original.sender}>\n${quotedLines}\n\n${content.body}`;
       // HTML fallback: <mx-reply> with sender link and quoted text
       const roomPermalink = `https://matrix.to/#/${encodeURIComponent(roomId)}/${encodeURIComponent(replyToId)}`;
       const senderPermalink = `https://matrix.to/#/${encodeURIComponent(original.sender)}`;
       const sanitizeHtml = await getSanitize();
       const escapedBody = sanitizeHtml(original.body, { allowedTags: [], allowedAttributes: {} });
-      const escapedSender = sanitizeHtml(original.sender, { allowedTags: [], allowedAttributes: {} });
+      const escapedSender = sanitizeHtml(original.sender, {
+        allowedTags: [],
+        allowedAttributes: {},
+      });
       content.formatted_body =
         `<mx-reply><blockquote><a href="${roomPermalink}">In reply to</a> <a href="${senderPermalink}">${escapedSender}</a><br>${escapedBody}</blockquote></mx-reply>` +
         content.formatted_body;
@@ -281,7 +297,11 @@ export async function sendMatrixMessage(opts: {
 async function sendEncrypted(
   roomId: string,
   content: Record<string, unknown>,
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void; error?: (msg: string) => void }
+  log?: {
+    info?: (msg: string) => void;
+    warn?: (msg: string) => void;
+    error?: (msg: string) => void;
+  },
 ): Promise<SendResult> {
   const machine = getMachine();
   const matrixRoomId = new RoomId(roomId);
@@ -291,11 +311,7 @@ async function sendEncrypted(
     await ensureRoomKeysShared(roomId, log as any);
     incrementCounter("encryptOps");
     const encrypted = JSON.parse(
-      await machine.encryptRoomEvent(
-        matrixRoomId,
-        "m.room.message",
-        JSON.stringify(content)
-      )
+      await machine.encryptRoomEvent(matrixRoomId, "m.room.message", JSON.stringify(content)),
     ) as MatrixEncryptedContent;
 
     // Validate encrypted output
@@ -317,7 +333,7 @@ async function sendEncrypted(
     const eventId = await putEvent(
       roomId,
       "m.room.encrypted",
-      encrypted as unknown as Record<string, unknown>
+      encrypted as unknown as Record<string, unknown>,
     );
     incrementCounter("messagesSent");
     return { eventId, roomId };
@@ -329,17 +345,13 @@ async function sendEncrypted(
     // did the full ensureRoomKeysShared dance — repeating it is redundant and
     // doubles the network round-trips for key queries/claims/shares)
     log?.warn?.(
-      `[send] Encrypt failed, retrying after flushing outgoing requests: ${firstErr.message}`
+      `[send] Encrypt failed, retrying after flushing outgoing requests: ${firstErr.message}`,
     );
     await processOutgoingRequests(log as any);
 
     incrementCounter("encryptOps");
     const encrypted = JSON.parse(
-      await machine.encryptRoomEvent(
-        matrixRoomId,
-        "m.room.message",
-        JSON.stringify(content)
-      )
+      await machine.encryptRoomEvent(matrixRoomId, "m.room.message", JSON.stringify(content)),
     ) as MatrixEncryptedContent;
 
     // Post-encryption size check on retry path too
@@ -351,7 +363,7 @@ async function sendEncrypted(
     const eventId = await putEvent(
       roomId,
       "m.room.encrypted",
-      encrypted as unknown as Record<string, unknown>
+      encrypted as unknown as Record<string, unknown>,
     );
     incrementCounter("messagesSent");
     return { eventId, roomId };
@@ -363,7 +375,7 @@ async function sendEncrypted(
  */
 async function sendPlaintext(
   roomId: string,
-  content: Record<string, unknown>
+  content: Record<string, unknown>,
 ): Promise<SendResult> {
   const eventId = await putEvent(roomId, "m.room.message", content);
   incrementCounter("messagesSent");
@@ -376,7 +388,7 @@ async function sendPlaintext(
 async function putEvent(
   roomId: string,
   eventType: string,
-  content: Record<string, unknown>
+  content: Record<string, unknown>,
 ): Promise<string> {
   // Pre-send size check — covers both plaintext and any event type
   const size = Buffer.byteLength(JSON.stringify(content));
@@ -387,7 +399,7 @@ async function putEvent(
   const response = await matrixFetch<{ event_id: string }>(
     "PUT",
     `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/${encodeURIComponent(eventType)}/${tid}`,
-    content
+    content,
   );
   return response.event_id;
 }
@@ -400,7 +412,11 @@ export async function sendMedia(opts: {
   filename: string;
   caption?: string;
   replyToId?: string;
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void; error?: (msg: string) => void };
+  log?: {
+    info?: (msg: string) => void;
+    warn?: (msg: string) => void;
+    error?: (msg: string) => void;
+  };
 }): Promise<SendResult> {
   const { roomId, buffer, mimeType, filename, caption, replyToId, log } = opts;
   const encrypted = isRoomEncrypted(roomId);
@@ -442,7 +458,7 @@ export async function sendMedia(opts: {
 export async function sendReaction(
   roomId: string,
   targetEventId: string,
-  emoji: string
+  emoji: string,
 ): Promise<string> {
   const content = {
     "m.relates_to": {
@@ -456,13 +472,13 @@ export async function sendReaction(
 
 export async function listReactions(
   roomId: string,
-  eventId: string
+  eventId: string,
 ): Promise<Record<string, number>> {
   const response = await matrixFetch<{
     chunk: Array<{ content: { "m.relates_to"?: { key?: string } } }>;
   }>(
     "GET",
-    `/_matrix/client/v1/rooms/${encodeURIComponent(roomId)}/relations/${encodeURIComponent(eventId)}/m.annotation/m.reaction`
+    `/_matrix/client/v1/rooms/${encodeURIComponent(roomId)}/relations/${encodeURIComponent(eventId)}/m.annotation/m.reaction`,
   );
 
   const counts: Record<string, number> = {};
@@ -477,25 +493,29 @@ export async function removeReaction(
   roomId: string,
   eventId: string,
   ownUserId: string,
-  emoji: string
+  emoji: string,
 ): Promise<void> {
   // Find own reaction event via relations API
   const response = await matrixFetch<{
-    chunk: Array<{ event_id: string; sender: string; content: { "m.relates_to"?: { key?: string } } }>;
+    chunk: Array<{
+      event_id: string;
+      sender: string;
+      content: { "m.relates_to"?: { key?: string } };
+    }>;
   }>(
     "GET",
-    `/_matrix/client/v1/rooms/${encodeURIComponent(roomId)}/relations/${encodeURIComponent(eventId)}/m.annotation/m.reaction`
+    `/_matrix/client/v1/rooms/${encodeURIComponent(roomId)}/relations/${encodeURIComponent(eventId)}/m.annotation/m.reaction`,
   );
 
   const ownReaction = (response.chunk ?? []).find(
-    (e) => e.sender === ownUserId && e.content?.["m.relates_to"]?.key === emoji
+    (e) => e.sender === ownUserId && e.content?.["m.relates_to"]?.key === emoji,
   );
 
   if (ownReaction?.event_id) {
     await matrixFetch(
       "PUT",
       `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/redact/${encodeURIComponent(ownReaction.event_id)}/${txnId()}`,
-      {}
+      {},
     );
   }
 }
@@ -504,7 +524,7 @@ export async function removeReaction(
 export async function editMessage(
   roomId: string,
   targetEventId: string,
-  newText: string
+  newText: string,
 ): Promise<SendResult> {
   const formatted = await formatMessage(newText);
   // Outer content includes format/formatted_body for clients that don't understand edits
@@ -529,14 +549,14 @@ export async function editMessage(
 export async function deleteMessage(
   roomId: string,
   eventId: string,
-  reason?: string
+  reason?: string,
 ): Promise<void> {
   const body: Record<string, unknown> = {};
   if (reason) body.reason = reason;
   await matrixFetch(
     "PUT",
     `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/redact/${encodeURIComponent(eventId)}/${txnId()}`,
-    body
+    body,
   );
 }
 
@@ -549,11 +569,7 @@ const TYPING_THROTTLE_MS = 4_000;
  * Send typing indicator. Throttled: re-sends typing=true only every 4s.
  * Fire-and-forget — errors are silently ignored.
  */
-export async function sendTyping(
-  roomId: string,
-  userId: string,
-  typing: boolean
-): Promise<void> {
+export async function sendTyping(roomId: string, userId: string, typing: boolean): Promise<void> {
   if (typing) {
     const now = Date.now();
     if (now - lastTypingSentAt < TYPING_THROTTLE_MS) return;
@@ -564,7 +580,7 @@ export async function sendTyping(
     await matrixFetch(
       "PUT",
       `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/typing/${encodeURIComponent(userId)}`,
-      { typing, timeout: 30_000 }
+      { typing, timeout: 30_000 },
     );
   } catch {
     // Non-critical — silently ignore

@@ -9,10 +9,7 @@ import { matrixFetch } from "./http.js";
  * - #alias:domain → resolve via directory API
  * - Prefixed: matrix:, room:, channel:, user: stripped before resolution
  */
-export async function resolveMatrixTarget(
-  raw: string,
-  userId: string
-): Promise<string> {
+export async function resolveMatrixTarget(raw: string, userId: string): Promise<string> {
   let target = raw.trim();
   if (!target) throw new Error("Matrix target is required");
 
@@ -43,10 +40,7 @@ export async function resolveMatrixTarget(
 // SINGLETON: multi-account requires refactoring this to per-account state
 const directRoomCache = new Map<string, string>();
 
-async function resolveDirectRoomId(
-  targetUserId: string,
-  ownUserId: string
-): Promise<string> {
+async function resolveDirectRoomId(targetUserId: string, ownUserId: string): Promise<string> {
   const cached = directRoomCache.get(targetUserId);
   if (cached) return cached;
 
@@ -54,7 +48,7 @@ async function resolveDirectRoomId(
   try {
     const directData = await matrixFetch<Record<string, string[]>>(
       "GET",
-      `/_matrix/client/v3/user/${encodeURIComponent(ownUserId)}/account_data/m.direct`
+      `/_matrix/client/v3/user/${encodeURIComponent(ownUserId)}/account_data/m.direct`,
     );
     const rooms = directData?.[targetUserId];
     if (Array.isArray(rooms) && rooms.length > 0) {
@@ -69,7 +63,7 @@ async function resolveDirectRoomId(
   try {
     const { joined_rooms } = await matrixFetch<{ joined_rooms: string[] }>(
       "GET",
-      "/_matrix/client/v3/joined_rooms"
+      "/_matrix/client/v3/joined_rooms",
     );
 
     let fallback: string | null = null;
@@ -79,10 +73,7 @@ async function resolveDirectRoomId(
       try {
         const { joined } = await matrixFetch<{
           joined: Record<string, unknown>;
-        }>(
-          "GET",
-          `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/joined_members`
-        );
+        }>("GET", `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/joined_members`);
         const members = Object.keys(joined ?? {});
         if (!members.includes(targetUserId)) continue;
         if (members.length === 2) {
@@ -103,7 +94,7 @@ async function resolveDirectRoomId(
   }
 
   throw new Error(
-    `No DM room found for ${targetUserId}. Create a DM room first or use a room ID (!...)`
+    `No DM room found for ${targetUserId}. Create a DM room first or use a room ID (!...)`,
   );
 }
 
@@ -112,7 +103,7 @@ async function resolveDirectRoomId(
 async function resolveRoomAlias(alias: string): Promise<string> {
   const response = await matrixFetch<{ room_id: string }>(
     "GET",
-    `/_matrix/client/v3/directory/room/${encodeURIComponent(alias)}`
+    `/_matrix/client/v3/directory/room/${encodeURIComponent(alias)}`,
   );
   if (!response.room_id) {
     throw new Error(`Matrix alias ${alias} could not be resolved`);

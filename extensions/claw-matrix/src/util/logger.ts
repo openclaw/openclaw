@@ -35,19 +35,14 @@ function formatFields(fields?: Record<string, unknown>): string {
  * @param component - Tag prefix (e.g., "sync", "crypto", "send")
  * @param base - The PluginLogger from OpenClaw (or undefined for silent)
  */
-export function createLogger(
-  component: string,
-  base?: PluginLogger | null
-): StructuredLogger {
+export function createLogger(component: string, base?: PluginLogger | null): StructuredLogger {
   const tag = `[${component}]`;
   return {
     info(msg: string, fields?: Record<string, unknown>): void {
       base?.info?.(`${tag} ${msg}${formatFields(fields)}`);
     },
     warn(msg: string, fields?: Record<string, unknown>): void {
-      (base?.warn ?? base?.info)?.(
-        `${tag} ${msg}${formatFields(fields)}`
-      );
+      (base?.warn ?? base?.info)?.(`${tag} ${msg}${formatFields(fields)}`);
     },
     error(msg: string, fields?: Record<string, unknown>): void {
       base?.error?.(`${tag} ${msg}${formatFields(fields)}`);

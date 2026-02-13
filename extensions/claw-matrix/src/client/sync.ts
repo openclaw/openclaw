@@ -1,9 +1,6 @@
+import { RoomId, DeviceLists, UserId } from "@matrix-org/matrix-sdk-crypto-nodejs";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { matrixFetch, MatrixApiError, MatrixTimeoutError, updateAccessToken } from "./http.js";
-import { processStateEvents, cleanupRoom, isRoomEncrypted, invalidateMDirectCache } from "./rooms.js";
-import { getMachine, closeMachine, withCryptoTimeout, CRYPTO_TIMEOUT_MS } from "../crypto/machine.js";
-import { processOutgoingRequests } from "../crypto/outgoing.js";
 import type {
   MatrixSyncResponse,
   MatrixFilterResponse,
@@ -11,8 +8,26 @@ import type {
   MatrixLoginResponse,
   UTDQueueEntry,
 } from "../types.js";
-import { RoomId, DeviceLists, UserId } from "@matrix-org/matrix-sdk-crypto-nodejs";
-import { updateSyncMetrics, updateCryptoMetrics, updateRoomMetrics, incrementCounter } from "../health.js";
+import {
+  getMachine,
+  closeMachine,
+  withCryptoTimeout,
+  CRYPTO_TIMEOUT_MS,
+} from "../crypto/machine.js";
+import { processOutgoingRequests } from "../crypto/outgoing.js";
+import {
+  updateSyncMetrics,
+  updateCryptoMetrics,
+  updateRoomMetrics,
+  incrementCounter,
+} from "../health.js";
+import { matrixFetch, MatrixApiError, MatrixTimeoutError, updateAccessToken } from "./http.js";
+import {
+  processStateEvents,
+  cleanupRoom,
+  isRoomEncrypted,
+  invalidateMDirectCache,
+} from "./rooms.js";
 import { getTrackedRoomIds } from "./rooms.js";
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -92,7 +107,7 @@ function saveSyncToken(storePath: string, token: string): void {
   fs.writeFileSync(
     tokenPath,
     JSON.stringify({ next_batch: token, processedEvents: processedEventIds }),
-    "utf-8"
+    "utf-8",
   );
 }
 
@@ -107,7 +122,7 @@ async function getOrCreateFilter(userId: string): Promise<string | null> {
           timeline: { limit: 10 },
           state: { lazy_load_members: true },
         },
-      }
+      },
     );
     return response.filter_id;
   } catch {
@@ -169,15 +184,11 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
       let syncPath = "/_matrix/client/v3/sync?timeout=" + SYNC_TIMEOUT_MS;
       if (nextBatch) syncPath += `&since=${encodeURIComponent(nextBatch)}`;
       if (filterId) syncPath += `&filter=${encodeURIComponent(filterId)}`;
-      else if (inlineFilter)
-        syncPath += `&filter=${encodeURIComponent(inlineFilter)}`;
+      else if (inlineFilter) syncPath += `&filter=${encodeURIComponent(inlineFilter)}`;
 
-      const response = await matrixFetch<MatrixSyncResponse>(
-        "GET",
-        syncPath,
-        undefined,
-        { timeoutMs: FETCH_TIMEOUT_MS }
-      );
+      const response = await matrixFetch<MatrixSyncResponse>("GET", syncPath, undefined, {
+        timeoutMs: FETCH_TIMEOUT_MS,
+      });
 
       // Success — reset backoff
       consecutiveFailures = 0;
@@ -188,12 +199,13 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
       const toDeviceEvents = response.to_device?.events ?? [];
       const deviceLists = response.device_lists;
       const otkCounts = response.device_one_time_keys_count ?? {};
-      const unusedFallbackKeys =
-        response.device_unused_fallback_key_types ?? [];
+      const unusedFallbackKeys = response.device_unused_fallback_key_types ?? [];
 
       // DEBUG: Log to-device events and device list changes
       if (toDeviceEvents.length > 0) {
-        log?.info?.(`[sync] Received ${toDeviceEvents.length} to-device event(s): ${toDeviceEvents.map((e: any) => e.type).join(", ")}`);
+        log?.info?.(
+          `[sync] Received ${toDeviceEvents.length} to-device event(s): ${toDeviceEvents.map((e: any) => e.type).join(", ")}`,
+        );
       }
       if (deviceLists?.changed?.length) {
         log?.info?.(`[sync] Device list changed for: ${deviceLists.changed.join(", ")}`);
@@ -214,7 +226,7 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
         log?.warn?.("[sync] DeviceLists(UserId[]) failed, falling back to string[]");
         deviceListsObj = new DeviceLists(
           (deviceLists?.changed ?? []) as any,
-          (deviceLists?.left ?? []) as any
+          (deviceLists?.left ?? []) as any,
         );
       }
 
@@ -226,10 +238,10 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
           JSON.stringify(toDeviceEvents),
           deviceListsObj,
           new Map(Object.entries(otkCounts)),
-          unusedFallbackKeys
+          unusedFallbackKeys,
         ),
         CRYPTO_TIMEOUT_MS,
-        "receiveSyncChanges"
+        "receiveSyncChanges",
       );
 
       // OTK low-count warning — force key upload if dangerously low
@@ -267,9 +279,7 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
         // 3b. Timeline events
         if (room.timeline?.events) {
           // Process state events in timeline too
-          const stateInTimeline = room.timeline.events.filter(
-            (e) => e.state_key !== undefined
-          );
+          const stateInTimeline = room.timeline.events.filter((e) => e.state_key !== undefined);
           if (stateInTimeline.length) {
             processStateEvents(roomId, stateInTimeline);
           }
@@ -281,7 +291,7 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
               await processTimelineEvent(event, roomId, onMessage, log);
             } catch (eventErr: any) {
               log?.error?.(
-                `[sync] Error processing event ${event.event_id ?? "unknown"} in ${roomId}: ${eventErr.message}`
+                `[sync] Error processing event ${event.event_id ?? "unknown"} in ${roomId}: ${eventErr.message}`,
               );
               // Continue processing remaining events — don't let one bad event break the sync
             }
@@ -310,7 +320,7 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
         const reasonEvent = leaveEvents.find(
           (e: MatrixEvent) =>
             e.type === "m.room.member" &&
-            (e.content?.membership === "leave" || e.content?.membership === "ban")
+            (e.content?.membership === "leave" || e.content?.membership === "ban"),
         );
         const reason = (reasonEvent?.content as any)?.reason;
         log?.info?.(`[sync] Left room ${roomId}${reason ? ` (reason: ${reason})` : ""}`);
@@ -321,10 +331,12 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
       const preReqs = await withCryptoTimeout(
         getMachine().outgoingRequests(),
         CRYPTO_TIMEOUT_MS,
-        "outgoingRequests(sync)"
+        "outgoingRequests(sync)",
       );
       if (preReqs.length > 0) {
-        log?.info?.(`[sync] Processing ${preReqs.length} outgoing request(s): ${preReqs.map((r: any) => r.type?.toString?.() ?? r.constructor?.name ?? "?").join(", ")}`);
+        log?.info?.(
+          `[sync] Processing ${preReqs.length} outgoing request(s): ${preReqs.map((r: any) => r.type?.toString?.() ?? r.constructor?.name ?? "?").join(", ")}`,
+        );
       }
       await processOutgoingRequests(log);
 
@@ -334,10 +346,7 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
       const allRoomIds = getTrackedRoomIds();
       // Deduplicate: joinedRooms from this sync may overlap with tracked rooms
       const allJoinedSet = new Set([...Object.keys(joinedRooms), ...allRoomIds]);
-      updateRoomMetrics(
-        allJoinedSet.size,
-        allRoomIds.filter((id) => isRoomEncrypted(id)).length
-      );
+      updateRoomMetrics(allJoinedSet.size, allRoomIds.filter((id) => isRoomEncrypted(id)).length);
 
       // Update status
       setStatus?.({
@@ -368,7 +377,7 @@ export async function runSyncLoop(opts: SyncLoopOpts): Promise<void> {
 
       consecutiveFailures++;
       log?.error(
-        `[sync] Sync failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${err.message}`
+        `[sync] Sync failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${err.message}`,
       );
 
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -395,7 +404,11 @@ async function processTimelineEvent(
   event: MatrixEvent,
   roomId: string,
   onMessage: (event: MatrixEvent, roomId: string) => void | Promise<void>,
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void; error?: (msg: string) => void }
+  log?: {
+    info?: (msg: string) => void;
+    warn?: (msg: string) => void;
+    error?: (msg: string) => void;
+  },
 ): Promise<void> {
   // Skip old events (avoid replaying history on initial sync)
   const age = event.unsigned?.age ?? 0;
@@ -413,12 +426,9 @@ async function processTimelineEvent(
       incrementCounter("decryptOps");
       const machine = getMachine();
       const decrypted = await withCryptoTimeout(
-        machine.decryptRoomEvent(
-          JSON.stringify(event),
-          new RoomId(roomId)
-        ),
+        machine.decryptRoomEvent(JSON.stringify(event), new RoomId(roomId)),
         CRYPTO_TIMEOUT_MS,
-        "decryptRoomEvent"
+        "decryptRoomEvent",
       );
       const decryptedEvent = JSON.parse(decrypted.event);
 
@@ -437,9 +447,7 @@ async function processTimelineEvent(
       // UTD — queue for retry
       incrementCounter("decryptFailures");
       incrementCounter("utdQueued");
-      log?.warn?.(
-        `[sync] Failed to decrypt event ${event.event_id}: ${err.message}`
-      );
+      log?.warn?.(`[sync] Failed to decrypt event ${event.event_id}: ${err.message}`);
       pushUTD({ event, roomId, queuedAt: Date.now(), retries: 0 });
     }
   } else if (event.type === "m.room.message") {
@@ -454,12 +462,12 @@ async function processTimelineEvent(
     // Remove redacted event from UTD queue (prevents forwarding deleted content)
     // Pre-v1.11: `redacts` is a top-level event field
     // v1.11+: moved to `content.redacts`
-    const redactsId =
-      event.redacts ??
-      (event.content as any)?.redacts;
+    const redactsId = event.redacts ?? (event.content as any)?.redacts;
     if (redactsId) {
       removeUTDByEventId(redactsId);
-      log?.info?.(`[sync] Redaction: ${event.sender} redacted ${redactsId}${(event.content as any)?.reason ? ` (reason: ${(event.content as any).reason})` : ""}`);
+      log?.info?.(
+        `[sync] Redaction: ${event.sender} redacted ${redactsId}${(event.content as any)?.reason ? ` (reason: ${(event.content as any).reason})` : ""}`,
+      );
     }
   }
 }
@@ -469,7 +477,7 @@ async function retryUTDQueue(
   onMessage: (event: MatrixEvent, roomId: string) => void | Promise<void>,
   log?: { info?: (msg: string) => void; warn?: (msg: string) => void },
   backupDecryptionKey?: any,
-  backupVersion?: string
+  backupVersion?: string,
 ): Promise<void> {
   const now = Date.now();
   const toRetry = [...utdQueue];
@@ -478,9 +486,7 @@ async function retryUTDQueue(
     // Expire old entries
     if (now - entry.queuedAt > UTD_EXPIRE_MS) {
       incrementCounter("utdExpired");
-      log?.warn?.(
-        `[sync] Giving up on UTD event ${entry.event.event_id} (>1h old)`
-      );
+      log?.warn?.(`[sync] Giving up on UTD event ${entry.event.event_id} (>1h old)`);
       removeUTDByEventId(entry.event.event_id ?? "");
       continue;
     }
@@ -492,12 +498,9 @@ async function retryUTDQueue(
       incrementCounter("decryptOps");
       const machine = getMachine();
       const decrypted = await withCryptoTimeout(
-        machine.decryptRoomEvent(
-          JSON.stringify(entry.event),
-          new RoomId(entry.roomId)
-        ),
+        machine.decryptRoomEvent(JSON.stringify(entry.event), new RoomId(entry.roomId)),
         CRYPTO_TIMEOUT_MS,
-        "decryptRoomEvent(UTD retry)"
+        "decryptRoomEvent(UTD retry)",
       );
       const decryptedEvent = JSON.parse(decrypted.event);
 
@@ -528,7 +531,7 @@ async function retryUTDQueue(
               backupVersion,
               entry.roomId,
               sessionId,
-              log
+              log,
             );
             if (restored) {
               // Retry decrypt immediately after backup restore
@@ -536,12 +539,9 @@ async function retryUTDQueue(
                 incrementCounter("decryptOps");
                 const machine = getMachine();
                 const decrypted = await withCryptoTimeout(
-                  machine.decryptRoomEvent(
-                    JSON.stringify(entry.event),
-                    new RoomId(entry.roomId)
-                  ),
+                  machine.decryptRoomEvent(JSON.stringify(entry.event), new RoomId(entry.roomId)),
                   CRYPTO_TIMEOUT_MS,
-                  "decryptRoomEvent(backup restore)"
+                  "decryptRoomEvent(backup restore)",
                 );
                 const decryptedEvent = JSON.parse(decrypted.event);
                 incrementCounter("utdRecovered");
@@ -573,7 +573,11 @@ async function retryUTDQueue(
 async function handleTokenError(
   err: MatrixApiError,
   opts: SyncLoopOpts,
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void; error?: (msg: string) => void }
+  log?: {
+    info?: (msg: string) => void;
+    warn?: (msg: string) => void;
+    error?: (msg: string) => void;
+  },
 ): Promise<void> {
   if (err.softLogout && opts.password) {
     // Soft logout: KEEP crypto store, re-auth with same device_id
@@ -591,23 +595,19 @@ async function handleTokenError(
           password: opts.password,
           device_id: opts.deviceName ?? "OpenClaw",
         },
-        { noAuth: true }
+        { noAuth: true },
       );
 
       // Update access token (already imported statically)
       updateAccessToken(response.access_token);
       log?.info?.("[sync] Re-auth successful, resuming sync");
     } catch (reAuthErr: any) {
-      log?.error?.(
-        `[sync] Re-auth failed: ${reAuthErr.message}. Stopping sync.`
-      );
+      log?.error?.(`[sync] Re-auth failed: ${reAuthErr.message}. Stopping sync.`);
       throw reAuthErr;
     }
   } else {
     // Hard logout: server DESTROYED the session
-    log?.error?.(
-      "[sync] Hard logout — server destroyed session. Wiping crypto store."
-    );
+    log?.error?.("[sync] Hard logout — server destroyed session. Wiping crypto store.");
     // Drain pending crypto operations before closing, then wipe store.
     // closeMachine() is guarded against concurrent calls.
     await closeMachine();
@@ -632,12 +632,16 @@ async function handleRoomInvite(
   roomId: string,
   inviteData: { invite_state?: { events?: MatrixEvent[] } },
   opts: SyncLoopOpts,
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void; error?: (msg: string) => void }
+  log?: {
+    info?: (msg: string) => void;
+    warn?: (msg: string) => void;
+    error?: (msg: string) => void;
+  },
 ): Promise<void> {
   // Extract inviter from invite state events
   const inviteEvents = inviteData?.invite_state?.events ?? [];
   const memberEvent = inviteEvents.find(
-    (e) => e.type === "m.room.member" && e.content?.membership === "invite"
+    (e) => e.type === "m.room.member" && e.content?.membership === "invite",
   );
   const inviter = memberEvent?.sender ?? "unknown";
 
@@ -649,7 +653,7 @@ async function handleRoomInvite(
   if (opts.autoJoin === "allowlist") {
     const normalizedInviter = inviter.replace(/^matrix:/, "");
     const allowed = (opts.autoJoinAllowFrom ?? []).some(
-      (a) => a.replace(/^matrix:/, "") === normalizedInviter
+      (a) => a.replace(/^matrix:/, "") === normalizedInviter,
     );
     if (!allowed) {
       log?.info?.(`[sync] Invited to ${roomId} by ${inviter} (not in allowlist, ignoring)`);
@@ -664,7 +668,9 @@ async function handleRoomInvite(
     joinWindowStart = now;
   }
   if (joinCount >= JOIN_RATE_LIMIT) {
-    log?.warn?.(`[sync] Join rate limit hit (${JOIN_RATE_LIMIT}/${JOIN_RATE_WINDOW_MS}ms), skipping ${roomId}`);
+    log?.warn?.(
+      `[sync] Join rate limit hit (${JOIN_RATE_LIMIT}/${JOIN_RATE_WINDOW_MS}ms), skipping ${roomId}`,
+    );
     return;
   }
 
@@ -683,15 +689,12 @@ async function handleRoomInvite(
 }
 
 // ── Read Receipts ──────────────────────────────────────────────────────
-async function sendReadReceipt(
-  roomId: string,
-  eventId: string
-): Promise<void> {
+async function sendReadReceipt(roomId: string, eventId: string): Promise<void> {
   try {
     await matrixFetch(
       "POST",
       `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/receipt/m.read/${encodeURIComponent(eventId)}`,
-      {}
+      {},
     );
   } catch {
     // Best-effort — don't fail sync for receipt errors

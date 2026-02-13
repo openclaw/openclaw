@@ -143,7 +143,7 @@ MUST return `{ content: [{ type: "text", text: JSON.stringify(payload) }], detai
 - **Recovery key:** base58 decode → 0x8B01 prefix validation → parity check → BackupDecryptionKey → server backup activation
 - **Backup UTD fallback:** per-session fetch from server backup, decryptV1, inject via synthetic forwarded_room_key
 - **Media encryption:** AES-256-CTR with SHA-256 hash-before-decrypt (malleability protection)
-- **MXC URI validation:** Strict regex — server_name `[a-zA-Z0-9._:-]`, media_id `[a-zA-Z0-9._-]` (prevents path traversal)
+- **MXC URI validation:** Strict regex — server*name `[a-zA-Z0-9.*:-]`, media_id `[a-zA-Z0-9._-]` (prevents path traversal)
 - **SSSS key verification:** Recovery key verified against key metadata (HKDF info="") before decrypting secrets (HKDF info=secretName)
 - **Startup diagnostics:** Logs device keys + cross-signing status
 

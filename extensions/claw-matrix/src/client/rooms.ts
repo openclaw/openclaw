@@ -45,7 +45,7 @@ async function fetchMDirectRoomIds(): Promise<Set<string> | null> {
   try {
     const directData = await matrixFetch<Record<string, string[]>>(
       "GET",
-      `/_matrix/client/v3/user/${encodeURIComponent(mDirectUserId)}/account_data/m.direct`
+      `/_matrix/client/v3/user/${encodeURIComponent(mDirectUserId)}/account_data/m.direct`,
     );
 
     const roomIds = new Set<string>();
@@ -168,10 +168,7 @@ export function getRoomMembers(roomId: string): Set<string> {
 /**
  * Process state events from a sync response for a room.
  */
-export function processStateEvents(
-  roomId: string,
-  events: MatrixEvent[]
-): void {
+export function processStateEvents(roomId: string, events: MatrixEvent[]): void {
   for (const event of events) {
     switch (event.type) {
       case "m.room.encryption":
@@ -236,10 +233,7 @@ export function processStateEvents(
  * Get display name for a user in a room.
  * Cache → profile API → raw user ID fallback.
  */
-export async function getMemberDisplayName(
-  roomId: string,
-  userId: string
-): Promise<string> {
+export async function getMemberDisplayName(roomId: string, userId: string): Promise<string> {
   // Check room-level cache first
   const roomDn = displayNameCache.get(roomId);
   if (roomDn?.has(userId)) return roomDn.get(userId)!;
@@ -248,7 +242,7 @@ export async function getMemberDisplayName(
   try {
     const profile = await matrixFetch<{ displayname?: string }>(
       "GET",
-      `/_matrix/client/v3/profile/${encodeURIComponent(userId)}`
+      `/_matrix/client/v3/profile/${encodeURIComponent(userId)}`,
     );
     if (profile.displayname) {
       // Cache for future use
@@ -287,8 +281,5 @@ export function cleanupRoom(roomId: string): void {
  * Get all tracked room IDs.
  */
 export function getTrackedRoomIds(): string[] {
-  return [...new Set([
-    ...encryptionCache.keys(),
-    ...roomTypeCache.keys(),
-  ])];
+  return [...new Set([...encryptionCache.keys(), ...roomTypeCache.keys()])];
 }

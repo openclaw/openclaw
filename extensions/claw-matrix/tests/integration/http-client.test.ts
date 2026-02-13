@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 /**
  * Integration test scaffolding: HTTP client against mock homeserver.
  *
@@ -5,9 +6,8 @@
  * matrixFetch/initHttpClient for end-to-end request testing.
  */
 import { describe, it, before, after } from "node:test";
-import assert from "node:assert/strict";
-import { MockHomeserver } from "./mock-homeserver.js";
 import { initHttpClient, matrixFetch, MatrixApiError } from "../../src/client/http.js";
+import { MockHomeserver } from "./mock-homeserver.js";
 
 describe("integration: HTTP client with mock homeserver", () => {
   const server = new MockHomeserver({ accessToken: "test-token-123" });
@@ -31,7 +31,7 @@ describe("integration: HTTP client with mock homeserver", () => {
       "GET",
       "/_matrix/client/v3/sync",
       undefined,
-      { skipRateLimit: true }
+      { skipRateLimit: true },
     );
     assert.equal(result.next_batch, "s42");
   });
@@ -45,7 +45,7 @@ describe("integration: HTTP client with mock homeserver", () => {
       "PUT",
       `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
       { msgtype: "m.text", body: "Hello from test" },
-      { skipRateLimit: true }
+      { skipRateLimit: true },
     );
 
     assert.equal(server.sentEvents.length, 1);
@@ -61,20 +61,23 @@ describe("integration: HTTP client with mock homeserver", () => {
       "GET",
       `/_matrix/client/v3/directory/room/${encodeURIComponent("#test:mock.server")}`,
       undefined,
-      { skipRateLimit: true }
+      { skipRateLimit: true },
     );
     assert.equal(result.room_id, "!resolved:mock.server");
   });
 
   it("should handle 404 as MatrixApiError", async () => {
     await assert.rejects(
-      () => matrixFetch("GET", "/_matrix/client/v3/directory/room/%23nonexistent:x", undefined, { skipRateLimit: true }),
+      () =>
+        matrixFetch("GET", "/_matrix/client/v3/directory/room/%23nonexistent:x", undefined, {
+          skipRateLimit: true,
+        }),
       (err: unknown) => {
         assert.ok(err instanceof MatrixApiError);
         assert.equal(err.statusCode, 404);
         assert.equal(err.errcode, "M_NOT_FOUND");
         return true;
-      }
+      },
     );
   });
 
@@ -87,7 +90,7 @@ describe("integration: HTTP client with mock homeserver", () => {
         assert.ok(err instanceof MatrixApiError);
         assert.equal(err.statusCode, 401);
         return true;
-      }
+      },
     );
     // Restore correct token
     initHttpClient(server.url, "test-token-123");
@@ -102,7 +105,7 @@ describe("integration: HTTP client with mock homeserver", () => {
       "GET",
       `/_matrix/client/v3/user/${encodeURIComponent("@bot:mock.server")}/account_data/m.direct`,
       undefined,
-      { skipRateLimit: true }
+      { skipRateLimit: true },
     );
     assert.deepEqual(result["@friend:mock.server"], ["!dm-room:mock.server"]);
   });
@@ -112,7 +115,7 @@ describe("integration: HTTP client with mock homeserver", () => {
       "POST",
       "/_matrix/media/v3/upload?filename=test.txt",
       undefined, // body would be binary in real usage
-      { skipRateLimit: true }
+      { skipRateLimit: true },
     );
     assert.ok(result.content_uri.startsWith("mxc://"));
   });
@@ -122,7 +125,7 @@ describe("integration: HTTP client with mock homeserver", () => {
       "POST",
       "/_matrix/client/v3/keys/upload",
       { device_keys: {}, one_time_keys: {} },
-      { skipRateLimit: true }
+      { skipRateLimit: true },
     );
     assert.ok(result.one_time_key_counts);
   });

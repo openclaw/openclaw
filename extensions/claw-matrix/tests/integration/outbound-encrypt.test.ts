@@ -6,18 +6,16 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { createMockOlmMachine, type MockOlmMachine } from "../mocks/olm-machine.js";
-import { MockMatrixServer } from "../mocks/matrix-server.js";
 import { initHttpClient, matrixFetch } from "../../src/client/http.js";
 import { setRoomEncrypted } from "../../src/client/rooms.js";
+import { MockMatrixServer } from "../mocks/matrix-server.js";
+import { createMockOlmMachine, type MockOlmMachine } from "../mocks/olm-machine.js";
 
 // We cannot use the real OlmMachine without the full test harness and FFI,
 // so we mock the crypto/machine module to return our mock machine.
 vi.mock("../../src/crypto/machine.js", () => ({
   getMachine: vi.fn(),
-  withCryptoTimeout: vi.fn(
-    (promise: Promise<unknown>) => promise
-  ),
+  withCryptoTimeout: vi.fn((promise: Promise<unknown>) => promise),
   CRYPTO_TIMEOUT_MS: 30_000,
   initCryptoMachine: vi.fn(),
   closeMachine: vi.fn(),

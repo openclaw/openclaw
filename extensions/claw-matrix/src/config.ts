@@ -23,30 +23,25 @@ export const MatrixConfigSchema = z.object({
         return s.replace(/\/+$/, "");
       }
     }),
-  userId: z
-    .string()
-    .regex(/^@[\w.-]+:[\w.-]+$/, "Must be @user:domain format"),
+  userId: z.string().regex(/^@[\w.-]+:[\w.-]+$/, "Must be @user:domain format"),
   accessToken: z.string().min(1),
   password: z.string().optional(),
   encryption: z.boolean().default(true),
   deviceName: z.string().default("OpenClaw"),
   dm: z
     .object({
-      policy: z
-        .enum(["pairing", "allowlist", "open", "disabled"])
-        .default("allowlist"),
+      policy: z.enum(["pairing", "allowlist", "open", "disabled"]).default("allowlist"),
       allowFrom: z.array(z.string()).default([]),
     })
     .default(() => ({ policy: "allowlist" as const, allowFrom: [] })),
-  groupPolicy: z
-    .enum(["allowlist", "open", "disabled"])
-    .default("allowlist"),
+  groupPolicy: z.enum(["allowlist", "open", "disabled"]).default("allowlist"),
   groups: z
-    .record(z.string(),
+    .record(
+      z.string(),
       z.object({
         allow: z.boolean().default(true),
         requireMention: z.boolean().default(false),
-      })
+      }),
     )
     .default({}),
   groupAllowFrom: z.array(z.string()).default([]),
@@ -85,13 +80,13 @@ export type ResolvedMatrixAccount = MatrixConfig & {
  */
 export function resolveMatrixAccount(
   cfg: unknown,
-  accountId?: string | null
+  accountId?: string | null,
 ): ResolvedMatrixAccount {
   // Single-account limitation: only "default" (or null/undefined) is supported.
   // Multi-account requires per-account isolation of crypto, sync, and room state.
   if (accountId != null && accountId !== "default") {
     throw new Error(
-      `[claw-matrix] Account "${accountId}" not supported: only a single account ("default") is implemented. Multi-account is planned for Phase 3.`
+      `[claw-matrix] Account "${accountId}" not supported: only a single account ("default") is implemented. Multi-account is planned for Phase 3.`,
     );
   }
 
@@ -140,7 +135,11 @@ export function resolveMatrixAccount(
     enabled: matrixCfg.enabled !== false,
     homeserver: (() => {
       const raw = matrixCfg.homeserver ?? "";
-      try { return new URL(raw).origin; } catch { return raw.replace(/\/+$/, ""); }
+      try {
+        return new URL(raw).origin;
+      } catch {
+        return raw.replace(/\/+$/, "");
+      }
     })(),
     userId: matrixCfg.userId ?? "",
     accessToken: matrixCfg.accessToken ?? "",

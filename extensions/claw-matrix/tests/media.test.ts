@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import * as crypto from "node:crypto";
 /**
  * Tests for media encryption/decryption round-trip.
  *
@@ -9,9 +11,12 @@
  * We also test the exported utility functions: mimeToMsgtype, isValidMxcUrl.
  */
 import { describe, it } from "node:test";
-import assert from "node:assert/strict";
-import * as crypto from "node:crypto";
-import { decryptAttachment, mimeToMsgtype, isValidMxcUrl, type EncryptedFile } from "../src/client/media.js";
+import {
+  decryptAttachment,
+  mimeToMsgtype,
+  isValidMxcUrl,
+  type EncryptedFile,
+} from "../src/client/media.js";
 
 // ── Helper: replicate encryptAttachment logic for testing ────────────
 // encryptAttachment is not exported, so we replicate its logic here
@@ -103,10 +108,7 @@ describe("media encryption", () => {
       // Tamper with ciphertext
       const tampered = Buffer.from(ciphertext);
       tampered[0] ^= 0xff;
-      assert.throws(
-        () => decryptAttachment(tampered, file),
-        /hash mismatch/
-      );
+      assert.throws(() => decryptAttachment(tampered, file), /hash mismatch/);
     });
 
     it("should reject wrong hash in metadata", () => {
@@ -117,10 +119,7 @@ describe("media encryption", () => {
         ...file,
         hashes: { sha256: toUnpaddedBase64(crypto.randomBytes(32)) },
       };
-      assert.throws(
-        () => decryptAttachment(ciphertext, badFile),
-        /hash mismatch/
-      );
+      assert.throws(() => decryptAttachment(ciphertext, badFile), /hash mismatch/);
     });
   });
 
@@ -134,7 +133,7 @@ describe("media encryption", () => {
       };
       assert.throws(
         () => decryptAttachment(ciphertext, badFile),
-        /Unsupported encryption algorithm/
+        /Unsupported encryption algorithm/,
       );
     });
   });

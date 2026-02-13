@@ -89,10 +89,7 @@ function encryptAttachment(plaintext: Buffer): {
  * Decrypt an encrypted Matrix attachment.
  * Validates SHA-256 hash BEFORE decryption (prevents malleability attacks).
  */
-export function decryptAttachment(
-  ciphertext: Buffer,
-  file: EncryptedFile
-): Buffer {
+export function decryptAttachment(ciphertext: Buffer, file: EncryptedFile): Buffer {
   // Validate algorithm
   if (file.key.alg !== "A256CTR") {
     throw new Error(`Unsupported encryption algorithm: ${file.key.alg}`);
@@ -122,7 +119,7 @@ export async function uploadMedia(
   buffer: Buffer,
   mimeType: string,
   filename: string,
-  encrypted: boolean
+  encrypted: boolean,
 ): Promise<UploadResult> {
   let uploadBuffer = buffer;
   let uploadMime = mimeType;
@@ -152,9 +149,15 @@ export async function uploadMedia(
       signal: controller.signal,
     });
 
-    const json = (await response.json()) as { content_uri?: string; errcode?: string; error?: string };
+    const json = (await response.json()) as {
+      content_uri?: string;
+      errcode?: string;
+      error?: string;
+    };
     if (!response.ok || !json.content_uri) {
-      throw new Error(`Upload failed: ${json.errcode ?? "unknown"} — ${json.error ?? response.statusText}`);
+      throw new Error(
+        `Upload failed: ${json.errcode ?? "unknown"} — ${json.error ?? response.statusText}`,
+      );
     }
 
     const mxcUrl = json.content_uri;
@@ -170,10 +173,7 @@ export async function uploadMedia(
  * Download media from the homeserver.
  * Uses authenticated media endpoint (v1.11+).
  */
-export async function downloadMedia(
-  mxcUrl: string,
-  maxSize: number = 52_428_800
-): Promise<Buffer> {
+export async function downloadMedia(mxcUrl: string, maxSize: number = 52_428_800): Promise<Buffer> {
   if (!isValidMxcUrl(mxcUrl)) {
     throw new Error(`Invalid mxc URL: ${mxcUrl}`);
   }
@@ -219,7 +219,7 @@ export async function downloadMedia(
 export async function downloadAndDecryptMedia(
   mxcUrl: string,
   encryptedFile?: EncryptedFile,
-  maxSize?: number
+  maxSize?: number,
 ): Promise<Buffer> {
   const ciphertext = await downloadMedia(mxcUrl, maxSize);
 

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 /**
  * Tests for rooms.ts — processStateEvents state machine.
  *
@@ -8,7 +9,7 @@
  * isDmRoomAsync) — those require integration test mocking.
  */
 import { describe, it, beforeEach } from "node:test";
-import assert from "node:assert/strict";
+import type { MatrixEvent } from "../src/types.js";
 import {
   processStateEvents,
   isRoomEncrypted,
@@ -19,14 +20,9 @@ import {
   cleanupRoom,
   getTrackedRoomIds,
 } from "../src/client/rooms.js";
-import type { MatrixEvent } from "../src/types.js";
 
 // Helper to create state events
-function makeEvent(
-  type: string,
-  content: Record<string, unknown>,
-  stateKey?: string
-): MatrixEvent {
+function makeEvent(type: string, content: Record<string, unknown>, stateKey?: string): MatrixEvent {
   return { type, content, state_key: stateKey };
 }
 
@@ -60,28 +56,20 @@ describe("processStateEvents", () => {
   describe("room name resolution", () => {
     it("should track m.room.name events", () => {
       const roomId = "!name-test-1:example.com";
-      processStateEvents(roomId, [
-        makeEvent("m.room.name", { name: "Test Room" }),
-      ]);
+      processStateEvents(roomId, [makeEvent("m.room.name", { name: "Test Room" })]);
       assert.equal(getRoomName(roomId), "Test Room");
     });
 
     it("should update room name on newer events", () => {
       const roomId = "!name-test-2:example.com";
-      processStateEvents(roomId, [
-        makeEvent("m.room.name", { name: "Old Name" }),
-      ]);
-      processStateEvents(roomId, [
-        makeEvent("m.room.name", { name: "New Name" }),
-      ]);
+      processStateEvents(roomId, [makeEvent("m.room.name", { name: "Old Name" })]);
+      processStateEvents(roomId, [makeEvent("m.room.name", { name: "New Name" })]);
       assert.equal(getRoomName(roomId), "New Name");
     });
 
     it("should ignore m.room.name with non-string name", () => {
       const roomId = "!name-test-3:example.com";
-      processStateEvents(roomId, [
-        makeEvent("m.room.name", { name: 42 }),
-      ]);
+      processStateEvents(roomId, [makeEvent("m.room.name", { name: 42 })]);
       assert.equal(getRoomName(roomId), undefined);
     });
 

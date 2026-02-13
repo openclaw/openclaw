@@ -1,8 +1,8 @@
+import assert from "node:assert/strict";
 /**
  * Tests for config.ts — Zod schema parsing and resolveMatrixAccount.
  */
 import { describe, it } from "node:test";
-import assert from "node:assert/strict";
 import { MatrixConfigSchema, resolveMatrixAccount } from "../src/config.js";
 
 // ── Test Fixtures ────────────────────────────────────────────────────
@@ -205,7 +205,7 @@ describe("resolveMatrixAccount", () => {
     it("should reject non-default accountId", () => {
       assert.throws(
         () => resolveMatrixAccount(VALID_MINIMAL_CONFIG, "secondary"),
-        /not supported.*only a single account/
+        /not supported.*only a single account/,
       );
     });
   });

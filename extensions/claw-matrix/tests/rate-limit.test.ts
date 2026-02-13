@@ -1,8 +1,8 @@
+import assert from "node:assert/strict";
 /**
  * Tests for TokenBucket rate limiter.
  */
 import { describe, it, beforeEach } from "node:test";
-import assert from "node:assert/strict";
 import { TokenBucket } from "../src/util/rate-limit.js";
 
 describe("TokenBucket", () => {
@@ -101,11 +101,7 @@ describe("TokenBucket", () => {
     it("should handle multiple concurrent acquires", async () => {
       const bucket = new TokenBucket(3, 10);
       // Fire 3 concurrent acquires — all should succeed from burst
-      const results = await Promise.all([
-        bucket.acquire(),
-        bucket.acquire(),
-        bucket.acquire(),
-      ]);
+      const results = await Promise.all([bucket.acquire(), bucket.acquire(), bucket.acquire()]);
       assert.equal(results.length, 3);
     });
 
@@ -113,12 +109,7 @@ describe("TokenBucket", () => {
       const bucket = new TokenBucket(2, 10);
       // Fire 4 concurrent: 2 burst + 2 waiting
       const start = Date.now();
-      await Promise.all([
-        bucket.acquire(),
-        bucket.acquire(),
-        bucket.acquire(),
-        bucket.acquire(),
-      ]);
+      await Promise.all([bucket.acquire(), bucket.acquire(), bucket.acquire(), bucket.acquire()]);
       const elapsed = Date.now() - start;
       // At least some waiting should have occurred
       assert.ok(elapsed >= 50, `Expected some waiting, got ${elapsed}ms`);

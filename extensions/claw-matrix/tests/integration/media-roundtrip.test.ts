@@ -7,12 +7,9 @@
  * tests/media.test.ts) and test against the exported decryptAttachment.
  */
 
-import { describe, it, expect } from "vitest";
 import * as crypto from "node:crypto";
-import {
-  decryptAttachment,
-  type EncryptedFile,
-} from "../../src/client/media.js";
+import { describe, it, expect } from "vitest";
+import { decryptAttachment, type EncryptedFile } from "../../src/client/media.js";
 
 // ── Replicate encryptAttachment for test fixtures ────────────────────
 // (same approach as tests/media.test.ts since encryptAttachment is not exported)
@@ -166,9 +163,7 @@ describe("Media Encryption Round-Trip", () => {
       // Generate completely different ciphertext
       const fakeCiphertext = crypto.randomBytes(1024);
 
-      expect(() => decryptAttachment(fakeCiphertext, file)).toThrow(
-        /hash mismatch/
-      );
+      expect(() => decryptAttachment(fakeCiphertext, file)).toThrow(/hash mismatch/);
     });
 
     it("rejects truncated ciphertext", () => {
@@ -191,9 +186,7 @@ describe("Media Encryption Round-Trip", () => {
         hashes: { sha256: toUnpaddedBase64(crypto.randomBytes(32)) },
       };
 
-      expect(() => decryptAttachment(ciphertext, badFile)).toThrow(
-        /hash mismatch/
-      );
+      expect(() => decryptAttachment(ciphertext, badFile)).toThrow(/hash mismatch/);
     });
   });
 
@@ -208,7 +201,7 @@ describe("Media Encryption Round-Trip", () => {
       };
 
       expect(() => decryptAttachment(ciphertext, badFile)).toThrow(
-        /Unsupported encryption algorithm/
+        /Unsupported encryption algorithm/,
       );
     });
   });

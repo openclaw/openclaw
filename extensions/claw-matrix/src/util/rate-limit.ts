@@ -7,7 +7,7 @@ export class TokenBucket {
   private lastRefill: number;
   constructor(
     private maxTokens: number = 5,
-    private refillRate: number = 1 // tokens per second
+    private refillRate: number = 1, // tokens per second
   ) {
     this.tokens = maxTokens;
     this.lastRefill = Date.now();

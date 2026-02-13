@@ -158,7 +158,9 @@ export function isMessageContent(content: Record<string, unknown>): content is M
   return typeof content.msgtype === "string" && typeof content.body === "string";
 }
 
-export function isEncryptedContent(content: Record<string, unknown>): content is EncryptedEventContent {
+export function isEncryptedContent(
+  content: Record<string, unknown>,
+): content is EncryptedEventContent {
   return typeof content.algorithm === "string" && typeof content.sender_key === "string";
 }
 

@@ -4,9 +4,6 @@
   "description": "OpenClaw Matrix channel plugin with E2E encryption",
   "type": "module",
   "main": "index.ts",
-  "engines": {
-    "node": ">=22.12.0"
-  },
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "bs58": "^6.0.0",
@@ -14,11 +11,14 @@
     "sanitize-html": "^2.13.0",
     "zod": "^4.3.6"
   },
-  "peerDependencies": {
-    "openclaw": ">=2026.2.9"
-  },
   "devDependencies": {
     "typescript": "^5.9.3",
     "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.9"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

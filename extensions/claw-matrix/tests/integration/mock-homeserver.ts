@@ -143,7 +143,9 @@ export class MockHomeserver {
           txnId: decodeURIComponent(sendMatch[3]),
           body: JSON.parse(body || "{}"),
         });
-        this.json(res, 200, { event_id: `$mock_${Date.now()}_${Math.random().toString(36).slice(2)}` });
+        this.json(res, 200, {
+          event_id: `$mock_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        });
         return;
       }
 
@@ -167,7 +169,9 @@ export class MockHomeserver {
       }
 
       // m.direct account data
-      const mDirectMatch = path.match(/\/_matrix\/client\/v3\/user\/[^/]+\/account_data\/m\.direct/);
+      const mDirectMatch = path.match(
+        /\/_matrix\/client\/v3\/user\/[^/]+\/account_data\/m\.direct/,
+      );
       if (mDirectMatch && method === "GET") {
         this.json(res, 200, this.mDirectData);
         return;
@@ -221,7 +225,10 @@ export class MockHomeserver {
       }
 
       // Default: 404
-      this.json(res, 404, { errcode: "M_UNRECOGNIZED", error: `Unknown endpoint: ${method} ${path}` });
+      this.json(res, 404, {
+        errcode: "M_UNRECOGNIZED",
+        error: `Unknown endpoint: ${method} ${path}`,
+      });
     } catch (err) {
       this.json(res, 500, { errcode: "M_UNKNOWN", error: String(err) });
     }

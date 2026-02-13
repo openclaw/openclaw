@@ -1,5 +1,7 @@
+import { RoomId } from "@matrix-org/matrix-sdk-crypto-nodejs";
 import type { OpenClawConfig, AgentToolResult } from "./openclaw-types.js";
 import { matrixFetch } from "./client/http.js";
+import { getTrackedRoomIds, getRoomName, isDmRoom } from "./client/rooms.js";
 import {
   sendMatrixMessage,
   sendReaction,
@@ -9,9 +11,7 @@ import {
   deleteMessage,
 } from "./client/send.js";
 import { resolveMatrixTarget } from "./client/targets.js";
-import { getTrackedRoomIds, getRoomName, isDmRoom } from "./client/rooms.js";
 import { getMachine } from "./crypto/machine.js";
-import { RoomId } from "@matrix-org/matrix-sdk-crypto-nodejs";
 
 /**
  * Build an AgentToolResult matching the jsonResult() format from openclaw/plugin-sdk.
@@ -67,10 +67,7 @@ export async function handleMatrixAction(ctx: {
 }
 
 // ── Send ─────────────────────────────────────────────────────────────
-async function handleSend(
-  params: Record<string, unknown>,
-  cfg: OpenClawConfig
-) {
+async function handleSend(params: Record<string, unknown>, cfg: OpenClawConfig) {
   const target = params.target as string | undefined;
   const message = params.message as string | undefined;
 
@@ -78,7 +75,8 @@ async function handleSend(
   if (!message) throw new Error("Missing 'message' text");
 
   const replyTo = params.replyTo as string | undefined;
-  const userId = (cfg.channels?.matrix as Record<string, unknown> | undefined)?.userId as string ?? "";
+  const userId =
+    ((cfg.channels?.matrix as Record<string, unknown> | undefined)?.userId as string) ?? "";
   const roomId = await resolveMatrixTarget(target, userId);
 
   const result = await sendMatrixMessage({
@@ -95,17 +93,15 @@ async function handleSend(
 }
 
 // ── Read ─────────────────────────────────────────────────────────────
-async function handleRead(
-  params: Record<string, unknown>,
-  cfg: OpenClawConfig
-) {
+async function handleRead(params: Record<string, unknown>, cfg: OpenClawConfig) {
   const target = params.target as string | undefined;
   const limit = Math.min((params.limit as number) ?? 20, 100);
   const fromToken = params.from_token as string | undefined;
 
   if (!target) throw new Error("Missing 'target' room ID");
 
-  const userId = (cfg.channels?.matrix as Record<string, unknown> | undefined)?.userId as string ?? "";
+  const userId =
+    ((cfg.channels?.matrix as Record<string, unknown> | undefined)?.userId as string) ?? "";
   const roomId = await resolveMatrixTarget(target, userId);
 
   let url = `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/messages?dir=b&limit=${limit}`;
@@ -139,10 +135,7 @@ async function handleRead(
     if (event.type === "m.room.encrypted") {
       // Attempt decryption
       try {
-        const decrypted = await machine.decryptRoomEvent(
-          JSON.stringify(event),
-          matrixRoomId
-        );
+        const decrypted = await machine.decryptRoomEvent(JSON.stringify(event), matrixRoomId);
         const decryptedContent = JSON.parse(decrypted.event);
         if (decryptedContent.type === "m.room.message") {
           messages.push({
@@ -169,10 +162,7 @@ async function handleRead(
         id: event.event_id,
         sender: event.sender,
         timestamp: event.origin_server_ts,
-        body:
-          typeof event.content?.body === "string"
-            ? event.content.body
-            : "[no text]",
+        body: typeof event.content?.body === "string" ? event.content.body : "[no text]",
       });
     }
   }
@@ -193,7 +183,7 @@ async function handleChannelList() {
   try {
     const response = await matrixFetch<{ joined_rooms: string[] }>(
       "GET",
-      "/_matrix/client/v3/joined_rooms"
+      "/_matrix/client/v3/joined_rooms",
     );
     joinedRooms = response.joined_rooms ?? [];
   } catch {
@@ -250,7 +240,8 @@ async function handleUnreact(params: Record<string, unknown>, cfg: OpenClawConfi
   if (!eventId) throw new Error("Missing 'eventId'");
   if (!emoji) throw new Error("Missing 'emoji'");
 
-  const userId = (cfg.channels?.matrix as Record<string, unknown> | undefined)?.userId as string ?? "";
+  const userId =
+    ((cfg.channels?.matrix as Record<string, unknown> | undefined)?.userId as string) ?? "";
   await removeReaction(roomId, eventId, userId, emoji);
   return jsonResult({ ok: true });
 }
@@ -294,11 +285,7 @@ async function handleInvite(params: Record<string, unknown>) {
   const body: Record<string, unknown> = { user_id: userId };
   if (reason) body.reason = reason;
 
-  await matrixFetch(
-    "POST",
-    `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`,
-    body
-  );
+  await matrixFetch("POST", `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`, body);
   return jsonResult({ ok: true, roomId, userId });
 }
 
@@ -311,7 +298,7 @@ async function handleJoin(params: Record<string, unknown>) {
   const response = await matrixFetch<{ room_id: string }>(
     "POST",
     `/_matrix/client/v3/join/${encodeURIComponent(target)}`,
-    {}
+    {},
   );
   return jsonResult({ ok: true, roomId: response.room_id });
 }
@@ -326,11 +313,7 @@ async function handleLeave(params: Record<string, unknown>) {
   const body: Record<string, unknown> = {};
   if (reason) body.reason = reason;
 
-  await matrixFetch(
-    "POST",
-    `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/leave`,
-    body
-  );
+  await matrixFetch("POST", `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/leave`, body);
   return jsonResult({ ok: true, roomId });
 }
 
@@ -346,11 +329,7 @@ async function handleKick(params: Record<string, unknown>) {
   const body: Record<string, unknown> = { user_id: userId };
   if (reason) body.reason = reason;
 
-  await matrixFetch(
-    "POST",
-    `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/kick`,
-    body
-  );
+  await matrixFetch("POST", `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/kick`, body);
   return jsonResult({ ok: true, roomId, userId });
 }
 
@@ -366,10 +345,6 @@ async function handleBan(params: Record<string, unknown>) {
   const body: Record<string, unknown> = { user_id: userId };
   if (reason) body.reason = reason;
 
-  await matrixFetch(
-    "POST",
-    `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/ban`,
-    body
-  );
+  await matrixFetch("POST", `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/ban`, body);
   return jsonResult({ ok: true, roomId, userId });
 }

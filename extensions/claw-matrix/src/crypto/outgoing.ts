@@ -6,9 +6,9 @@ import {
   SignatureUploadRequest,
   RoomMessageRequest,
 } from "@matrix-org/matrix-sdk-crypto-nodejs";
-import { getMachine, withCryptoTimeout, CRYPTO_TIMEOUT_MS } from "./machine.js";
 import { matrixFetch } from "../client/http.js";
 import { TokenBucket } from "../util/rate-limit.js";
+import { getMachine, withCryptoTimeout, CRYPTO_TIMEOUT_MS } from "./machine.js";
 
 const rateLimiter = new TokenBucket(5, 1);
 
@@ -24,8 +24,18 @@ const rateLimiter = new TokenBucket(5, 1);
  * - RoomMessageRequest: { id, roomId, txnId, eventType, body, type } → PUT /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}
  */
 async function dispatchRequest(
-  request: KeysUploadRequest | KeysQueryRequest | KeysClaimRequest | ToDeviceRequest | SignatureUploadRequest | RoomMessageRequest,
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void; error?: (msg: string) => void }
+  request:
+    | KeysUploadRequest
+    | KeysQueryRequest
+    | KeysClaimRequest
+    | ToDeviceRequest
+    | SignatureUploadRequest
+    | RoomMessageRequest,
+  log?: {
+    info?: (msg: string) => void;
+    warn?: (msg: string) => void;
+    error?: (msg: string) => void;
+  },
 ): Promise<unknown> {
   if (request instanceof KeysUploadRequest) {
     return matrixFetch("POST", "/_matrix/client/v3/keys/upload", JSON.parse(request.body));
@@ -45,7 +55,11 @@ async function dispatchRequest(
   }
 
   if (request instanceof SignatureUploadRequest) {
-    return matrixFetch("POST", "/_matrix/client/v3/keys/signatures/upload", JSON.parse(request.body));
+    return matrixFetch(
+      "POST",
+      "/_matrix/client/v3/keys/signatures/upload",
+      JSON.parse(request.body),
+    );
   }
 
   if (request instanceof RoomMessageRequest) {
@@ -71,14 +85,16 @@ async function dispatchRequest(
  * CRITICAL: Only call markRequestAsSent() AFTER the network call succeeds.
  * If marked prematurely, OlmMachine won't retry (e.g., OTKs assumed uploaded but weren't).
  */
-export async function processOutgoingRequests(
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void; error?: (msg: string) => void }
-): Promise<void> {
+export async function processOutgoingRequests(log?: {
+  info?: (msg: string) => void;
+  warn?: (msg: string) => void;
+  error?: (msg: string) => void;
+}): Promise<void> {
   const machine = getMachine();
   const requests = await withCryptoTimeout(
     machine.outgoingRequests(),
     CRYPTO_TIMEOUT_MS,
-    "outgoingRequests"
+    "outgoingRequests",
   );
 
   for (const request of requests) {
@@ -90,17 +106,13 @@ export async function processOutgoingRequests(
 
       // Only mark as sent AFTER successful network call
       await withCryptoTimeout(
-        machine.markRequestAsSent(
-          request.id,
-          request.type,
-          JSON.stringify(response)
-        ),
+        machine.markRequestAsSent(request.id, request.type, JSON.stringify(response)),
         CRYPTO_TIMEOUT_MS,
-        "markRequestAsSent"
+        "markRequestAsSent",
       );
     } catch (err: any) {
       log?.error?.(
-        `[crypto] Failed to process outgoing request (type=${request.type}): ${err.message}`
+        `[crypto] Failed to process outgoing request (type=${request.type}): ${err.message}`,
       );
       // Do NOT mark as sent — OlmMachine will retry next cycle
     }
