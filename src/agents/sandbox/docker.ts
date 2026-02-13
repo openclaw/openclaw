@@ -155,6 +155,10 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
   }
+  for (const [key, value] of Object.entries(params.cfg.env ?? {})) {
+    if (!key.trim()) continue;
+    args.push("--env", key + "=" + value);
+  }
   for (const cap of params.cfg.capDrop) {
     args.push("--cap-drop", cap);
   }
