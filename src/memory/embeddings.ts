@@ -29,6 +29,15 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
+function createNoopEmbeddingProvider(): EmbeddingProvider {
+  return {
+    id: "none",
+    model: "none",
+    embedQuery: async () => [],
+    embedBatch: async (texts) => texts.map(() => []),
+  };
+}
+
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider;
   requestedProvider: "openai" | "local" | "gemini" | "voyage" | "auto";
@@ -181,10 +190,14 @@ export async function createEmbeddingProvider(
     }
 
     const details = [...missingKeyErrors, localError].filter(Boolean) as string[];
-    if (details.length > 0) {
-      throw new Error(details.join("\n\n"));
-    }
-    throw new Error("No embeddings provider available.");
+    // No embeddings provider is available. Fall back to keyword-only (FTS/BM25)
+    // so memory_search remains usable without remote API keys.
+    const reason = details.length > 0 ? details.join("\n\n") : "No embeddings provider available.";
+    return {
+      provider: createNoopEmbeddingProvider(),
+      requestedProvider,
+      fallbackReason: `Embeddings disabled; using keyword-only search.\n\n${reason}`,
+    };
   }
 
   try {
@@ -192,6 +205,22 @@ export async function createEmbeddingProvider(
     return { ...primary, requestedProvider };
   } catch (primaryErr) {
     const reason = formatPrimaryError(primaryErr, requestedProvider);
+    // If the user explicitly requested local embeddings and disallowed fallback,
+    // keep the previous behavior: surface a helpful setup error rather than
+    // silently switching to keyword-only mode.
+    if (requestedProvider === "local" && (!fallback || fallback === "none")) {
+      throw new Error(reason, { cause: primaryErr });
+    }
+    if (!fallback || fallback === "none") {
+      // Explicitly configured to not fall back to another embeddings provider.
+      // Keep memory_search usable by falling back to keyword-only indexing.
+      return {
+        provider: createNoopEmbeddingProvider(),
+        requestedProvider,
+        fallbackFrom: requestedProvider,
+        fallbackReason: `Embeddings disabled; using keyword-only search.\n\n${reason}`,
+      };
+    }
     if (fallback && fallback !== "none" && fallback !== requestedProvider) {
       try {
         const fallbackResult = await createProvider(fallback);
