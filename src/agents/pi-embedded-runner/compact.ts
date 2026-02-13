@@ -25,7 +25,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentCompaction, resolveSessionAgentIds } from "../agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
@@ -525,10 +525,15 @@ export async function compactEmbeddedPiSessionDirect(
       });
       trackSessionManagerAccess(params.sessionFile);
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
-      ensurePiCompactionReserveTokens({
-        settingsManager,
-        minReserveTokens: resolveCompactionReserveTokensFloor(params.config, sessionAgentId),
-      });
+      const compactionMode = params.config
+        ? (resolveAgentCompaction(params.config, sessionAgentId)?.mode ?? "default")
+        : "default";
+      if (compactionMode !== "off") {
+        ensurePiCompactionReserveTokens({
+          settingsManager,
+          minReserveTokens: resolveCompactionReserveTokensFloor(params.config, sessionAgentId),
+        });
+      }
       // Call for side effects (sets compaction/pruning runtime state)
       buildEmbeddedExtensionPaths({
         cfg: params.config,

@@ -3,7 +3,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentCompaction } from "../agent-scope.js";
+import { resolveAgentCompaction, resolveAgentContextPruningMode } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -42,9 +42,17 @@ function buildContextPruningExtension(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  agentId?: string;
 }): { additionalExtensionPaths?: string[] } {
+  // Per-agent contextPruning.mode overrides the global default.
+  const effectiveMode = params.cfg
+    ? resolveAgentContextPruningMode(params.cfg, params.agentId)
+    : params.cfg?.agents?.defaults?.contextPruning?.mode;
+  if (effectiveMode !== "cache-ttl") {
+    return {};
+  }
   const raw = params.cfg?.agents?.defaults?.contextPruning;
-  if (raw?.mode !== "cache-ttl") {
+  if (!raw) {
     return {};
   }
   if (!isCacheTtlEligibleProvider(params.provider, params.modelId)) {
@@ -68,8 +76,14 @@ function buildContextPruningExtension(params: {
   };
 }
 
-function resolveCompactionMode(cfg?: OpenClawConfig, agentId?: string): "default" | "safeguard" {
+function resolveCompactionMode(
+  cfg?: OpenClawConfig,
+  agentId?: string,
+): "default" | "safeguard" | "off" {
   const compaction = cfg ? resolveAgentCompaction(cfg, agentId) : undefined;
+  if (compaction?.mode === "off") {
+    return "off";
+  }
   return compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 

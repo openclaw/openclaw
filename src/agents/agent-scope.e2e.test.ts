@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentCompaction,
   resolveAgentConfig,
+  resolveAgentContextPruningMode,
   resolveAgentDir,
   resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
@@ -502,5 +503,74 @@ describe("resolveAgentCompaction", () => {
     };
     const result = resolveAgentConfig(cfg, "basic");
     expect(result?.compaction).toBeUndefined();
+  });
+});
+
+describe("resolveAgentCompaction — mode: off", () => {
+  it("per-agent mode 'off' overrides global safeguard default", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: { mode: "safeguard", reserveTokensFloor: 20000 },
+        },
+        list: [{ id: "steno-managed", compaction: { mode: "off" } }],
+      },
+    };
+    const result = resolveAgentCompaction(cfg, "steno-managed");
+    expect(result?.mode).toBe("off");
+    // Still inherits other fields from defaults
+    expect(result?.reserveTokensFloor).toBe(20000);
+  });
+
+  it("other agents keep global default when one agent is 'off'", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: { mode: "safeguard" },
+        },
+        list: [{ id: "steno-managed", compaction: { mode: "off" } }, { id: "normal-agent" }],
+      },
+    };
+    expect(resolveAgentCompaction(cfg, "steno-managed")?.mode).toBe("off");
+    expect(resolveAgentCompaction(cfg, "normal-agent")?.mode).toBe("safeguard");
+  });
+});
+
+describe("resolveAgentContextPruningMode", () => {
+  it("returns undefined when no config exists", () => {
+    const cfg: OpenClawConfig = {};
+    expect(resolveAgentContextPruningMode(cfg)).toBeUndefined();
+    expect(resolveAgentContextPruningMode(cfg, "main")).toBeUndefined();
+  });
+
+  it("returns global default when agent has no override", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { contextPruning: { mode: "cache-ttl" } },
+        list: [{ id: "main" }],
+      },
+    };
+    expect(resolveAgentContextPruningMode(cfg, "main")).toBe("cache-ttl");
+  });
+
+  it("per-agent mode 'off' overrides global cache-ttl", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { contextPruning: { mode: "cache-ttl" } },
+        list: [{ id: "steno-managed", contextPruning: { mode: "off" } }],
+      },
+    };
+    expect(resolveAgentContextPruningMode(cfg, "steno-managed")).toBe("off");
+  });
+
+  it("other agents keep global default when one agent overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { contextPruning: { mode: "cache-ttl" } },
+        list: [{ id: "steno-managed", contextPruning: { mode: "off" } }, { id: "normal-agent" }],
+      },
+    };
+    expect(resolveAgentContextPruningMode(cfg, "steno-managed")).toBe("off");
+    expect(resolveAgentContextPruningMode(cfg, "normal-agent")).toBe("cache-ttl");
   });
 });

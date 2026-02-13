@@ -318,7 +318,7 @@ export const AgentToolsSchema = z
 
 export const CompactionSchema = z
   .object({
-    mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+    mode: z.union([z.literal("default"), z.literal("safeguard"), z.literal("off")]).optional(),
     reserveTokensFloor: z.number().int().nonnegative().optional(),
     maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
     memoryFlush: z
@@ -489,6 +489,12 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     compaction: CompactionSchema,
+    contextPruning: z
+      .object({
+        mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),
+      })
+      .strict()
+      .optional(),
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
   })

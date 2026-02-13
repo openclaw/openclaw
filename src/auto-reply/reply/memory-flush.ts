@@ -42,6 +42,9 @@ export function resolveMemoryFlushSettings(
   agentId?: string,
 ): MemoryFlushSettings | null {
   const compaction = cfg ? resolveAgentCompaction(cfg, agentId) : undefined;
+  if (compaction?.mode === "off") {
+    return null;
+  }
   const flushCfg = compaction?.memoryFlush;
   const enabled = flushCfg?.enabled ?? true;
   if (!enabled) {

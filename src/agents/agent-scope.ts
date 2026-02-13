@@ -27,6 +27,7 @@ type ResolvedAgentConfig = {
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
   compaction?: AgentEntry["compaction"];
+  contextPruning?: AgentEntry["contextPruning"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };
@@ -122,6 +123,7 @@ export function resolveAgentConfig(
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     compaction: entry.compaction,
+    contextPruning: entry.contextPruning,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
@@ -156,6 +158,21 @@ export function resolveAgentCompaction(
         ? { ...defaults.memoryFlush, ...perAgent.memoryFlush }
         : undefined,
   };
+}
+
+/**
+ * Resolve the effective context pruning mode for an agent.
+ * Per-agent `contextPruning.mode` overrides the global default.
+ */
+export function resolveAgentContextPruningMode(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): "off" | "cache-ttl" | undefined {
+  const perAgent = agentId ? resolveAgentConfig(cfg, agentId)?.contextPruning : undefined;
+  if (perAgent?.mode) {
+    return perAgent.mode;
+  }
+  return cfg?.agents?.defaults?.contextPruning?.mode;
 }
 
 export function resolveAgentSkillsFilter(
