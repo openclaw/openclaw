@@ -1,5 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   buildChannelConfigSchema,
+  createReplyPrefixOptions,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
   type ChannelPlugin,
@@ -232,19 +234,86 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             `[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`,
           );
 
-          // Forward to OpenClaw's message pipeline
-          // TODO: Replace with proper dispatchReplyWithBufferedBlockDispatcher call
-          await (
-            runtime.channel.reply as { handleInboundMessage?: (params: unknown) => Promise<void> }
-          ).handleInboundMessage?.({
+          const cfg = core.config.loadConfig() as OpenClawConfig;
+          const route = core.channel.routing.resolveAgentRoute({
+            cfg,
             channel: "nostr",
             accountId: account.accountId,
-            senderId: senderPubkey,
-            chatType: "direct",
-            chatId: senderPubkey, // For DMs, chatId is the sender's pubkey
-            text,
-            reply: async (responseText: string) => {
-              await reply(responseText);
+            peer: {
+              kind: "direct",
+              id: senderPubkey,
+            },
+          });
+
+          const fromLabel = senderPubkey;
+          const body = core.channel.reply.formatAgentEnvelope({
+            channel: "Nostr",
+            from: fromLabel,
+            timestamp: Date.now(),
+            envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
+            body: text,
+          });
+
+          const ctxPayload = core.channel.reply.finalizeInboundContext({
+            Body: body,
+            BodyForAgent: text,
+            RawBody: text,
+            CommandBody: text,
+            From: `nostr:${senderPubkey}`,
+            To: `nostr:${senderPubkey}`,
+            SessionKey: route.sessionKey,
+            AccountId: route.accountId,
+            ChatType: "direct",
+            ConversationLabel: fromLabel,
+            SenderName: senderPubkey,
+            SenderId: senderPubkey,
+            Provider: "nostr",
+            Surface: "nostr",
+            MessageSid: `${senderPubkey}-${Date.now()}`,
+            OriginatingChannel: "nostr",
+            OriginatingTo: `nostr:${senderPubkey}`,
+          });
+
+          const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+            agentId: route.agentId,
+          });
+          await core.channel.session.recordInboundSession({
+            storePath,
+            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+            ctx: ctxPayload,
+            onRecordError: (err) => {
+              ctx.log?.error?.(
+                `[${account.accountId}] failed updating session meta: ${String(err)}`,
+              );
+            },
+          });
+
+          const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+            cfg,
+            agentId: route.agentId,
+            channel: "nostr",
+            accountId: account.accountId,
+          });
+
+          await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+            ctx: ctxPayload,
+            cfg,
+            dispatcherOptions: {
+              ...prefixOptions,
+              deliver: async (payload) => {
+                if (!payload.text) {
+                  return;
+                }
+                await reply(payload.text);
+              },
+              onError: (err, info) => {
+                ctx.log?.error?.(
+                  `[${account.accountId}] ${info.kind} reply failed: ${String(err)}`,
+                );
+              },
+            },
+            replyOptions: {
+              onModelSelected,
             },
           });
         },
