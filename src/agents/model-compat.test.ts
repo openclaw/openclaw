@@ -41,4 +41,26 @@ describe("normalizeModelCompat", () => {
     const normalized = normalizeModelCompat(model);
     expect(normalized.compat?.supportsDeveloperRole).toBe(false);
   });
+
+  it("forces supportsDeveloperRole off for Moonshot models (provider)", () => {
+    const model = {
+      ...baseModel(),
+      provider: "moonshot",
+      baseUrl: "https://api.moonshot.ai/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
+  });
+
+  it("forces supportsDeveloperRole off for Moonshot models (baseUrl)", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom",
+      baseUrl: "https://platform.moonshot.cn/api/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
+  });
 });
