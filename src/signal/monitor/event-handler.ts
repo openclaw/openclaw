@@ -234,6 +234,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
       },
       onReplyStart: typingCallbacks.onReplyStart,
+      // Hook context for message:sent events
+      hookContext: {
+        sessionKey: route.sessionKey,
+        channel: "signal",
+        target: ctxPayload.To,
+      },
     });
 
     const { queuedFinal } = await dispatchInboundMessage({

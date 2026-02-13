@@ -2,6 +2,7 @@ import type { HumanDelayConfig } from "../../config/types.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
+import { triggerMessageSent } from "../../hooks/message-hooks.js";
 import { sleep } from "../../utils.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
@@ -53,6 +54,12 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Hook context for message:sent events */
+  hookContext?: {
+    sessionKey?: string;
+    channel?: string;
+    target?: string;
+  };
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -141,6 +148,21 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           }
         }
         await options.deliver(normalized, { kind });
+
+        // Trigger message:sent hook after successful delivery (fire-and-forget)
+        // Isolated from delivery to avoid marking successful sends as failed
+        if (options.hookContext?.sessionKey) {
+          triggerMessageSent(options.hookContext.sessionKey, normalized, {
+            target: options.hookContext.target,
+            channel: options.hookContext.channel,
+            kind,
+          }).catch((err) => {
+            console.error(
+              "[message:sent hook] Error:",
+              err instanceof Error ? err.message : String(err),
+            );
+          });
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });
