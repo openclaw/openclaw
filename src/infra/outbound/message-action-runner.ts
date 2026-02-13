@@ -410,6 +410,7 @@ async function hydrateSetGroupIconParams(params: {
   args: Record<string, unknown>;
   action: ChannelMessageActionName;
   dryRun?: boolean;
+  sandboxRoot?: string;
 }): Promise<void> {
   if (params.action !== "setGroupIcon") {
     return;
@@ -435,7 +436,15 @@ async function hydrateSetGroupIconParams(params: {
   }
 
   const filename = readStringParam(params.args, "filename");
-  const mediaSource = mediaHint ?? fileHint;
+  let mediaSource = mediaHint ?? fileHint;
+
+  // Walidacja sandbox: upewnij sie, ze sciezka mediow nie ucieka z sandbox (defense-in-depth)
+  if (mediaSource && params.sandboxRoot?.trim()) {
+    mediaSource = await resolveSandboxedMediaSource({
+      media: mediaSource,
+      sandboxRoot: params.sandboxRoot,
+    });
+  }
 
   if (!params.dryRun && !readStringParam(params.args, "buffer", { trim: false }) && mediaSource) {
     const maxBytes = resolveAttachmentMaxBytes({
@@ -470,6 +479,7 @@ async function hydrateSendAttachmentParams(params: {
   args: Record<string, unknown>;
   action: ChannelMessageActionName;
   dryRun?: boolean;
+  sandboxRoot?: string;
 }): Promise<void> {
   if (params.action !== "sendAttachment") {
     return;
@@ -500,7 +510,15 @@ async function hydrateSendAttachmentParams(params: {
   }
 
   const filename = readStringParam(params.args, "filename");
-  const mediaSource = mediaHint ?? fileHint;
+  let mediaSource = mediaHint ?? fileHint;
+
+  // Walidacja sandbox: upewnij sie, ze sciezka mediow nie ucieka z sandbox (defense-in-depth)
+  if (mediaSource && params.sandboxRoot?.trim()) {
+    mediaSource = await resolveSandboxedMediaSource({
+      media: mediaSource,
+      sandboxRoot: params.sandboxRoot,
+    });
+  }
 
   if (!params.dryRun && !readStringParam(params.args, "buffer", { trim: false }) && mediaSource) {
     const maxBytes = resolveAttachmentMaxBytes({
@@ -1086,6 +1104,7 @@ export async function runMessageAction(
     args: params,
     action,
     dryRun,
+    sandboxRoot: input.sandboxRoot,
   });
 
   await hydrateSetGroupIconParams({
@@ -1095,6 +1114,7 @@ export async function runMessageAction(
     args: params,
     action,
     dryRun,
+    sandboxRoot: input.sandboxRoot,
   });
 
   const resolvedTarget = await resolveActionTarget({
