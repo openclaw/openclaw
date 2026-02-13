@@ -93,7 +93,7 @@ export function handleAutoCompactionEnd(
     }
 
     // Flush any messages that were queued during compaction
-    const sessionId = (ctx.params.session as { id?: string }).id;
+    const sessionId = (ctx.params.session as { sessionId?: string }).sessionId;
     if (sessionId) {
       flushPendingCompactionMessages(sessionId);
     }

@@ -61,30 +61,32 @@ export function flushPendingCompactionMessages(sessionId: string): void {
   if (!pending || pending.length === 0) {
     return;
   }
-  PENDING_COMPACTION_MESSAGES.delete(sessionId);
 
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
     diag.debug(
       `flush pending failed: sessionId=${sessionId} reason=no_active_run pendingCount=${pending.length}`,
     );
+    // Keep messages queued - they may be deliverable on a future attempt
     return;
   }
   if (!handle.isStreaming()) {
     diag.debug(
       `flush pending failed: sessionId=${sessionId} reason=not_streaming pendingCount=${pending.length}`,
     );
+    // Keep messages queued - session may resume streaming
     return;
   }
   if (handle.isCompacting()) {
-    // Still compacting, keep them queued
-    PENDING_COMPACTION_MESSAGES.set(sessionId, pending);
     diag.debug(
       `flush pending deferred: sessionId=${sessionId} reason=still_compacting pendingCount=${pending.length}`,
     );
+    // Keep messages queued - still compacting
     return;
   }
 
+  // All checks passed - safe to deliver and delete
+  PENDING_COMPACTION_MESSAGES.delete(sessionId);
   diag.debug(`flushing pending messages: sessionId=${sessionId} count=${pending.length}`);
 
   // Combine all pending messages into one to avoid multiple agent turns
