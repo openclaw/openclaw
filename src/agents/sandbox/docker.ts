@@ -442,6 +442,7 @@ export async function ensureSandboxContainer(params: {
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
     configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    backend: "container",
   });
   return containerName;
 }

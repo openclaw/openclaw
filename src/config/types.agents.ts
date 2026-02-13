@@ -5,6 +5,7 @@ import type { GroupChatConfig } from "./types.messages.js";
 import type {
   SandboxBrowserSettings,
   SandboxDockerSettings,
+  SandboxMicrovmSettings,
   SandboxPruneSettings,
 } from "./types.sandbox.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
@@ -42,6 +43,8 @@ export type AgentConfig = {
   };
   sandbox?: {
     mode?: "off" | "non-main" | "all";
+    /** Sandbox backend: "container" (default) or "microvm" (Docker Desktop 4.58+). */
+    backend?: "container" | "microvm";
     /** Agent workspace access inside the sandbox. */
     workspaceAccess?: "none" | "ro" | "rw";
     /**
@@ -57,6 +60,8 @@ export type AgentConfig = {
     workspaceRoot?: string;
     /** Docker-specific sandbox overrides for this agent. */
     docker?: SandboxDockerSettings;
+    /** Docker Sandboxes (microVM) overrides for this agent. */
+    microvm?: SandboxMicrovmSettings;
     /** Optional sandboxed browser overrides for this agent. */
     browser?: SandboxBrowserSettings;
     /** Auto-prune overrides for this agent. */

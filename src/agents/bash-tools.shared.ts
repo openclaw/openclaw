@@ -3,6 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import type { SandboxBackend } from "./sandbox/types.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { killProcessTree } from "./shell-utils.js";
@@ -14,6 +15,7 @@ export type BashSandboxConfig = {
   workspaceDir: string;
   containerWorkdir: string;
   env?: Record<string, string>;
+  backend?: SandboxBackend;
 };
 
 export function buildSandboxEnv(params: {
@@ -78,6 +80,35 @@ export function buildDockerExecArgs(params: {
     ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
     : "";
   args.push(params.containerName, "sh", "-lc", `${pathExport}${params.command}`);
+  return args;
+}
+
+export function buildDockerSandboxExecArgs(params: {
+  sandboxName: string;
+  command: string;
+  workdir?: string;
+  env: Record<string, string>;
+  tty: boolean;
+}) {
+  const args = ["sandbox", "exec"];
+  if (params.tty) {
+    args.push("-t");
+  }
+  args.push("-i");
+  if (params.workdir) {
+    args.push("-w", params.workdir);
+  }
+  for (const [key, value] of Object.entries(params.env)) {
+    args.push("-e", `${key}=${value}`);
+  }
+  const hasCustomPath = typeof params.env.PATH === "string" && params.env.PATH.length > 0;
+  if (hasCustomPath) {
+    args.push("-e", `OPENCLAW_PREPEND_PATH=${params.env.PATH}`);
+  }
+  const pathExport = hasCustomPath
+    ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
+    : "";
+  args.push(params.sandboxName, "sh", "-lc", `${pathExport}${params.command}`);
   return args;
 }
 

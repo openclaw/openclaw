@@ -3,6 +3,19 @@ import type { SandboxDockerConfig } from "./types.docker.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
 
+export type SandboxBackend = "container" | "microvm";
+
+export type SandboxMicrovmConfig = {
+  /** Prefix for sandbox VM names. */
+  sandboxPrefix: string;
+  /** Custom template image for the microVM (optional). */
+  template?: string;
+  /** Extra environment variables passed via `docker sandbox exec -e`. */
+  env?: Record<string, string>;
+  /** Optional setup command run once after sandbox creation. */
+  setupCommand?: string;
+};
+
 export type SandboxToolPolicy = {
   allow?: string[];
   deny?: string[];
@@ -52,9 +65,11 @@ export type SandboxScope = "session" | "agent" | "shared";
 export type SandboxConfig = {
   mode: "off" | "non-main" | "all";
   scope: SandboxScope;
+  backend: SandboxBackend;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
   docker: SandboxDockerConfig;
+  microvm: SandboxMicrovmConfig;
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;
@@ -68,6 +83,7 @@ export type SandboxBrowserContext = {
 
 export type SandboxContext = {
   enabled: boolean;
+  backend: SandboxBackend;
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
@@ -75,6 +91,7 @@ export type SandboxContext = {
   containerName: string;
   containerWorkdir: string;
   docker: SandboxDockerConfig;
+  microvm?: SandboxMicrovmConfig;
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
   browser?: SandboxBrowserContext;
