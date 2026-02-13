@@ -358,7 +358,8 @@ async function buildActivity(
 
         // Bot Framework doesn't support "reference" attachment type for sending
         const fileLink = `📎 [${uploaded.name}](${uploaded.shareUrl})`;
-        activity.text = msg.text ? `${msg.text}\n\n${fileLink}` : fileLink;
+        const existingText = typeof activity.text === "string" ? activity.text : undefined;
+        activity.text = existingText ? `${existingText}\n\n${fileLink}` : fileLink;
         return activity;
       }
 
