@@ -89,4 +89,56 @@ describe("TuiStreamAssembler", () => {
 
     expect(second).toBeNull();
   });
+
+  it("keeps richer streamed text when final payload drops earlier blocks", () => {
+    const assembler = new TuiStreamAssembler();
+    assembler.ingestDelta(
+      "run-5",
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Before tool call" },
+          { type: "text", text: "After tool call" },
+        ],
+      },
+      false,
+    );
+
+    const finalText = assembler.finalize(
+      "run-5",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "After tool call" }],
+      },
+      false,
+    );
+
+    expect(finalText).toBe("Before tool call\nAfter tool call");
+  });
+
+  it("accepts richer final payload when it extends streamed text", () => {
+    const assembler = new TuiStreamAssembler();
+    assembler.ingestDelta(
+      "run-6",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Before tool call" }],
+      },
+      false,
+    );
+
+    const finalText = assembler.finalize(
+      "run-6",
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Before tool call" },
+          { type: "text", text: "After tool call" },
+        ],
+      },
+      false,
+    );
+
+    expect(finalText).toBe("Before tool call\nAfter tool call");
+  });
 });

@@ -11,6 +11,24 @@ type RunStreamState = {
   displayText: string;
 };
 
+function mergeTextPreferRicher(currentText: string, nextText: string): string {
+  const current = currentText.trim();
+  const next = nextText.trim();
+  if (!next) {
+    return current;
+  }
+  if (!current || current === next) {
+    return next;
+  }
+  if (next.includes(current)) {
+    return next;
+  }
+  if (current.includes(next)) {
+    return current;
+  }
+  return next;
+}
+
 export class TuiStreamAssembler {
   private runs = new Map<string, RunStreamState>();
 
@@ -32,10 +50,10 @@ export class TuiStreamAssembler {
     const contentText = extractContentFromMessage(message);
 
     if (thinkingText) {
-      state.thinkingText = thinkingText;
+      state.thinkingText = mergeTextPreferRicher(state.thinkingText, thinkingText);
     }
     if (contentText) {
-      state.contentText = contentText;
+      state.contentText = mergeTextPreferRicher(state.contentText, contentText);
     }
 
     const displayText = composeThinkingAndContent({
@@ -61,11 +79,12 @@ export class TuiStreamAssembler {
 
   finalize(runId: string, message: unknown, showThinking: boolean): string {
     const state = this.getOrCreateRun(runId);
+    const streamedDisplayText = state.displayText;
     this.updateRunState(state, message, showThinking);
     const finalComposed = state.displayText;
     const finalText = resolveFinalAssistantText({
       finalText: finalComposed,
-      streamedText: state.displayText,
+      streamedText: streamedDisplayText,
     });
 
     this.runs.delete(runId);
