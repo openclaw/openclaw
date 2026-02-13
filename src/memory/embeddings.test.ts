@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -21,7 +21,6 @@ const createFetchMock = () =>
 describe("embedding provider remote overrides", () => {
   afterEach(() => {
     vi.resetAllMocks();
-    vi.resetModules();
     vi.unstubAllGlobals();
   });
 
@@ -170,7 +169,6 @@ describe("embedding provider remote overrides", () => {
 describe("embedding provider auto selection", () => {
   afterEach(() => {
     vi.resetAllMocks();
-    vi.resetModules();
     vi.unstubAllGlobals();
   });
 
@@ -266,6 +264,10 @@ describe("embedding provider auto selection", () => {
 });
 
 describe("embedding provider local fallback", () => {
+  beforeAll(() => {
+    vi.resetModules();
+  });
+
   afterEach(() => {
     vi.resetAllMocks();
     vi.resetModules();
