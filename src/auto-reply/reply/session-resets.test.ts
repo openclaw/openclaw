@@ -451,6 +451,168 @@ describe("applyResetModelOverride", () => {
   });
 });
 
+describe("initSessionState preserves behavior overrides across /new and /reset", () => {
+  async function createStorePath(prefix: string): Promise<string> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    return path.join(root, "sessions.json");
+  }
+
+  async function seedSessionStoreWithOverrides(params: {
+    storePath: string;
+    sessionKey: string;
+    sessionId: string;
+    overrides: Record<string, unknown>;
+  }): Promise<void> {
+    const { saveSessionStore } = await import("../../config/sessions.js");
+    await saveSessionStore(params.storePath, {
+      [params.sessionKey]: {
+        sessionId: params.sessionId,
+        updatedAt: Date.now(),
+        ...params.overrides,
+      },
+    });
+  }
+
+  it("/new preserves verboseLevel from previous session", async () => {
+    const storePath = await createStorePath("openclaw-reset-verbose-");
+    const sessionKey = "agent:main:telegram:dm:user1";
+    const existingSessionId = "existing-session-verbose";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { verboseLevel: "on" },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user1",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.verboseLevel).toBe("on");
+  });
+
+  it("/reset preserves thinkingLevel and reasoningLevel from previous session", async () => {
+    const storePath = await createStorePath("openclaw-reset-thinking-");
+    const sessionKey = "agent:main:telegram:dm:user2";
+    const existingSessionId = "existing-session-thinking";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { thinkingLevel: "full", reasoningLevel: "high" },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        From: "user2",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionEntry.thinkingLevel).toBe("full");
+    expect(result.sessionEntry.reasoningLevel).toBe("high");
+  });
+
+  it("/new preserves ttsAuto from previous session", async () => {
+    const storePath = await createStorePath("openclaw-reset-tts-");
+    const sessionKey = "agent:main:telegram:dm:user3";
+    const existingSessionId = "existing-session-tts";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { ttsAuto: "on" },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user3",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.ttsAuto).toBe("on");
+  });
+
+  it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
+    const storePath = await createStorePath("openclaw-idle-no-preserve-");
+    const sessionKey = "agent:main:telegram:dm:new-user";
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 0 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "new-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionEntry.verboseLevel).toBeUndefined();
+    expect(result.sessionEntry.thinkingLevel).toBeUndefined();
+  });
+});
+
 describe("prependSystemEvents", () => {
   it("adds a local timestamp to queued system events by default", async () => {
     vi.useFakeTimers();
