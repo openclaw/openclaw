@@ -443,6 +443,61 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+
+        // ── Rolling context eviction ──────────────────────────────
+        const compactionMode = params.config?.agents?.defaults?.compaction?.mode;
+        if (compactionMode === "rolling") {
+          const { rollingEvict, buildEvictionNote, estimateMessagesTokens } =
+            await import("../compaction.js");
+          const rollingCfg = params.config?.agents?.defaults?.compaction?.rolling;
+          const contextWindow = model.contextWindow ?? 200000;
+          const tokensBefore = estimateMessagesTokens(session.messages);
+
+          const evictResult = rollingEvict({
+            messages: [...session.messages],
+            maxContextTokens: contextWindow,
+            targetUtilization: rollingCfg?.targetUtilization,
+            minKeepMessages: rollingCfg?.minKeepMessages,
+          });
+
+          if (evictResult.evictedCount > 0) {
+            const showNote = rollingCfg?.evictionNote !== false;
+            const keptWithNote = showNote
+              ? [buildEvictionNote(evictResult), ...evictResult.kept]
+              : evictResult.kept;
+
+            session.agent.replaceMessages(keptWithNote);
+            // Persist the updated messages via sessionManager
+            (sessionManager as any).setMessages?.(keptWithNote);
+
+            log.info(
+              `Rolling eviction: dropped ${evictResult.evictedCount} messages ` +
+                `(~${Math.round(evictResult.evictedTokens / 1000)}K tokens), ` +
+                `kept ${evictResult.kept.length} messages (~${Math.round(evictResult.keptTokens / 1000)}K tokens)`,
+            );
+
+            return {
+              ok: true,
+              compacted: true,
+              result: {
+                summary: `[Rolling eviction: ${evictResult.evictedCount} messages dropped, searchable via memory_search]`,
+                firstKeptEntryId: undefined as unknown as string,
+                tokensBefore,
+                tokensAfter: evictResult.keptTokens,
+                details: undefined,
+              },
+            };
+          }
+
+          // Nothing to evict — context is fine
+          return {
+            ok: true,
+            compacted: false,
+            reason: "Rolling mode: context within target utilization, no eviction needed",
+          };
+        }
+        // ── End rolling context eviction ──────────────────────────
+
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;

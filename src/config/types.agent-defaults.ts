@@ -243,7 +243,7 @@ export type AgentDefaultsConfig = {
   };
 };
 
-export type AgentCompactionMode = "default" | "safeguard";
+export type AgentCompactionMode = "default" | "safeguard" | "rolling";
 
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
@@ -254,6 +254,17 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /** Rolling context eviction settings (only used when mode is "rolling"). */
+  rolling?: AgentCompactionRollingConfig;
+};
+
+export type AgentCompactionRollingConfig = {
+  /** Target context utilization after eviction (0-1). Default: 0.8 */
+  targetUtilization?: number;
+  /** Minimum recent messages to always keep. Default: 10 */
+  minKeepMessages?: number;
+  /** Insert eviction note marker. Default: true */
+  evictionNote?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

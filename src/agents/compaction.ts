@@ -394,3 +394,124 @@ export function pruneHistoryForContextShare(params: {
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
   return Math.max(1, Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS));
 }
+
+// ── Rolling context eviction ────────────────────────────────────────────────
+
+const DEFAULT_TARGET_UTILIZATION = 0.8;
+const DEFAULT_MIN_KEEP_MESSAGES = 10;
+
+export interface RollingEvictParams {
+  messages: AgentMessage[];
+  maxContextTokens: number;
+  /** Target context utilization after eviction (0-1). Default 0.8 */
+  targetUtilization?: number;
+  /** Minimum recent messages to always keep. Default 10 */
+  minKeepMessages?: number;
+}
+
+export interface RollingEvictResult {
+  kept: AgentMessage[];
+  evicted: AgentMessage[];
+  evictedCount: number;
+  evictedTokens: number;
+  keptTokens: number;
+  firstEvictedTimestamp?: number;
+  lastEvictedTimestamp?: number;
+}
+
+/**
+ * Evict oldest messages to bring context under target utilization.
+ * No summarization — evicted messages remain in JSONL transcripts
+ * and are searchable via the memory system.
+ */
+export function rollingEvict(params: RollingEvictParams): RollingEvictResult {
+  const {
+    messages,
+    maxContextTokens,
+    targetUtilization = DEFAULT_TARGET_UTILIZATION,
+    minKeepMessages = DEFAULT_MIN_KEEP_MESSAGES,
+  } = params;
+
+  const targetTokens = Math.floor(maxContextTokens * targetUtilization);
+  const totalTokens = estimateMessagesTokens(messages);
+
+  // Nothing to evict
+  if (totalTokens <= targetTokens || messages.length <= minKeepMessages) {
+    return {
+      kept: messages,
+      evicted: [],
+      evictedCount: 0,
+      evictedTokens: 0,
+      keptTokens: totalTokens,
+    };
+  }
+
+  // Walk from oldest, accumulating tokens to evict
+  const tokensToEvict = totalTokens - targetTokens;
+  let evictedTokens = 0;
+  let evictBoundary = 0;
+
+  for (let i = 0; i < messages.length; i++) {
+    // Respect minKeepMessages — never evict so much that fewer than min remain
+    if (messages.length - i <= minKeepMessages) {
+      break;
+    }
+    if (evictedTokens >= tokensToEvict) {
+      break;
+    }
+    evictedTokens += estimateTokens(messages[i]);
+    evictBoundary = i + 1;
+  }
+
+  if (evictBoundary === 0) {
+    return {
+      kept: messages,
+      evicted: [],
+      evictedCount: 0,
+      evictedTokens: 0,
+      keptTokens: totalTokens,
+    };
+  }
+
+  const evicted = messages.slice(0, evictBoundary);
+  const keptRaw = messages.slice(evictBoundary);
+
+  // Repair tool_use/tool_result pairing after eviction
+  const repairReport = repairToolUseResultPairing(keptRaw);
+  const kept = repairReport.messages;
+
+  const firstTs = (evicted[0] as { timestamp?: number })?.timestamp;
+  const lastTs = (evicted[evicted.length - 1] as { timestamp?: number })?.timestamp;
+
+  return {
+    kept,
+    evicted,
+    evictedCount: evicted.length + repairReport.droppedOrphanCount,
+    evictedTokens,
+    keptTokens: totalTokens - evictedTokens,
+    firstEvictedTimestamp: firstTs,
+    lastEvictedTimestamp: lastTs,
+  };
+}
+
+/**
+ * Build the eviction note message inserted after rolling eviction.
+ */
+export function buildEvictionNote(result: RollingEvictResult): AgentMessage {
+  const fmtTs = (ts?: number) =>
+    ts
+      ? new Date(ts)
+          .toISOString()
+          .replace("T", " ")
+          .replace(/\.\d+Z$/, " UTC")
+      : "unknown";
+
+  return {
+    role: "user",
+    content:
+      `[Context rolled: ${result.evictedCount} messages evicted (~${Math.round(result.evictedTokens / 1000)}K tokens). ` +
+      `Full transcript searchable via memory_search tool. ` +
+      `Evicted range: ${fmtTs(result.firstEvictedTimestamp)} to ${fmtTs(result.lastEvictedTimestamp)}]`,
+    timestamp: Date.now(),
+  } as AgentMessage;
+}

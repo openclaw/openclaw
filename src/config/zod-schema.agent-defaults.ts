@@ -90,7 +90,9 @@ export const AgentDefaultsSchema = z
       .optional(),
     compaction: z
       .object({
-        mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+        mode: z
+          .union([z.literal("default"), z.literal("safeguard"), z.literal("rolling")])
+          .optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
         memoryFlush: z
@@ -99,6 +101,14 @@ export const AgentDefaultsSchema = z
             softThresholdTokens: z.number().int().nonnegative().optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        rolling: z
+          .object({
+            targetUtilization: z.number().min(0.1).max(0.95).optional(),
+            minKeepMessages: z.number().int().min(1).optional(),
+            evictionNote: z.boolean().optional(),
           })
           .strict()
           .optional(),
