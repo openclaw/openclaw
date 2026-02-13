@@ -2,18 +2,18 @@
 
 This checkout runs a **locally patched** OpenClaw build. These commits are intentionally _not_ upstreamed (at least for now), so we need a durable “why” + “where” record.
 
-Branch convention: `local/<upstream-version>` (currently `local/2026.2.9`).
+Branch convention: `local/<upstream-version>` (currently `local/2026.2.12`).
 
 Quick status:
 
-- Upstream base: `v2026.2.9`
+- Upstream base: `v2026.2.12`
 - Local head: run `git describe --tags --always`
 
 ## Patch list
 
 ### 1) WhatsApp: mark outbound messages as disappearing (7d via config)
 
-- Commit: `341653a71` — `feat(whatsapp): support disappearing outbound messages`
+- Commit: `e1cb3c55c` — `feat(whatsapp): support disappearing outbound messages`
 - Why:
   - We want **only outbound messages** to be sent as ephemeral (disappearing) without toggling a chat’s disappearing setting (to avoid WhatsApp system notices like “disappearing messages turned on”).
   - Enforces 7-day expiry via config (`604800` seconds).
@@ -25,31 +25,27 @@ Quick status:
   - Falls back to WhatsApp creds default disappearing mode if config is unset.
 - Files / docs touched:
   - `src/web/...`, `src/config/...`
-  - `docs/channels/whatsapp.md`, `docs/gateway/configuration.md`
-  - `src/config/schema.ts`
+  - `docs/channels/whatsapp.md`
 
 ### 2) Browser (Linux): avoid screenshot hangs
 
-- Commit: `cfa0bb0fe` — `Browser: avoid screenshot hangs on Linux`
+- Commit: `8d8ebfe09` — `Browser: avoid screenshot hangs on Linux`
 - Why:
   - Prevents sporadic hangs when taking screenshots on Linux in the browser toolchain.
 - Notes:
   - Keep local unless/until confirmed safe upstream.
 
-### 3) Cron: don’t skip due jobs when reloading store on timer ticks
+### 3) Cron due-run reload skip fix — dropped (covered upstream)
 
-- Commit: `de3652cab` — `fix(cron): don't skip due jobs on timer reload`
-- Why:
-  - A production issue was observed: a cron job scheduled for **02:30 Europe/Rome** did not run, yet `nextRunAtMs` advanced to the next day and no run history was recorded.
-  - Root cause: on timer ticks the service reloads the store and recomputed `nextRunAtMs` from “now”, which can jump to the next occurrence and effectively **skip** runs that are already due.
-- What:
-  - Preserve persisted `job.state.nextRunAtMs` during store reload; only fill it if missing/invalid.
-  - Add regression tests.
-  - Treat exact boundaries as due (Croner edge case).
+- Local commit dropped during rebase to `v2026.2.12`.
+- Reason:
+  - Upstream now includes broader cron scheduling/delivery reliability fixes, and our old local patch no longer applies cleanly.
+- Action:
+  - Keep as an upstream-owned fix going forward (no local carry patch).
 
 ### 4) Browser: allow `browser.snapshot` timeout override (fix misleading 20s timeouts)
 
-- Commit: `322a40b2f` — `fix(browser): honor browser.snapshot timeoutMs`
+- Commit: `a86087bb4` — `fix(browser): honor browser.snapshot timeoutMs`
 - Why:
   - We use a “fail fast” browser SOP (e.g. `timeoutMs: 3000` + retry once) so long browser calls don’t stall WhatsApp sessions.
   - Previously, `browser.snapshot` ignored tool `timeoutMs` and always used a hard-coded **20s** client timeout, causing apparent “stalls” and misleading errors.
@@ -59,7 +55,7 @@ Quick status:
 
 ### 5) Browser: allow `browser.navigate` timeout override (avoid 20s stalls)
 
-- Commit: `bb80857fb` — `fix(browser): honor browser.navigate timeoutMs`
+- Commit: `c0f87d834` — `fix(browser): honor browser.navigate timeoutMs`
 - Why:
   - Same SOP rationale as snapshot: fast failures + one retry beats 20s stalls.
   - Previously, `browser.navigate` ignored tool `timeoutMs` and always used a hard-coded **20s** client timeout.
@@ -69,7 +65,7 @@ Quick status:
 
 ### 6) Browser: allow `browser.screenshot` + `browser.act` timeout override
 
-- Commit: `aa6de86d6` — `fix(browser): honor browser.screenshot and browser.act timeoutMs`
+- Commit: `cad5573b3` — `fix(browser): honor browser.screenshot and browser.act timeoutMs`
 - Why:
   - `browser.screenshot` and `browser.act` previously ignored tool `timeoutMs` and always used a hard-coded **20s** client timeout.
   - In WhatsApp sessions this looks like the browser is “down” when in reality the request just exceeded the client-side 20s.
@@ -80,7 +76,7 @@ Quick status:
 
 ### 7) Memory/QMD: enforce per-agent QMD isolation for both memory manager and `exec qmd ...`
 
-- Commit: `f986f05e1` — `fix(memory): isolate qmd config/cache per agent in memory and exec`
+- Commit: `842ab6def` — `fix(memory): isolate qmd config/cache per agent in memory and exec`
 - Why:
   - We need strict memory boundaries:
     - terminal shell qmd index = obsidian-only
@@ -99,7 +95,7 @@ Quick status:
 
 ### 8) Discord native skill commands: scope to channel-bound agents (avoid `_2` duplicates)
 
-- Commit: `764b3b6e5` — `fix(discord): scope native skill commands to bound agents`
+- Commit: `3c155a9f5` — `fix(discord): scope native skill commands to bound agents`
 - Why:
   - Discord slash skill commands were built from **all agents**, not just agents routed for Discord.
   - In multi-agent setups this produced duplicate names with numeric suffixes (e.g., `askpi`, `askpi_2`).
@@ -110,7 +106,7 @@ Quick status:
 
 ### 9) Cron delivery: add `delivery.format` (`summary`|`full`) and use `full` for morning rollup
 
-- Commit: _pending_ — `feat(cron): support full announce delivery format for isolated jobs`
+- Commit: `d7d5d1cfd` — `feat(cron): support full delivery format for isolated announce jobs`
 - Why:
   - Some jobs (notably `morning-rollup`) must deliver full/untrimmed output.
   - Existing announce flow always rewrote isolated output into a 1–2 sentence summary via `subagent-announce`, overriding skill/user intent.

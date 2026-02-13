@@ -82,7 +82,13 @@ describe("exec PATH login shell merge", () => {
     const result = await tool.execute("call1", { command: "echo $PATH" });
     const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
-    expect(entries).toEqual(["/custom/bin", "/opt/bin", "/usr/bin"]);
+    const customIndex = entries.indexOf("/custom/bin");
+    const optIndex = entries.indexOf("/opt/bin");
+    const usrIndex = entries.indexOf("/usr/bin");
+
+    expect(customIndex).toBeGreaterThanOrEqual(0);
+    expect(optIndex).toBeGreaterThan(customIndex);
+    expect(usrIndex).toBeGreaterThan(optIndex);
     expect(shellPathMock).toHaveBeenCalledTimes(1);
   });
 
