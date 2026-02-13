@@ -145,4 +145,7 @@ if [[ "$run_doctor" == "1" ]]; then
   echo "[remote] running: openclaw doctor"
   openclaw doctor
 fi
+
+echo "[remote] running: clawdbot gateway restart && clawdbot doctor --fix"
+clawdbot gateway restart && clawdbot doctor --fix
 EOF
