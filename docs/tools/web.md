@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web via Brave Search API (default) or Perplexity Sonar (direct or via OpenRouter).
+- `web_search` — Search the web via Brave Search API (default) or Perplexity Sonar (direct or via OpenRouter) or BaiduSearch API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -22,6 +22,8 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 - `web_search` calls your configured provider and returns results.
   - **Brave** (default): returns structured results (title, URL, snippet).
   - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
+  - **Baidu**: returns structured results (title, URL, snippet).
+
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
@@ -33,8 +35,9 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 | ------------------- | -------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
 | **Brave** (default) | Fast, structured results, free tier          | Traditional search results               | `BRAVE_API_KEY`                              |
 | **Perplexity**      | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
+| **baidu**           | Fast, structured results, high qulaity       | Traditional search results               | `BAIDU_SEARCH_API_KEY`                       |
 
-See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
+See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) and [Baidu Search](/baidu-search) for provider-specific details.
 
 Set the provider in config:
 
@@ -62,6 +65,23 @@ Example: switch to Perplexity Sonar (direct API):
           apiKey: "pplx-...",
           baseUrl: "https://api.perplexity.ai",
           model: "perplexity/sonar-pro",
+        },
+      },
+    },
+  },
+}
+```
+
+Example: switch to Baidu search API:
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "baidu",
+        baidu: {
+          apiKey: "bce-v3/ALTAK-...",
         },
       },
     },
@@ -139,6 +159,12 @@ If no base URL is set, OpenClaw chooses a default based on the API key source:
 | `perplexity/sonar-pro` (default) | Multi-step reasoning with web search | Complex questions |
 | `perplexity/sonar-reasoning-pro` | Chain-of-thought analysis            | Deep research     |
 
+## Getting a Baidu Search API key
+
+1. Visit the [Baidu AI Search Console](https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey)
+2. Generate a new API key or select an existing one(format: `bce-v3/ALTAK-...`)
+3. Copy the API key and use it with OpenClaw
+
 ## web_search
 
 Search the web using your configured provider.
@@ -149,6 +175,7 @@ Search the web using your configured provider.
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Perplexity**: `OPENROUTER_API_KEY`, `PERPLEXITY_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **Baidu**: `BAIDU_SEARCH_API_KEY`, or `tools.web.search.baidu.apiKey`
 
 ### Config
 
