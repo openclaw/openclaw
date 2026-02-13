@@ -93,6 +93,19 @@ export type WorkspaceBootstrapFile = {
   missing: boolean;
 };
 
+/** Set of recognized bootstrap filenames for runtime validation */
+const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_MEMORY_ALT_FILENAME,
+]);
+
 async function writeFileIfMissing(filePath: string, content: string) {
   try {
     await fs.writeFile(filePath, content, {
@@ -328,4 +341,72 @@ export function filterBootstrapFilesForSession(
     return files;
   }
   return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+}
+
+export async function loadExtraBootstrapFiles(
+  dir: string,
+  extraPatterns: string[],
+): Promise<WorkspaceBootstrapFile[]> {
+  if (!extraPatterns.length) {
+    return [];
+  }
+  const resolvedDir = resolveUserPath(dir);
+  let realResolvedDir = resolvedDir;
+  try {
+    realResolvedDir = await fs.realpath(resolvedDir);
+  } catch {
+    // Keep lexical root if realpath fails.
+  }
+
+  // Resolve glob patterns into concrete file paths
+  const resolvedPaths = new Set<string>();
+  for (const pattern of extraPatterns) {
+    if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
+      try {
+        const matches = fs.glob(pattern, { cwd: resolvedDir });
+        for await (const m of matches) {
+          resolvedPaths.add(m);
+        }
+      } catch {
+        // glob not available or pattern error — fall back to literal
+        resolvedPaths.add(pattern);
+      }
+    } else {
+      resolvedPaths.add(pattern);
+    }
+  }
+
+  const result: WorkspaceBootstrapFile[] = [];
+  for (const relPath of resolvedPaths) {
+    const filePath = path.resolve(resolvedDir, relPath);
+    // Guard against path traversal — resolved path must stay within workspace
+    if (!filePath.startsWith(resolvedDir + path.sep) && filePath !== resolvedDir) {
+      continue;
+    }
+    try {
+      // Resolve symlinks and verify the real path is still within workspace
+      const realFilePath = await fs.realpath(filePath);
+      if (
+        !realFilePath.startsWith(realResolvedDir + path.sep) &&
+        realFilePath !== realResolvedDir
+      ) {
+        continue;
+      }
+      // Only load files whose basename is a recognized bootstrap filename
+      const baseName = path.basename(relPath);
+      if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
+        continue;
+      }
+      const content = await fs.readFile(realFilePath, "utf-8");
+      result.push({
+        name: baseName as WorkspaceBootstrapFileName,
+        path: filePath,
+        content,
+        missing: false,
+      });
+    } catch {
+      // Silently skip missing extra files
+    }
+  }
+  return result;
 }
