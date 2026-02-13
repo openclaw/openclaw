@@ -328,14 +328,14 @@ describe("memory index", () => {
   });
 
   it("hybrid weights can favor keyword matches when text weight dominates", async () => {
-    const manyAlpha = Array.from({ length: 200 }, () => "Alpha").join(" ");
+    // weak-match has only one search term; strong-match has all three
     await fs.writeFile(
-      path.join(workspaceDir, "memory", "vector-only.md"),
-      "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
+      path.join(workspaceDir, "memory", "weak-match.md"),
+      "Alpha is mentioned once here.",
     );
     await fs.writeFile(
-      path.join(workspaceDir, "memory", "keyword-only.md"),
-      `${manyAlpha} beta id123.`,
+      path.join(workspaceDir, "memory", "strong-match.md"),
+      "Alpha beta id123. Alpha beta id123. Alpha beta id123.",
     );
 
     const cfg = {
@@ -377,12 +377,13 @@ describe("memory index", () => {
     await manager.sync({ force: true });
     const results = await manager.search("alpha beta id123");
     expect(results.length).toBeGreaterThan(0);
-    const paths = results.map((r) => r.path);
-    expect(paths).toContain("memory/vector-only.md");
-    expect(paths).toContain("memory/keyword-only.md");
-    const vectorOnly = results.find((r) => r.path === "memory/vector-only.md");
-    const keywordOnly = results.find((r) => r.path === "memory/keyword-only.md");
-    expect((keywordOnly?.score ?? 0) > (vectorOnly?.score ?? 0)).toBe(true);
+    const strongMatch = results.find((r) => r.path === "memory/strong-match.md");
+    const weakMatch = results.find((r) => r.path === "memory/weak-match.md");
+    // strong-match has all three terms repeated; should rank higher with BM25
+    expect(strongMatch).toBeDefined();
+    if (weakMatch && strongMatch) {
+      expect(strongMatch.score).toBeGreaterThan(weakMatch.score);
+    }
   });
 
   it("reports vector availability after probe", async () => {

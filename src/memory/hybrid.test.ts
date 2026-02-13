@@ -2,17 +2,23 @@ import { describe, expect, it } from "vitest";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 
 describe("memory hybrid helpers", () => {
-  it("buildFtsQuery tokenizes and AND-joins", () => {
-    expect(buildFtsQuery("hello world")).toBe('"hello" AND "world"');
-    expect(buildFtsQuery("FOO_bar baz-1")).toBe('"FOO_bar" AND "baz" AND "1"');
+  it("buildFtsQuery tokenizes and OR-joins", () => {
+    expect(buildFtsQuery("hello world")).toBe('"hello" OR "world"');
+    expect(buildFtsQuery("FOO_bar baz-1")).toBe('"FOO_bar" OR "baz" OR "1"');
     expect(buildFtsQuery("   ")).toBeNull();
   });
 
-  it("bm25RankToScore is monotonic and clamped", () => {
-    expect(bm25RankToScore(0)).toBeCloseTo(1);
+  it("bm25RankToScore handles negative ranks from FTS5", () => {
+    expect(bm25RankToScore(0)).toBeCloseTo(0);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);
-    expect(bm25RankToScore(10)).toBeLessThan(bm25RankToScore(1));
-    expect(bm25RankToScore(-100)).toBeCloseTo(1);
+    expect(bm25RankToScore(10)).toBeGreaterThan(bm25RankToScore(1));
+    // FTS5 returns negative values — more negative = better match = higher score
+    expect(bm25RankToScore(-4.69)).toBeGreaterThan(bm25RankToScore(-2.93));
+    // Previously all negatives returned 1.0 — now they differentiate
+    expect(bm25RankToScore(-0.01)).not.toBeCloseTo(bm25RankToScore(-4.69));
+    // Non-finite returns 0
+    expect(bm25RankToScore(NaN)).toBeCloseTo(0);
+    expect(bm25RankToScore(Infinity)).toBeCloseTo(0);
   });
 
   it("mergeHybridResults unions by id and combines weighted scores", () => {

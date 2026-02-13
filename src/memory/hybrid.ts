@@ -30,12 +30,15 @@ export function buildFtsQuery(raw: string): string | null {
     return null;
   }
   const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
-  return quoted.join(" AND ");
+  return quoted.join(" OR ");
 }
 
 export function bm25RankToScore(rank: number): number {
-  const normalized = Number.isFinite(rank) ? Math.max(0, rank) : 999;
-  return 1 / (1 + normalized);
+  // SQLite FTS5 bm25() returns negative values (lower = better match).
+  // Use Math.abs() to get the magnitude, then map so higher magnitude = higher score.
+  // The formula 1 - 1/(1+abs(rank)) maps 0→0 and large values→~1.
+  const absRank = Number.isFinite(rank) ? Math.abs(rank) : 0;
+  return absRank / (1 + absRank);
 }
 
 export function mergeHybridResults(params: {
