@@ -62,14 +62,18 @@ export async function resolveMatrixClient(opts: {
   if (opts.client) {
     return { client: opts.client, stopOnDone: false };
   }
+  const accountId =
+    typeof opts.accountId === "string" && opts.accountId.trim().length > 0
+      ? normalizeAccountId(opts.accountId)
+      : undefined;
   // Try to get the client for the specific account
-  const active = getActiveMatrixClient(opts.accountId);
+  const active = getActiveMatrixClient(accountId);
   if (active) {
     return { client: active, stopOnDone: false };
   }
   // When no account is specified, try the default account first; only fall back to
   // any active client as a last resort (prevents sending from an arbitrary account).
-  if (!opts.accountId) {
+  if (!accountId) {
     const defaultClient = getActiveMatrixClient(DEFAULT_ACCOUNT_ID);
     if (defaultClient) {
       return { client: defaultClient, stopOnDone: false };
@@ -83,18 +87,18 @@ export async function resolveMatrixClient(opts: {
   if (shouldShareClient) {
     const client = await resolveSharedMatrixClient({
       timeoutMs: opts.timeoutMs,
-      accountId: opts.accountId,
+      accountId,
     });
     return { client, stopOnDone: false };
   }
-  const auth = await resolveMatrixAuth({ accountId: opts.accountId });
+  const auth = await resolveMatrixAuth({ accountId });
   const client = await createMatrixClient({
     homeserver: auth.homeserver,
     userId: auth.userId,
     accessToken: auth.accessToken,
     encryption: auth.encryption,
     localTimeoutMs: opts.timeoutMs,
-    accountId: opts.accountId,
+    accountId,
   });
   if (auth.encryption && client.crypto) {
     try {
