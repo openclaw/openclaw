@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentIdFromSessionKey, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -53,8 +53,9 @@ function resolveTranscriptPath(params: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
+  agentId?: string;
 }): string | null {
-  const { sessionId, storePath, sessionFile } = params;
+  const { sessionId, storePath, sessionFile, agentId } = params;
   if (!storePath && !sessionFile) {
     return null;
   }
@@ -63,7 +64,7 @@ function resolveTranscriptPath(params: {
     return resolveSessionFilePath(
       sessionId,
       sessionFile ? { sessionFile } : undefined,
-      sessionsDir ? { sessionsDir } : undefined,
+      agentId ? { agentId } : sessionsDir ? { sessionsDir } : undefined,
     );
   } catch {
     return null;
@@ -99,12 +100,14 @@ function appendAssistantTranscriptMessage(params: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
+  agentId?: string;
   createIfMissing?: boolean;
 }): TranscriptAppendResult {
   const transcriptPath = resolveTranscriptPath({
     sessionId: params.sessionId,
     storePath: params.storePath,
     sessionFile: params.sessionFile,
+    agentId: params.agentId,
   });
   if (!transcriptPath) {
     return { ok: false, error: "transcript path not resolved" };
@@ -567,11 +570,13 @@ export const chatHandlers: GatewayRequestHandlers = {
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+              const agentId = resolveAgentIdFromSessionKey(sessionKey);
               const appended = appendAssistantTranscriptMessage({
                 message: combinedReply,
                 sessionId,
                 storePath: latestStorePath,
                 sessionFile: latestEntry?.sessionFile,
+                agentId,
                 createIfMissing: true,
               });
               if (appended.ok) {
@@ -679,6 +684,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
+      agentId: resolveAgentIdFromSessionKey(rawSessionKey),
       createIfMissing: false,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {

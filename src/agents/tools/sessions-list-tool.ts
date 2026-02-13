@@ -161,7 +161,7 @@ export function createSessionsListTool(opts?: {
             transcriptPath = resolveSessionFilePath(
               sessionId,
               sessionFile ? { sessionFile } : undefined,
-              { sessionsDir: path.dirname(storePath) },
+              { agentId: entryAgentId, sessionsDir: path.dirname(storePath) },
             );
           } catch {
             transcriptPath = undefined;
