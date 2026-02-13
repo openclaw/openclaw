@@ -95,6 +95,14 @@ const voiceCallConfigSchema = {
       advanced: true,
     },
     "tts.elevenlabs.baseUrl": { label: "ElevenLabs Base URL", advanced: true },
+    "tts.minimax.apiKey": {
+      label: "MiniMax API Key",
+      sensitive: true,
+      advanced: true,
+    },
+    "tts.minimax.model": { label: "MiniMax TTS Model", advanced: true },
+    "tts.minimax.voiceId": { label: "MiniMax Voice ID", advanced: true },
+    "tts.minimax.baseUrl": { label: "MiniMax Base URL", advanced: true },
     publicUrl: { label: "Public Webhook URL", advanced: true },
     skipSignatureVerification: {
       label: "Skip Signature Verification",

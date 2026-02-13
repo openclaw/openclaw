@@ -152,6 +152,26 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### MiniMax TTS
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "minimax",
+      minimax: {
+        apiKey: "your-minimax-api-key",
+        model: "speech-2.8-hd",
+        voiceId: "Friendly_Person",
+        speed: 1.0,
+        languageBoost: "auto",
+      },
+    },
+  },
+}
+```
+
 ### Custom limits + prefs path
 
 ```json5
@@ -204,16 +224,16 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"openai"`, `"minimax"`, or `"edge"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
-  otherwise `edge`.
+  then `minimax` (if key), otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`, `MINIMAX_API_KEY`).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `elevenlabs.voiceSettings`:
   - `stability`, `similarityBoost`, `style`: `0..1`
@@ -231,6 +251,14 @@ Then run:
 - `edge.saveSubtitles`: write JSON subtitles alongside the audio file.
 - `edge.proxy`: proxy URL for Edge TTS requests.
 - `edge.timeoutMs`: request timeout override (ms).
+- `minimax.apiKey`: MiniMax API key (falls back to `MINIMAX_API_KEY` env var).
+- `minimax.baseUrl`: override MiniMax API base URL (default `https://api.minimax.io`).
+- `minimax.model`: TTS model (default `speech-2.8-hd`; also `speech-2.8-turbo`).
+- `minimax.voiceId`: voice identifier (default `Friendly_Person`).
+- `minimax.speed`: speech speed `0.5..2.0` (default `1.0`).
+- `minimax.vol`: volume `0..10` (default `1.0`).
+- `minimax.pitch`: pitch adjustment `-12..12` (default `0`).
+- `minimax.languageBoost`: language hint (e.g. `English`, `Chinese`, `auto`).
 
 ## Model-driven overrides (default on)
 
@@ -253,7 +281,7 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`)
+- `provider` (`openai` | `elevenlabs` | `edge` | `minimax`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
