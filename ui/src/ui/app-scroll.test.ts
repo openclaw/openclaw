@@ -42,6 +42,7 @@ function createScrollHost(
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatNewMessagesBelow: false,
+    chatContentObserver: null as MutationObserver | null,
     logsScrollFrame: null as number | null,
     logsAtBottom: true,
     topbarObserver: null as ResizeObserver | null,

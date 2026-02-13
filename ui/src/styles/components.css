@@ -1450,10 +1450,7 @@
 }
 
 .compose-framework {
-  display: grid;
-  gap: 8px;
   margin-bottom: 10px;
-  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--card) 86%, var(--secondary));
@@ -1464,6 +1461,35 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.compose-framework__head::-webkit-details-marker {
+  display: none;
+}
+
+.compose-framework__head::marker {
+  content: "";
+}
+
+.compose-framework__head::after {
+  content: "";
+  display: block;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 200ms ease;
+  margin-left: auto;
+}
+
+.compose-framework[open] > .compose-framework__head::after {
+  transform: rotate(45deg);
 }
 
 .compose-framework__title {
@@ -1488,6 +1514,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  padding: 4px 10px 8px;
 }
 
 .compose-framework__item {
@@ -1539,7 +1566,7 @@
   outline: none;
   background: transparent;
   resize: none;
-  min-height: 92px;
+  min-height: 44px;
   max-height: 45vh;
   overflow: auto;
   white-space: pre-wrap;

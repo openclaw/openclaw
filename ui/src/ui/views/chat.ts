@@ -909,13 +909,13 @@ export function renderChat(props: ChatProps) {
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__bar">
-          <div class="compose-framework" role="group" aria-label="Execution checklist">
-            <div class="compose-framework__head">
+          <details class="compose-framework" role="group" aria-label="Execution checklist">
+            <summary class="compose-framework__head">
               <span class="compose-framework__title">${icons.fileText} Execution checklist</span>
               <span class="compose-framework__progress muted"
                 >${checklistCompletedCount}/${ELITE_CHECKLIST_TEMPLATES.length}</span
               >
-            </div>
+            </summary>
             <div class="compose-framework__items">
               ${ELITE_CHECKLIST_TEMPLATES.map((item) => {
                 const done = props.draft.toLowerCase().includes(item.marker.toLowerCase());
@@ -932,7 +932,7 @@ export function renderChat(props: ChatProps) {
                 `;
               })}
             </div>
-          </div>
+          </details>
           <textarea
             class="chat-compose__input"
             ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}

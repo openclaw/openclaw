@@ -10,6 +10,7 @@ type ScrollHost = {
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
   chatNewMessagesBelow: boolean;
+  chatContentObserver: MutationObserver | null;
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
   topbarObserver: ResizeObserver | null;
@@ -149,6 +150,53 @@ export function exportLogs(lines: string[], label: string) {
   anchor.download = `openclaw-logs-${label}-${stamp}.log`;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Watch `.chat-thread` for async DOM changes (e.g. `until()` promise
+ * resolution, Mermaid SVG rendering) and re-scroll when the user is near
+ * the bottom.  Without this, content that grows after Lit's `updateComplete`
+ * (async markdown, lazy diagrams) won't trigger a follow-up scroll.
+ */
+export function observeChatContent(host: ScrollHost) {
+  disconnectChatContentObserver(host);
+
+  const thread = host.querySelector(".chat-thread") as HTMLElement | null;
+  if (!thread) {
+    return;
+  }
+
+  let scrollFrame: number | null = null;
+
+  host.chatContentObserver = new MutationObserver(() => {
+    if (!host.chatUserNearBottom) {
+      return;
+    }
+    // Coalesce into a single rAF to avoid layout thrashing.
+    if (scrollFrame != null) {
+      return;
+    }
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = null;
+      if (!host.chatUserNearBottom) {
+        return;
+      }
+      thread.scrollTop = thread.scrollHeight;
+    });
+  });
+
+  host.chatContentObserver.observe(thread, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
+}
+
+export function disconnectChatContentObserver(host: ScrollHost) {
+  if (host.chatContentObserver) {
+    host.chatContentObserver.disconnect();
+    host.chatContentObserver = null;
+  }
 }
 
 export function observeTopbar(host: ScrollHost) {

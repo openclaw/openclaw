@@ -239,7 +239,7 @@ export async function runMigrations(): Promise<void> {
               timescaledb.compress,
               timescaledb.compress_segmentby = 'category,severity'
             );
-            SELECT add_compression_policy('security_events', INTERVAL '7 days', if_not_exists => TRUE);
+            PERFORM add_compression_policy('security_events', INTERVAL '7 days', if_not_exists => TRUE);
           END IF;
         END $$;
       `,

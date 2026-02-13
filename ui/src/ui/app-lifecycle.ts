@@ -8,7 +8,13 @@ import {
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
-import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import {
+  disconnectChatContentObserver,
+  observeChatContent,
+  observeTopbar,
+  scheduleChatScroll,
+  scheduleLogsScroll,
+} from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
   attachThemeListener,
@@ -90,6 +96,7 @@ export function handleConnected(host: LifecycleHost) {
 
 export function handleFirstUpdated(host: LifecycleHost) {
   observeTopbar(host as unknown as Parameters<typeof observeTopbar>[0]);
+  observeChatContent(host as unknown as Parameters<typeof observeChatContent>[0]);
 }
 
 export function handleDisconnected(host: LifecycleHost) {
@@ -101,6 +108,9 @@ export function handleDisconnected(host: LifecycleHost) {
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);
+  disconnectChatContentObserver(
+    host as unknown as Parameters<typeof disconnectChatContentObserver>[0],
+  );
   host.topbarObserver?.disconnect();
   host.topbarObserver = null;
 }
