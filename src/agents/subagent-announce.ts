@@ -496,8 +496,14 @@ export async function runSubagentAnnounceFlow(params: {
       "",
       "Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.",
       `Do not mention technical details like tokens, stats, or that this was a ${announceType}.`,
-      "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
+      reply && reply !== "(no output)"
+        ? "You MUST summarize the findings for the user. Do NOT respond with NO_REPLY — real content was produced."
+        : "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
     ].join("\n");
+
+    defaultRuntime.log(
+      `[subagent-announce] reply=${reply ? `"${reply.substring(0, 120)}..."` : "(empty)"} announceType=${announceType}`,
+    );
 
     const queued = await maybeQueueSubagentAnnounce({
       requesterSessionKey: params.requesterSessionKey,
