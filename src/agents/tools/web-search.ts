@@ -113,17 +113,15 @@ type GrokSearchResponse = {
   output?: Array<{
     type?: string;
     role?: string;
-    // Direct output_text fields (grok-4 family with server-side tools)
     text?: string;
     annotations?: GrokAnnotation[];
-    // Nested content blocks (message wrapper format)
     content?: Array<{
       type?: string;
       text?: string;
       annotations?: GrokAnnotation[];
     }>;
   }>;
-  output_text?: string; // deprecated field - kept for backwards compatibility
+  output_text?: string;
   citations?: string[];
   inline_citations?: Array<{
     start_index: number;
@@ -147,17 +145,13 @@ function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
 } {
-  // xAI Responses API format: find output_text content blocks.
-  // They can appear either directly in the output array or nested inside a "message" wrapper.
   for (const output of data.output ?? []) {
-    // Direct output_text block (common with grok-4 family + server-side tools)
     if (output.type === "output_text" && typeof output.text === "string" && output.text) {
       const urls = (output.annotations ?? [])
         .filter((a) => a.type === "url_citation" && typeof a.url === "string")
         .map((a) => a.url as string);
       return { text: output.text, annotationCitations: [...new Set(urls)] };
     }
-    // Nested inside a "message" wrapper
     if (output.type === "message") {
       for (const block of output.content ?? []) {
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
@@ -169,7 +163,6 @@ function extractGrokContent(data: GrokSearchResponse): {
       }
     }
   }
-  // Fallback: deprecated output_text field
   const text = typeof data.output_text === "string" ? data.output_text : undefined;
   return { text, annotationCitations: [] };
 }
