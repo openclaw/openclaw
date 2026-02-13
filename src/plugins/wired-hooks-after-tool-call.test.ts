@@ -72,7 +72,7 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    handleToolExecutionEnd(
+    await handleToolExecutionEnd(
       ctx as never,
       {
         type: "tool_execution_end",
@@ -138,7 +138,7 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    handleToolExecutionEnd(
+    await handleToolExecutionEnd(
       ctx as never,
       {
         type: "tool_execution_end",
@@ -184,7 +184,7 @@ describe("after_tool_call hook wiring", () => {
       trimMessagingToolSent: vi.fn(),
     };
 
-    handleToolExecutionEnd(
+    await handleToolExecutionEnd(
       ctx as never,
       {
         type: "tool_execution_end",
