@@ -55,13 +55,8 @@ export function resolveLegacyDaemonCliAccessors(
   }
 
   const registerContainer = findRegisterContainerSymbol(bundleSource);
-  if (!registerContainer) {
-    return null;
-  }
-  const registerContainerAlias = aliases.get(registerContainer);
-  if (!registerContainerAlias) {
-    return null;
-  }
+  const registerContainerAlias = registerContainer ? aliases.get(registerContainer) : undefined;
+  const registerDirectAlias = aliases.get("registerDaemonCli");
 
   const runDaemonInstall = aliases.get("runDaemonInstall");
   const runDaemonRestart = aliases.get("runDaemonRestart");
@@ -70,6 +65,7 @@ export function resolveLegacyDaemonCliAccessors(
   const runDaemonStop = aliases.get("runDaemonStop");
   const runDaemonUninstall = aliases.get("runDaemonUninstall");
   if (
+    !(registerContainerAlias || registerDirectAlias) ||
     !runDaemonInstall ||
     !runDaemonRestart ||
     !runDaemonStart ||
@@ -81,7 +77,9 @@ export function resolveLegacyDaemonCliAccessors(
   }
 
   return {
-    registerDaemonCli: `${registerContainerAlias}.registerDaemonCli`,
+    registerDaemonCli: registerContainerAlias
+      ? `${registerContainerAlias}.registerDaemonCli`
+      : registerDirectAlias!,
     runDaemonInstall,
     runDaemonRestart,
     runDaemonStart,
