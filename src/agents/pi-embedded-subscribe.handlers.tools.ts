@@ -89,7 +89,7 @@ export async function handleToolExecutionStart(
   // toolExecutionCount tracks all active tools, while activeToolName/CallId/StartTime
   // track only the most recent (used for timeout snapshots).
   ctx.state.toolExecutionCount++;
-  ctx.state.toolExecutionInFlight = true;
+  ctx.state.toolExecutionInFlight = ctx.state.toolExecutionCount > 0;
   ctx.state.activeToolName = toolName;
   ctx.state.activeToolCallId = toolCallId;
   ctx.state.activeToolStartTime = startTime;
