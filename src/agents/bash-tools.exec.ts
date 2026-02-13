@@ -179,7 +179,7 @@ export function createExecTool(
     name: "exec",
     label: "exec",
     description:
-      "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+      "Execute shell commands with background continuation. Use yieldMs/background=true to continue later via process tool. Use background=false to force synchronous execution (no auto-backgrounding). Use pty=true for TTY-required commands (terminal UIs, coding agents).",
     parameters: execSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
       const params = args as {
@@ -206,19 +206,22 @@ export function createExecTool(
       const warnings: string[] = [];
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
+      const synchronousRequested = params.background === false;
       const yieldRequested = typeof params.yieldMs === "number";
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
         warnings.push("Warning: background execution is disabled; running synchronously.");
       }
       const yieldWindow = allowBackground
-        ? backgroundRequested
-          ? 0
-          : clampWithDefault(
-              params.yieldMs ?? defaultBackgroundMs,
-              defaultBackgroundMs,
-              10,
-              120_000,
-            )
+        ? synchronousRequested
+          ? null
+          : backgroundRequested
+            ? 0
+            : clampWithDefault(
+                params.yieldMs ?? defaultBackgroundMs,
+                defaultBackgroundMs,
+                10,
+                120_000,
+              )
         : null;
       const elevatedDefaults = defaults?.elevated;
       const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);

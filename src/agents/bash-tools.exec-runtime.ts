@@ -81,7 +81,13 @@ export const execSchema = Type.Object({
       description: "Milliseconds to wait before backgrounding (default 10000)",
     }),
   ),
-  background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
+  background: Type.Optional(
+    Type.Boolean({
+      description:
+        "Run in background immediately (true) or force synchronous execution (false). " +
+        "When false, the command runs to completion regardless of yieldMs/backgroundMs.",
+    }),
+  ),
   timeout: Type.Optional(
     Type.Number({
       description: "Timeout in seconds (optional, kills process on expiry)",
