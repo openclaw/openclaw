@@ -243,7 +243,9 @@ JOB SCHEMA (for add action):
   "payload": { ... },       // Required: what to execute
   "delivery": { ... },      // Optional: announce summary (isolated only)
   "sessionTarget": "main" | "isolated",  // Required
-  "enabled": true | false   // Optional, default true
+  "enabled": true | false,  // Optional, default true
+  "deleteAfterRun": true | false,  // Optional: auto-delete after completion
+  "maxRuns": <number>       // Optional: auto-delete recurring job after N runs
 }
 
 SCHEDULE TYPES (schedule.kind):
@@ -318,6 +320,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "enabled",
               "description",
               "deleteAfterRun",
+              "maxRuns",
               "agentId",
               "message",
               "text",

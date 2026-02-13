@@ -63,6 +63,8 @@ export type CronJobState = {
   consecutiveErrors?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
+  /** Total number of completed runs (any status). Used with maxRuns for auto-deletion. */
+  totalRuns?: number;
 };
 
 export type CronJob = {
@@ -72,6 +74,7 @@ export type CronJob = {
   description?: string;
   enabled: boolean;
   deleteAfterRun?: boolean;
+  maxRuns?: number;
   createdAtMs: number;
   updatedAtMs: number;
   schedule: CronSchedule;
