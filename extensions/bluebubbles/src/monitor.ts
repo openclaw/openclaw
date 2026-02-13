@@ -335,7 +335,13 @@ export async function handleBlueBubblesWebhookRequest(
 
   const body = await readJsonBody(req, 1024 * 1024);
   if (!body.ok) {
-    res.statusCode = body.error === "payload too large" ? 413 : 400;
+    if (body.error === "payload too large") {
+      res.statusCode = 413;
+    } else if (body.error === "request body timeout") {
+      res.statusCode = 408;
+    } else {
+      res.statusCode = 400;
+    }
     res.end(body.error ?? "invalid payload");
     console.warn(`[bluebubbles] webhook rejected: ${body.error ?? "invalid payload"}`);
     return true;

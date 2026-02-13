@@ -79,19 +79,16 @@ function createDiscordGatewayPlugin(params: {
     params.runtime.log?.("discord: gateway proxy enabled");
 
     class ProxyGatewayPlugin extends GatewayPlugin {
-      #proxyAgent: HttpsProxyAgent<string>;
-
-      constructor(proxyAgent: HttpsProxyAgent<string>) {
+      constructor() {
         super(options);
-        this.#proxyAgent = proxyAgent;
       }
 
       createWebSocket(url: string) {
-        return new WebSocket(url, { agent: this.#proxyAgent });
+        return new WebSocket(url, { agent });
       }
     }
 
-    return new ProxyGatewayPlugin(agent);
+    return new ProxyGatewayPlugin();
   } catch (err) {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
     return new GatewayPlugin(options);
