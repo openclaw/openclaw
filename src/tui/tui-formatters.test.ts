@@ -4,6 +4,8 @@ import {
   extractTextFromMessage,
   extractThinkingFromMessage,
   isCommandMessage,
+  isNoOutputAssistantText,
+  resolveFinalAssistantText,
 } from "./tui-formatters.js";
 
 describe("extractTextFromMessage", () => {
@@ -104,5 +106,18 @@ describe("isCommandMessage", () => {
     expect(isCommandMessage({ command: true })).toBe(true);
     expect(isCommandMessage({ command: false })).toBe(false);
     expect(isCommandMessage({})).toBe(false);
+  });
+});
+
+describe("resolveFinalAssistantText", () => {
+  it("falls back to no-output placeholder when both final and streamed are empty", () => {
+    expect(resolveFinalAssistantText({ finalText: "", streamedText: "" })).toBe("(no output)");
+  });
+});
+
+describe("isNoOutputAssistantText", () => {
+  it("detects the no-output placeholder", () => {
+    expect(isNoOutputAssistantText("(no output)")).toBe(true);
+    expect(isNoOutputAssistantText(" done ")).toBe(false);
   });
 });

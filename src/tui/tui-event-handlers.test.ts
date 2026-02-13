@@ -357,4 +357,46 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
+
+  it("retries history refresh for local runs when final output is empty", () => {
+    vi.useFakeTimers();
+    try {
+      const state = makeState({ activeChatRunId: null });
+      const {
+        chatLog,
+        tui,
+        setActivityStatus,
+        loadHistory,
+        isLocalRunId,
+        forgetLocalRunId,
+        noteLocalRunId,
+      } = makeContext(state);
+      noteLocalRunId("local-run");
+
+      const { handleChatEvent } = createEventHandlers({
+        chatLog,
+        tui,
+        state,
+        setActivityStatus,
+        loadHistory,
+        isLocalRunId,
+        forgetLocalRunId,
+      });
+
+      handleChatEvent({
+        runId: "local-run",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [] },
+      });
+
+      expect(loadHistory).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(200);
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(800);
+      expect(loadHistory).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

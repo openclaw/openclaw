@@ -1,6 +1,8 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
+export const NO_OUTPUT_PLACEHOLDER = "(no output)";
+
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
   streamedText?: string | null;
@@ -13,7 +15,11 @@ export function resolveFinalAssistantText(params: {
   if (streamedText.trim()) {
     return streamedText;
   }
-  return "(no output)";
+  return NO_OUTPUT_PLACEHOLDER;
+}
+
+export function isNoOutputAssistantText(text?: string | null): boolean {
+  return (text ?? "").trim() === NO_OUTPUT_PLACEHOLDER;
 }
 
 export function composeThinkingAndContent(params: {
