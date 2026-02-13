@@ -35,8 +35,8 @@ describe("gateway config reload during reply", () => {
     let deliveredReplies: string[] = [];
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
-        // Simulate async reply delivery
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        // Keep delivery asynchronous without real wall-clock delay.
+        await Promise.resolve();
         deliveredReplies.push(payload.text ?? "");
       },
       onError: (err) => {

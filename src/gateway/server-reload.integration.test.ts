@@ -30,8 +30,8 @@ describe("gateway restart deferral integration", () => {
     const deliveredReplies: Array<{ text: string; timestamp: number }> = [];
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
-        // Simulate network delay
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        // Keep delivery asynchronous without real wall-clock delay.
+        await Promise.resolve();
         deliveredReplies.push({
           text: payload.text ?? "",
           timestamp: Date.now(),
