@@ -108,11 +108,17 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (hookRunner?.hasHooks("after_tool_call")) {
             try {
               await hookRunner.runAfterToolCall(
-                { toolName: name, params: isPlainObject(adjustedParams) ? adjustedParams : {}, result },
+                {
+                  toolName: name,
+                  params: isPlainObject(adjustedParams) ? adjustedParams : {},
+                  result,
+                },
                 { toolName: name },
               );
             } catch (hookErr) {
-              logDebug(`after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`);
+              logDebug(
+                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
+              );
             }
           }
 
@@ -145,11 +151,17 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (hookRunner?.hasHooks("after_tool_call")) {
             try {
               await hookRunner.runAfterToolCall(
-                { toolName: normalizedName, params: isPlainObject(params) ? params : {}, error: described.message },
+                {
+                  toolName: normalizedName,
+                  params: isPlainObject(params) ? params : {},
+                  error: described.message,
+                },
                 { toolName: normalizedName },
               );
             } catch (hookErr) {
-              logDebug(`after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`);
+              logDebug(
+                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
+              );
             }
           }
 
