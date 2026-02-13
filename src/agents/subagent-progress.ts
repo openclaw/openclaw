@@ -140,7 +140,12 @@ export function subscribeSubagentProgress(config: SubagentProgressConfig): () =>
   }
 
   const stopListener = onAgentEvent((evt) => {
-    if (!evt || evt.runId !== config.runId || evt.stream !== "tool") {
+    if (!evt || evt.stream !== "tool") {
+      return;
+    }
+    const matchesRun = evt.runId === config.runId;
+    const matchesSession = evt.sessionKey === config.childSessionKey;
+    if (!matchesRun && !matchesSession) {
       return;
     }
 

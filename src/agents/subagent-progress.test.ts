@@ -36,17 +36,19 @@ function emitToolEvent(
   runId: string,
   phase: "start" | "update" | "result",
   name: string,
-  extra?: Record<string, unknown>,
+  extra?: Record<string, unknown> & { sessionKey?: string },
 ) {
   if (!capturedListener) {
     throw new Error("No listener registered");
   }
+  const { sessionKey, ...rest } = extra ?? {};
   capturedListener({
     runId,
     seq: 1,
     stream: "tool",
     ts: Date.now(),
-    data: { phase, name, ...extra },
+    data: { phase, name, ...rest },
+    ...(sessionKey ? { sessionKey } : {}),
   });
 }
 
@@ -106,6 +108,43 @@ describe("subscribeSubagentProgress", () => {
     });
 
     emitToolEvent("run-other", "start", "read", { args: { path: "src/foo.ts" } });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("matches events by sessionKey when runId differs", async () => {
+    subscribeSubagentProgress({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:test",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "slack", to: "C123" },
+    });
+
+    // Different runId but matching sessionKey should still be processed
+    emitToolEvent("run-different", "start", "read", {
+      args: { path: "src/foo.ts" },
+      sessionKey: "agent:main:subagent:test",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const callArgs = routeReplyMock.mock.calls[0][0] as { payload: { text: string } };
+    expect(callArgs.payload.text).toContain("Read");
+  });
+
+  it("ignores events with neither matching runId nor sessionKey", async () => {
+    subscribeSubagentProgress({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:test",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "slack", to: "C123" },
+    });
+
+    emitToolEvent("run-other", "start", "read", {
+      args: { path: "src/foo.ts" },
+      sessionKey: "agent:main:subagent:other",
+    });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(routeReplyMock).not.toHaveBeenCalled();

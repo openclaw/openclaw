@@ -340,6 +340,11 @@ export async function runAgentTurnWithFallback(params: {
                   }
                 : undefined,
             onAgentEvent: async (evt) => {
+              // Forward SDK events to global event bus for subagent-progress listeners.
+              if (evt.stream === "tool" || evt.stream === "compaction") {
+                emitAgentEvent({ runId, stream: evt.stream, data: evt.data });
+              }
+
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
               if (evt.stream === "tool") {
