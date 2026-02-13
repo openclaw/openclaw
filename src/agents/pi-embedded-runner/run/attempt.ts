@@ -15,7 +15,7 @@ import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
-import { resolveUserPath } from "../../../utils.js";
+import { resolveUserPath, truncateUtf16Safe } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
@@ -137,6 +137,52 @@ export function injectHistoryImagesIntoMessages(
   }
 
   return didMutate;
+}
+
+const BEFORE_AGENT_START_PREPEND_CONTEXT_MAX_CHARS = 8_000;
+const BEFORE_AGENT_START_SYSTEM_PROMPT_MAX_CHARS = 4_000;
+const BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_OPEN =
+  "<openclaw:before_agent_start_system_prompt_patch>";
+const BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_CLOSE =
+  "</openclaw:before_agent_start_system_prompt_patch>";
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripBeforeAgentStartSystemPromptPatch(baseSystemPrompt: string): string {
+  if (!baseSystemPrompt.includes(BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_OPEN)) {
+    return baseSystemPrompt;
+  }
+  const pattern = new RegExp(
+    `${escapeRegex(BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_OPEN)}[\\s\\S]*?${escapeRegex(BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_CLOSE)}\\n*`,
+    "g",
+  );
+  return baseSystemPrompt.replace(pattern, "").trimEnd();
+}
+
+function capHookText(text: string, maxChars: number, label: string): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${truncateUtf16Safe(text, maxChars)}\n…(truncated ${label})…`;
+}
+
+function applyBeforeAgentStartSystemPromptPatch(
+  baseSystemPrompt: string,
+  systemPromptPatch: string,
+): string {
+  const trimmedPatch = systemPromptPatch.trim();
+  if (!trimmedPatch) {
+    return baseSystemPrompt.trimEnd();
+  }
+  const cleanBase = stripBeforeAgentStartSystemPromptPatch(baseSystemPrompt.trimEnd());
+  const sanitizedPatch = trimmedPatch.replaceAll(BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_CLOSE, "");
+  const taggedPatch = `${BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_OPEN}\n${sanitizedPatch}\n${BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_CLOSE}`;
+  if (!cleanBase) {
+    return taggedPatch;
+  }
+  return `${cleanBase}\n\n${taggedPatch}`;
 }
 
 export async function runEmbeddedAttempt(
@@ -400,7 +446,7 @@ export async function runEmbeddedAttempt(
       tools,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
-    const systemPromptText = systemPromptOverride();
+    let systemPromptText = systemPromptOverride();
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -750,10 +796,29 @@ export async function runEmbeddedAttempt(
               },
             );
             if (hookResult?.prependContext) {
-              effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
-              log.debug(
-                `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
+              const prepended = capHookText(
+                hookResult.prependContext,
+                BEFORE_AGENT_START_PREPEND_CONTEXT_MAX_CHARS,
+                "hook prependContext",
               );
+              effectivePrompt = `${prepended}\n\n${params.prompt}`;
+              log.debug(`hooks: prepended context to prompt (${prepended.length} chars)`);
+            }
+            const rawSystemPrompt =
+              typeof hookResult?.systemPrompt === "string" ? hookResult.systemPrompt.trim() : "";
+            if (rawSystemPrompt) {
+              const systemPromptPatch = capHookText(
+                rawSystemPrompt,
+                BEFORE_AGENT_START_SYSTEM_PROMPT_MAX_CHARS,
+                "hook systemPrompt",
+              );
+              const patchedSystemPrompt = applyBeforeAgentStartSystemPromptPatch(
+                systemPromptText,
+                systemPromptPatch,
+              );
+              applySystemPromptOverrideToSession(activeSession, patchedSystemPrompt);
+              systemPromptText = patchedSystemPrompt;
+              log.debug(`hooks: appended ${systemPromptPatch.length} chars to system prompt`);
             }
           } catch (hookErr) {
             log.warn(`before_agent_start hook failed: ${String(hookErr)}`);
