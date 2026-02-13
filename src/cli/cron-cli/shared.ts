@@ -2,6 +2,7 @@ import type { CronJob, CronSchedule } from "../../cron/types.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
+import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
@@ -107,19 +108,6 @@ const formatIsoMinute = (iso: string) => {
   return `${isoStr.slice(0, 10)} ${isoStr.slice(11, 16)}Z`;
 };
 
-const formatDuration = (ms: number) => {
-  if (ms < 60_000) {
-    return `${Math.max(1, Math.round(ms / 1000))}s`;
-  }
-  if (ms < 3_600_000) {
-    return `${Math.round(ms / 60_000)}m`;
-  }
-  if (ms < 86_400_000) {
-    return `${Math.round(ms / 3_600_000)}h`;
-  }
-  return `${Math.round(ms / 86_400_000)}d`;
-};
-
 const formatSpan = (ms: number) => {
   if (ms < 60_000) {
     return "<1m";
@@ -147,7 +135,7 @@ const formatSchedule = (schedule: CronSchedule) => {
     return `at ${formatIsoMinute(schedule.at)}`;
   }
   if (schedule.kind === "every") {
-    return `every ${formatDuration(schedule.everyMs)}`;
+    return `every ${formatDurationHuman(schedule.everyMs)}`;
   }
   return schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
 };

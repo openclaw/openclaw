@@ -1,4 +1,5 @@
 export * from "./internal-hooks.js";
+export * from "./message-hooks.js";
 
 export type HookEventType = import("./internal-hooks.js").InternalHookEventType;
 export type HookEvent = import("./internal-hooks.js").InternalHookEvent;

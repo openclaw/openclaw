@@ -615,7 +615,7 @@ async function processMessageWithPipeline(params: {
     channel: "googlechat",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "dm",
+      kind: isGroup ? "group" : "direct",
       id: spaceId,
     },
   });
@@ -655,6 +655,7 @@ async function processMessageWithPipeline(params: {
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: `googlechat:${senderId}`,
@@ -835,7 +836,8 @@ async function deliverGoogleChatReply(params: {
       const caption = first && !suppressCaption ? payload.text : undefined;
       first = false;
       try {
-        const loaded = await core.channel.media.fetchRemoteMedia(mediaUrl, {
+        const loaded = await core.channel.media.fetchRemoteMedia({
+          url: mediaUrl,
           maxBytes: (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
         });
         const upload = await uploadAttachmentForReply({
@@ -843,7 +845,7 @@ async function deliverGoogleChatReply(params: {
           spaceId,
           buffer: loaded.buffer,
           contentType: loaded.contentType,
-          filename: loaded.filename ?? "attachment",
+          filename: loaded.fileName ?? "attachment",
         });
         if (!upload.attachmentUploadToken) {
           throw new Error("missing attachment upload token");
@@ -854,7 +856,7 @@ async function deliverGoogleChatReply(params: {
           text: caption,
           thread: payload.replyToId,
           attachments: [
-            { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.filename },
+            { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
         });
         statusSink?.({ lastOutboundAt: Date.now() });

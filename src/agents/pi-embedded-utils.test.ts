@@ -1,6 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { extractAssistantText, formatReasoningMessage } from "./pi-embedded-utils.js";
+import {
+  extractAssistantText,
+  formatReasoningMessage,
+  stripDowngradedToolCallText,
+} from "./pi-embedded-utils.js";
 
 describe("extractAssistantText", () => {
   it("strips Minimax tool invocation XML from text", () => {
@@ -73,6 +77,19 @@ describe("extractAssistantText", () => {
 
     const result = extractAssistantText(msg);
     expect(result).toBe("This is a normal response without any tool calls.");
+  });
+
+  it("sanitizes HTTP-ish error text only when stopReason is error", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "500 Internal Server Error",
+      content: [{ type: "text", text: "500 Internal Server Error" }],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("HTTP 500: Internal Server Error");
   });
 
   it("strips Minimax tool invocations with extra attributes", () => {
@@ -544,5 +561,41 @@ describe("formatReasoningMessage", () => {
     expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
       "Reasoning:\n_Reasoning here_",
     );
+  });
+});
+
+describe("stripDowngradedToolCallText", () => {
+  it("strips [Historical context: ...] blocks", () => {
+    const text = `[Historical context: a different model called tool "exec" with arguments {"command":"git status"}]`;
+    expect(stripDowngradedToolCallText(text)).toBe("");
+  });
+
+  it("preserves text before [Historical context: ...] blocks", () => {
+    const text = `Here is the answer.\n[Historical context: a different model called tool "read"]`;
+    expect(stripDowngradedToolCallText(text)).toBe("Here is the answer.");
+  });
+
+  it("preserves text around [Historical context: ...] blocks", () => {
+    const text = `Before.\n[Historical context: tool call info]\nAfter.`;
+    expect(stripDowngradedToolCallText(text)).toBe("Before.\nAfter.");
+  });
+
+  it("strips multiple [Historical context: ...] blocks", () => {
+    const text = `[Historical context: first tool call]\n[Historical context: second tool call]`;
+    expect(stripDowngradedToolCallText(text)).toBe("");
+  });
+
+  it("strips mixed [Tool Call: ...] and [Historical context: ...] blocks", () => {
+    const text = `Intro.\n[Tool Call: exec (ID: toolu_1)]\nArguments: { "command": "ls" }\n[Historical context: a different model called tool "read"]`;
+    expect(stripDowngradedToolCallText(text)).toBe("Intro.");
+  });
+
+  it("returns text unchanged when no markers are present", () => {
+    const text = "Just a normal response with no markers.";
+    expect(stripDowngradedToolCallText(text)).toBe("Just a normal response with no markers.");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(stripDowngradedToolCallText("")).toBe("");
   });
 });

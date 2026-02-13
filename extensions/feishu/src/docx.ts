@@ -92,6 +92,14 @@ async function convertMarkdown(client: Lark.Client, markdown: string) {
   };
 }
 
+function sortBlocksByFirstLevel(blocks: any[], firstLevelIds: string[]): any[] {
+  if (!firstLevelIds || firstLevelIds.length === 0) return blocks;
+  const sorted = firstLevelIds.map((id) => blocks.find((b) => b.block_id === id)).filter(Boolean);
+  const sortedIds = new Set(firstLevelIds);
+  const remaining = blocks.filter((b) => !sortedIds.has(b.block_id));
+  return [...sorted, ...remaining];
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function insertBlocks(
   client: Lark.Client,
@@ -279,12 +287,13 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
 async function writeDoc(client: Lark.Client, docToken: string, markdown: string) {
   const deleted = await clearDocumentContent(client, docToken);
 
-  const { blocks } = await convertMarkdown(client, markdown);
+  const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
   if (blocks.length === 0) {
     return { success: true, blocks_deleted: deleted, blocks_added: 0, images_processed: 0 };
   }
+  const sortedBlocks = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
 
-  const { children: inserted, skipped } = await insertBlocks(client, docToken, blocks);
+  const { children: inserted, skipped } = await insertBlocks(client, docToken, sortedBlocks);
   const imagesProcessed = await processImages(client, docToken, markdown, inserted);
 
   return {
@@ -299,12 +308,13 @@ async function writeDoc(client: Lark.Client, docToken: string, markdown: string)
 }
 
 async function appendDoc(client: Lark.Client, docToken: string, markdown: string) {
-  const { blocks } = await convertMarkdown(client, markdown);
+  const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
   if (blocks.length === 0) {
     throw new Error("Content is empty");
   }
+  const sortedBlocks = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
 
-  const { children: inserted, skipped } = await insertBlocks(client, docToken, blocks);
+  const { children: inserted, skipped } = await insertBlocks(client, docToken, sortedBlocks);
   const imagesProcessed = await processImages(client, docToken, markdown, inserted);
 
   return {
