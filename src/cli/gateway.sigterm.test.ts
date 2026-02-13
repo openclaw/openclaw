@@ -156,5 +156,17 @@ describe("gateway SIGTERM", () => {
       return;
     }
     expect(result.signal).toBeNull();
+
+    // Incident tracking should record a start + signal.
+    const incidentsPath = path.join(stateDir, "state", "gateway-incidents.jsonl");
+    const rawIncidents = fs.readFileSync(incidentsPath, "utf8");
+    const lines = rawIncidents
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    expect(lines.length).toBeGreaterThan(0);
+    const parsed = lines.map((l) => JSON.parse(l) as { kind?: string; signal?: string });
+    expect(parsed.some((e) => e.kind === "start")).toBe(true);
+    expect(parsed.some((e) => e.kind === "signal" && e.signal === "SIGTERM")).toBe(true);
   });
 });

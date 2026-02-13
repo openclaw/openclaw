@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -28,7 +29,7 @@ export type RestartSentinelStats = {
 };
 
 export type RestartSentinelPayload = {
-  kind: "config-apply" | "update" | "restart";
+  kind: "config-apply" | "update" | "restart" | "crash" | "recover";
   status: "ok" | "error" | "skipped";
   ts: number;
   sessionKey?: string;
@@ -71,6 +72,27 @@ export async function writeRestartSentinel(
   const data: RestartSentinel = { version: 1, payload };
   await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
   return filePath;
+}
+
+/**
+ * Synchronous best-effort writer for crash paths.
+ *
+ * This is intentionally lossy/overwrite-based (single sentinel file) and must
+ * never throw.
+ */
+export function writeRestartSentinelSync(
+  payload: RestartSentinelPayload,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  try {
+    const filePath = resolveRestartSentinelPath(env);
+    fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
+    const data: RestartSentinel = { version: 1, payload };
+    fsSync.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
+    return filePath;
+  } catch {
+    return null;
+  }
 }
 
 export async function readRestartSentinel(

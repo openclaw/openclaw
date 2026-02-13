@@ -4,7 +4,16 @@ import type { GatewayDiscoverOpts } from "./discover.js";
 import { gatewayStatusCommand } from "../../commands/gateway-status.js";
 import { formatHealthChannelLines, type HealthSummary } from "../../commands/health.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { discoverGatewayBeacons } from "../../infra/bonjour-discovery.js";
+import {
+  readGatewayIncidentEntries,
+  readGatewayIncidentState,
+  recordGatewayRecoverAttempt,
+  resolveGatewayIncidentsPath,
+} from "../../infra/gateway-incidents.js";
+import { writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import { resolveWideAreaDiscoveryDomain } from "../../infra/widearea-dns.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -196,6 +205,200 @@ export function registerGatewayCli(program: Command) {
     .action(async (opts) => {
       await runDaemonRestart(opts);
     });
+
+  gateway
+    .command("incidents")
+    .description("Show recent gateway incidents (signals, crashes, recoveries)")
+    .option("--limit <n>", "Max entries", "50")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runGatewayCommand(async () => {
+        const limitRaw = typeof opts.limit === "string" ? opts.limit : "50";
+        const limit = Math.max(1, Math.min(5000, Number.parseInt(limitRaw, 10) || 50));
+        const filePath = resolveGatewayIncidentsPath(process.env);
+        const [state, entries] = await Promise.all([
+          readGatewayIncidentState(process.env),
+          readGatewayIncidentEntries(filePath, { limit }),
+        ]);
+
+        if (opts.json) {
+          defaultRuntime.log(
+            JSON.stringify(
+              {
+                filePath,
+                state,
+                entries,
+              },
+              null,
+              2,
+            ),
+          );
+          return;
+        }
+
+        const rich = isRich();
+        defaultRuntime.log(colorize(rich, theme.heading, "Gateway Incidents"));
+        defaultRuntime.log(colorize(rich, theme.muted, `log: ${filePath}`));
+        defaultRuntime.log(
+          colorize(
+            rich,
+            theme.muted,
+            `restartCount=${state.restartCount}${state.lastRestartReason ? ` · lastRestartReason=${state.lastRestartReason}` : ""}${state.lastCrashAtMs ? ` · lastCrash=${new Date(state.lastCrashAtMs).toISOString()}` : ""}`,
+          ),
+        );
+
+        if (entries.length === 0) {
+          defaultRuntime.log("(no incidents recorded)");
+          return;
+        }
+
+        for (const entry of entries) {
+          const ts = new Date(entry.ts).toISOString();
+          const kind = entry.kind;
+          const detail =
+            kind === "signal"
+              ? `signal=${entry.signal ?? "?"}`
+              : kind === "recover"
+                ? `status=${entry.status ?? "?"}${entry.detail ? ` · ${entry.detail}` : ""}`
+                : kind === "crash"
+                  ? `${entry.errorName ?? "Error"}${entry.errorMessage ? `: ${entry.errorMessage}` : ""}`
+                  : `pid=${entry.pid ?? "?"}${entry.restartReason ? ` · reason=${entry.restartReason}` : ""}`;
+          defaultRuntime.log(`${ts}  ${kind.padEnd(7)}  ${detail}`);
+        }
+      }, "gateway incidents failed");
+    });
+
+  gatewayCallOpts(
+    gateway
+      .command("recover")
+      .description("Attempt to recover a stuck gateway (best effort; avoids reinstall by default)")
+      .option("--force", "Attempt recovery even if gateway is reachable", false)
+      .option("--cooldown-ms <ms>", "Minimum time between recovery attempts (anti-loop)", "60000")
+      .action(async (opts) => {
+        await runGatewayCommand(async () => {
+          const now = Date.now();
+          const cooldownMsRaw = typeof opts.cooldownMs === "string" ? opts.cooldownMs : "60000";
+          const cooldownMs = Math.max(0, Number.parseInt(cooldownMsRaw, 10) || 60_000);
+          const force = Boolean(opts.force);
+          const sessionKey = resolveMainSessionKeyFromConfig();
+          const writeSentinel = async (status: "ok" | "error", message: string) => {
+            try {
+              await writeRestartSentinel({
+                kind: "recover",
+                status,
+                ts: Date.now(),
+                sessionKey,
+                message,
+              });
+            } catch {
+              // ignore
+            }
+          };
+
+          const state = await readGatewayIncidentState(process.env);
+          const lastAttempt = state.lastRecoverAttemptAtMs ?? 0;
+          if (!force && lastAttempt > 0 && now - lastAttempt < cooldownMs) {
+            const remainingMs = cooldownMs - (now - lastAttempt);
+            const message = `recovery suppressed (cooldown active; retry in ${Math.ceil(remainingMs / 1000)}s or pass --force)`;
+            await recordGatewayRecoverAttempt({ status: "ok", detail: message, env: process.env });
+            await writeSentinel("ok", message);
+            if (opts.json) {
+              defaultRuntime.log(JSON.stringify({ ok: true, skipped: true, message }, null, 2));
+            } else {
+              defaultRuntime.log(message);
+            }
+            return;
+          }
+
+          const probeOk = await callGatewayCli("health", opts).then(
+            () => true,
+            () => false,
+          );
+
+          if (probeOk && !force) {
+            const message = "gateway is reachable; no recovery needed";
+            await recordGatewayRecoverAttempt({ status: "ok", detail: message, env: process.env });
+            await writeSentinel("ok", message);
+            if (opts.json) {
+              defaultRuntime.log(JSON.stringify({ ok: true, skipped: true, message }, null, 2));
+            } else {
+              defaultRuntime.log(message);
+            }
+            return;
+          }
+
+          const service = resolveGatewayService();
+          const loaded = await service.isLoaded({ env: process.env }).catch(() => false);
+          const action = loaded ? "restart" : "start";
+
+          if (!loaded) {
+            const message = `gateway service ${service.notLoadedText}; recovery cannot proceed (install required)`;
+            await recordGatewayRecoverAttempt({
+              status: "error",
+              detail: message,
+              env: process.env,
+            });
+            await writeSentinel("error", message);
+            if (opts.json) {
+              defaultRuntime.log(JSON.stringify({ ok: false, message }, null, 2));
+            } else {
+              defaultRuntime.error(message);
+            }
+            defaultRuntime.exit(1);
+            return;
+          }
+
+          try {
+            await service.restart({ env: process.env, stdout: process.stdout });
+          } catch (err) {
+            const message = `gateway ${action} failed: ${String(err)}`;
+            await recordGatewayRecoverAttempt({
+              status: "error",
+              detail: message,
+              env: process.env,
+            });
+            await writeSentinel("error", message);
+            if (opts.json) {
+              defaultRuntime.log(JSON.stringify({ ok: false, message }, null, 2));
+            } else {
+              defaultRuntime.error(message);
+            }
+            defaultRuntime.exit(1);
+            return;
+          }
+
+          // Give the service a moment to come up.
+          await new Promise((r) => setTimeout(r, 1500));
+
+          const recovered = await callGatewayCli("health", opts).then(
+            () => true,
+            () => false,
+          );
+
+          if (recovered) {
+            const message = "gateway recovery succeeded";
+            await recordGatewayRecoverAttempt({ status: "ok", detail: message, env: process.env });
+            await writeSentinel("ok", message);
+            if (opts.json) {
+              defaultRuntime.log(JSON.stringify({ ok: true, message }, null, 2));
+            } else {
+              defaultRuntime.log(message);
+            }
+            return;
+          }
+
+          const message = "gateway still unreachable after recovery attempt";
+          await recordGatewayRecoverAttempt({ status: "error", detail: message, env: process.env });
+          await writeSentinel("error", message);
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify({ ok: false, message }, null, 2));
+          } else {
+            defaultRuntime.error(message);
+          }
+          defaultRuntime.exit(1);
+        }, "gateway recover failed");
+      }),
+  );
 
   gatewayCallOpts(
     gateway

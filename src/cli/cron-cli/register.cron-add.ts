@@ -41,8 +41,9 @@ export function registerCronListCommand(cron: Command) {
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
+          const includeDisabled = Boolean(opts.all);
           const res = await callGatewayFromCli("cron.list", opts, {
-            includeDisabled: Boolean(opts.all),
+            includeDisabled,
           });
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(res, null, 2));
@@ -50,6 +51,24 @@ export function registerCronListCommand(cron: Command) {
           }
           const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
           printCronList(jobs, defaultRuntime);
+
+          // UX: if disabled jobs exist but were omitted, surface a hint.
+          if (!includeDisabled) {
+            try {
+              const resAll = await callGatewayFromCli("cron.list", opts, {
+                includeDisabled: true,
+              });
+              const allJobs = (resAll as { jobs?: CronJob[] } | null)?.jobs ?? [];
+              const disabledCount = allJobs.filter((j) => j && j.enabled === false).length;
+              if (disabledCount > 0) {
+                defaultRuntime.log(
+                  `\nNote: ${disabledCount} disabled job(s) hidden. Re-run with --all to include them.`,
+                );
+              }
+            } catch {
+              // ignore
+            }
+          }
         } catch (err) {
           defaultRuntime.error(danger(String(err)));
           defaultRuntime.exit(1);
