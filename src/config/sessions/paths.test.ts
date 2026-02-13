@@ -72,6 +72,30 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "subdir/threaded-session.jsonl"));
   });
 
+  it("accepts absolute sessionFile paths that resolve within the sessions dir", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+
+    const resolved = resolveSessionFilePath(
+      "sess-1",
+      { sessionFile: "/tmp/openclaw/agents/main/sessions/sess-1.jsonl" },
+      { sessionsDir },
+    );
+
+    expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
+  });
+
+  it("rejects absolute sessionFile paths outside the sessions dir", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+
+    expect(() =>
+      resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: "/tmp/openclaw/agents/sven/sessions/sess-1.jsonl" },
+        { sessionsDir },
+      ),
+    ).toThrow(/within sessions directory/);
+  });
+
   it("uses agent sessions dir fallback for transcript path", () => {
     const resolved = resolveSessionTranscriptPath("sess-1", "main");
     expect(resolved.endsWith(path.join("agents", "main", "sessions", "sess-1.jsonl"))).toBe(true);

@@ -77,7 +77,11 @@ function resolvePathWithinSessionsDir(sessionsDir: string, candidate: string): s
     throw new Error("Session file path must not be empty");
   }
   const resolvedBase = path.resolve(sessionsDir);
-  const resolvedCandidate = path.resolve(resolvedBase, trimmed);
+  // When candidate is already absolute, path.resolve(base, absolute) ignores base.
+  // Handle this by checking if the absolute candidate is within the sessions root.
+  const resolvedCandidate = path.isAbsolute(trimmed)
+    ? path.resolve(trimmed)
+    : path.resolve(resolvedBase, trimmed);
   const relative = path.relative(resolvedBase, resolvedCandidate);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("Session file path must be within sessions directory");
