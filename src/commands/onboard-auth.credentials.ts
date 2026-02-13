@@ -149,12 +149,14 @@ export async function setXiaomiApiKey(key: string, agentDir?: string) {
 }
 
 export async function setOpenrouterApiKey(key: string, agentDir?: string) {
+  // Never persist the literal "undefined" (e.g. when prompt returns undefined and caller used String(key)).
+  const safeKey = key === "undefined" ? "" : key;
   upsertAuthProfile({
     profileId: "openrouter:default",
     credential: {
       type: "api_key",
       provider: "openrouter",
-      key,
+      key: safeKey,
     },
     agentDir: resolveAuthAgentDir(agentDir),
   });

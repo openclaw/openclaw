@@ -73,7 +73,7 @@ export async function applyAuthChoiceOpenRouter(
       message: "Enter OpenRouter API key",
       validate: validateApiKeyInput,
     });
-    await setOpenrouterApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    await setOpenrouterApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     hasCredential = true;
   }
 
