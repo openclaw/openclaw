@@ -1,13 +1,13 @@
 ---
 name: x-actions
-description: Perform X (Twitter) actions like following users, liking tweets, reposting tweets, replying to tweets, sending DMs, and querying tweets. Use when the user wants to interact with X/Twitter - follow/unfollow users, like/unlike tweets, repost/unrepost tweets, reply/comment on tweets, send direct messages, search/view tweets or user timelines, or check X account info.
+description: Perform X (Twitter) actions like following users, liking tweets, reposting tweets, replying to tweets, posting new tweets, sending DMs, and querying tweets. Use when the user wants to interact with X/Twitter - follow/unfollow users, like/unlike tweets, repost/unrepost tweets, reply/comment on tweets, post new standalone tweets, send direct messages, search/view tweets or user timelines, or check X account info.
 ---
 
 # X (Twitter) Actions
 
 This skill enables X/Twitter interactions through two complementary tool sets:
 
-- **Write actions** (follow, like, repost, reply, DM): use the `message` tool with X-specific actions.
+- **Write actions** (follow, like, repost, reply, post new tweet, DM): use the `message` tool with X-specific actions.
 - **Read/query actions** (search tweets, view user timeline, get tweet details): use `qveris_search` + `qveris_execute`.
 
 > **IMPORTANT**: For X/Twitter write actions, ALWAYS use the `message` tool with X-specific actions listed below. For searching/querying tweets and user timelines, use QVeris tools. Do NOT use the `browser` tool for X operations - the API-based tools are faster, more reliable, and work without browser automation.
@@ -23,6 +23,7 @@ This skill enables X/Twitter interactions through two complementary tool sets:
 | `x-repost`   | Repost (retweet) a tweet      | `message({ action: "x-repost", target: "https://x.com/user/status/123" })`                        |
 | `x-unrepost` | Undo repost (unretweet)       | `message({ action: "x-unrepost", target: "1234567890" })`                                         |
 | `x-reply`    | Reply to / comment on a tweet | `message({ action: "x-reply", target: "https://x.com/user/status/123", message: "Great post!" })` |
+| `x-post`     | Post a new standalone tweet   | `message({ action: "x-post", message: "Hello world!" })`                                          |
 | `x-dm`       | Send direct message           | `message({ action: "x-dm", target: "@user", message: "Hello!" })`                                 |
 
 ## Read/Query Actions (QVeris tools)
@@ -160,6 +161,16 @@ message({
 message({ action: "x-reply", target: "1234567890", message: "Comment content" });
 ```
 
+### Post a New Standalone Tweet
+
+```typescript
+// No target needed - posts to your own timeline
+message({
+  action: "x-post",
+  message: "Your tweet content here (max 280 chars)",
+});
+```
+
 ### Send Direct Message
 
 ```typescript
@@ -186,6 +197,7 @@ When users ask to interact with X/Twitter, map their requests:
 | 转推 / 转发这条推文                        | message | `x-repost`              |
 | 取消转推 / 取消转发                        | message | `x-unrepost`            |
 | 评论这条推 / 回复这条推文 / 根据内容做评论 | message | `x-reply`               |
+| 发一条新推 / 发推文 / 发条推               | message | `x-post`                |
 | 发私信给 @xxx / 私信 @xxx                  | message | `x-dm`                  |
 
 | User Request (English)                                | Tool    | Action                  |
@@ -200,6 +212,7 @@ When users ask to interact with X/Twitter, map their requests:
 | Repost this tweet / Retweet this                      | message | `x-repost`              |
 | Undo repost / Unretweet                               | message | `x-unrepost`            |
 | Reply to this tweet / Comment on this tweet           | message | `x-reply`               |
+| Post a new tweet / Tweet something / Send a tweet     | message | `x-post`                |
 | DM @xxx / Send a message to @xxx                      | message | `x-dm`                  |
 
 ## Parameters
@@ -247,7 +260,7 @@ Two separate allowlists; do not reuse one for the other.
   - **X**: `channels.x.allowFrom` -- X user IDs who can mention the bot (mention -> reply). Server config only.
   - **Feishu**: `channels.feishu.allowFrom` -- who can send DMs/messages (controls mention/chat access). Server config only.
 
-- **Proactive X actions allowlist** -- who can trigger follow/like/repost/reply/dm (auto-operations):
+- **Proactive X actions allowlist** -- who can trigger follow/like/repost/reply/post/dm (auto-operations):
   - **X**: `channels.x.actionsAllowFrom` -- X user IDs who can trigger x-follow, x-like, x-reply, x-dm when they mention the bot. Do not reuse `allowFrom`.
   - **Feishu**: `channels.feishu.xActionsAllowFrom` -- Feishu user IDs who can trigger X actions from Feishu. Do not reuse `allowFrom`.
 
