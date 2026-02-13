@@ -545,6 +545,7 @@ const ERROR_PATTERNS = {
     "exceeded your current quota",
     "resource has been exhausted",
     "quota exceeded",
+    "quota limit",
     "resource_exhausted",
     "usage limit",
   ],
