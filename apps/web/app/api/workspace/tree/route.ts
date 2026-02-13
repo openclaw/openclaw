@@ -311,7 +311,7 @@ export async function GET() {
     if (skillsFolder) {tree.push(skillsFolder);}
     const memoriesFolder = buildMemoriesVirtualFolder();
     if (memoriesFolder) {tree.push(memoriesFolder);}
-    return Response.json({ tree, exists: false });
+    return Response.json({ tree, exists: false, workspaceRoot: null });
   }
 
   // Load objects from DuckDB for smart directory detection
@@ -332,5 +332,5 @@ export async function GET() {
   const memoriesFolder = buildMemoriesVirtualFolder();
   if (memoriesFolder) {tree.push(memoriesFolder);}
 
-  return Response.json({ tree, exists: true });
+  return Response.json({ tree, exists: true, workspaceRoot: root });
 }

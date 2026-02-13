@@ -10,6 +10,14 @@ type WorkspaceSidebarProps = {
 	onRefresh: () => void;
 	orgName?: string;
 	loading?: boolean;
+	/** Current browse directory (absolute path), or null when in workspace mode. */
+	browseDir?: string | null;
+	/** Parent directory for ".." navigation. Null at filesystem root or when browsing is unavailable. */
+	parentDir?: string | null;
+	/** Navigate up one directory. */
+	onNavigateUp?: () => void;
+	/** Return to workspace mode from browse mode. */
+	onGoHome?: () => void;
 };
 
 function WorkspaceLogo() {
@@ -46,6 +54,23 @@ function HomeIcon() {
 		>
 			<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
 			<polyline points="9 22 9 12 15 12 15 22" />
+		</svg>
+	);
+}
+
+function FolderOpenIcon() {
+	return (
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+		>
+			<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
 		</svg>
 	);
 }
@@ -120,6 +145,12 @@ function ThemeToggle() {
 	);
 }
 
+/** Extract the directory name from an absolute path for display. */
+function dirDisplayName(dir: string): string {
+	if (dir === "/") {return "/";}
+	return dir.split("/").pop() || dir;
+}
+
 export function WorkspaceSidebar({
 	tree,
 	activePath,
@@ -127,7 +158,13 @@ export function WorkspaceSidebar({
 	onRefresh,
 	orgName,
 	loading,
+	browseDir,
+	parentDir,
+	onNavigateUp,
+	onGoHome,
 }: WorkspaceSidebarProps) {
+	const isBrowsing = browseDir != null;
+
 	return (
 		<aside
 			className="flex flex-col h-screen border-r flex-shrink-0"
@@ -142,31 +179,77 @@ export function WorkspaceSidebar({
 				className="flex items-center gap-2.5 px-4 py-3 border-b"
 				style={{ borderColor: "var(--color-border)" }}
 			>
-				<span
-					className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-					style={{
-						background: "var(--color-accent-light)",
-						color: "var(--color-accent)",
-					}}
-				>
-					<WorkspaceLogo />
-				</span>
-				<div className="flex-1 min-w-0">
-					<div
-						className="text-sm font-medium truncate"
-						style={{ color: "var(--color-text)" }}
-					>
-						{orgName || "Workspace"}
-					</div>
-					<div
-						className="text-[11px]"
-						style={{
-							color: "var(--color-text-muted)",
-						}}
-					>
-						Ironclaw
-					</div>
-				</div>
+				{isBrowsing ? (
+					<>
+						<span
+							className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+							style={{
+								background: "var(--color-surface-hover)",
+								color: "var(--color-text-muted)",
+							}}
+						>
+							<FolderOpenIcon />
+						</span>
+						<div className="flex-1 min-w-0">
+							<div
+								className="text-sm font-medium truncate"
+								style={{ color: "var(--color-text)" }}
+								title={browseDir}
+							>
+								{dirDisplayName(browseDir)}
+							</div>
+							<div
+								className="text-[11px] truncate"
+								style={{
+									color: "var(--color-text-muted)",
+								}}
+								title={browseDir}
+							>
+								{browseDir}
+							</div>
+						</div>
+						{/* Home button to return to workspace */}
+						{onGoHome && (
+							<button
+								type="button"
+								onClick={onGoHome}
+								className="p-1.5 rounded-lg flex-shrink-0"
+								style={{ color: "var(--color-text-muted)" }}
+								title="Return to workspace"
+							>
+								<HomeIcon />
+							</button>
+						)}
+					</>
+				) : (
+					<>
+						<span
+							className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+							style={{
+								background: "var(--color-accent-light)",
+								color: "var(--color-accent)",
+							}}
+						>
+							<WorkspaceLogo />
+						</span>
+						<div className="flex-1 min-w-0">
+							<div
+								className="text-sm font-medium truncate"
+								style={{ color: "var(--color-text)" }}
+							>
+								{orgName || "Workspace"}
+							</div>
+							<div
+								className="text-[11px]"
+								style={{
+									color: "var(--color-text-muted)",
+								}}
+							>
+								Ironclaw
+							</div>
+						</div>
+					</>
+				)}
 			</div>
 
 			{/* Tree */}
@@ -188,6 +271,9 @@ export function WorkspaceSidebar({
 						activePath={activePath}
 						onSelect={onSelect}
 						onRefresh={onRefresh}
+						parentDir={parentDir}
+						onNavigateUp={onNavigateUp}
+						browseDir={browseDir}
 					/>
 				)}
 			</div>
@@ -197,14 +283,26 @@ export function WorkspaceSidebar({
 				className="px-3 py-2.5 border-t flex items-center justify-between"
 				style={{ borderColor: "var(--color-border)" }}
 			>
-				<a
-					href="/"
-					className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm"
-					style={{ color: "var(--color-text-muted)" }}
-				>
-					<HomeIcon />
-					Home
-				</a>
+				{isBrowsing && onGoHome ? (
+					<button
+						type="button"
+						onClick={onGoHome}
+						className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm"
+						style={{ color: "var(--color-text-muted)" }}
+					>
+						<WorkspaceLogo />
+						Workspace
+					</button>
+				) : (
+					<a
+						href="/"
+						className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm"
+						style={{ color: "var(--color-text-muted)" }}
+					>
+						<HomeIcon />
+						Home
+					</a>
+				)}
 				<ThemeToggle />
 			</div>
 		</aside>

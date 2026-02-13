@@ -44,6 +44,12 @@ type FileManagerTreeProps = {
   onSelect: (node: TreeNode) => void;
   onRefresh: () => void;
   compact?: boolean;
+  /** Parent directory path for ".." navigation. Null when at filesystem root or in workspace mode without browsing. */
+  parentDir?: string | null;
+  /** Callback when user clicks ".." to navigate up. */
+  onNavigateUp?: () => void;
+  /** Current browse directory (absolute path), or null when in workspace mode. */
+  browseDir?: string | null;
 };
 
 // --- System file detection (client-side mirror) ---
@@ -600,7 +606,7 @@ function flattenVisible(tree: TreeNode[], expanded: Set<string>): TreeNode[] {
 
 // --- Main Exported Component ---
 
-export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact }: FileManagerTreeProps) {
+export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact, parentDir, onNavigateUp, browseDir }: FileManagerTreeProps) {
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
@@ -999,6 +1005,36 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
         onKeyDown={handleKeyDown}
         onContextMenu={handleEmptyContextMenu}
       >
+        {/* ".." navigation entry for browsing up */}
+        {parentDir != null && onNavigateUp && (
+          <div
+            role="treeitem"
+            tabIndex={-1}
+            onClick={onNavigateUp}
+            className="w-full flex items-center gap-1.5 py-1 px-2 rounded-md text-left text-sm transition-colors duration-100 cursor-pointer select-none"
+            style={{
+              paddingLeft: "8px",
+              color: "var(--color-text-muted)",
+              borderRadius: "6px",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "var(--color-surface-hover)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "transparent";
+            }}
+          >
+            <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m15 18-6-6 6-6" />
+              </svg>
+            </span>
+            <span className="flex-shrink-0 flex items-center" style={{ color: "var(--color-text-muted)" }}>
+              <FolderIcon />
+            </span>
+            <span className="truncate flex-1">..</span>
+          </div>
+        )}
         {tree.map((node) => (
           <DraggableNode
             key={node.path}

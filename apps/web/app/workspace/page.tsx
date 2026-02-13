@@ -104,11 +104,28 @@ function isVirtualPath(path: string): boolean {
   return path.startsWith("~");
 }
 
-/** Pick the right file API endpoint based on virtual vs real paths. */
+/** Detect absolute filesystem paths (browse mode). */
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith("/");
+}
+
+/** Pick the right file API endpoint based on virtual vs real vs absolute paths. */
 function fileApiUrl(path: string): string {
-  return isVirtualPath(path)
-    ? `/api/workspace/virtual-file?path=${encodeURIComponent(path)}`
-    : `/api/workspace/file?path=${encodeURIComponent(path)}`;
+  if (isVirtualPath(path)) {
+    return `/api/workspace/virtual-file?path=${encodeURIComponent(path)}`;
+  }
+  if (isAbsolutePath(path)) {
+    return `/api/workspace/browse-file?path=${encodeURIComponent(path)}`;
+  }
+  return `/api/workspace/file?path=${encodeURIComponent(path)}`;
+}
+
+/** Pick the right raw file URL for media preview. */
+function rawFileUrl(path: string): string {
+  if (isAbsolutePath(path)) {
+    return `/api/workspace/browse-file?path=${encodeURIComponent(path)}&raw=true`;
+  }
+  return `/api/workspace/raw-file?path=${encodeURIComponent(path)}`;
 }
 
 /** Find a node in the tree by exact path. */
@@ -197,8 +214,11 @@ function WorkspacePageInner() {
   // Chat panel ref for session management
   const chatRef = useRef<ChatPanelHandle>(null);
 
-  // Live-reactive tree via SSE watcher
-  const { tree, loading: treeLoading, exists: workspaceExists, refresh: refreshTree } = useWorkspaceWatcher();
+  // Live-reactive tree via SSE watcher (with browse-mode support)
+  const {
+    tree, loading: treeLoading, exists: workspaceExists, refresh: refreshTree,
+    browseDir, setBrowseDir, parentDir: browseParentDir, workspaceRoot,
+  } = useWorkspaceWatcher();
 
   // Search index for @ mention fuzzy search (files + entries)
   const { search: searchIndex } = useSearchIndex();
@@ -333,8 +353,8 @@ function WorkspacePageInner() {
           // Check if this is a media file (image/video/audio/pdf)
           const mediaType = detectMediaType(node.name);
           if (mediaType) {
-            const rawUrl = `/api/workspace/raw-file?path=${encodeURIComponent(node.path)}`;
-            setContent({ kind: "media", url: rawUrl, mediaType, filename: node.name, filePath: node.path });
+            const url = rawFileUrl(node.path);
+            setContent({ kind: "media", url, mediaType, filename: node.name, filePath: node.path });
             return;
           }
 
@@ -399,7 +419,12 @@ function WorkspacePageInner() {
   );
 
   // Build the enhanced tree: real tree + Chats + Cron virtual folders at the bottom
+  // In browse mode, skip virtual folders (they only apply to workspace mode)
   const enhancedTree = useMemo(() => {
+    if (browseDir) {
+      return tree;
+    }
+
     const chatChildren: TreeNode[] = sessions.map((s) => ({
       name: s.title || "Untitled chat",
       path: `~chats/${s.id}`,
@@ -439,7 +464,34 @@ function WorkspacePageInner() {
     };
 
     return [...tree, chatsFolder, cronFolder];
-  }, [tree, sessions, cronJobs]);
+  }, [tree, sessions, cronJobs, browseDir]);
+
+  // Compute the effective parentDir for ".." navigation.
+  // In browse mode: use browseParentDir from the API.
+  // In workspace mode: use the parent of the workspace root (allows escaping workspace).
+  const effectiveParentDir = useMemo(() => {
+    if (browseDir) {
+      return browseParentDir;
+    }
+    // In workspace mode, allow ".." to go up from workspace root
+    if (workspaceRoot) {
+      const parent = workspaceRoot === "/" ? null : workspaceRoot.split("/").slice(0, -1).join("/") || "/";
+      return parent;
+    }
+    return null;
+  }, [browseDir, browseParentDir, workspaceRoot]);
+
+  // Handle ".." navigation
+  const handleNavigateUp = useCallback(() => {
+    if (effectiveParentDir != null) {
+      setBrowseDir(effectiveParentDir);
+    }
+  }, [effectiveParentDir, setBrowseDir]);
+
+  // Return to workspace mode
+  const handleGoHome = useCallback(() => {
+    setBrowseDir(null);
+  }, [setBrowseDir]);
 
   // Sync URL bar with active content / chat state.
   // Uses window.location instead of searchParams in the comparison to
@@ -647,6 +699,10 @@ function WorkspacePageInner() {
         onRefresh={refreshTree}
         orgName={context?.organization?.name}
         loading={treeLoading}
+        browseDir={browseDir}
+        parentDir={effectiveParentDir}
+        onNavigateUp={handleNavigateUp}
+        onGoHome={handleGoHome}
       />
 
       {/* Main content */}

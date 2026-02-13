@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { CronJob, CronRunLogEntry, CronRunsResponse } from "../../types/cron";
 import { CronRunChat } from "./cron-run-chat";
 
@@ -377,21 +379,31 @@ function RunCard({
             </div>
           )}
 
-          {/* Summary */}
-          {run.summary && (
-            <div className="mt-3 text-sm" style={{ color: "var(--color-text)" }}>
-              {run.summary}
-            </div>
-          )}
-
-          {/* Session transcript */}
+          {/* Session transcript (full chat) or summary fallback */}
           {run.sessionId ? (
             <div className="mt-4">
               <CronRunChat sessionId={run.sessionId} />
             </div>
+          ) : run.summary ? (
+            <div className="mt-3">
+              <div
+                className="text-[11px] uppercase tracking-wider font-medium mb-2"
+                style={{ color: "var(--color-text-muted)" }}
+              >
+                Run Output
+              </div>
+              <div
+                className="chat-prose text-sm"
+                style={{ color: "var(--color-text)" }}
+              >
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {run.summary}
+                </ReactMarkdown>
+              </div>
+            </div>
           ) : (
             <div className="mt-3 text-xs" style={{ color: "var(--color-text-muted)" }}>
-              No session transcript available for this run.
+              No output recorded for this run.
             </div>
           )}
         </div>

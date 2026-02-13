@@ -14,23 +14,32 @@ export type TreeNode = {
 /**
  * Hook that fetches the workspace tree and subscribes to SSE file-change events
  * for live reactivity. Falls back to polling if SSE is unavailable.
+ *
+ * Supports a browse mode: when `browseDir` is set, the tree is fetched from
+ * the browse API instead of the workspace tree API.
  */
 export function useWorkspaceWatcher() {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [exists, setExists] = useState(false);
 
+  // Browse mode state
+  const [browseDir, setBrowseDir] = useState<string | null>(null);
+  const [parentDir, setParentDir] = useState<string | null>(null);
+  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
+
   const mountedRef = useRef(true);
   const retryDelayRef = useRef(1000);
 
-  // Fetch the tree from the API
-  const fetchTree = useCallback(async () => {
+  // Fetch the workspace tree from the tree API
+  const fetchWorkspaceTree = useCallback(async () => {
     try {
       const res = await fetch("/api/workspace/tree");
       const data = await res.json();
       if (mountedRef.current) {
         setTree(data.tree ?? []);
         setExists(data.exists ?? false);
+        setWorkspaceRoot(data.workspaceRoot ?? null);
         setLoading(false);
       }
     } catch {
@@ -38,12 +47,38 @@ export function useWorkspaceWatcher() {
     }
   }, []);
 
+  // Fetch a directory listing from the browse API
+  const fetchBrowseTree = useCallback(async (dir: string) => {
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/workspace/browse?dir=${encodeURIComponent(dir)}`);
+      const data = await res.json();
+      if (mountedRef.current) {
+        setTree(data.entries ?? []);
+        setParentDir(data.parentDir ?? null);
+        setExists(true);
+        setLoading(false);
+      }
+    } catch {
+      if (mountedRef.current) {setLoading(false);}
+    }
+  }, []);
+
+  // Unified fetch based on current mode
+  const fetchTree = useCallback(async () => {
+    if (browseDir) {
+      await fetchBrowseTree(browseDir);
+    } else {
+      await fetchWorkspaceTree();
+    }
+  }, [browseDir, fetchBrowseTree, fetchWorkspaceTree]);
+
   // Manual refresh for use after mutations
   const refresh = useCallback(() => {
     fetchTree();
   }, [fetchTree]);
 
-  // Initial fetch
+  // Re-fetch when browseDir changes
   useEffect(() => {
     mountedRef.current = true;
     fetchTree();
@@ -52,8 +87,10 @@ export function useWorkspaceWatcher() {
     };
   }, [fetchTree]);
 
-  // SSE subscription with auto-reconnect and polling fallback
+  // SSE subscription -- only active in workspace mode (not browse mode)
   useEffect(() => {
+    if (browseDir) {return;}
+
     let eventSource: EventSource | null = null;
     let pollInterval: ReturnType<typeof setInterval> | null = null;
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -64,7 +101,7 @@ export function useWorkspaceWatcher() {
     function debouncedRefetch() {
       if (debounceTimer) {clearTimeout(debounceTimer);}
       debounceTimer = setTimeout(() => {
-        if (alive) {fetchTree();}
+        if (alive) {fetchWorkspaceTree();}
       }, 300);
     }
 
@@ -124,7 +161,7 @@ export function useWorkspaceWatcher() {
     function startPolling() {
       if (pollInterval || !alive) {return;}
       pollInterval = setInterval(() => {
-        if (alive) {fetchTree();}
+        if (alive) {fetchWorkspaceTree();}
       }, 5000);
     }
 
@@ -137,7 +174,7 @@ export function useWorkspaceWatcher() {
       if (reconnectTimeout) {clearTimeout(reconnectTimeout);}
       if (debounceTimer) {clearTimeout(debounceTimer);}
     };
-  }, [fetchTree]);
+  }, [browseDir, fetchWorkspaceTree]);
 
-  return { tree, loading, exists, refresh };
+  return { tree, loading, exists, refresh, browseDir, setBrowseDir, parentDir, workspaceRoot };
 }
