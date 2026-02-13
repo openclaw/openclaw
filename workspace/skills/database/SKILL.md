@@ -321,6 +321,20 @@ $env:SUPABASE_URL='<your-supabase-url>'
 $env:SUPABASE_SERVICE_ROLE_KEY='<your-service-role-key>'
 ```
 
+## ⚠️ PowerShell JSON Escaping
+
+PowerShell handles quotes differently than bash. Escape inner double quotes:
+
+```powershell
+# ✅ Correct (PowerShell)
+--filters '{\"status\": \"ACTIVE\"}'
+
+# ❌ Wrong (bash-style — fails in PowerShell)
+--filters '{"status": "ACTIVE"}'
+```
+
+All examples in this doc use bash-style for readability. **In PowerShell, escape all inner `"` as `\"`.**
+
 ---
 
 ## Template Patterns
