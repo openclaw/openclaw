@@ -139,21 +139,6 @@ jobs:
             const experiencedLabel = "experienced-contributor";
             const trustedThreshold = 4;
             const experiencedThreshold = 10;
-            const issueNumber = context.payload.pull_request.number;
-
-            const removeLabelIfPresent = async (name) => {
-              try {
-                await github.rest.issues.removeLabel({
-                  ...context.repo,
-                  issue_number: issueNumber,
-                  name,
-                });
-              } catch (error) {
-                if (error?.status !== 404) {
-                  throw error;
-                }
-              }
-            };
 
             let isMaintainer = false;
             try {
@@ -172,7 +157,7 @@ jobs:
             if (isMaintainer) {
               await github.rest.issues.addLabels({
                 ...context.repo,
-                issue_number: issueNumber,
+                issue_number: context.payload.pull_request.number,
                 labels: ["maintainer"],
               });
               return;
@@ -194,10 +179,9 @@ jobs:
             }
 
             if (mergedCount >= experiencedThreshold) {
-              await removeLabelIfPresent(trustedLabel);
               await github.rest.issues.addLabels({
                 ...context.repo,
-                issue_number: issueNumber,
+                issue_number: context.payload.pull_request.number,
                 labels: [experiencedLabel],
               });
               return;
@@ -206,7 +190,7 @@ jobs:
             if (mergedCount >= trustedThreshold) {
               await github.rest.issues.addLabels({
                 ...context.repo,
-                issue_number: issueNumber,
+                issue_number: context.payload.pull_request.number,
                 labels: [trustedLabel],
               });
             }
@@ -389,22 +373,6 @@ jobs:
                 return;
               }
 
-              if (label === experiencedLabel && labelNames.has(trustedLabel)) {
-                try {
-                  await github.rest.issues.removeLabel({
-                    owner,
-                    repo,
-                    issue_number: pullRequest.number,
-                    name: trustedLabel,
-                  });
-                } catch (error) {
-                  if (error?.status !== 404) {
-                    throw error;
-                  }
-                }
-                labelNames.delete(trustedLabel);
-              }
-
               if (labelNames.has(label)) {
                 return;
               }
@@ -494,21 +462,6 @@ jobs:
             const experiencedLabel = "experienced-contributor";
             const trustedThreshold = 4;
             const experiencedThreshold = 10;
-            const issueNumber = context.payload.issue.number;
-
-            const removeLabelIfPresent = async (name) => {
-              try {
-                await github.rest.issues.removeLabel({
-                  ...context.repo,
-                  issue_number: issueNumber,
-                  name,
-                });
-              } catch (error) {
-                if (error?.status !== 404) {
-                  throw error;
-                }
-              }
-            };
 
             let isMaintainer = false;
             try {
@@ -527,7 +480,7 @@ jobs:
             if (isMaintainer) {
               await github.rest.issues.addLabels({
                 ...context.repo,
-                issue_number: issueNumber,
+                issue_number: context.payload.issue.number,
                 labels: ["maintainer"],
               });
               return;
@@ -549,10 +502,9 @@ jobs:
             }
 
             if (mergedCount >= experiencedThreshold) {
-              await removeLabelIfPresent(trustedLabel);
               await github.rest.issues.addLabels({
                 ...context.repo,
-                issue_number: issueNumber,
+                issue_number: context.payload.issue.number,
                 labels: [experiencedLabel],
               });
               return;
@@ -561,7 +513,7 @@ jobs:
             if (mergedCount >= trustedThreshold) {
               await github.rest.issues.addLabels({
                 ...context.repo,
-                issue_number: issueNumber,
+                issue_number: context.payload.issue.number,
                 labels: [trustedLabel],
               });
             }
