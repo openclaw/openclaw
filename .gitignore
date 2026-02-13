@@ -73,6 +73,7 @@ docs/.local/
 IDENTITY.md
 USER.md
 .tgz
+.idea
 
 # local tooling
 .serena/

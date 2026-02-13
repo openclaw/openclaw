@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 
-const STREAM_URL_PREFIX = "wss://example.ngrok.app/voice/stream?token=";
+const STREAM_URL = "wss://example.ngrok.app/voice/stream";
 
 function createProvider(): TwilioProvider {
   return new TwilioProvider(
@@ -30,7 +30,8 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toContain(STREAM_URL_PREFIX);
+    expect(result.providerResponseBody).toContain(STREAM_URL);
+    expect(result.providerResponseBody).toContain('<Parameter name="token" value="');
     expect(result.providerResponseBody).toContain("<Connect>");
   });
 
@@ -54,7 +55,8 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toContain(STREAM_URL_PREFIX);
+    expect(result.providerResponseBody).toContain(STREAM_URL);
+    expect(result.providerResponseBody).toContain('<Parameter name="token" value="');
     expect(result.providerResponseBody).toContain("<Connect>");
   });
 });

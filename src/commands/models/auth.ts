@@ -26,6 +26,8 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "../openai-codex-model-default.js";
+import { loginOpenAICodexOAuth } from "../openai-codex-oauth.js";
 import { updateConfig } from "./shared.js";
 
 const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
@@ -92,7 +94,7 @@ export async function modelsAuthSetupTokenCommand(
     message: "Paste Anthropic setup-token",
     validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
   });
-  const token = String(tokenInput).trim();
+  const token = String(tokenInput ?? "").trim();
   const profileId = resolveDefaultTokenProfileId(provider);
 
   upsertAuthProfile({
@@ -135,11 +137,11 @@ export async function modelsAuthPasteTokenCommand(
     message: `Paste token for ${provider}`,
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
-  const token = String(tokenInput).trim();
+  const token = String(tokenInput ?? "").trim();
 
   const expires =
     opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
-      ? Date.now() + parseDurationMs(String(opts.expiresIn).trim(), { defaultUnit: "d" })
+      ? Date.now() + parseDurationMs(String(opts.expiresIn ?? "").trim(), { defaultUnit: "d" })
       : undefined;
 
   upsertAuthProfile({
@@ -342,6 +344,59 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const workspaceDir =
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
 
+  const prompter = createClackPrompter();
+  const requestedProvider = opts.provider ? normalizeProviderId(opts.provider) : null;
+  if (requestedProvider === "openai-codex") {
+    const method = opts.method?.trim().toLowerCase();
+    if (method && method !== "oauth") {
+      throw new Error('OpenAI Codex auth only supports --method "oauth".');
+    }
+
+    const creds = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: isRemoteEnvironment(),
+      openUrl: async (url) => {
+        await openUrl(url);
+      },
+    });
+    if (!creds) {
+      return;
+    }
+
+    const profileId = "openai-codex:default";
+    upsertAuthProfile({
+      profileId,
+      credential: {
+        type: "oauth",
+        provider: "openai-codex",
+        ...creds,
+      },
+      agentDir,
+    });
+
+    await updateConfig((cfg) => {
+      let next = applyAuthProfileConfig(cfg, {
+        profileId,
+        provider: "openai-codex",
+        mode: "oauth",
+      });
+      if (opts.setDefault) {
+        next = applyDefaultModel(next, OPENAI_CODEX_DEFAULT_MODEL);
+      }
+      return next;
+    });
+
+    logConfigUpdated(runtime);
+    runtime.log(`Auth profile: ${profileId} (openai-codex/oauth)`);
+    runtime.log(
+      opts.setDefault
+        ? `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`
+        : `Default model available: ${OPENAI_CODEX_DEFAULT_MODEL} (use --set-default to apply)`,
+    );
+    return;
+  }
+
   const providers = resolvePluginProviders({ config, workspaceDir });
   if (providers.length === 0) {
     throw new Error(
@@ -349,7 +404,6 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  const prompter = createClackPrompter();
   const selectedProvider =
     resolveProviderMatch(providers, opts.provider) ??
     (await prompter

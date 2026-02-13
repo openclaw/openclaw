@@ -210,15 +210,16 @@ export async function uploadImageFeishu(params: {
 
   const client = createFeishuClient(account);
 
-  // SDK expects a Readable stream, not a Buffer
-  // Use type assertion since SDK actually accepts any Readable at runtime
-  const imageStream = typeof image === "string" ? fs.createReadStream(image) : Readable.from(image);
+  // SDK accepts Buffer directly or fs.ReadStream for file paths
+  // Using Readable.from(buffer) causes issues with form-data library
+  // See: https://github.com/larksuite/node-sdk/issues/121
+  const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
 
   const response = await client.im.image.create({
     data: {
       image_type: imageType,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK stream type
-      image: imageStream as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
+      image: imageData as any,
     },
   });
 
@@ -258,16 +259,17 @@ export async function uploadFileFeishu(params: {
 
   const client = createFeishuClient(account);
 
-  // SDK expects a Readable stream, not a Buffer
-  // Use type assertion since SDK actually accepts any Readable at runtime
-  const fileStream = typeof file === "string" ? fs.createReadStream(file) : Readable.from(file);
+  // SDK accepts Buffer directly or fs.ReadStream for file paths
+  // Using Readable.from(buffer) causes issues with form-data library
+  // See: https://github.com/larksuite/node-sdk/issues/121
+  const fileData = typeof file === "string" ? fs.createReadStream(file) : file;
 
   const response = await client.im.file.create({
     data: {
       file_type: fileType,
       file_name: fileName,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK stream type
-      file: fileStream as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
+      file: fileData as any,
       ...(duration !== undefined && { duration }),
     },
   });
@@ -357,10 +359,13 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
+  /** Use "media" for audio/video files, "file" for documents */
+  msgType?: "file" | "media";
   replyToMessageId?: string;
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, fileKey, replyToMessageId, accountId } = params;
+  const msgType = params.msgType ?? "file";
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -380,7 +385,7 @@ export async function sendFileFeishu(params: {
       path: { message_id: replyToMessageId },
       data: {
         content,
-        msg_type: "file",
+        msg_type: msgType,
       },
     });
 
@@ -399,7 +404,7 @@ export async function sendFileFeishu(params: {
     data: {
       receive_id: receiveId,
       content,
-      msg_type: "file",
+      msg_type: msgType,
     },
   });
 
@@ -522,6 +527,15 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    return sendFileFeishu({ cfg, to, fileKey, replyToMessageId, accountId });
+    // Feishu requires msg_type "media" for audio/video, "file" for documents
+    const isMedia = fileType === "mp4" || fileType === "opus";
+    return sendFileFeishu({
+      cfg,
+      to,
+      fileKey,
+      msgType: isMedia ? "media" : "file",
+      replyToMessageId,
+      accountId,
+    });
   }
 }

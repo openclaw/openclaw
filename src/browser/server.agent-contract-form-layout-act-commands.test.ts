@@ -49,6 +49,7 @@ const pwMocks = vi.hoisted(() => ({
   selectOptionViaPlaywright: vi.fn(async () => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+  traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
   })),
@@ -154,6 +155,9 @@ vi.mock("./screenshot.js", () => ({
     contentType: "image/png",
   })),
 }));
+
+const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
+  await import("./server.js");
 
 async function getFreePort(): Promise<number> {
   while (true) {
@@ -273,12 +277,10 @@ describe("browser control server", () => {
     } else {
       process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
     }
-    const { stopBrowserControlServer } = await import("./server.js");
     await stopBrowserControlServer();
   });
 
   const startServerAndBase = async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();
     const base = `http://127.0.0.1:${testPort}`;
     await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
@@ -434,14 +436,14 @@ describe("browser control server", () => {
     expect(dialog).toMatchObject({ ok: true });
 
     const waitDownload = await postJson(`${base}/wait/download`, {
-      path: "/tmp/report.pdf",
+      path: "report.pdf",
       timeoutMs: 1111,
     });
     expect(waitDownload).toMatchObject({ ok: true });
 
     const download = await postJson(`${base}/download`, {
       ref: "e12",
-      path: "/tmp/report.pdf",
+      path: "report.pdf",
     });
     expect(download).toMatchObject({ ok: true });
 
@@ -479,5 +481,84 @@ describe("browser control server", () => {
     }).then((r) => r.json())) as { ok: boolean; stopped?: boolean };
     expect(stopped.ok).toBe(true);
     expect(stopped.stopped).toBe(true);
+  });
+
+  it("trace stop rejects traversal path outside trace dir", async () => {
+    const base = await startServerAndBase();
+    const res = await postJson<{ error?: string }>(`${base}/trace/stop`, {
+      path: "../../pwned.zip",
+    });
+    expect(res.error).toContain("Invalid path");
+    expect(pwMocks.traceStopViaPlaywright).not.toHaveBeenCalled();
+  });
+
+  it("trace stop accepts in-root relative output path", async () => {
+    const base = await startServerAndBase();
+    const res = await postJson<{ ok?: boolean; path?: string }>(`${base}/trace/stop`, {
+      path: "safe-trace.zip",
+    });
+    expect(res.ok).toBe(true);
+    expect(res.path).toContain("safe-trace.zip");
+    expect(pwMocks.traceStopViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        path: expect.stringContaining("safe-trace.zip"),
+      }),
+    );
+  });
+
+  it("wait/download rejects traversal path outside downloads dir", async () => {
+    const base = await startServerAndBase();
+    const waitRes = await postJson<{ error?: string }>(`${base}/wait/download`, {
+      path: "../../pwned.pdf",
+    });
+    expect(waitRes.error).toContain("Invalid path");
+    expect(pwMocks.waitForDownloadViaPlaywright).not.toHaveBeenCalled();
+  });
+
+  it("download rejects traversal path outside downloads dir", async () => {
+    const base = await startServerAndBase();
+    const downloadRes = await postJson<{ error?: string }>(`${base}/download`, {
+      ref: "e12",
+      path: "../../pwned.pdf",
+    });
+    expect(downloadRes.error).toContain("Invalid path");
+    expect(pwMocks.downloadViaPlaywright).not.toHaveBeenCalled();
+  });
+
+  it("wait/download accepts in-root relative output path", async () => {
+    const base = await startServerAndBase();
+    const res = await postJson<{ ok?: boolean; download?: { path?: string } }>(
+      `${base}/wait/download`,
+      {
+        path: "safe-wait.pdf",
+      },
+    );
+    expect(res.ok).toBe(true);
+    expect(pwMocks.waitForDownloadViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        path: expect.stringContaining("safe-wait.pdf"),
+      }),
+    );
+  });
+
+  it("download accepts in-root relative output path", async () => {
+    const base = await startServerAndBase();
+    const res = await postJson<{ ok?: boolean; download?: { path?: string } }>(`${base}/download`, {
+      ref: "e12",
+      path: "safe-download.pdf",
+    });
+    expect(res.ok).toBe(true);
+    expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        ref: "e12",
+        path: expect.stringContaining("safe-download.pdf"),
+      }),
+    );
   });
 });

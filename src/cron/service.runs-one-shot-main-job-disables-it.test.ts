@@ -200,6 +200,49 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
+  it("passes agentId to runHeartbeatOnce for main-session wakeMode now jobs", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runHeartbeatOnce,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "wakeMode now with agent",
+      agentId: "ops",
+      enabled: true,
+      schedule: { kind: "at", at: new Date(1).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    expect(runHeartbeatOnce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `cron:${job.id}`,
+        agentId: "ops",
+      }),
+    );
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("hello", { agentId: "ops" });
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("wakeMode now falls back to queued heartbeat when main lane stays busy", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
@@ -282,6 +325,48 @@ describe("CronService", () => {
       agentId: undefined,
     });
     expect(requestHeartbeatNow).toHaveBeenCalled();
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not post isolated summary to main when run already delivered output", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "done",
+      delivered: true,
+    }));
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob,
+    });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
+    await cron.add({
+      enabled: true,
+      name: "weekly delivered",
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "do it" },
+      delivery: { mode: "announce" },
+    });
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+
+    await waitForJobs(cron, (items) => items.some((item) => item.state.lastStatus === "ok"));
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
     cron.stop();
     await store.cleanup();
   });

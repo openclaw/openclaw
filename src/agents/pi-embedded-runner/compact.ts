@@ -75,6 +75,7 @@ import {
 } from "./system-prompt.js";
 import { splitSdkTools } from "./tool-split.js";
 import { describeUnknownError, mapThinkingLevel, resolveExecToolDefaults } from "./utils.js";
+import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
@@ -521,7 +522,10 @@ export async function compactEmbeddedPiSessionDirect(
           },
         };
       } finally {
-        sessionManager.flushPendingToolResults?.();
+        await flushPendingToolResultsAfterIdle({
+          agent: session?.agent,
+          sessionManager,
+        });
         session.dispose();
       }
     } finally {

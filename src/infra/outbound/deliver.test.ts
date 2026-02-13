@@ -14,6 +14,17 @@ import {
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
+const hookMocks = vi.hoisted(() => ({
+  runner: {
+    hasHooks: vi.fn(() => false),
+    runMessageSent: vi.fn(async () => {}),
+  },
+}));
+const queueMocks = vi.hoisted(() => ({
+  enqueueDelivery: vi.fn(async () => "mock-queue-id"),
+  ackDelivery: vi.fn(async () => {}),
+  failDelivery: vi.fn(async () => {}),
+}));
 
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
@@ -24,12 +35,30 @@ vi.mock("../../config/sessions.js", async () => {
     appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
   };
 });
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => hookMocks.runner,
+}));
+vi.mock("./delivery-queue.js", () => ({
+  enqueueDelivery: queueMocks.enqueueDelivery,
+  ackDelivery: queueMocks.ackDelivery,
+  failDelivery: queueMocks.failDelivery,
+}));
 
 const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
 
 describe("deliverOutboundPayloads", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
+    hookMocks.runner.hasHooks.mockReset();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runMessageSent.mockReset();
+    hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
+    queueMocks.enqueueDelivery.mockReset();
+    queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
+    queueMocks.ackDelivery.mockReset();
+    queueMocks.ackDelivery.mockResolvedValue(undefined);
+    queueMocks.failDelivery.mockReset();
+    queueMocks.failDelivery.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -196,6 +225,73 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("strips leading blank lines for WhatsApp text payloads", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 4000 } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "\n\nHello from WhatsApp" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "Hello from WhatsApp",
+      expect.objectContaining({ verbose: false }),
+    );
+  });
+
+  it("drops whitespace-only WhatsApp text payloads when no media is attached", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 4000 } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "   \n\t   " }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+
+  it("keeps WhatsApp media payloads but clears whitespace-only captions", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 4000 } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: " \n\t ", mediaUrl: "https://example.com/photo.png" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/photo.png",
+        verbose: false,
+      }),
+    );
+  });
+
   it("preserves fenced blocks for markdown chunkers in newline mode", async () => {
     const chunker = vi.fn((text: string) => (text ? [text] : []));
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
@@ -309,6 +405,57 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "whatsapp", messageId: "w2", toJid: "jid" }]);
   });
 
+  it("calls failDelivery instead of ackDelivery on bestEffort partial failure", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fail"))
+      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
+    const onError = vi.fn();
+    const cfg: OpenClawConfig = {};
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "a" }, { text: "b" }],
+      deps: { sendWhatsApp },
+      bestEffort: true,
+      onError,
+    });
+
+    // onError was called for the first payload's failure.
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // Queue entry should NOT be acked — failDelivery should be called instead.
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      "partial delivery failure (bestEffort)",
+    );
+  });
+
+  it("acks the queue entry when delivery is aborted", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const abortController = new AbortController();
+    abortController.abort();
+    const cfg: OpenClawConfig = {};
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg,
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "a" }],
+        deps: { sendWhatsApp },
+        abortSignal: abortController.signal,
+      }),
+    ).rejects.toThrow("Operation aborted");
+
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
   it("passes normalized payload to onError", async () => {
     const sendWhatsApp = vi.fn().mockRejectedValue(new Error("boom"));
     const onError = vi.fn();
@@ -354,6 +501,86 @@ describe("deliverOutboundPayloads", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({ text: "report.pdf" }),
     );
+  });
+
+  it("emits message_sent success for text-only deliveries", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "+1555", content: "hello", success: true }),
+        expect.objectContaining({ channelId: "whatsapp" }),
+      );
+    });
+  });
+
+  it("emits message_sent success for sendPayload deliveries", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
+    const sendText = vi.fn();
+    const sendMedia = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendPayload, sendText, sendMedia },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "payload text", channelData: { mode: "custom" } }],
+    });
+
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
+        expect.objectContaining({ channelId: "matrix" }),
+      );
+    });
+  });
+
+  it("emits message_sent failure when delivery errors", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const sendWhatsApp = vi.fn().mockRejectedValue(new Error("downstream failed"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "hi" }],
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow("downstream failed");
+
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "+1555",
+          content: "hi",
+          success: false,
+          error: "downstream failed",
+        }),
+        expect.objectContaining({ channelId: "whatsapp" }),
+      );
+    });
   });
 });
 
