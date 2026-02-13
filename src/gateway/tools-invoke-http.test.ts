@@ -225,6 +225,72 @@ describe("POST /tools/invoke", () => {
     expect(profileRes.status).toBe(404);
   });
 
+  it("denies sessions_spawn via HTTP even when agent policy allows", async () => {
+    testState.agentsConfig = {
+      list: [
+        {
+          id: "main",
+          tools: { allow: ["sessions_spawn"] },
+        },
+      ],
+    } as any;
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port, { bind: "loopback" });
+    const token = resolveGatewayToken();
+
+    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tool: "sessions_spawn", args: { task: "test" }, sessionKey: "main" }),
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error.type).toBe("not_found");
+
+    await server.close();
+  });
+
+  it("denies sessions_send via HTTP gateway", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main", tools: { allow: ["sessions_send"] } }],
+    } as any;
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port, { bind: "loopback" });
+    const token = resolveGatewayToken();
+
+    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tool: "sessions_send", args: {}, sessionKey: "main" }),
+    });
+
+    expect(res.status).toBe(404);
+    await server.close();
+  });
+
+  it("denies gateway tool via HTTP", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main", tools: { allow: ["gateway"] } }],
+    } as any;
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port, { bind: "loopback" });
+    const token = resolveGatewayToken();
+
+    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tool: "gateway", args: {}, sessionKey: "main" }),
+    });
+
+    expect(res.status).toBe(404);
+    await server.close();
+  });
+
   it("uses the configured main session key when sessionKey is missing or main", async () => {
     testState.agentsConfig = {
       list: [
