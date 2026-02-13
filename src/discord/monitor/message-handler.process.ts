@@ -22,6 +22,7 @@ import { createTypingCallbacks } from "../../channels/typing.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
@@ -88,6 +89,18 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     logVerbose(`discord: drop message ${message.id} (empty content)`);
     return;
   }
+  // Show typing as soon as message is received (not only when reply starts).
+  void sendTyping({ client, channelId: message.channelId }).catch((err) => {
+    logVerbose(`discord typing on receive failed for channel ${message.channelId}: ${String(err)}`);
+  });
+  await triggerInternalHook(
+    createInternalHookEvent("message", "received", route.sessionKey, {
+      channel: "discord",
+      senderId: author.id,
+      channelId: message.channelId,
+      messageText: text,
+    }),
+  );
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldAckReaction = () =>
@@ -373,6 +386,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         chunkMode: resolveChunkMode(cfg, "discord", accountId),
       });
       replyReference.markSent();
+      await triggerInternalHook(
+        createInternalHookEvent("message", "sent", ctxPayload.SessionKey ?? route.sessionKey, {
+          channel: "discord",
+          sessionId: ctxPayload.SessionKey ?? route.sessionKey,
+          replyText: payload.text ?? "",
+        }),
+      );
     },
     onError: (err, info) => {
       runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));

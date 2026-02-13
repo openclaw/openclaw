@@ -81,6 +81,7 @@ Token resolution is account-aware. Config token values win over env fallback. `D
 ## Runtime model
 
 - Gateway owns the Discord connection.
+- **Typing**: A typing indicator is sent when a message is first received (and again when the reply starts), so users see feedback immediately.
 - Reply routing is deterministic: Discord inbound replies back to Discord.
 - By default (`session.dmScope=main`), direct chats share the agent main session (`agent:main:main`).
 - Guild channels are isolated session keys (`agent:<agentId>:discord:channel:<channelId>`).
