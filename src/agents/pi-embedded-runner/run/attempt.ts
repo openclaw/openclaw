@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
@@ -7,9 +5,13 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs/promises";
+import os from "node:os";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { emitDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -77,6 +79,7 @@ import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
+import { wrapStreamFnWithTraceContext } from "../../trace-context-propagator.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -115,7 +118,6 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
-import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -418,6 +420,11 @@ export function resolveAttemptFsWorkspaceOnly(params: {
     agentId: params.sessionAgentId,
   });
 }
+import {
+  buildGenAiMessagesFromContext,
+  buildGenAiToolDefsFromContext,
+} from "./diagnostic-builders.js";
+import { detectAndLoadPromptImages, injectHistoryImagesIntoMessages } from "./images.js";
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
@@ -965,6 +972,12 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
       }
 
+      // Wrap streamFn to inject W3C Trace Context headers for distributed tracing
+      activeSession.agent.streamFn = wrapStreamFnWithTraceContext(
+        activeSession.agent.streamFn,
+        params.sessionKey,
+      );
+
       applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
@@ -1070,6 +1083,53 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      const captureContent =
+        params.config?.diagnostics?.enabled === true &&
+        !!params.config?.diagnostics?.otel?.captureContent;
+      if (captureContent) {
+        // Capture the exact model request context at the point of the LLM call.
+        // This is more trustworthy than sampling AgentSession.state.messages from streaming events.
+        const inner = activeSession.agent.streamFn;
+        let callIndex = 0;
+        activeSession.agent.streamFn = ((model, context, options) => {
+          callIndex += 1;
+          emitDiagnosticEvent({
+            type: "model.inference.started",
+            runId: params.runId,
+            sessionId: activeSession.sessionId,
+            sessionKey: params.sessionKey,
+            channel: params.messageChannel,
+            provider: model.provider,
+            model: model.id,
+            operationName: "chat",
+            callIndex,
+            inputMessages: buildGenAiMessagesFromContext(
+              (context as { messages?: unknown }).messages,
+            ),
+            systemInstructions:
+              typeof (context as { systemPrompt?: unknown }).systemPrompt === "string" &&
+              (context as { systemPrompt?: string }).systemPrompt?.trim()
+                ? [
+                    {
+                      type: "text",
+                      content: String((context as { systemPrompt?: string }).systemPrompt),
+                    },
+                  ]
+                : undefined,
+            toolDefinitions: buildGenAiToolDefsFromContext((context as { tools?: unknown }).tools),
+            temperature:
+              typeof (options as { temperature?: unknown }).temperature === "number"
+                ? (options as { temperature?: number }).temperature
+                : undefined,
+            maxOutputTokens:
+              typeof (options as { maxTokens?: unknown }).maxTokens === "number"
+                ? (options as { maxTokens?: number }).maxTokens
+                : undefined,
+          });
+          return inner(model, context, options);
+        }) as typeof inner;
+      }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -1167,6 +1227,10 @@ export async function runEmbeddedAttempt(
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
+        captureContent,
+        sessionKey: params.sessionKey ?? params.sessionId,
+        sessionId: params.sessionId,
+        channel: params.messageChannel,
         hookRunner: getGlobalHookRunner() ?? undefined,
         verboseLevel: params.verboseLevel,
         reasoningMode: params.reasoningLevel ?? "off",
@@ -1185,7 +1249,6 @@ export async function runEmbeddedAttempt(
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
-        sessionKey: params.sessionKey ?? params.sessionId,
       });
 
       const {
@@ -1631,6 +1694,8 @@ export async function runEmbeddedAttempt(
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
+        systemPromptText: systemPromptText,
+        firstTokenAt: subscription?.getFirstTokenAt?.(),
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.

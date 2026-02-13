@@ -1,13 +1,14 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { emitAgentEvent } from "../infra/agent-events.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
-import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
-import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
+import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
   extractMessagingToolSend,
   extractToolErrorMessage,
@@ -204,6 +205,11 @@ export async function handleToolExecutionStart(
 
   const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
   ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
+  ctx.state.toolStartTimeById.set(toolCallId, Date.now());
+  ctx.state.toolArgsById.set(
+    toolCallId,
+    args && typeof args === "object" ? (args as Record<string, unknown>) : undefined,
+  );
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
@@ -403,6 +409,26 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
     },
+  });
+
+  // Emit OTel diagnostic event for tool execution
+  const startTime = ctx.state.toolStartTimeById.get(toolCallId);
+  ctx.state.toolStartTimeById.delete(toolCallId);
+  const toolInput = ctx.state.toolArgsById.get(toolCallId);
+  ctx.state.toolArgsById.delete(toolCallId);
+  emitDiagnosticEvent({
+    type: "tool.execution",
+    runId: ctx.params.runId,
+    sessionKey: ctx.params.sessionKey,
+    sessionId: ctx.params.sessionId,
+    channel: ctx.params.channel,
+    toolName,
+    toolType: "function",
+    toolCallId,
+    durationMs: typeof startTime === "number" ? Date.now() - startTime : undefined,
+    error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+    toolInput,
+    toolOutput: sanitizedResult,
   });
 
   ctx.log.debug(

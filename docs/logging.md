@@ -163,9 +163,13 @@ diagnostics + the exporter plugin are enabled.
 
 ### Diagnostic event catalog
 
-Model usage:
+Runs + inference:
 
-- `model.usage`: tokens, cost, duration, context, provider/model/channel, session ids.
+- `run.started`: start of an agent run (parent span for the whole turn).
+- `model.inference.started`: start of an LLM call (used to capture per-call input messages when content capture is enabled).
+- `model.inference`: end of an LLM call (duration, TTFT, usage when available).
+- `tool.execution`: tool call execution (duration, error, metadata).
+- `run.completed`: end of an agent run (aggregate usage, cost, duration, final error metadata).
 
 Message flow:
 
@@ -220,6 +224,7 @@ Notes:
 - Flag logs go to the standard log file (same as `logging.file`).
 - Output is still redacted according to `logging.redactSensitive`.
 - Full guide: [/diagnostics/flags](/diagnostics/flags).
+- Event lifecycle: [/diagnostics/events](/diagnostics/events).
 
 ### Export to OpenTelemetry
 

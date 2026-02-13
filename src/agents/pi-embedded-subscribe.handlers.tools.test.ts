@@ -1,14 +1,14 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
-import {
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
-} from "./pi-embedded-subscribe.handlers.tools.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import {
+  handleToolExecutionEnd,
+  handleToolExecutionStart,
+} from "./pi-embedded-subscribe.handlers.tools.js";
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
@@ -36,6 +36,8 @@ function createTestContext(): {
     state: {
       toolMetaById: new Map<string, ToolCallSummary>(),
       toolMetas: [],
+      toolStartTimeById: new Map<string, number>(),
+      toolArgsById: new Map<string, Record<string, unknown> | undefined>(),
       toolSummaryById: new Set<string>(),
       pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       pendingMessagingTexts: new Map<string, string>(),

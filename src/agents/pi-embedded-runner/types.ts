@@ -52,6 +52,10 @@ export type EmbeddedPiRunMeta = {
     name: string;
     arguments: string;
   }>;
+  /** The full system prompt text sent to the model. */
+  systemPromptText?: string;
+  /** Time-to-first-token in milliseconds (relative to run start). */
+  firstTokenMs?: number;
 };
 
 export type EmbeddedPiRunResult = {

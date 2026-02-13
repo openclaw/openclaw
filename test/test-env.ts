@@ -89,6 +89,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
     { key: "GH_TOKEN", value: process.env.GH_TOKEN },
     { key: "GITHUB_TOKEN", value: process.env.GITHUB_TOKEN },
     { key: "NODE_OPTIONS", value: process.env.NODE_OPTIONS },
+    { key: "ZDOTDIR", value: process.env.ZDOTDIR },
   ];
 
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-home-"));
@@ -97,6 +98,9 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   process.env.USERPROFILE = tempHome;
   process.env.OPENCLAW_TEST_HOME = tempHome;
   process.env.OPENCLAW_TEST_FAST = "1";
+  // Prevent spawned zsh subprocesses from sourcing the real user's .zshenv,
+  // which can fail (e.g. missing .cargo/env) and pollute test output.
+  process.env.ZDOTDIR = tempHome;
 
   // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
   delete process.env.OPENCLAW_CONFIG_PATH;
