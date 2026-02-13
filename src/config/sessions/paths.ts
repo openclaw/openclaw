@@ -60,24 +60,13 @@ function resolvePathWithinSessionsDir(sessionsDir: string, candidate: string): s
   const resolvedCandidate = path.resolve(resolvedBase, trimmed);
 
   // Security check: ensure the resolved path is within the sessions directory.
-  // Handle both relative paths and absolute paths that may already be within the directory.
-  // For absolute paths, check if they start with the sessions directory prefix.
-  // For relative paths, check if they don't escape with "..".
-  if (path.isAbsolute(trimmed)) {
-    // Candidate is an absolute path - verify it's within the sessions directory
-    const normalizedBase = resolvedBase + path.sep;
-    if (
-      !resolvedCandidate.startsWith(normalizedBase) &&
-      resolvedCandidate !== resolvedBase
-    ) {
-      throw new Error("Session file path must be within sessions directory");
-    }
-  } else {
-    // Candidate is a relative path - use the original relative path check
-    const relative = path.relative(resolvedBase, resolvedCandidate);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error("Session file path must be within sessions directory");
-    }
+  // Use path.relative for both relative and absolute paths to handle
+  // platform differences (e.g., Windows case-insensitive paths).
+  // If the resolved path is within sessions dir, path.relative will return
+  // a path that doesn't start with ".." and isn't absolute.
+  const relative = path.relative(resolvedBase, resolvedCandidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Session file path must be within sessions directory");
   }
   return resolvedCandidate;
 }

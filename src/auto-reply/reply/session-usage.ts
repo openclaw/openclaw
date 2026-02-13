@@ -39,15 +39,14 @@ export async function persistSessionUsageUpdate(params: {
   // Check if either accumulated usage or lastCallUsage has valid data
   // This ensures totalTokens gets updated even when the final request fails
   // but we have valid lastCallUsage from a previous successful request in the run
-  const hasAnyUsage = hasNonzeroUsage(params.usage) || hasNonzeroUsage(params.lastCallUsage);
-  if (hasAnyUsage) {
+  const hasAccumulatedUsage = hasNonzeroUsage(params.usage);
+  const hasLastCallUsage = hasNonzeroUsage(params.lastCallUsage);
+  if (hasAccumulatedUsage || hasLastCallUsage) {
     try {
       await updateSessionStoreEntry({
         storePath,
         sessionKey,
         update: async (entry) => {
-          const input = params.usage?.input ?? 0;
-          const output = params.usage?.output ?? 0;
           const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
@@ -55,14 +54,21 @@ export async function persistSessionUsageUpdate(params: {
           // `lastCallUsage` reflects only the final API call — the true context.
           const usageForContext = params.lastCallUsage ?? params.usage;
           const patch: Partial<SessionEntry> = {
-            inputTokens: input,
-            outputTokens: output,
+            // Only update inputTokens/outputTokens when we have accumulated usage data.
+            // When only lastCallUsage is available (final request failed), preserve
+            // the existing token counters to avoid overwriting valid data with zeros.
+            ...(hasAccumulatedUsage
+              ? {
+                  inputTokens: params.usage?.input ?? 0,
+                  outputTokens: params.usage?.output ?? 0,
+                }
+              : {}),
             totalTokens:
               deriveSessionTotalTokens({
                 usage: usageForContext,
                 contextTokens: resolvedContextTokens,
                 promptTokens: params.promptTokens,
-              }) ?? input,
+              }) ?? params.usage?.input,
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
             contextTokens: resolvedContextTokens,
