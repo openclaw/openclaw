@@ -384,7 +384,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
     describe: "Move audio.transcription to tools.media.audio.models",
     apply: (raw, changes) => {
       const audio = getRecord(raw.audio);
-      if (audio?.transcription === undefined) return;
+      if (audio?.transcription === undefined) {
+        return;
+      }
 
       const mapped = mapLegacyAudioTranscription(audio.transcription);
       if (mapped) {
@@ -400,13 +402,19 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
           changes.push("Removed audio.transcription (tools.media.audio.models already set).");
         }
         delete audio.transcription;
-        if (Object.keys(audio).length === 0) delete raw.audio;
-        else raw.audio = audio;
+        if (Object.keys(audio).length === 0) {
+          delete raw.audio;
+        } else {
+          raw.audio = audio;
+        }
       } else {
         delete audio.transcription;
         changes.push("Removed audio.transcription (invalid or empty command).");
-        if (Object.keys(audio).length === 0) delete raw.audio;
-        else raw.audio = audio;
+        if (Object.keys(audio).length === 0) {
+          delete raw.audio;
+        } else {
+          raw.audio = audio;
+        }
       }
     },
   },
