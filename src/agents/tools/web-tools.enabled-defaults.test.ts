@@ -352,10 +352,18 @@ describe("web_search external content wrapping", () => {
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
     const result = await tool?.execute?.(1, { query: "test" });
-    const details = result?.details as { results?: Array<{ description?: string }> };
+    const details = result?.details as {
+      externalContent?: { untrusted?: boolean; source?: string; wrapped?: boolean };
+      results?: Array<{ description?: string }>;
+    };
 
     expect(details.results?.[0]?.description).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
     expect(details.results?.[0]?.description).toContain("Ignore previous instructions");
+    expect(details.externalContent).toMatchObject({
+      untrusted: true,
+      source: "web_search",
+      wrapped: true,
+    });
   });
 
   it("does not wrap Brave result urls (raw for tool chaining)", async () => {

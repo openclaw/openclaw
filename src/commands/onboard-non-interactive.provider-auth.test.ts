@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
@@ -28,6 +29,22 @@ type OnboardEnv = {
   configPath: string;
   runtime: RuntimeMock;
 };
+
+async function removeDirWithRetry(dir: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const isTransient = code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM";
+      if (!isTransient || attempt === 4) {
+        throw error;
+      }
+      await delay(25 * (attempt + 1));
+    }
+  }
+}
 
 function captureEnv(): EnvSnapshot {
   return {
@@ -102,7 +119,7 @@ async function withOnboardEnv(
   try {
     await run({ configPath, runtime });
   } finally {
-    await fs.rm(tempHome, { recursive: true, force: true });
+    await removeDirWithRetry(tempHome);
     restoreEnv(prev);
   }
 }
@@ -139,7 +156,7 @@ async function expectApiKeyProfile(params: {
 }
 
 describe("onboard (non-interactive): provider auth", () => {
-  it("stores Z.AI API key and uses coding-global baseUrl by default", async () => {
+  it("stores Z.AI API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-zai-", async ({ configPath, runtime }) => {
       await runNonInteractive(
         {
@@ -162,8 +179,8 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
       expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7");
+      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/paas/v4");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
       await expectApiKeyProfile({ profileId: "zai:default", provider: "zai", key: "zai-test-key" });
     });
   }, 60_000);

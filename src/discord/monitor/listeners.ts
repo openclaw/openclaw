@@ -188,15 +188,14 @@ async function handleDiscordReactionEvent(params: {
     if (!user || user.bot) {
       return;
     }
-    if (!data.guild_id) {
-      return;
-    }
-
-    const guildInfo = resolveDiscordGuildEntry({
-      guild: data.guild ?? undefined,
-      guildEntries,
-    });
-    if (guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
+    const isGuildMessage = Boolean(data.guild_id);
+    const guildInfo = isGuildMessage
+      ? resolveDiscordGuildEntry({
+          guild: data.guild ?? undefined,
+          guildEntries,
+        })
+      : null;
+    if (isGuildMessage && guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
       return;
     }
 
@@ -207,6 +206,8 @@ async function handleDiscordReactionEvent(params: {
     const channelName = "name" in channel ? (channel.name ?? undefined) : undefined;
     const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
     const channelType = "type" in channel ? channel.type : undefined;
+    const isDirectMessage = channelType === ChannelType.DM;
+    const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel =
       channelType === ChannelType.PublicThread ||
       channelType === ChannelType.PrivateThread ||
@@ -262,7 +263,10 @@ async function handleDiscordReactionEvent(params: {
     const emojiLabel = formatDiscordReactionEmoji(data.emoji);
     const actorLabel = formatDiscordUserTag(user);
     const guildSlug =
-      guildInfo?.slug || (data.guild?.name ? normalizeDiscordSlug(data.guild.name) : data.guild_id);
+      guildInfo?.slug ||
+      (data.guild?.name
+        ? normalizeDiscordSlug(data.guild.name)
+        : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
     const channelLabel = channelSlug
       ? `#${channelSlug}`
       : channelName
@@ -276,7 +280,10 @@ async function handleDiscordReactionEvent(params: {
       channel: "discord",
       accountId: params.accountId,
       guildId: data.guild_id ?? undefined,
-      peer: { kind: "channel", id: data.channel_id },
+      peer: {
+        kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+        id: isDirectMessage ? user.id : data.channel_id,
+      },
       parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
     });
     enqueueSystemEvent(text, {
