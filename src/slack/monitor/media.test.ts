@@ -338,7 +338,46 @@ describe("resolveSlackMedia", () => {
     });
 
     expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns all successfully downloaded files as an array", async () => {
+    // Mock the store module
+    vi.doMock("../../media/store.js", () => ({
+      saveMediaBuffer: vi
+        .fn()
+        .mockResolvedValueOnce({ path: "/tmp/a.jpg", contentType: "image/jpeg" })
+        .mockResolvedValueOnce({ path: "/tmp/b.png", contentType: "image/png" }),
+    }));
+
+    const { resolveSlackMedia } = await import("./media.js");
+
+    const responseA = new Response(Buffer.from("image a"), {
+      status: 200,
+      headers: { "content-type": "image/jpeg" },
+    });
+    const responseB = new Response(Buffer.from("image b"), {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    });
+
+    mockFetch.mockResolvedValueOnce(responseA).mockResolvedValueOnce(responseB);
+
+    const result = await resolveSlackMedia({
+      files: [
+        { url_private: "https://files.slack.com/a.jpg", name: "a.jpg" },
+        { url_private: "https://files.slack.com/b.png", name: "b.png" },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result![0].path).toBe("/tmp/a.jpg");
+    expect(result![0].placeholder).toBe("[Slack file: a.jpg]");
+    expect(result![1].path).toBe("/tmp/b.png");
+    expect(result![1].placeholder).toBe("[Slack file: b.png]");
   });
 });
 
