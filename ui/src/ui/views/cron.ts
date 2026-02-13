@@ -199,6 +199,23 @@ export function renderCron(props: CronProps) {
           ></textarea>
         </label>
         ${
+          props.form.sessionTarget === "main"
+            ? html`
+                <label class="field" style="margin-top: 12px;">
+                  <span>Target Session Key</span>
+                  <input
+                    .value=${props.form.targetSessionKey}
+                    @input=${(e: Event) =>
+                      props.onFormChange({
+                        targetSessionKey: (e.target as HTMLInputElement).value,
+                      })}
+                    placeholder="agent:main:slack:C123:thread:xxx (optional)"
+                  />
+                </label>
+              `
+            : nothing
+        }
+        ${
           props.form.payloadKind === "agentTurn"
             ? html`
                 <div class="form-grid" style="margin-top: 12px;">
@@ -255,6 +272,17 @@ export function renderCron(props: CronProps) {
                                   deliveryTo: (e.target as HTMLInputElement).value,
                                 })}
                               placeholder="+1555… or chat id"
+                            />
+                          </label>
+                          <label class="field">
+                            <span>Thread ID</span>
+                            <input
+                              .value=${props.form.deliveryThreadId}
+                              @input=${(e: Event) =>
+                                props.onFormChange({
+                                  deliveryThreadId: (e.target as HTMLInputElement).value,
+                                })}
+                              placeholder="Slack ts or Telegram topic id"
                             />
                           </label>
                         `

@@ -59,12 +59,16 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
-      const sessionKey = resolveAgentMainSessionKey({
-        cfg: runtimeConfig,
-        agentId,
-      });
-      enqueueSystemEvent(text, { sessionKey });
+      if (opts?.sessionKey) {
+        enqueueSystemEvent(text, { sessionKey: opts.sessionKey });
+      } else {
+        const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
+        const sessionKey = resolveAgentMainSessionKey({
+          cfg: runtimeConfig,
+          agentId,
+        });
+        enqueueSystemEvent(text, { sessionKey });
+      }
     },
     requestHeartbeatNow,
     runHeartbeatOnce: async (opts) => {
@@ -72,6 +76,7 @@ export function buildGatewayCronService(params: {
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         reason: opts?.reason,
+        sessionKey: opts?.sessionKey,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },

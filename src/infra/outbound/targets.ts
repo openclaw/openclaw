@@ -26,6 +26,7 @@ export type OutboundTarget = {
   to?: string;
   reason?: string;
   accountId?: string;
+  threadId?: string | number;
   lastChannel?: DeliverableMessageChannel;
   lastAccountId?: string;
 };
@@ -281,6 +282,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     to: resolved.to,
     reason,
     accountId: effectiveAccountId,
+    threadId: resolvedTarget.threadId,
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
   };

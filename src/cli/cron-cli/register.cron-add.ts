@@ -89,7 +89,12 @@ export function registerCronAddCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
+      .option("--thread-id <id>", "Thread ID for delivery (e.g. Slack ts, Telegram topic)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
+      .option(
+        "--target-session-key <key>",
+        "Target session key for main jobs (routes to specific session)",
+      )
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
         try {
@@ -215,6 +220,10 @@ export function registerCronAddCommand(cron: Command) {
               ? opts.description.trim()
               : undefined;
 
+          const threadIdRaw = typeof opts.threadId === "string" ? opts.threadId.trim() : undefined;
+          const targetSessionKeyRaw =
+            typeof opts.targetSessionKey === "string" ? opts.targetSessionKey.trim() : undefined;
+
           const params = {
             name,
             description,
@@ -225,6 +234,7 @@ export function registerCronAddCommand(cron: Command) {
             sessionTarget,
             wakeMode,
             payload,
+            targetSessionKey: targetSessionKeyRaw || undefined,
             delivery: deliveryMode
               ? {
                   mode: deliveryMode,
@@ -233,6 +243,7 @@ export function registerCronAddCommand(cron: Command) {
                       ? opts.channel.trim()
                       : undefined,
                   to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                  threadId: threadIdRaw || undefined,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }
               : undefined,

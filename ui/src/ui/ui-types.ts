@@ -32,5 +32,7 @@ export type CronFormState = {
   deliveryMode: "none" | "announce";
   deliveryChannel: string;
   deliveryTo: string;
+  deliveryThreadId: string;
+  targetSessionKey: string;
   timeoutSeconds: string;
 };

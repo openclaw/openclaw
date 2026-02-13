@@ -28,5 +28,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   deliveryMode: "announce",
   deliveryChannel: "last",
   deliveryTo: "",
+  deliveryThreadId: "",
+  targetSessionKey: "",
   timeoutSeconds: "",
 };

@@ -40,9 +40,19 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
-function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+function assertDeliverySupport(
+  job: Pick<CronJob, "sessionTarget" | "delivery" | "targetSessionKey" | "wakeMode">,
+) {
   if (job.delivery && job.sessionTarget !== "isolated") {
     throw new Error('cron delivery config is only supported for sessionTarget="isolated"');
+  }
+  if (job.targetSessionKey && job.sessionTarget !== "main") {
+    throw new Error('targetSessionKey is only supported for sessionTarget="main"');
+  }
+  if (job.targetSessionKey && job.wakeMode !== "now") {
+    throw new Error(
+      'targetSessionKey requires wakeMode="now" (next-heartbeat cannot target specific sessions)',
+    );
   }
 }
 
@@ -179,6 +189,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload: input.payload,
+    targetSessionKey: input.targetSessionKey?.trim() || undefined,
     delivery: input.delivery,
     state: {
       ...input.state,
@@ -214,6 +225,10 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);
+  }
+  if ("targetSessionKey" in patch) {
+    const raw = (patch as { targetSessionKey?: unknown }).targetSessionKey;
+    job.targetSessionKey = typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
   }
   if (!patch.delivery && patch.payload?.kind === "agentTurn") {
     // Back-compat: legacy clients still update delivery via payload fields.
@@ -365,6 +380,7 @@ function mergeCronDelivery(
     mode: existing?.mode ?? "none",
     channel: existing?.channel,
     to: existing?.to,
+    threadId: existing?.threadId,
     bestEffort: existing?.bestEffort,
   };
 
@@ -378,6 +394,17 @@ function mergeCronDelivery(
   if ("to" in patch) {
     const to = typeof patch.to === "string" ? patch.to.trim() : "";
     next.to = to ? to : undefined;
+  }
+  if ("threadId" in patch) {
+    const raw = patch.threadId;
+    if (typeof raw === "number") {
+      next.threadId = raw;
+    } else if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      next.threadId = trimmed ? trimmed : undefined;
+    } else {
+      next.threadId = undefined;
+    }
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;

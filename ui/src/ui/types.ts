@@ -515,6 +515,7 @@ export type CronDelivery = {
   mode: "none" | "announce";
   channel?: string;
   to?: string;
+  threadId?: string | number;
   bestEffort?: boolean;
 };
 
@@ -540,6 +541,7 @@ export type CronJob = {
   sessionTarget: CronSessionTarget;
   wakeMode: CronWakeMode;
   payload: CronPayload;
+  targetSessionKey?: string;
   delivery?: CronDelivery;
   state?: CronJobState;
 };

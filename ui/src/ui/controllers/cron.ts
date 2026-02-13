@@ -114,9 +114,11 @@ export async function addCronJob(state: CronState) {
             mode: state.cronForm.deliveryMode === "announce" ? "announce" : "none",
             channel: state.cronForm.deliveryChannel.trim() || "last",
             to: state.cronForm.deliveryTo.trim() || undefined,
+            threadId: state.cronForm.deliveryThreadId.trim() || undefined,
           }
         : undefined;
     const agentId = state.cronForm.agentId.trim();
+    const targetSessionKey = state.cronForm.targetSessionKey.trim() || undefined;
     const job = {
       name: state.cronForm.name.trim(),
       description: state.cronForm.description.trim() || undefined,
@@ -126,6 +128,7 @@ export async function addCronJob(state: CronState) {
       sessionTarget: state.cronForm.sessionTarget,
       wakeMode: state.cronForm.wakeMode,
       payload,
+      targetSessionKey,
       delivery,
     };
     if (!job.name) {
