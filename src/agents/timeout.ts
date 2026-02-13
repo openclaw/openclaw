@@ -7,6 +7,29 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 const normalizeNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
 
+/**
+ * Extracts timeout value from a provider config object.
+ * Prefers timeoutMs (recommended) over deprecated timeout field.
+ */
+function extractProviderTimeout(providerConfig: unknown): number | undefined {
+  if (!providerConfig || typeof providerConfig !== "object") {
+    return undefined;
+  }
+  const obj = providerConfig as Record<string, unknown>;
+
+  // Prefer timeoutMs (recommended)
+  if ("timeoutMs" in obj && typeof obj.timeoutMs === "number") {
+    return normalizeNumber(obj.timeoutMs);
+  }
+
+  // Fallback to deprecated timeout field for backward compatibility
+  if ("timeout" in obj && typeof obj.timeout === "number") {
+    return normalizeNumber(obj.timeout);
+  }
+
+  return undefined;
+}
+
 export function resolveAgentTimeoutSeconds(cfg?: OpenClawConfig): number {
   const raw = normalizeNumber(cfg?.agents?.defaults?.timeoutSeconds);
   const seconds = raw ?? DEFAULT_AGENT_TIMEOUT_SECONDS;
@@ -19,28 +42,21 @@ function resolveProviderTimeoutMs(cfg?: OpenClawConfig, provider?: string): numb
   }
   const providers = cfg.models.providers;
   const direct = providers[provider];
-  const directTimeoutMs =
-    direct && typeof direct === "object" && "timeoutMs" in direct ? direct.timeoutMs : undefined;
-  if (directTimeoutMs !== undefined) {
-    return normalizeNumber(directTimeoutMs);
+  const directTimeout = extractProviderTimeout(direct);
+  if (directTimeout !== undefined) {
+    return directTimeout;
   }
   const normalized = normalizeProviderId(provider);
   if (normalized === provider) {
     const matched = Object.entries(providers).find(
       ([key]) => normalizeProviderId(key) === normalized,
     );
-    const matchedTimeoutMs =
-      matched?.[1] && typeof matched[1] === "object" && "timeoutMs" in matched[1]
-        ? matched[1].timeoutMs
-        : undefined;
-    return normalizeNumber(matchedTimeoutMs);
+    const matchedTimeout = extractProviderTimeout(matched?.[1]);
+    return matchedTimeout;
   }
   const normalizedEntry = providers[normalized];
-  const normalizedTimeoutMs =
-    normalizedEntry && typeof normalizedEntry === "object" && "timeoutMs" in normalizedEntry
-      ? normalizedEntry.timeoutMs
-      : undefined;
-  return normalizeNumber(normalizedTimeoutMs);
+  const normalizedTimeout = extractProviderTimeout(normalizedEntry);
+  return normalizedTimeout;
 }
 
 export function resolveAgentTimeoutMs(opts: {
