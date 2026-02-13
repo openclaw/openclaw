@@ -13,15 +13,27 @@ type HeldLock = {
   lockPath: string;
 };
 
-const HELD_LOCKS = new Map<string, HeldLock>();
 const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
 type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
 const CLEANUP_STATE_KEY = Symbol.for("openclaw.sessionWriteLockCleanupState");
+const HELD_LOCKS_KEY = Symbol.for("openclaw.sessionWriteLockHeldLocks");
 
 type CleanupState = {
   registered: boolean;
   cleanupHandlers: Map<CleanupSignal, () => void>;
 };
+
+function resolveHeldLocks(): Map<string, HeldLock> {
+  const proc = process as NodeJS.Process & {
+    [HELD_LOCKS_KEY]?: Map<string, HeldLock>;
+  };
+  if (!proc[HELD_LOCKS_KEY]) {
+    proc[HELD_LOCKS_KEY] = new Map<string, HeldLock>();
+  }
+  return proc[HELD_LOCKS_KEY];
+}
+
+const HELD_LOCKS = resolveHeldLocks();
 
 function resolveCleanupState(): CleanupState {
   const proc = process as NodeJS.Process & {
@@ -78,6 +90,7 @@ function handleTerminationSignal(signal: CleanupSignal): void {
     const handler = cleanupState.cleanupHandlers.get(signal);
     if (handler) {
       process.off(signal, handler);
+      cleanupState.cleanupHandlers.delete(signal);
     }
     try {
       process.kill(process.pid, signal);
@@ -89,18 +102,19 @@ function handleTerminationSignal(signal: CleanupSignal): void {
 
 function registerCleanupHandlers(): void {
   const cleanupState = resolveCleanupState();
-  if (cleanupState.registered) {
-    return;
+  if (!cleanupState.registered) {
+    cleanupState.registered = true;
+    // Cleanup on normal exit and process.exit() calls
+    process.on("exit", () => {
+      releaseAllLocksSync();
+    });
   }
-  cleanupState.registered = true;
-
-  // Cleanup on normal exit and process.exit() calls
-  process.on("exit", () => {
-    releaseAllLocksSync();
-  });
 
   // Handle termination signals
   for (const signal of CLEANUP_SIGNALS) {
+    if (cleanupState.cleanupHandlers.has(signal)) {
+      continue;
+    }
     try {
       const handler = () => handleTerminationSignal(signal);
       cleanupState.cleanupHandlers.set(signal, handler);

@@ -161,7 +161,7 @@ describe("trigger handling", () => {
       expect(text).toBe("ok");
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
       const extra = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.extraSystemPrompt ?? "";
-      expect(extra).toContain("Test Group");
+      expect(extra).toContain('"chat_type": "group"');
       expect(extra).toContain("Activation: always-on");
     });
   });

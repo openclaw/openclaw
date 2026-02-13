@@ -81,6 +81,11 @@ export function createMediaAttachmentCache(attachments: MediaAttachment[]): Medi
 const binaryCache = new Map<string, Promise<string | null>>();
 const geminiProbeCache = new Map<string, Promise<boolean>>();
 
+export function clearMediaUnderstandingBinaryCacheForTests(): void {
+  binaryCache.clear();
+  geminiProbeCache.clear();
+}
+
 function expandHomeDir(value: string): string {
   if (!value.startsWith("~")) {
     return value;
