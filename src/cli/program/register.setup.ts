@@ -1,6 +1,4 @@
 import type { Command } from "commander";
-import { onboardCommand } from "../../commands/onboard.js";
-import { setupCommand } from "../../commands/setup.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -35,6 +33,7 @@ export function registerSetupCommand(program: Command) {
           "remoteToken",
         ]);
         if (opts.wizard || hasWizardFlags) {
+          const { onboardCommand } = await import("../../commands/onboard.js");
           await onboardCommand(
             {
               workspace: opts.workspace as string | undefined,
@@ -47,6 +46,7 @@ export function registerSetupCommand(program: Command) {
           );
           return;
         }
+        const { setupCommand } = await import("../../commands/setup.js");
         await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
       });
     });

@@ -4,19 +4,13 @@ import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { registerBrowserActionInputCommands } from "./browser-cli-actions-input.js";
-import { registerBrowserActionObserveCommands } from "./browser-cli-actions-observe.js";
-import { registerBrowserDebugCommands } from "./browser-cli-debug.js";
-import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
-import { registerBrowserExtensionCommands } from "./browser-cli-extension.js";
-import { registerBrowserInspectCommands } from "./browser-cli-inspect.js";
-import { registerBrowserManageCommands } from "./browser-cli-manage.js";
-import { registerBrowserStateCommands } from "./browser-cli-state.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions } from "./gateway-rpc.js";
 import { formatHelpExamples } from "./help-format.js";
 
-export function registerBrowserCli(program: Command) {
+export async function registerBrowserCli(program: Command) {
+  const { browserActionExamples, browserCoreExamples } = await import("./browser-cli-examples.js");
+
   const browser = program
     .command("browser")
     .description("Manage OpenClaw's dedicated browser (Chrome/Chromium)")
@@ -44,6 +38,25 @@ export function registerBrowserCli(program: Command) {
   addGatewayClientOptions(browser);
 
   const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+
+  // Load all browser sub-command registrations in parallel
+  const [
+    { registerBrowserManageCommands },
+    { registerBrowserExtensionCommands },
+    { registerBrowserInspectCommands },
+    { registerBrowserActionInputCommands },
+    { registerBrowserActionObserveCommands },
+    { registerBrowserDebugCommands },
+    { registerBrowserStateCommands },
+  ] = await Promise.all([
+    import("./browser-cli-manage.js"),
+    import("./browser-cli-extension.js"),
+    import("./browser-cli-inspect.js"),
+    import("./browser-cli-actions-input.js"),
+    import("./browser-cli-actions-observe.js"),
+    import("./browser-cli-debug.js"),
+    import("./browser-cli-state.js"),
+  ]);
 
   registerBrowserManageCommands(browser, parentOpts);
   registerBrowserExtensionCommands(browser, parentOpts);

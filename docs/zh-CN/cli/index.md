@@ -65,7 +65,7 @@ x-i18n:
 - `--profile <name>`：将状态隔离到 `~/.openclaw-<name>` 下。
 - `--no-color`：禁用 ANSI 颜色。
 - `--update`：`openclaw update` 的简写（仅限源码安装）。
-- `-V`、`--version`、`-v`：打印版本并退出。
+- `-V`、`--version`：打印版本并退出。
 
 ## 输出样式
 

@@ -1,5 +1,5 @@
 const HELP_FLAGS = new Set(["-h", "--help"]);
-const VERSION_FLAGS = new Set(["-v", "-V", "--version"]);
+const VERSION_FLAGS = new Set(["-V", "--version"]);
 const FLAG_TERMINATOR = "--";
 
 export function hasHelpOrVersion(argv: string[]): boolean {

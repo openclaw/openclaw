@@ -2,14 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { loadDotEnv } from "../infra/dotenv.js";
-import { normalizeEnv } from "../infra/env.js";
-import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
-import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
-import { enableConsoleCapture } from "../logging.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
 import { tryRouteCli } from "./route.js";
 
@@ -26,35 +20,66 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
 
 export async function runCli(argv: string[] = process.argv) {
   const normalizedArgv = stripWindowsNodeExec(argv);
-  loadDotEnv({ quiet: true });
-  normalizeEnv();
-  ensureOpenClawCliOnPath();
 
-  // Enforce the minimum supported runtime before doing any work.
-  assertSupportedRuntime();
+  // Fast path for --version: resolve version without loading any command modules.
+  const isVersionOnly = normalizedArgv.includes("--version") || normalizedArgv.includes("-V");
+  const isHelpFlag = normalizedArgv.includes("--help") || normalizedArgv.includes("-h");
+  if (isVersionOnly && !isHelpFlag) {
+    const { VERSION } = await import("../version.js");
+    console.log(VERSION);
+    process.exit(0);
+  }
+
+  // Defer heavy env setup (dotenv, normalizeEnv, ensureOpenClawCliOnPath) for
+  // help-only invocations — they pull logging/subsystem → channels/registry →
+  // plugins/runtime which adds hundreds of ms for no benefit when showing help.
+  const isHelpOnly = isHelpFlag && !isVersionOnly;
+  if (!isHelpOnly) {
+    const { loadDotEnv } = await import("../infra/dotenv.js");
+    loadDotEnv({ quiet: true });
+    const { normalizeEnv } = await import("../infra/env.js");
+    normalizeEnv();
+    const { ensureOpenClawCliOnPath } = await import("../infra/path-env.js");
+    ensureOpenClawCliOnPath();
+    assertSupportedRuntime();
+  }
+
+  // Global error handlers — install early so routed commands and program
+  // build are covered by the safety net.
+  const { installUnhandledRejectionHandler } = await import("../infra/unhandled-rejections.js");
+  installUnhandledRejectionHandler();
+
+  process.on("uncaughtException", (error) => {
+    import("../infra/errors.js")
+      .then(({ formatUncaughtError }) => {
+        console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+      })
+      .catch(() => {
+        console.error("[openclaw] Uncaught exception:", error);
+      })
+      .finally(() => {
+        process.exit(1);
+      });
+  });
 
   if (await tryRouteCli(normalizedArgv)) {
     return;
   }
 
+  const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
+  const primary = getPrimaryCommand(parseArgv);
+
   // Capture all console output into structured logs while keeping stdout/stderr behavior.
+  const { enableConsoleCapture } = await import("../logging.js");
   enableConsoleCapture();
 
-  const { buildProgram } = await import("./program.js");
-  const program = buildProgram();
-
-  // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
-  // These log the error and exit gracefully instead of crashing without trace.
-  installUnhandledRejectionHandler();
-
-  process.on("uncaughtException", (error) => {
-    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
-    process.exit(1);
-  });
-
-  const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
+  // For bare --help (no subcommand), use a lightweight program that stubs out
+  // message/browser registrations (each loads 10+ sub-modules: ~2s).
+  // Subcommand help (e.g. `openclaw message --help`) loads the full tree.
+  const buildFn = isHelpOnly && !primary ? "buildMinimalHelpProgram" : "buildProgram";
+  const mod = await import("./program.js");
+  const program = await mod[buildFn]();
   // Register the primary subcommand if one exists (for lazy-loading)
-  const primary = getPrimaryCommand(parseArgv);
   if (primary) {
     const { registerSubCliByName } = await import("./program/register.subclis.js");
     await registerSubCliByName(program, primary);

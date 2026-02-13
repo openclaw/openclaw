@@ -1,7 +1,4 @@
 import type { Command } from "commander";
-import { healthCommand } from "../../commands/health.js";
-import { sessionsCommand } from "../../commands/sessions.js";
-import { statusCommand } from "../../commands/status.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -63,6 +60,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         return;
       }
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { statusCommand } = await import("../../commands/status.js");
         await statusCommand(
           {
             json: Boolean(opts.json),
@@ -97,6 +95,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         return;
       }
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { healthCommand } = await import("../../commands/health.js");
         await healthCommand(
           {
             json: Boolean(opts.json),
@@ -134,6 +133,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
+      const { sessionsCommand } = await import("../../commands/sessions.js");
       await sessionsCommand(
         {
           json: Boolean(opts.json),

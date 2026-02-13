@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -64,7 +64,7 @@ function createEnv(
 ): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    PATH: `${sandbox.binDir}:${process.env.PATH ?? ""}`,
+    PATH: `${sandbox.binDir}${delimiter}${process.env.PATH ?? ""}`,
     DOCKER_STUB_LOG: sandbox.logPath,
     OPENCLAW_GATEWAY_TOKEN: "test-token",
     OPENCLAW_CONFIG_DIR: join(sandbox.rootDir, "config"),
@@ -86,6 +86,16 @@ function resolveBashForCompatCheck(): string | null {
 
 describe("docker-setup.sh", () => {
   it("handles unset optional env vars under strict mode", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const assocCheck = spawnSync("bash", ["-c", "declare -A _t=()"], {
+      encoding: "utf8",
+    });
+    if (assocCheck.status !== 0) {
+      return;
+    }
+
     const sandbox = await createDockerSetupSandbox();
     const env = createEnv(sandbox, {
       OPENCLAW_DOCKER_APT_PACKAGES: undefined,
@@ -108,6 +118,9 @@ describe("docker-setup.sh", () => {
   });
 
   it("supports a home volume when extra mounts are empty", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const sandbox = await createDockerSetupSandbox();
     const env = createEnv(sandbox, {
       OPENCLAW_EXTRA_MOUNTS: "",
@@ -129,6 +142,9 @@ describe("docker-setup.sh", () => {
   });
 
   it("avoids associative arrays so the script remains Bash 3.2-compatible", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const script = await readFile(join(repoRoot, "docker-setup.sh"), "utf8");
     expect(script).not.toMatch(/^\s*declare -A\b/m);
 
@@ -162,6 +178,9 @@ describe("docker-setup.sh", () => {
   });
 
   it("plumbs OPENCLAW_DOCKER_APT_PACKAGES into .env and docker build args", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const sandbox = await createDockerSetupSandbox();
     const env = createEnv(sandbox, {
       OPENCLAW_DOCKER_APT_PACKAGES: "ffmpeg build-essential",

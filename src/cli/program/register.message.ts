@@ -3,25 +3,8 @@ import type { ProgramContext } from "./context.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { formatHelpExamples } from "../help-format.js";
-import { createMessageCliHelpers } from "./message/helpers.js";
-import { registerMessageBroadcastCommand } from "./message/register.broadcast.js";
-import { registerMessageDiscordAdminCommands } from "./message/register.discord-admin.js";
-import {
-  registerMessageEmojiCommands,
-  registerMessageStickerCommands,
-} from "./message/register.emoji-sticker.js";
-import {
-  registerMessagePermissionsCommand,
-  registerMessageSearchCommand,
-} from "./message/register.permissions-search.js";
-import { registerMessagePinCommands } from "./message/register.pins.js";
-import { registerMessagePollCommand } from "./message/register.poll.js";
-import { registerMessageReactionsCommands } from "./message/register.reactions.js";
-import { registerMessageReadEditDeleteCommands } from "./message/register.read-edit-delete.js";
-import { registerMessageSendCommand } from "./message/register.send.js";
-import { registerMessageThreadCommands } from "./message/register.thread.js";
 
-export function registerMessageCommands(program: Command, ctx: ProgramContext) {
+export async function registerMessageCommands(program: Command, ctx: ProgramContext) {
   const message = program
     .command("message")
     .description("Send messages and channel actions")
@@ -52,7 +35,34 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
       message.help({ error: true });
     });
 
+  const { createMessageCliHelpers } = await import("./message/helpers.js");
   const helpers = createMessageCliHelpers(message, ctx.messageChannelOptions);
+
+  // Load all message sub-command registrations in parallel
+  const [
+    { registerMessageSendCommand },
+    { registerMessageBroadcastCommand },
+    { registerMessagePollCommand },
+    { registerMessageReactionsCommands },
+    { registerMessageReadEditDeleteCommands },
+    { registerMessagePinCommands },
+    { registerMessagePermissionsCommand, registerMessageSearchCommand },
+    { registerMessageThreadCommands },
+    { registerMessageEmojiCommands, registerMessageStickerCommands },
+    { registerMessageDiscordAdminCommands },
+  ] = await Promise.all([
+    import("./message/register.send.js"),
+    import("./message/register.broadcast.js"),
+    import("./message/register.poll.js"),
+    import("./message/register.reactions.js"),
+    import("./message/register.read-edit-delete.js"),
+    import("./message/register.pins.js"),
+    import("./message/register.permissions-search.js"),
+    import("./message/register.thread.js"),
+    import("./message/register.emoji-sticker.js"),
+    import("./message/register.discord-admin.js"),
+  ]);
+
   registerMessageSendCommand(message, helpers);
   registerMessageBroadcastCommand(message, helpers);
   registerMessagePollCommand(message, helpers);

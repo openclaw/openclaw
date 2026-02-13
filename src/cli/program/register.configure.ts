@@ -1,15 +1,13 @@
 import type { Command } from "commander";
-import {
-  CONFIGURE_WIZARD_SECTIONS,
-  configureCommand,
-  configureCommandWithSections,
-} from "../../commands/configure.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 
 export function registerConfigureCommand(program: Command) {
+  // Inlined section names to avoid eagerly importing configure.shared.ts (which pulls @clack/prompts)
+  const sectionNames = "workspace, model, web, gateway, daemon, channels, skills, health";
+
   program
     .command("configure")
     .description("Interactive prompt to set up credentials, devices, and agent defaults")
@@ -20,12 +18,14 @@ export function registerConfigureCommand(program: Command) {
     )
     .option(
       "--section <section>",
-      `Configuration sections (repeatable). Options: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}`,
+      `Configuration sections (repeatable). Options: ${sectionNames}`,
       (value: string, previous: string[]) => [...previous, value],
       [] as string[],
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { CONFIGURE_WIZARD_SECTIONS, configureCommand, configureCommandWithSections } =
+          await import("../../commands/configure.js");
         const sections: string[] = Array.isArray(opts.section)
           ? opts.section
               .map((value: unknown) => (typeof value === "string" ? value.trim() : ""))

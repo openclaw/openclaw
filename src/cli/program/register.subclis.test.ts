@@ -44,7 +44,7 @@ describe("registerSubCliCommands", () => {
   it("registers only the primary placeholder and dispatches", async () => {
     process.argv = ["node", "openclaw", "acp"];
     const program = new Command();
-    registerSubCliCommands(program, process.argv);
+    await registerSubCliCommands(program, process.argv);
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp"]);
 
@@ -54,10 +54,10 @@ describe("registerSubCliCommands", () => {
     expect(acpAction).toHaveBeenCalledTimes(1);
   });
 
-  it("registers placeholders for all subcommands when no primary", () => {
+  it("registers placeholders for all subcommands when no primary", async () => {
     process.argv = ["node", "openclaw"];
     const program = new Command();
-    registerSubCliCommands(program, process.argv);
+    await registerSubCliCommands(program, process.argv);
 
     const names = program.commands.map((cmd) => cmd.name());
     expect(names).toContain("acp");
@@ -69,7 +69,7 @@ describe("registerSubCliCommands", () => {
     process.argv = ["node", "openclaw", "nodes", "list"];
     const program = new Command();
     program.name("openclaw");
-    registerSubCliCommands(program, process.argv);
+    await registerSubCliCommands(program, process.argv);
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes"]);
 
@@ -83,7 +83,7 @@ describe("registerSubCliCommands", () => {
     process.argv = ["node", "openclaw", "acp", "--help"];
     const program = new Command();
     program.name("openclaw");
-    registerSubCliCommands(program, process.argv);
+    await registerSubCliCommands(program, process.argv);
 
     await registerSubCliByName(program, "acp");
 

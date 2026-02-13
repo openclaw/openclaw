@@ -1,6 +1,4 @@
 import type { Command } from "commander";
-import JSON5 from "json5";
-import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -66,18 +64,19 @@ function parsePath(raw: string): PathSegment[] {
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
-function parseValue(raw: string, opts: { json?: boolean }): unknown {
+async function parseValue(raw: string, opts: { json?: boolean }): Promise<unknown> {
   const trimmed = raw.trim();
+  const JSON5 = await import("json5");
   if (opts.json) {
     try {
-      return JSON5.parse(trimmed);
+      return JSON5.default.parse(trimmed);
     } catch (err) {
       throw new Error(`Failed to parse JSON5 value: ${String(err)}`, { cause: err });
     }
   }
 
   try {
-    return JSON5.parse(trimmed);
+    return JSON5.default.parse(trimmed);
   } catch {
     return raw;
   }
@@ -202,6 +201,7 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
 }
 
 async function loadValidConfig() {
+  const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.valid) {
     return snapshot;
@@ -304,10 +304,11 @@ export function registerConfigCli(program: Command) {
         if (parsedPath.length === 0) {
           throw new Error("Path is empty.");
         }
-        const parsedValue = parseValue(value, opts);
+        const parsedValue = await parseValue(value, opts);
         const snapshot = await loadValidConfig();
         const next = snapshot.config as Record<string, unknown>;
         setAtPath(next, parsedPath, parsedValue);
+        const { writeConfigFile } = await import("../config/config.js");
         await writeConfigFile(next);
         defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
       } catch (err) {
@@ -334,6 +335,7 @@ export function registerConfigCli(program: Command) {
           defaultRuntime.exit(1);
           return;
         }
+        const { writeConfigFile } = await import("../config/config.js");
         await writeConfigFile(next);
         defaultRuntime.log(info(`Removed ${path}. Restart the gateway to apply.`));
       } catch (err) {

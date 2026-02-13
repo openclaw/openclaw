@@ -61,7 +61,7 @@ async function main() {
   const { installUnhandledRejectionHandler } = await import("../infra/unhandled-rejections.js");
 
   const { buildProgram } = await import("../cli/program.js");
-  const program = buildProgram();
+  const program = await buildProgram();
 
   installUnhandledRejectionHandler();
 

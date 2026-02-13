@@ -58,7 +58,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - `--profile <name>`: isolate state under `~/.openclaw-<name>`.
 - `--no-color`: disable ANSI colors.
 - `--update`: shorthand for `openclaw update` (source installs only).
-- `-V`, `--version`, `-v`: print version and exit.
+- `-V`, `--version`: print version and exit.
 
 ## Output styling
 
