@@ -46,6 +46,11 @@ export type CronServiceDeps = {
     error?: string;
     sessionId?: string;
     sessionKey?: string;
+    /**
+     * `true` when the isolated run already delivered its output to the target
+     * channel.  See: https://github.com/openclaw/openclaw/issues/15692
+     */
+    delivered?: boolean;
   }>;
   onEvent?: (evt: CronEvent) => void;
 };
