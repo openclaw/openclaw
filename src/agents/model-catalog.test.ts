@@ -94,7 +94,9 @@ describe("loadModelCatalog", () => {
       async () =>
         ({
           AuthStorage: class {},
-          ModelRegistry: class {
+          ModelRegistry: class {},
+          discoverAuthStorage: () => ({}),
+          discoverModels: () => ({
             getAll() {
               return [
                 {
@@ -111,8 +113,8 @@ describe("loadModelCatalog", () => {
                   name: "GPT-5.2 Codex",
                 },
               ];
-            }
-          },
+            },
+          }),
         }) as unknown as PiSdkModule,
     );
 
