@@ -62,6 +62,27 @@ describe("isTrustedProxyAddress", () => {
     });
   });
 
+  describe("backward compatibility", () => {
+    it("preserves exact IP matching behavior (no CIDR notation)", () => {
+      // Old configs with exact IPs should work exactly as before
+      expect(isTrustedProxyAddress("192.168.1.1", ["192.168.1.1"])).toBe(true);
+      expect(isTrustedProxyAddress("192.168.1.2", ["192.168.1.1"])).toBe(false);
+      expect(isTrustedProxyAddress("10.0.0.5", ["192.168.1.1", "10.0.0.5"])).toBe(true);
+    });
+
+    it("does NOT treat plain IPs as /32 CIDR (exact match only)", () => {
+      // "10.42.0.1" without /32 should match ONLY that exact IP
+      expect(isTrustedProxyAddress("10.42.0.1", ["10.42.0.1"])).toBe(true);
+      expect(isTrustedProxyAddress("10.42.0.2", ["10.42.0.1"])).toBe(false);
+      expect(isTrustedProxyAddress("10.42.0.59", ["10.42.0.1"])).toBe(false);
+    });
+
+    it("handles IPv4-mapped IPv6 addresses (existing normalizeIp behavior)", () => {
+      // Existing normalizeIp() behavior should be preserved
+      expect(isTrustedProxyAddress("::ffff:192.168.1.1", ["192.168.1.1"])).toBe(true);
+    });
+  });
+
   describe("edge cases", () => {
     it("returns false when IP is undefined", () => {
       expect(isTrustedProxyAddress(undefined, ["192.168.1.1"])).toBe(false);
