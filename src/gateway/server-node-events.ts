@@ -12,6 +12,9 @@ import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
+  // Load config once per invocation to avoid per-event overhead
+  const cfg = loadConfig();
+
   switch (evt.event) {
     case "voice.transcript": {
       if (!evt.payloadJSON) {
@@ -219,33 +222,33 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const output = typeof obj.output === "string" ? obj.output.trim() : "";
       const reason = typeof obj.reason === "string" ? obj.reason.trim() : "";
 
-      // Respect gateway.nodes.execEvents config:
+      // Respect gateway.nodes.execEvents config for completion events only:
       //   "inject"  (default) — full output as system message
       //   "notify"  — brief one-liner without output body
       //   "silent"  — suppressed entirely (heartbeat still fires)
-      const execEvents = loadConfig().gateway?.nodes?.execEvents ?? "inject";
+      const execEvents = cfg.gateway?.nodes?.execEvents ?? "inject";
 
-      if (execEvents !== "silent") {
-        let text = "";
-        if (evt.event === "exec.started") {
-          text = `Exec started (node=${nodeId}${runId ? ` id=${runId}` : ""})`;
-          if (command) {
-            text += `: ${command}`;
-          }
-        } else if (evt.event === "exec.finished") {
+      if (evt.event === "exec.started") {
+        let text = `Exec started (node=${nodeId}${runId ? ` id=${runId}` : ""})`;
+        if (command) {
+          text += `: ${command}`;
+        }
+        enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
+      } else if (evt.event === "exec.denied") {
+        let text = `Exec denied (node=${nodeId}${runId ? ` id=${runId}` : ""}${reason ? `, ${reason}` : ""})`;
+        if (command) {
+          text += `: ${command}`;
+        }
+        enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
+      } else if (evt.event === "exec.finished") {
+        if (execEvents !== "silent") {
           const exitLabel = timedOut ? "timeout" : `code ${exitCode ?? "?"}`;
-          text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
+          let text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
           if (execEvents === "inject" && output) {
             text += `\n${output}`;
           }
-        } else {
-          text = `Exec denied (node=${nodeId}${runId ? ` id=${runId}` : ""}${reason ? `, ${reason}` : ""})`;
-          if (command) {
-            text += `: ${command}`;
-          }
+          enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
         }
-
-        enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
       }
       requestHeartbeatNow({ reason: "exec-event" });
       return;
