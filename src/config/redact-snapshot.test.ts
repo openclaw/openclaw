@@ -12,6 +12,7 @@ function makeSnapshot(config: Record<string, unknown>, raw?: string): ConfigFile
     exists: true,
     raw: raw ?? JSON.stringify(config),
     parsed: config,
+    resolved: config as ConfigFileSnapshot["resolved"],
     valid: true,
     config: config as ConfigFileSnapshot["config"],
     hash: "abc123",
@@ -111,6 +112,7 @@ describe("redactConfigSnapshot", () => {
 
   it("does not redact maxTokens-style fields", () => {
     const snapshot = makeSnapshot({
+      maxTokens: 16384,
       models: {
         providers: {
           openai: {
@@ -124,12 +126,21 @@ describe("redactConfigSnapshot", () => {
             ],
             apiKey: "sk-proj-abcdef1234567890ghij",
             accessToken: "access-token-value-1234567890",
+            maxTokens: 8192,
+            maxOutputTokens: 4096,
+            maxCompletionTokens: 2048,
+            contextTokens: 128000,
+            tokenCount: 500,
+            tokenLimit: 100000,
+            tokenBudget: 50000,
           },
         },
       },
+      gateway: { auth: { token: "secret-gateway-token-value" } },
     });
 
     const result = redactConfigSnapshot(snapshot);
+    expect((result.config as Record<string, unknown>).maxTokens).toBe(16384);
     const models = result.config.models as Record<string, unknown>;
     const providerList = ((
       (models.providers as Record<string, unknown>).openai as Record<string, unknown>
@@ -138,9 +149,19 @@ describe("redactConfigSnapshot", () => {
     expect(providerList[0]?.contextTokens).toBe(200000);
     expect(providerList[0]?.maxTokensField).toBe("max_completion_tokens");
 
-    const providers = (models.providers as Record<string, Record<string, string>>) ?? {};
+    const providers = (models.providers as Record<string, Record<string, unknown>>) ?? {};
     expect(providers.openai.apiKey).toBe(REDACTED_SENTINEL);
     expect(providers.openai.accessToken).toBe(REDACTED_SENTINEL);
+    expect(providers.openai.maxTokens).toBe(8192);
+    expect(providers.openai.maxOutputTokens).toBe(4096);
+    expect(providers.openai.maxCompletionTokens).toBe(2048);
+    expect(providers.openai.contextTokens).toBe(128000);
+    expect(providers.openai.tokenCount).toBe(500);
+    expect(providers.openai.tokenLimit).toBe(100000);
+    expect(providers.openai.tokenBudget).toBe(50000);
+
+    const gw = result.config.gateway as Record<string, Record<string, string>>;
+    expect(gw.auth.token).toBe(REDACTED_SENTINEL);
   });
 
   it("preserves hash unchanged", () => {
@@ -168,12 +189,23 @@ describe("redactConfigSnapshot", () => {
     expect(parsed.channels.discord.token).toBe(REDACTED_SENTINEL);
   });
 
+  it("redacts resolved object as well", () => {
+    const config = {
+      gateway: { auth: { token: "supersecrettoken123456" } },
+    };
+    const snapshot = makeSnapshot(config);
+    const result = redactConfigSnapshot(snapshot);
+    const resolved = result.resolved as Record<string, Record<string, Record<string, string>>>;
+    expect(resolved.gateway.auth.token).toBe(REDACTED_SENTINEL);
+  });
+
   it("handles null raw gracefully", () => {
     const snapshot: ConfigFileSnapshot = {
       path: "/test",
       exists: false,
       raw: null,
       parsed: null,
+      resolved: {} as ConfigFileSnapshot["resolved"],
       valid: false,
       config: {} as ConfigFileSnapshot["config"],
       issues: [],

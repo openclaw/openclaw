@@ -24,7 +24,7 @@ import {
   resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
-  resolveDiscordUserAllowed,
+  resolveDiscordMemberAllowed,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
 
@@ -233,6 +233,9 @@ export class AgentComponentButton extends Button {
     // when guild is not cached even though guild_id is present in rawData
     const rawGuildId = interaction.rawData.guild_id;
     const isDirectMessage = !rawGuildId;
+    const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
+      ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
+      : [];
 
     if (isDirectMessage) {
       const authorized = await ensureDmComponentAuthorized({
@@ -294,25 +297,26 @@ export class AgentComponentButton extends Button {
       });
 
       const channelUsers = channelConfig?.users ?? guildInfo?.users;
-      if (Array.isArray(channelUsers) && channelUsers.length > 0) {
-        const userOk = resolveDiscordUserAllowed({
-          allowList: channelUsers,
-          userId,
-          userName: user.username,
-          userTag: user.discriminator ? `${user.username}#${user.discriminator}` : undefined,
-        });
-        if (!userOk) {
-          logVerbose(`agent button: blocked user ${userId} (not in allowlist)`);
-          try {
-            await interaction.reply({
-              content: "You are not authorized to use this button.",
-              ephemeral: true,
-            });
-          } catch {
-            // Interaction may have expired
-          }
-          return;
+      const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
+      const memberAllowed = resolveDiscordMemberAllowed({
+        userAllowList: channelUsers,
+        roleAllowList: channelRoles,
+        memberRoleIds,
+        userId,
+        userName: user.username,
+        userTag: user.discriminator ? `${user.username}#${user.discriminator}` : undefined,
+      });
+      if (!memberAllowed) {
+        logVerbose(`agent button: blocked user ${userId} (not in users/roles allowlist)`);
+        try {
+          await interaction.reply({
+            content: "You are not authorized to use this button.",
+            ephemeral: true,
+          });
+        } catch {
+          // Interaction may have expired
         }
+        return;
       }
     }
 
@@ -322,6 +326,7 @@ export class AgentComponentButton extends Button {
       channel: "discord",
       accountId: this.ctx.accountId,
       guildId: rawGuildId,
+      memberRoleIds,
       peer: {
         kind: isDirectMessage ? "direct" : "channel",
         id: isDirectMessage ? userId : channelId,
@@ -399,6 +404,9 @@ export class AgentSelectMenu extends StringSelectMenu {
     // when guild is not cached even though guild_id is present in rawData
     const rawGuildId = interaction.rawData.guild_id;
     const isDirectMessage = !rawGuildId;
+    const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
+      ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
+      : [];
 
     if (isDirectMessage) {
       const authorized = await ensureDmComponentAuthorized({
@@ -456,25 +464,26 @@ export class AgentSelectMenu extends StringSelectMenu {
       });
 
       const channelUsers = channelConfig?.users ?? guildInfo?.users;
-      if (Array.isArray(channelUsers) && channelUsers.length > 0) {
-        const userOk = resolveDiscordUserAllowed({
-          allowList: channelUsers,
-          userId,
-          userName: user.username,
-          userTag: user.discriminator ? `${user.username}#${user.discriminator}` : undefined,
-        });
-        if (!userOk) {
-          logVerbose(`agent select: blocked user ${userId} (not in allowlist)`);
-          try {
-            await interaction.reply({
-              content: "You are not authorized to use this select menu.",
-              ephemeral: true,
-            });
-          } catch {
-            // Interaction may have expired
-          }
-          return;
+      const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
+      const memberAllowed = resolveDiscordMemberAllowed({
+        userAllowList: channelUsers,
+        roleAllowList: channelRoles,
+        memberRoleIds,
+        userId,
+        userName: user.username,
+        userTag: user.discriminator ? `${user.username}#${user.discriminator}` : undefined,
+      });
+      if (!memberAllowed) {
+        logVerbose(`agent select: blocked user ${userId} (not in users/roles allowlist)`);
+        try {
+          await interaction.reply({
+            content: "You are not authorized to use this select menu.",
+            ephemeral: true,
+          });
+        } catch {
+          // Interaction may have expired
         }
+        return;
       }
     }
 
@@ -488,6 +497,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       channel: "discord",
       accountId: this.ctx.accountId,
       guildId: rawGuildId,
+      memberRoleIds,
       peer: {
         kind: isDirectMessage ? "direct" : "channel",
         id: isDirectMessage ? userId : channelId,

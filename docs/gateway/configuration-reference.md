@@ -1934,6 +1934,10 @@ See [Plugins](/tools/plugin).
 
 - Chat Completions: disabled by default. Enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Responses API: `gateway.http.endpoints.responses.enabled`.
+- Responses URL-input hardening:
+  - `gateway.http.endpoints.responses.maxUrlParts`
+  - `gateway.http.endpoints.responses.files.urlAllowlist`
+  - `gateway.http.endpoints.responses.images.urlAllowlist`
 
 ### Multi-instance isolation
 
@@ -1960,6 +1964,9 @@ See [Multiple Gateways](/gateway/multiple-gateways).
     token: "shared-secret",
     path: "/hooks",
     maxBodyBytes: 262144,
+    defaultSessionKey: "hook:ingress",
+    allowRequestSessionKey: false,
+    allowedSessionKeyPrefixes: ["hook:"],
     allowedAgentIds: ["hooks", "main"],
     presets: ["gmail"],
     transformsDir: "~/.openclaw/hooks",
@@ -1987,6 +1994,7 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+  - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 <Accordion title="Mapping details">
@@ -1997,6 +2005,9 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 - `transform` can point to a JS/TS module returning a hook action.
 - `agentId` routes to a specific agent; unknown IDs fall back to default.
 - `allowedAgentIds`: restricts explicit routing (`*` or omitted = allow all, `[]` = deny all).
+- `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
+- `allowRequestSessionKey`: allow `/hooks/agent` callers to set `sessionKey` (default: `false`).
+- `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`.
 - `deliver: true` sends final reply to a channel; `channel` defaults to `last`.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
 

@@ -9,6 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -54,13 +55,19 @@ function resolveTranscriptPath(params: {
   sessionFile?: string;
 }): string | null {
   const { sessionId, storePath, sessionFile } = params;
-  if (sessionFile) {
-    return sessionFile;
-  }
-  if (!storePath) {
+  if (!storePath && !sessionFile) {
     return null;
   }
-  return path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+  try {
+    const sessionsDir = storePath ? path.dirname(storePath) : undefined;
+    return resolveSessionFilePath(
+      sessionId,
+      sessionFile ? { sessionFile } : undefined,
+      sessionsDir ? { sessionsDir } : undefined,
+    );
+  } catch {
+    return null;
+  }
 }
 
 function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {

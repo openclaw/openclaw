@@ -47,7 +47,7 @@ describe("normalizeUsage", () => {
     expect(hasNonzeroUsage({ total: 1 })).toBe(true);
   });
 
-  it("caps derived session total tokens to the context window", () => {
+  it("does not clamp derived session total tokens to the context window", () => {
     expect(
       deriveSessionTotalTokens({
         usage: {
@@ -58,7 +58,7 @@ describe("normalizeUsage", () => {
         },
         contextTokens: 200_000,
       }),
-    ).toBe(200_000);
+    ).toBe(2_400_027);
   });
 
   it("uses prompt tokens when within context window", () => {
@@ -73,5 +73,20 @@ describe("normalizeUsage", () => {
         contextTokens: 200_000,
       }),
     ).toBe(1_550);
+  });
+
+  it("prefers explicit prompt token overrides", () => {
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 1_200,
+          cacheRead: 300,
+          cacheWrite: 50,
+          total: 9_999,
+        },
+        promptTokens: 65_000,
+        contextTokens: 200_000,
+      }),
+    ).toBe(65_000);
   });
 });

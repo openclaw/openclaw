@@ -40,6 +40,7 @@ import {
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   applyZaiConfig,
+  applyZaiProviderConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
@@ -68,6 +69,7 @@ import {
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
+import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
 
 export async function applyAuthChoiceApiProviders(
   params: ApplyAuthChoiceParams,
@@ -175,7 +177,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter OpenRouter API key",
         validate: validateApiKeyInput,
       });
-      await setOpenrouterApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setOpenrouterApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
       hasCredential = true;
     }
 
@@ -240,7 +242,7 @@ export async function applyAuthChoiceApiProviders(
           message: "Enter LiteLLM API key",
           validate: validateApiKeyInput,
         });
-        await setLitellmApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+        await setLitellmApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
         hasCredential = true;
       }
     }
@@ -294,7 +296,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Vercel AI Gateway API key",
         validate: validateApiKeyInput,
       });
-      await setVercelAiGatewayApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setVercelAiGatewayApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "vercel-ai-gateway:default",
@@ -327,16 +329,16 @@ export async function applyAuthChoiceApiProviders(
       if (!accountId) {
         const value = await params.prompter.text({
           message: "Enter Cloudflare Account ID",
-          validate: (val) => (String(val).trim() ? undefined : "Account ID is required"),
+          validate: (val) => (String(val ?? "").trim() ? undefined : "Account ID is required"),
         });
-        accountId = String(value).trim();
+        accountId = String(value ?? "").trim();
       }
       if (!gatewayId) {
         const value = await params.prompter.text({
           message: "Enter Cloudflare AI Gateway ID",
-          validate: (val) => (String(val).trim() ? undefined : "Gateway ID is required"),
+          validate: (val) => (String(val ?? "").trim() ? undefined : "Gateway ID is required"),
         });
-        gatewayId = String(value).trim();
+        gatewayId = String(value ?? "").trim();
       }
     };
 
@@ -379,7 +381,7 @@ export async function applyAuthChoiceApiProviders(
       await setCloudflareAiGatewayConfig(
         accountId,
         gatewayId,
-        normalizeApiKeyInput(String(key)),
+        normalizeApiKeyInput(String(key ?? "")),
         params.agentDir,
       );
       hasCredential = true;
@@ -441,7 +443,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Moonshot API key",
         validate: validateApiKeyInput,
       });
-      await setMoonshotApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setMoonshotApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "moonshot:default",
@@ -488,7 +490,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Moonshot API key (.cn)",
         validate: validateApiKeyInput,
       });
-      await setMoonshotApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setMoonshotApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "moonshot:default",
@@ -548,7 +550,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Kimi Coding API key",
         validate: validateApiKeyInput,
       });
-      await setKimiCodingApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setKimiCodingApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "kimi-coding:default",
@@ -596,7 +598,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Gemini API key",
         validate: validateApiKeyInput,
       });
-      await setGeminiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setGeminiApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "google:default",
@@ -619,11 +621,31 @@ export async function applyAuthChoiceApiProviders(
     return { config: nextConfig, agentModelOverride };
   }
 
-  if (authChoice === "zai-api-key") {
+  if (
+    authChoice === "zai-api-key" ||
+    authChoice === "zai-coding-global" ||
+    authChoice === "zai-coding-cn" ||
+    authChoice === "zai-global" ||
+    authChoice === "zai-cn"
+  ) {
+    let endpoint: "global" | "cn" | "coding-global" | "coding-cn" | undefined;
+    if (authChoice === "zai-coding-global") {
+      endpoint = "coding-global";
+    } else if (authChoice === "zai-coding-cn") {
+      endpoint = "coding-cn";
+    } else if (authChoice === "zai-global") {
+      endpoint = "global";
+    } else if (authChoice === "zai-cn") {
+      endpoint = "cn";
+    }
+
+    // Input API key
     let hasCredential = false;
+    let apiKey = "";
 
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "zai") {
-      await setZaiApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      apiKey = normalizeApiKeyInput(params.opts.token);
+      await setZaiApiKey(apiKey, params.agentDir);
       hasCredential = true;
     }
 
@@ -634,7 +656,8 @@ export async function applyAuthChoiceApiProviders(
         initialValue: true,
       });
       if (useExisting) {
-        await setZaiApiKey(envKey.apiKey, params.agentDir);
+        apiKey = envKey.apiKey;
+        await setZaiApiKey(apiKey, params.agentDir);
         hasCredential = true;
       }
     }
@@ -643,42 +666,76 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Z.AI API key",
         validate: validateApiKeyInput,
       });
-      await setZaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      apiKey = normalizeApiKeyInput(String(key ?? ""));
+      await setZaiApiKey(apiKey, params.agentDir);
     }
+
+    // zai-api-key: auto-detect endpoint + choose a working default model.
+    let modelIdOverride: string | undefined;
+    if (!endpoint) {
+      const detected = await detectZaiEndpoint({ apiKey });
+      if (detected) {
+        endpoint = detected.endpoint;
+        modelIdOverride = detected.modelId;
+        await params.prompter.note(detected.note, "Z.AI endpoint");
+      } else {
+        endpoint = await params.prompter.select({
+          message: "Select Z.AI endpoint",
+          options: [
+            {
+              value: "coding-global",
+              label: "Coding-Plan-Global",
+              hint: "GLM Coding Plan Global (api.z.ai)",
+            },
+            {
+              value: "coding-cn",
+              label: "Coding-Plan-CN",
+              hint: "GLM Coding Plan CN (open.bigmodel.cn)",
+            },
+            {
+              value: "global",
+              label: "Global",
+              hint: "Z.AI Global (api.z.ai)",
+            },
+            {
+              value: "cn",
+              label: "CN",
+              hint: "Z.AI CN (open.bigmodel.cn)",
+            },
+          ],
+          initialValue: "global",
+        });
+      }
+    }
+
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "zai:default",
       provider: "zai",
       mode: "api_key",
     });
-    {
-      const applied = await applyDefaultModelChoice({
-        config: nextConfig,
-        setDefaultModel: params.setDefaultModel,
-        defaultModel: ZAI_DEFAULT_MODEL_REF,
-        applyDefaultConfig: applyZaiConfig,
-        applyProviderConfig: (config) => ({
-          ...config,
-          agents: {
-            ...config.agents,
-            defaults: {
-              ...config.agents?.defaults,
-              models: {
-                ...config.agents?.defaults?.models,
-                [ZAI_DEFAULT_MODEL_REF]: {
-                  ...config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF],
-                  alias: config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF]?.alias ?? "GLM",
-                },
-              },
-            },
-          },
+
+    const defaultModel = modelIdOverride ? `zai/${modelIdOverride}` : ZAI_DEFAULT_MODEL_REF;
+    const applied = await applyDefaultModelChoice({
+      config: nextConfig,
+      setDefaultModel: params.setDefaultModel,
+      defaultModel,
+      applyDefaultConfig: (config) =>
+        applyZaiConfig(config, {
+          endpoint,
+          ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
         }),
-        noteDefault: ZAI_DEFAULT_MODEL_REF,
-        noteAgentModel,
-        prompter: params.prompter,
-      });
-      nextConfig = applied.config;
-      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
-    }
+      applyProviderConfig: (config) =>
+        applyZaiProviderConfig(config, {
+          endpoint,
+          ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
+        }),
+      noteDefault: defaultModel,
+      noteAgentModel,
+      prompter: params.prompter,
+    });
+    nextConfig = applied.config;
+    agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+
     return { config: nextConfig, agentModelOverride };
   }
 
@@ -706,7 +763,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Xiaomi API key",
         validate: validateApiKeyInput,
       });
-      await setXiaomiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setXiaomiApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "xiaomi:default",
@@ -732,13 +789,13 @@ export async function applyAuthChoiceApiProviders(
 
   if (authChoice === "synthetic-api-key") {
     if (params.opts?.token && params.opts?.tokenProvider === "synthetic") {
-      await setSyntheticApiKey(String(params.opts.token).trim(), params.agentDir);
+      await setSyntheticApiKey(String(params.opts.token ?? "").trim(), params.agentDir);
     } else {
       const key = await params.prompter.text({
         message: "Enter Synthetic API key",
         validate: (value) => (value?.trim() ? undefined : "Required"),
       });
-      await setSyntheticApiKey(String(key).trim(), params.agentDir);
+      await setSyntheticApiKey(String(key ?? "").trim(), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "synthetic:default",
@@ -797,7 +854,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Venice AI API key",
         validate: validateApiKeyInput,
       });
-      await setVeniceApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setVeniceApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "venice:default",
@@ -854,7 +911,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter OpenCode Zen API key",
         validate: validateApiKeyInput,
       });
-      await setOpencodeZenApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setOpencodeZenApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "opencode:default",
@@ -912,7 +969,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Together AI API key",
         validate: validateApiKeyInput,
       });
-      await setTogetherApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setTogetherApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "together:default",
@@ -968,7 +1025,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter QIANFAN API key",
         validate: validateApiKeyInput,
       });
-      setQianfanApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      setQianfanApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "qianfan:default",

@@ -96,12 +96,66 @@ const EXEC_EVENT_PROMPT =
   "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
   "If it failed, explain what went wrong.";
 
-// Prompt used when a scheduled cron job has fired and injected a system event.
-// This overrides the standard heartbeat prompt so the model relays the scheduled
-// reminder instead of responding with "HEARTBEAT_OK".
-const CRON_EVENT_PROMPT =
-  "A scheduled reminder has been triggered. The reminder message is shown in the system messages above. " +
-  "Please relay this reminder to the user in a helpful and friendly way.";
+// Build a dynamic prompt for cron events by embedding the actual event content.
+// This ensures the model sees the reminder text directly instead of relying on
+// "shown in the system messages above" which may not be visible in context.
+function buildCronEventPrompt(pendingEvents: string[]): string {
+  const eventText = pendingEvents.join("\n").trim();
+  if (!eventText) {
+    return (
+      "A scheduled cron event was triggered, but no event content was found. " +
+      "Reply HEARTBEAT_OK."
+    );
+  }
+  return (
+    "A scheduled reminder has been triggered. The reminder content is:\n\n" +
+    eventText +
+    "\n\nPlease relay this reminder to the user in a helpful and friendly way."
+  );
+}
+
+const HEARTBEAT_OK_PREFIX = HEARTBEAT_TOKEN.toLowerCase();
+
+// Detect heartbeat-specific noise so cron reminders don't trigger on non-reminder events.
+function isHeartbeatAckEvent(evt: string): boolean {
+  const trimmed = evt.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const lower = trimmed.toLowerCase();
+  if (!lower.startsWith(HEARTBEAT_OK_PREFIX)) {
+    return false;
+  }
+  const suffix = lower.slice(HEARTBEAT_OK_PREFIX.length);
+  if (suffix.length === 0) {
+    return true;
+  }
+  return !/[a-z0-9_]/.test(suffix[0]);
+}
+
+function isHeartbeatNoiseEvent(evt: string): boolean {
+  const lower = evt.trim().toLowerCase();
+  if (!lower) {
+    return false;
+  }
+  return (
+    isHeartbeatAckEvent(lower) ||
+    lower.includes("heartbeat poll") ||
+    lower.includes("heartbeat wake")
+  );
+}
+
+function isExecCompletionEvent(evt: string): boolean {
+  return evt.toLowerCase().includes("exec finished");
+}
+
+// Returns true when a system event should be treated as real cron reminder content.
+export function isCronSystemEvent(evt: string) {
+  if (!evt.trim()) {
+    return false;
+  }
+  return !isHeartbeatNoiseEvent(evt) && !isExecCompletionEvent(evt);
+}
 
 type HeartbeatAgentState = {
   agentId: string;
@@ -488,12 +542,13 @@ export async function runHeartbeatOnce(opts: {
   const isExecEvent = opts.reason === "exec-event";
   const isCronEvent = Boolean(opts.reason?.startsWith("cron:"));
   const pendingEvents = isExecEvent || isCronEvent ? peekSystemEvents(sessionKey) : [];
-  const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
-  const hasCronEvents = isCronEvent && pendingEvents.length > 0;
+  const cronEvents = pendingEvents.filter((evt) => isCronSystemEvent(evt));
+  const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
+  const hasCronEvents = isCronEvent && cronEvents.length > 0;
   const prompt = hasExecCompletion
     ? EXEC_EVENT_PROMPT
     : hasCronEvents
-      ? CRON_EVENT_PROMPT
+      ? buildCronEventPrompt(cronEvents)
       : resolveHeartbeatPrompt(cfg, heartbeat);
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
@@ -797,6 +852,11 @@ export function startHeartbeatRunner(opts: {
     return now + intervalMs;
   };
 
+  const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
+    agent.lastRunMs = now;
+    agent.nextDueMs = now + agent.intervalMs;
+  };
+
   const scheduleNext = () => {
     if (state.stopped) {
       return;
@@ -820,6 +880,7 @@ export function startHeartbeatRunner(opts: {
     }
     const delay = Math.max(0, nextDue - now);
     state.timer = setTimeout(() => {
+      state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     }, delay);
     state.timer.unref?.();
@@ -873,6 +934,12 @@ export function startHeartbeatRunner(opts: {
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
+    if (state.stopped) {
+      return {
+        status: "skipped",
+        reason: "disabled",
+      } satisfies HeartbeatRunResult;
+    }
     if (!heartbeatsEnabled) {
       return {
         status: "skipped",
@@ -897,19 +964,30 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
 
-      const res = await runOnce({
-        cfg: state.cfg,
-        agentId: agent.agentId,
-        heartbeat: agent.heartbeat,
-        reason,
-        deps: { runtime: state.runtime },
-      });
+      let res: HeartbeatRunResult;
+      try {
+        res = await runOnce({
+          cfg: state.cfg,
+          agentId: agent.agentId,
+          heartbeat: agent.heartbeat,
+          reason,
+          deps: { runtime: state.runtime },
+        });
+      } catch (err) {
+        // If runOnce throws (e.g. during session compaction), we must still
+        // advance the timer and call scheduleNext so heartbeats keep firing.
+        const errMsg = formatErrorMessage(err);
+        log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
+        advanceAgentSchedule(agent, now);
+        continue;
+      }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
+        advanceAgentSchedule(agent, now);
+        scheduleNext();
         return res;
       }
       if (res.status !== "skipped" || res.reason !== "disabled") {
-        agent.lastRunMs = now;
-        agent.nextDueMs = now + agent.intervalMs;
+        advanceAgentSchedule(agent, now);
       }
       if (res.status === "ran") {
         ran = true;
@@ -923,12 +1001,16 @@ export function startHeartbeatRunner(opts: {
     return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
   };
 
-  setHeartbeatWakeHandler(async (params) => run({ reason: params.reason }));
+  const wakeHandler: HeartbeatWakeHandler = async (params) => run({ reason: params.reason });
+  const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);
 
   const cleanup = () => {
+    if (state.stopped) {
+      return;
+    }
     state.stopped = true;
-    setHeartbeatWakeHandler(null);
+    disposeWakeHandler();
     if (state.timer) {
       clearTimeout(state.timer);
     }

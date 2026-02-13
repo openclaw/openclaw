@@ -124,7 +124,10 @@ export async function runCronIsolatedAgentTurn(params: {
     ? resolveAgentConfig(params.cfg, normalizedRequested)
     : undefined;
   const { model: overrideModel, ...agentOverrideRest } = agentConfigOverride ?? {};
-  const agentId = agentConfigOverride ? (normalizedRequested ?? defaultAgentId) : defaultAgentId;
+  // Use the requested agentId even when there is no explicit agent config entry.
+  // This ensures auth-profiles, workspace, and agentDir all resolve to the
+  // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
+  const agentId = normalizedRequested ?? defaultAgentId;
   const agentCfg: AgentDefaultsConfig = Object.assign(
     {},
     params.cfg.agents?.defaults,
@@ -170,6 +173,7 @@ export async function runCronIsolatedAgentTurn(params: {
   };
   // Resolve model - prefer hooks.gmail.model for Gmail hooks.
   const isGmailHook = baseSessionKey.startsWith("hook:gmail:");
+  let hooksGmailModelApplied = false;
   const hooksGmailModelRef = isGmailHook
     ? resolveHooksGmailModel({
         cfg: params.cfg,
@@ -187,6 +191,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (status.allowed) {
       provider = hooksGmailModelRef.provider;
       model = hooksGmailModelRef.model;
+      hooksGmailModelApplied = true;
     }
   }
   const modelOverrideRaw =
@@ -242,6 +247,28 @@ export async function runCronIsolatedAgentTurn(params: {
         ? params.job.name.trim()
         : params.job.id;
     cronSession.sessionEntry.label = `Cron: ${labelSuffix}`;
+  }
+
+  // Respect session model override — check session.modelOverride before falling
+  // back to the default config model. This ensures /model changes are honoured
+  // by cron and isolated agent runs.
+  if (!modelOverride && !hooksGmailModelApplied) {
+    const sessionModelOverride = cronSession.sessionEntry.modelOverride?.trim();
+    if (sessionModelOverride) {
+      const sessionProviderOverride =
+        cronSession.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
+      const resolvedSessionOverride = resolveAllowedModelRef({
+        cfg: cfgWithAgentDefaults,
+        catalog: await loadCatalog(),
+        raw: `${sessionProviderOverride}/${sessionModelOverride}`,
+        defaultProvider: resolvedDefault.provider,
+        defaultModel: resolvedDefault.model,
+      });
+      if (!("error" in resolvedSessionOverride)) {
+        provider = resolvedSessionOverride.ref.provider;
+        model = resolvedSessionOverride.ref.model;
+      }
+    }
   }
 
   // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default
@@ -429,6 +456,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // Update token+model fields in the session store.
   {
     const usage = runResult.meta.agentMeta?.usage;
+    const promptTokens = runResult.meta.agentMeta?.promptTokens;
     const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? model;
     const providerUsed = runResult.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =
@@ -446,13 +474,16 @@ export async function runCronIsolatedAgentTurn(params: {
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
-      cronSession.sessionEntry.inputTokens = input;
-      cronSession.sessionEntry.outputTokens = output;
-      cronSession.sessionEntry.totalTokens =
+      const totalTokens =
         deriveSessionTotalTokens({
           usage,
           contextTokens,
+          promptTokens,
         }) ?? input;
+      cronSession.sessionEntry.inputTokens = input;
+      cronSession.sessionEntry.outputTokens = output;
+      cronSession.sessionEntry.totalTokens = totalTokens;
+      cronSession.sessionEntry.totalTokensFresh = true;
     }
     await persistSessionEntry();
   }

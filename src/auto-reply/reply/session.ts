@@ -27,6 +27,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -54,10 +55,12 @@ export type SessionInitResult = {
 
 function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
+  sessionsDir: string;
 }): { sessionId: string; sessionFile: string } | null {
   const parentSessionFile = resolveSessionFilePath(
     params.parentEntry.sessionId,
     params.parentEntry,
+    { sessionsDir: params.sessionsDir },
   );
   if (!parentSessionFile || !fs.existsSync(parentSessionFile)) {
     return null;
@@ -222,7 +225,11 @@ export async function initSessionState(params: {
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
 
-  if (!isNewSession && freshEntry) {
+  // When this is the first user message in a thread, the session entry may already
+  // exist (created by recordInboundSession in prepare.ts), but we should still treat
+  // it as a new session so that thread context (history/starter/fork) is applied.
+  const forceNewForThread = Boolean(ctx.IsFirstThreadTurn) && !resetTriggered;
+  if (!isNewSession && freshEntry && !forceNewForThread) {
     sessionId = entry.sessionId;
     systemSent = entry.systemSent ?? false;
     abortedLastRun = entry.abortedLastRun ?? false;
@@ -237,6 +244,15 @@ export async function initSessionState(params: {
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
+    // When a reset trigger (/new, /reset) starts a new session, carry over
+    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
+    // so the user doesn't have to re-enable them every time.
+    if (resetTriggered && entry) {
+      persistedThinking = entry.thinkingLevel;
+      persistedVerbose = entry.verboseLevel;
+      persistedReasoning = entry.reasoningLevel;
+      persistedTtsAuto = entry.ttsAuto;
+    }
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
@@ -319,6 +335,7 @@ export async function initSessionState(params: {
     );
     const forked = forkSessionFromParent({
       parentEntry: sessionStore[parentSessionKey],
+      sessionsDir: path.dirname(storePath),
     });
     if (forked) {
       sessionId = forked.sessionId;
@@ -341,6 +358,7 @@ export async function initSessionState(params: {
     // Clear stale token metrics from previous session so /status doesn't
     // display the old session's context usage after /new or /reset.
     sessionEntry.totalTokens = undefined;
+    sessionEntry.totalTokensFresh = false;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
@@ -381,6 +399,46 @@ export async function initSessionState(params: {
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
   };
+
+  // Run session plugin hooks (fire-and-forget)
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner && isNewSession) {
+    const effectiveSessionId = sessionId ?? "";
+
+    // If replacing an existing session, fire session_end for the old one
+    if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
+      if (hookRunner.hasHooks("session_end")) {
+        void hookRunner
+          .runSessionEnd(
+            {
+              sessionId: previousSessionEntry.sessionId,
+              messageCount: 0,
+            },
+            {
+              sessionId: previousSessionEntry.sessionId,
+              agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+            },
+          )
+          .catch(() => {});
+      }
+    }
+
+    // Fire session_start for the new session
+    if (hookRunner.hasHooks("session_start")) {
+      void hookRunner
+        .runSessionStart(
+          {
+            sessionId: effectiveSessionId,
+            resumedFrom: previousSessionEntry?.sessionId,
+          },
+          {
+            sessionId: effectiveSessionId,
+            agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+          },
+        )
+        .catch(() => {});
+    }
+  }
 
   return {
     sessionCtx,
