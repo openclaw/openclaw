@@ -6,15 +6,24 @@
 import JSON5 from "json5";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
+import type { AgentToolsConfig } from "../config/types.tools.js";
 import type { ExecFn } from "./windows-acl.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
+import {
+  resolveSandboxConfigForAgent,
+  resolveSandboxToolPolicyForAgent,
+} from "../agents/sandbox.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills.js";
+import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import { createConfigIO } from "../config/config.js";
 import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
 import { resolveOAuthDir } from "../config/paths.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   formatPermissionDetail,
@@ -196,6 +205,135 @@ function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string):
     .join("\n");
 }
 
+function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
+  if (!Array.isArray(extra) || extra.length === 0) {
+    return base;
+  }
+  if (!Array.isArray(base) || base.length === 0) {
+    return Array.from(new Set(["*", ...extra]));
+  }
+  return Array.from(new Set([...base, ...extra]));
+}
+
+function pickToolPolicy(config?: {
+  allow?: string[];
+  alsoAllow?: string[];
+  deny?: string[];
+}): SandboxToolPolicy | undefined {
+  if (!config) {
+    return undefined;
+  }
+  const allow = Array.isArray(config.allow)
+    ? unionAllow(config.allow, config.alsoAllow)
+    : Array.isArray(config.alsoAllow) && config.alsoAllow.length > 0
+      ? unionAllow(undefined, config.alsoAllow)
+      : undefined;
+  const deny = Array.isArray(config.deny) ? config.deny : undefined;
+  if (!allow && !deny) {
+    return undefined;
+  }
+  return { allow, deny };
+}
+
+function resolveToolPolicies(params: {
+  cfg: OpenClawConfig;
+  agentTools?: AgentToolsConfig;
+  sandboxMode?: "off" | "non-main" | "all";
+  agentId?: string | null;
+}): Array<SandboxToolPolicy | undefined> {
+  const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
+  const profilePolicy = resolveToolProfilePolicy(profile);
+  const policies: Array<SandboxToolPolicy | undefined> = [
+    profilePolicy,
+    pickToolPolicy(params.cfg.tools ?? undefined),
+    pickToolPolicy(params.agentTools),
+  ];
+  if (params.sandboxMode === "all") {
+    policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
+  }
+  return policies;
+}
+
+function normalizePluginIdSet(entries: string[]): Set<string> {
+  return new Set(entries.map((entry) => entry.trim().toLowerCase()).filter(Boolean));
+}
+
+function resolveEnabledExtensionPluginIds(params: {
+  cfg: OpenClawConfig;
+  pluginDirs: string[];
+}): string[] {
+  const normalized = normalizePluginsConfig(params.cfg.plugins);
+  if (!normalized.enabled) {
+    return [];
+  }
+
+  const allowSet = normalizePluginIdSet(normalized.allow);
+  const denySet = normalizePluginIdSet(normalized.deny);
+  const entryById = new Map<string, { enabled?: boolean }>();
+  for (const [id, entry] of Object.entries(normalized.entries)) {
+    entryById.set(id.trim().toLowerCase(), entry);
+  }
+
+  const enabled: string[] = [];
+  for (const id of params.pluginDirs) {
+    const normalizedId = id.trim().toLowerCase();
+    if (!normalizedId) {
+      continue;
+    }
+    if (denySet.has(normalizedId)) {
+      continue;
+    }
+    if (allowSet.size > 0 && !allowSet.has(normalizedId)) {
+      continue;
+    }
+    if (entryById.get(normalizedId)?.enabled === false) {
+      continue;
+    }
+    enabled.push(normalizedId);
+  }
+  return enabled;
+}
+
+function collectAllowEntries(config?: { allow?: string[]; alsoAllow?: string[] }): string[] {
+  const out: string[] = [];
+  if (Array.isArray(config?.allow)) {
+    out.push(...config.allow);
+  }
+  if (Array.isArray(config?.alsoAllow)) {
+    out.push(...config.alsoAllow);
+  }
+  return out.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+}
+
+function hasExplicitPluginAllow(params: {
+  allowEntries: string[];
+  enabledPluginIds: Set<string>;
+}): boolean {
+  return params.allowEntries.some(
+    (entry) => entry === "group:plugins" || params.enabledPluginIds.has(entry),
+  );
+}
+
+function hasProviderPluginAllow(params: {
+  byProvider?: Record<string, { allow?: string[]; alsoAllow?: string[]; deny?: string[] }>;
+  enabledPluginIds: Set<string>;
+}): boolean {
+  if (!params.byProvider) {
+    return false;
+  }
+  for (const policy of Object.values(params.byProvider)) {
+    if (
+      hasExplicitPluginAllow({
+        allowEntries: collectAllowEntries(policy),
+        enabledPluginIds: params.enabledPluginIds,
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // --------------------------------------------------------------------------
 // Exported collectors
 // --------------------------------------------------------------------------
@@ -295,6 +433,78 @@ export async function collectPluginsTrustFindings(params: {
           : ""),
       remediation: "Set plugins.allow to an explicit list of plugin ids you trust.",
     });
+  }
+
+  const enabledExtensionPluginIds = resolveEnabledExtensionPluginIds({
+    cfg: params.cfg,
+    pluginDirs,
+  });
+  if (enabledExtensionPluginIds.length > 0) {
+    const enabledPluginSet = new Set(enabledExtensionPluginIds);
+    const contexts: Array<{
+      label: string;
+      agentId?: string;
+      tools?: AgentToolsConfig;
+    }> = [{ label: "default" }];
+    for (const entry of params.cfg.agents?.list ?? []) {
+      if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+        continue;
+      }
+      contexts.push({
+        label: `agents.list.${entry.id}`,
+        agentId: entry.id,
+        tools: entry.tools,
+      });
+    }
+
+    const permissiveContexts: string[] = [];
+    for (const context of contexts) {
+      const profile = context.tools?.profile ?? params.cfg.tools?.profile;
+      const restrictiveProfile = Boolean(resolveToolProfilePolicy(profile));
+      const sandboxMode = resolveSandboxConfigForAgent(params.cfg, context.agentId).mode;
+      const policies = resolveToolPolicies({
+        cfg: params.cfg,
+        agentTools: context.tools,
+        sandboxMode,
+        agentId: context.agentId,
+      });
+      const broadPolicy = isToolAllowedByPolicies("__openclaw_plugin_probe__", policies);
+      const explicitPluginAllow =
+        !restrictiveProfile &&
+        (hasExplicitPluginAllow({
+          allowEntries: collectAllowEntries(params.cfg.tools),
+          enabledPluginIds: enabledPluginSet,
+        }) ||
+          hasProviderPluginAllow({
+            byProvider: params.cfg.tools?.byProvider,
+            enabledPluginIds: enabledPluginSet,
+          }) ||
+          hasExplicitPluginAllow({
+            allowEntries: collectAllowEntries(context.tools),
+            enabledPluginIds: enabledPluginSet,
+          }) ||
+          hasProviderPluginAllow({
+            byProvider: context.tools?.byProvider,
+            enabledPluginIds: enabledPluginSet,
+          }));
+
+      if (broadPolicy || explicitPluginAllow) {
+        permissiveContexts.push(context.label);
+      }
+    }
+
+    if (permissiveContexts.length > 0) {
+      findings.push({
+        checkId: "plugins.tools_reachable_permissive_policy",
+        severity: "warn",
+        title: "Extension plugin tools may be reachable under permissive tool policy",
+        detail:
+          `Enabled extension plugins: ${enabledExtensionPluginIds.join(", ")}.\n` +
+          `Permissive tool policy contexts:\n${permissiveContexts.map((entry) => `- ${entry}`).join("\n")}`,
+        remediation:
+          "Use restrictive profiles (`minimal`/`coding`) or explicit tool allowlists that exclude plugin tools for agents handling untrusted input.",
+      });
+    }
   }
 
   return findings;

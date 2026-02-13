@@ -303,6 +303,110 @@ describe("security audit", () => {
     expect(finding?.detail).toContain("sandbox=all");
   });
 
+  it("flags sandbox docker config when sandbox mode is off", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off",
+            docker: { image: "ghcr.io/example/sandbox:latest" },
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "sandbox.docker_config_mode_off",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
+
+  it("does not flag global sandbox docker config when an agent enables sandbox mode", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off",
+            docker: { image: "ghcr.io/example/sandbox:latest" },
+          },
+        },
+        list: [{ id: "ops", sandbox: { mode: "all" } }],
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings.some((f) => f.checkId === "sandbox.docker_config_mode_off")).toBe(false);
+  });
+
+  it("flags ineffective gateway.nodes.denyCommands entries", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["system.*", "system.runx"],
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("system.*");
+    expect(finding?.detail).toContain("system.runx");
+  });
+
+  it("flags agent profile overrides when global tools.profile is minimal", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "minimal",
+      },
+      agents: {
+        list: [
+          {
+            id: "owner",
+            tools: { profile: "full" },
+          },
+        ],
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "tools.profile_minimal_overridden",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
+
   it("flags tools.elevated allowFrom wildcard as critical", async () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -1146,6 +1250,68 @@ describe("security audit", () => {
       } else {
         process.env.SLACK_APP_TOKEN = prevSlackAppToken;
       }
+    }
+  });
+
+  it("flags enabled extensions when tool policy can expose plugin tools", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-plugins-"));
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
+      recursive: true,
+      mode: 0o700,
+    });
+
+    try {
+      const cfg: OpenClawConfig = {
+        plugins: { allow: ["some-plugin"] },
+      };
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: true,
+        includeChannelSecurity: false,
+        stateDir,
+        configPath: path.join(stateDir, "openclaw.json"),
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "plugins.tools_reachable_permissive_policy",
+            severity: "warn",
+          }),
+        ]),
+      );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not flag plugin tool reachability when profile is restrictive", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-plugins-"));
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
+      recursive: true,
+      mode: 0o700,
+    });
+
+    try {
+      const cfg: OpenClawConfig = {
+        plugins: { allow: ["some-plugin"] },
+        tools: { profile: "coding" },
+      };
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: true,
+        includeChannelSecurity: false,
+        stateDir,
+        configPath: path.join(stateDir, "openclaw.json"),
+      });
+
+      expect(
+        res.findings.some((f) => f.checkId === "plugins.tools_reachable_permissive_policy"),
+      ).toBe(false);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
     }
   });
 

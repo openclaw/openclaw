@@ -18,8 +18,11 @@ import {
   collectHooksHardeningFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
+  collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,
+  collectNodeDenyCommandPatternFindings,
   collectSmallModelRiskFindings,
+  collectSandboxDockerNoopFindings,
   collectPluginsTrustFindings,
   collectSecretsInConfigFindings,
   collectPluginsCodeSafetyFindings,
@@ -980,6 +983,9 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectHooksHardeningFindings(cfg));
+  findings.push(...collectSandboxDockerNoopFindings(cfg));
+  findings.push(...collectNodeDenyCommandPatternFindings(cfg));
+  findings.push(...collectMinimalProfileOverrideFindings(cfg));
   findings.push(...collectSecretsInConfigFindings(cfg));
   findings.push(...collectModelHygieneFindings(cfg));
   findings.push(...collectSmallModelRiskFindings({ cfg, env }));
