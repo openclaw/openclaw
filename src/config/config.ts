@@ -13,6 +13,7 @@ export * from "./types.js";
 export {
   validateConfigObject,
   validateConfigObjectRaw,
+  validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
 export { OpenClawSchema } from "./zod-schema.js";
