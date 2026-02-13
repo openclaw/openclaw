@@ -58,8 +58,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: setup-token|token|chutes|openai-codex|openai-api-key|xai-api-key|qianfan-api-key|openrouter-api-key|litellm-api-key|ai-gateway-api-key|cloudflare-ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|zai-coding-global|zai-coding-cn|zai-global|zai-cn|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|custom-api-key|skip|together-api-key|huggingface-api-key",
-      "Auth: setup-token|token|chutes|vllm|openai-codex|openai-api-key|xai-api-key|qianfan-api-key|openrouter-api-key|litellm-api-key|ai-gateway-api-key|cloudflare-ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|zai-coding-global|zai-coding-cn|zai-global|zai-cn|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|custom-api-key|skip|together-api-key|huggingface-api-key",
+      "Auth: setup-token|token|chutes|vllm|openai-codex|openai-api-key|xai-api-key|qianfan-api-key|openrouter-api-key|litellm-api-key|ai-gateway-api-key|cloudflare-ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|zai-coding-global|zai-coding-cn|zai-global|zai-cn|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|ovhcloud-api-key|custom-api-key|skip|together-api-key|huggingface-api-key",
     )
     .option(
       "--token-provider <id>",
@@ -88,6 +87,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--venice-api-key <key>", "Venice API key")
     .option("--together-api-key <key>", "Together AI API key")
     .option("--huggingface-api-key <key>", "Hugging Face API key (HF token)")
+    .option("--ovhcloud-api-key <key>", "OVHcloud AI Endpoints API key")
     .option("--opencode-zen-api-key <key>", "OpenCode Zen API key")
     .option("--xai-api-key <key>", "xAI API key")
     .option("--litellm-api-key <key>", "LiteLLM API key")
@@ -156,6 +156,7 @@ export function registerOnboardCommand(program: Command) {
             veniceApiKey: opts.veniceApiKey as string | undefined,
             togetherApiKey: opts.togetherApiKey as string | undefined,
             huggingfaceApiKey: opts.huggingfaceApiKey as string | undefined,
+            ovhcloudApiKey: opts.ovhcloudApiKey as string | undefined,
             opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
             xaiApiKey: opts.xaiApiKey as string | undefined,
             litellmApiKey: opts.litellmApiKey as string | undefined,

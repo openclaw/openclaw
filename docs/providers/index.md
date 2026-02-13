@@ -52,6 +52,7 @@ See [Venice AI](/providers/venice).
 - [MiniMax](/providers/minimax)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
 - [Hugging Face (Inference)](/providers/huggingface)
+- [OVHcloud AI Endpoints](/providers/ovhcloud)
 - [Ollama (local models)](/providers/ollama)
 - [vLLM (local models)](/providers/vllm)
 - [Qianfan](/providers/qianfan)
