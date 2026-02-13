@@ -64,7 +64,6 @@ export type ChatProps = {
   onSend: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
-  onNewSession: () => void;
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
@@ -408,10 +407,10 @@ export function renderChat(props: ChatProps) {
           <div class="chat-compose__actions">
             <button
               class="btn"
-              ?disabled=${!props.connected || (!canAbort && props.sending)}
-              @click=${canAbort ? props.onAbort : props.onNewSession}
+              ?disabled=${!props.connected || !canAbort}
+              @click=${() => props.onAbort?.()}
             >
-              ${canAbort ? "Stop" : "New session"}
+              Stop
             </button>
             <button
               class="btn primary"
