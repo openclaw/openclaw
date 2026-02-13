@@ -1,0 +1,9 @@
+{
+  "id": "tech-lead",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Andre 'Dre' Barbosa",
+  "category": "management",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

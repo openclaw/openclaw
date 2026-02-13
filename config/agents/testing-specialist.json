@@ -1,0 +1,9 @@
+{
+  "id": "testing-specialist",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Julia 'Ju' Santos",
+  "category": "quality",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

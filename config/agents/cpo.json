@@ -1,0 +1,9 @@
+{
+  "id": "cpo",
+  "role": "specialist",
+  "model": "claude-opus-4-6",
+  "persona": "Leonardo 'Leo' Ramos",
+  "category": "c_level",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

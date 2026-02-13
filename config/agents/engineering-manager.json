@@ -1,0 +1,9 @@
+{
+  "id": "engineering-manager",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Fabio 'Fab' Nogueira",
+  "category": "management",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

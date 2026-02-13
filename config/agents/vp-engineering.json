@@ -1,0 +1,9 @@
+{
+  "id": "vp-engineering",
+  "role": "specialist",
+  "model": "claude-opus-4-6",
+  "persona": "Cristiano 'Cris' Araujo",
+  "category": "c_level",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

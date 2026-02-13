@@ -1,0 +1,9 @@
+{
+  "id": "git-specialist",
+  "role": "specialist",
+  "model": "claude-haiku-4-0",
+  "persona": "Unknown",
+  "category": "tools",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "qa-lead",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Patricia 'Pat' Mendonca",
+  "category": "quality",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

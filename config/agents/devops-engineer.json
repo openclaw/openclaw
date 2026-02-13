@@ -1,0 +1,9 @@
+{
+  "id": "devops-engineer",
+  "role": "specialist",
+  "model": "claude-haiku-4-0",
+  "persona": "Gustavo 'Guga' Miranda",
+  "category": "infrastructure",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

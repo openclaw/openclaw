@@ -1,0 +1,9 @@
+{
+  "id": "technical-writer",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Renata 'Re' Nunes",
+  "category": "documentation",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

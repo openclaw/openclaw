@@ -1,0 +1,9 @@
+{
+  "id": "ui-designer",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Marcela 'Marcy' Viana",
+  "category": "design",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

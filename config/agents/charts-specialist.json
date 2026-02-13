@@ -1,0 +1,9 @@
+{
+  "id": "charts-specialist",
+  "role": "specialist",
+  "model": "claude-haiku-4-0",
+  "persona": "Bruno 'Bruninho' Gomes",
+  "category": "frontend",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

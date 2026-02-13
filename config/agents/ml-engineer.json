@@ -1,0 +1,9 @@
+{
+  "id": "ml-engineer",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Diego 'Di' Fernandes",
+  "category": "data",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

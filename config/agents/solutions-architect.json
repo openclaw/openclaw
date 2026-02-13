@@ -1,0 +1,9 @@
+{
+  "id": "solutions-architect",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Debora 'Deb' Lima",
+  "category": "architecture",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

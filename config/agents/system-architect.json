@@ -1,0 +1,9 @@
+{
+  "id": "system-architect",
+  "role": "specialist",
+  "model": "claude-opus-4-6",
+  "persona": "Roberto 'Beto' Almeida",
+  "category": "architecture",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

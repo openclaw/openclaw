@@ -1,0 +1,9 @@
+{
+  "id": "astro-specialist",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Pedro 'Pedrinho' Campos",
+  "category": "frontend",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

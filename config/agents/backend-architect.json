@@ -1,0 +1,9 @@
+{
+  "id": "backend-architect",
+  "role": "specialist",
+  "model": "claude-opus-4-6",
+  "persona": "Fernando 'Fe' Costa",
+  "category": "architecture",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

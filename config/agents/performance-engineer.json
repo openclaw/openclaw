@@ -1,0 +1,9 @@
+{
+  "id": "performance-engineer",
+  "role": "specialist",
+  "model": "claude-opus-4-6",
+  "persona": "Rafael 'Rafa' Souza",
+  "category": "quality",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

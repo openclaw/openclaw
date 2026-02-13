@@ -1,0 +1,9 @@
+{
+  "id": "elysia-specialist",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Thiago 'Thi' Nascimento",
+  "category": "backend",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

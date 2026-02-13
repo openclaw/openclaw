@@ -1,0 +1,9 @@
+{
+  "id": "python-specialist",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Isabela 'Isa' Rocha",
+  "category": "backend",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

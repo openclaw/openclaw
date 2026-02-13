@@ -1,0 +1,9 @@
+{
+  "id": "deep-research",
+  "role": "specialist",
+  "model": "claude-opus-4-6",
+  "persona": "Caio 'Caiao' Silveira",
+  "category": "research",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

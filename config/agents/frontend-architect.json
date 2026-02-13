@@ -1,0 +1,9 @@
+{
+  "id": "frontend-architect",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Ana 'Aninha' Martins",
+  "category": "architecture",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

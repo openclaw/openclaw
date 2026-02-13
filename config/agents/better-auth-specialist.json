@@ -1,0 +1,9 @@
+{
+  "id": "better-auth-specialist",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Daniela 'Dani' Castro",
+  "category": "security",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

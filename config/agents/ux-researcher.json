@@ -1,0 +1,9 @@
+{
+  "id": "ux-researcher",
+  "role": "specialist",
+  "model": "claude-haiku-4-0",
+  "persona": "Tatiana 'Tati' Cruz",
+  "category": "design",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

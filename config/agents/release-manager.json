@@ -1,0 +1,9 @@
+{
+  "id": "release-manager",
+  "role": "specialist",
+  "model": "claude-haiku-4-0",
+  "persona": "Vanessa 'Van' Cardoso",
+  "category": "tools",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

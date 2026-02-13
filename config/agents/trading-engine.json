@@ -1,0 +1,9 @@
+{
+  "id": "trading-engine",
+  "role": "specialist",
+  "model": "claude-opus-4-6",
+  "persona": "Eduardo 'Dudu' Pereira",
+  "category": "fintech",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

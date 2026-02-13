@@ -1,0 +1,9 @@
+{
+  "id": "ui-components",
+  "role": "specialist",
+  "model": "claude-haiku-4-0",
+  "persona": "Camila 'Cami' Ferreira",
+  "category": "frontend",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

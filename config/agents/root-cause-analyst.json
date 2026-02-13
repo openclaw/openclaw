@@ -1,0 +1,9 @@
+{
+  "id": "root-cause-analyst",
+  "role": "specialist",
+  "model": "claude-opus-4-6",
+  "persona": "Rogerio 'Roger' Duarte",
+  "category": "quality",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

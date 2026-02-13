@@ -1,0 +1,9 @@
+{
+  "id": "product-manager",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Rodrigo 'Rods' Melo",
+  "category": "product",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

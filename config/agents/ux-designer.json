@@ -1,0 +1,9 @@
+{
+  "id": "ux-designer",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Gabriela 'Gabi' Lopes",
+  "category": "design",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

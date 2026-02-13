@@ -1,0 +1,9 @@
+{
+  "id": "data-scientist",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Aline 'Ali' Correia",
+  "category": "data",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

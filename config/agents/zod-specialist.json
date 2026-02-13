@@ -1,0 +1,9 @@
+{
+  "id": "zod-specialist",
+  "role": "specialist",
+  "model": "claude-haiku-4-0",
+  "persona": "Leticia 'Leti' Moura",
+  "category": "backend",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

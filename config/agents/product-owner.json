@@ -1,0 +1,9 @@
+{
+  "id": "product-owner",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Juliana 'Juju' Prado",
+  "category": "product",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "agno-specialist",
+  "role": "specialist",
+  "model": "claude-haiku-4-0",
+  "persona": "Otavio 'Tav' Pinto",
+  "category": "ai",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

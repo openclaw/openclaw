@@ -1,0 +1,9 @@
+{
+  "id": "software-architect",
+  "role": "specialist",
+  "model": "claude-opus-4-6",
+  "persona": "Mauricio 'Mau' Costa",
+  "category": "architecture",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

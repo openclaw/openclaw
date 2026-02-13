@@ -1,0 +1,9 @@
+{
+  "id": "refactoring-expert",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Simone 'Si' Batista",
+  "category": "engineering",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}

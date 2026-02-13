@@ -1,0 +1,9 @@
+{
+  "id": "ai-engineer",
+  "role": "specialist",
+  "model": "claude-sonnet-4-5",
+  "persona": "Lucas 'Luc' Vieira",
+  "category": "ai",
+  "createdBy": "system",
+  "created": "2024-12-29"
+}
