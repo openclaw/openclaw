@@ -29,7 +29,7 @@ export function applyChannelAccountConfig(params: {
   signalNumber?: string;
   cliPath?: string;
   dbPath?: string;
-  service?: "imessage" | "sms" | "auto";
+  service?: "sms" | "auto";
   region?: string;
   authDir?: string;
   httpUrl?: string;

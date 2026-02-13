@@ -18,16 +18,7 @@ export const HookMappingSchema = z
     deliver: z.boolean().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
     channel: z
-      .union([
-        z.literal("last"),
-        z.literal("whatsapp"),
-        z.literal("telegram"),
-        z.literal("discord"),
-        z.literal("slack"),
-        z.literal("signal"),
-        z.literal("imessage"),
-        z.literal("msteams"),
-      ])
+      .union([z.literal("last"), z.literal("whatsapp"), z.literal("telegram"), z.literal("slack")])
       .optional(),
     to: z.string().optional(),
     model: z.string().optional(),

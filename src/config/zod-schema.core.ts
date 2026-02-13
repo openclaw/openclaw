@@ -308,12 +308,7 @@ export const QueueModeBySurfaceSchema = z
   .object({
     whatsapp: QueueModeSchema.optional(),
     telegram: QueueModeSchema.optional(),
-    discord: QueueModeSchema.optional(),
     slack: QueueModeSchema.optional(),
-    mattermost: QueueModeSchema.optional(),
-    signal: QueueModeSchema.optional(),
-    imessage: QueueModeSchema.optional(),
-    msteams: QueueModeSchema.optional(),
     webchat: QueueModeSchema.optional(),
   })
   .strict()
