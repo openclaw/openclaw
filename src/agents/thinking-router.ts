@@ -154,7 +154,9 @@ function matchesRule(context: ThinkingRouterContext, match: ThinkingRouterRule["
   // Keyword matching (any keyword present = match)
   if (match.keywords?.length) {
     const hasKeyword = match.keywords.some((kw) => msgLower.includes(kw.toLowerCase()));
-    if (!hasKeyword) return false;
+    if (!hasKeyword) {
+      return false;
+    }
   }
 
   // Message length bounds
@@ -168,7 +170,9 @@ function matchesRule(context: ThinkingRouterContext, match: ThinkingRouterRule["
   // Code detection
   if (match.hasCode !== undefined) {
     const messageHasCode = hasCodeBlocks(message);
-    if (messageHasCode !== match.hasCode) return false;
+    if (messageHasCode !== match.hasCode) {
+      return false;
+    }
   }
 
   // Session type
@@ -207,7 +211,7 @@ export function routeThinkingLevel(
   }
 
   // Sort rules by priority (descending)
-  const sortedRules = [...config.rules].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  const sortedRules = config.rules.toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 
   for (const rule of sortedRules) {
     if (matchesRule(context, rule.match)) {
