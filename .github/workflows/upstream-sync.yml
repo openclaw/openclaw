@@ -87,8 +87,40 @@ jobs:
           GH_TOKEN: ${{ env.SYNC_TOKEN }}
         run: |
           set -euo pipefail
-          gh pr create \
-            --head "${SYNC_BRANCH}" \
-            --base main \
-            --title "chore(sync): merge upstream/main (${SYNC_BRANCH})" \
-            --body "Automated upstream sync PR."
+          EXISTING_COUNT="$(
+            gh pr list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --state open \
+              --head "${SYNC_BRANCH}" \
+              --base main \
+              --json number \
+              --jq 'length'
+          )"
+          if [[ "${EXISTING_COUNT}" != "0" ]]; then
+            echo "PR already exists for ${SYNC_BRANCH}; skipping."
+            exit 0
+          fi
+
+          set +e
+          CREATE_OUTPUT="$(
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --head "${SYNC_BRANCH}" \
+              --base main \
+              --title "chore(sync): merge upstream/main (${SYNC_BRANCH})" \
+              --body "Automated upstream sync PR." \
+              2>&1
+          )"
+          CREATE_EXIT=$?
+          set -e
+
+          if [[ ${CREATE_EXIT} -ne 0 ]]; then
+            if grep -qi "No commits between" <<<"${CREATE_OUTPUT}"; then
+              echo "No commits between base and head; skipping PR creation."
+              exit 0
+            fi
+            echo "${CREATE_OUTPUT}"
+            exit ${CREATE_EXIT}
+          fi
+
+          echo "${CREATE_OUTPUT}"
