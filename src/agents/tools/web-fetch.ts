@@ -213,6 +213,15 @@ function formatWebFetchErrorDetail(params: {
   return truncated.text;
 }
 
+function redactUrlForDebugLog(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.pathname && parsed.pathname !== "/" ? `${parsed.origin}/...` : parsed.origin;
+  } catch {
+    return "[invalid-url]";
+  }
+}
+
 const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
 const WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD = wrapExternalContent("", {
   source: "web_fetch",
@@ -423,7 +432,9 @@ async function runWebFetch(params: {
     // Cloudflare Markdown for Agents — log token budget hint when present
     const markdownTokens = res.headers.get("x-markdown-tokens");
     if (markdownTokens) {
-      logDebug(`[web-fetch] x-markdown-tokens: ${markdownTokens} (${finalUrl})`);
+      logDebug(
+        `[web-fetch] x-markdown-tokens: ${markdownTokens} (${redactUrlForDebugLog(finalUrl)})`,
+      );
     }
   } catch (error) {
     if (error instanceof SsrFBlockedError) {

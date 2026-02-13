@@ -123,9 +123,17 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
       },
     });
 
-    await tool?.execute?.("call", { url: "https://example.com/tokens" });
+    await tool?.execute?.("call", { url: "https://example.com/tokens/private?token=secret" });
 
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("x-markdown-tokens: 1500"));
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("x-markdown-tokens: 1500 (https://example.com/...)"),
+    );
+    const tokenLogs = logSpy.mock.calls
+      .map(([message]) => String(message))
+      .filter((message) => message.includes("x-markdown-tokens"));
+    expect(tokenLogs).toHaveLength(1);
+    expect(tokenLogs[0]).not.toContain("token=secret");
+    expect(tokenLogs[0]).not.toContain("/tokens/private");
   });
 
   it("converts markdown to text when extractMode is text", async () => {
