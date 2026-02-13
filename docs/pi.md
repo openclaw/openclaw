@@ -388,10 +388,13 @@ if (resolveCompactionMode(params.cfg) === "safeguard") {
 
 ### Context Pruning
 
-`pi-extensions/context-pruning.ts` implements cache-TTL based context pruning:
+`pi-extensions/context-pruning.ts` implements context pruning modes (`always` and `cache-ttl`):
 
 ```typescript
-if (cfg?.agents?.defaults?.contextPruning?.mode === "cache-ttl") {
+if (
+  cfg?.agents?.defaults?.contextPruning?.mode === "always" ||
+  cfg?.agents?.defaults?.contextPruning?.mode === "cache-ttl"
+) {
   setContextPruningRuntime(params.sessionManager, {
     settings,
     contextWindowTokens,

@@ -82,6 +82,7 @@ describe("context-pruning", () => {
   it("mode off disables pruning", () => {
     expect(computeEffectiveSettings({ mode: "off" })).toBeNull();
     expect(computeEffectiveSettings({})).toBeNull();
+    expect(computeEffectiveSettings({ mode: "always" })).not.toBeNull();
   });
 
   it("does not touch tool results after the last N assistants", () => {
@@ -384,6 +385,77 @@ describe("context-pruning", () => {
       sessionManager,
     } as unknown as ExtensionContext);
     expect(second).toBeUndefined();
+  });
+
+  it("always mode prunes on every context event", () => {
+    const sessionManager = {};
+
+    setContextPruningRuntime(sessionManager, {
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        mode: "always",
+        keepLastAssistants: 0,
+        softTrimRatio: 0,
+        hardClearRatio: 0,
+        minPrunableToolChars: 0,
+        hardClear: { enabled: true, placeholder: "[cleared]" },
+        softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
+      },
+      contextWindowTokens: 1000,
+      isToolPrunable: () => true,
+      lastCacheTouchAt: Date.now(),
+    });
+
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistant("a1"),
+      makeToolResult({
+        toolCallId: "t1",
+        toolName: "exec",
+        text: "x".repeat(20_000),
+      }),
+    ];
+
+    let handler:
+      | ((
+          event: { messages: AgentMessage[] },
+          ctx: ExtensionContext,
+        ) => { messages: AgentMessage[] } | undefined)
+      | undefined;
+
+    const api = {
+      on: (name: string, fn: unknown) => {
+        if (name === "context") {
+          handler = fn as typeof handler;
+        }
+      },
+      appendEntry: (_type: string, _data?: unknown) => {},
+    } as unknown as ExtensionAPI;
+
+    contextPruningExtension(api);
+    if (!handler) {
+      throw new Error("missing context handler");
+    }
+
+    const first = handler({ messages }, {
+      model: undefined,
+      sessionManager,
+    } as unknown as ExtensionContext);
+    expect(first).toBeDefined();
+    if (!first) {
+      throw new Error("expected first prune");
+    }
+    expect(toolText(findToolResult(first.messages, "t1"))).toBe("[cleared]");
+
+    const second = handler({ messages }, {
+      model: undefined,
+      sessionManager,
+    } as unknown as ExtensionContext);
+    expect(second).toBeDefined();
+    if (!second) {
+      throw new Error("expected second prune");
+    }
+    expect(toolText(findToolResult(second.messages, "t1"))).toBe("[cleared]");
   });
 
   it("respects tools allow/deny (deny wins; wildcards supported)", () => {

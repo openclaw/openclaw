@@ -753,7 +753,7 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
   agents: {
     defaults: {
       contextPruning: {
-        mode: "cache-ttl", // off | cache-ttl
+        mode: "cache-ttl", // off | always | cache-ttl
         ttl: "1h", // duration (ms/s/m/h), default unit: minutes
         keepLastAssistants: 3,
         softTrimRatio: 0.3,
@@ -783,6 +783,20 @@ Notes:
 - Image blocks are never trimmed/cleared.
 - Ratios are character-based (approximate), not exact token counts.
 - If fewer than `keepLastAssistants` assistant messages exist, pruning is skipped.
+
+</Accordion>
+
+<Accordion title="always mode behavior">
+
+- `mode: "always"` enables pruning passes on every request.
+- Uses the same soft-trim + hard-clear logic as `cache-ttl`.
+- `ttl` is ignored in this mode.
+
+Notes:
+
+- Useful for non-Anthropic providers (for example MiniMax/OpenAI-compatible endpoints) when you need steady context pressure control.
+- Image blocks are never trimmed/cleared.
+- Ratios are character-based (approximate), not exact token counts.
 
 </Accordion>
 
