@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToolInputError } from "../agents/tools/common.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
 import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
@@ -40,6 +41,31 @@ const invokeAgentsList = async (params: {
   sessionKey?: string;
 }) => {
   const body: Record<string, unknown> = { tool: "agents_list", action: "json", args: {} };
+  if (params.sessionKey) {
+    body.sessionKey = params.sessionKey;
+  }
+  return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...params.headers },
+    body: JSON.stringify(body),
+  });
+};
+
+const invokeTool = async (params: {
+  port: number;
+  tool: string;
+  args?: Record<string, unknown>;
+  action?: string;
+  headers?: Record<string, string>;
+  sessionKey?: string;
+}) => {
+  const body: Record<string, unknown> = {
+    tool: params.tool,
+    args: params.args ?? {},
+  };
+  if (params.action) {
+    body.action = params.action;
+  }
   if (params.sessionKey) {
     body.sessionKey = params.sessionKey;
   }
@@ -329,5 +355,79 @@ describe("POST /tools/invoke", () => {
       sessionKey: "main",
     });
     expect(resMain.status).toBe(200);
+  });
+
+  it("maps tool input errors to 400 and unexpected execution errors to 500", async () => {
+    const registry = createTestRegistry();
+    registry.tools.push({
+      pluginId: "tools-invoke-test",
+      source: "test",
+      names: ["tools_invoke_test"],
+      optional: false,
+      factory: () => ({
+        label: "Tools Invoke Test",
+        name: "tools_invoke_test",
+        description: "Test-only tool.",
+        parameters: {
+          type: "object",
+          properties: {
+            mode: { type: "string" },
+          },
+          required: ["mode"],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId, args) => {
+          const mode = (args as { mode?: unknown }).mode;
+          if (mode === "input") {
+            throw new ToolInputError("mode invalid");
+          }
+          if (mode === "crash") {
+            throw new Error("boom");
+          }
+          return { ok: true };
+        },
+      }),
+    });
+    setTestPluginRegistry(registry);
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      plugins: { enabled: true },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    const token = resolveGatewayToken();
+
+    try {
+      const inputRes = await invokeTool({
+        port: sharedPort,
+        tool: "tools_invoke_test",
+        args: { mode: "input" },
+        headers: { authorization: `Bearer ${token}` },
+        sessionKey: "main",
+      });
+      expect(inputRes.status).toBe(400);
+      const inputBody = await inputRes.json();
+      expect(inputBody.ok).toBe(false);
+      expect(inputBody.error?.type).toBe("tool_error");
+      expect(inputBody.error?.message).toBe("mode invalid");
+
+      const crashRes = await invokeTool({
+        port: sharedPort,
+        tool: "tools_invoke_test",
+        args: { mode: "crash" },
+        headers: { authorization: `Bearer ${token}` },
+        sessionKey: "main",
+      });
+      expect(crashRes.status).toBe(500);
+      const crashBody = await crashRes.json();
+      expect(crashBody.ok).toBe(false);
+      expect(crashBody.error?.type).toBe("tool_error");
+      expect(crashBody.error?.message).toBe("tool execution failed");
+    } finally {
+      await writeConfigFile({
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any);
+      resetTestPluginRegistry();
+    }
   });
 });
