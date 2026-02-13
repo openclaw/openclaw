@@ -208,4 +208,16 @@ describe("formatMentionText", () => {
 
     expect(result).toBe("Hello world");
   });
+
+  it("escapes regex metacharacters in names", () => {
+    const text = "Hey @John(Test) and @Alice.Smith";
+    const mentions = [
+      { id: "28:xxx", name: "John(Test)" },
+      { id: "28:yyy", name: "Alice.Smith" },
+    ];
+
+    const result = formatMentionText(text, mentions);
+
+    expect(result).toBe("Hey <at>John(Test)</at> and <at>Alice.Smith</at>");
+  });
 });
