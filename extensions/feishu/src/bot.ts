@@ -4,6 +4,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  emitMessageReceived,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
@@ -686,6 +687,39 @@ export async function handleFeishuMessage(params: {
             },
           });
         }
+
+        // Emit message_received hook so plugins (e.g. bot-company) can journal
+        // non-@mention messages. The metadata shape mirrors dispatch-from-config.
+        const mentionsForHook = (event.message.mentions ?? []).map((m) => ({
+          userId: m.id.open_id ?? m.id.user_id ?? "",
+          userName: m.name,
+        }));
+        emitMessageReceived(
+          {
+            from: `feishu:${ctx.senderOpenId}`,
+            content: ctx.content,
+            timestamp: Date.now(),
+            metadata: {
+              provider: "feishu",
+              surface: "feishu",
+              to: `chat:${ctx.chatId}`,
+              messageId: ctx.messageId,
+              senderId: ctx.senderOpenId,
+              senderName: ctx.senderName ?? ctx.senderOpenId,
+              rootId: ctx.rootId,
+              parentId: ctx.parentId,
+              msgType: ctx.contentType,
+              mentionsJson: JSON.stringify(mentionsForHook),
+              eventId: event.message.message_id,
+            },
+          },
+          {
+            channelId: "feishu",
+            accountId: account.accountId,
+            conversationId: `chat:${ctx.chatId}`,
+          },
+        );
+
         return;
       }
     }
