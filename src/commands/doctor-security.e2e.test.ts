@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
+const pluginRegistry = vi.hoisted(() => ({ list: [] as any[] }));
 
 vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: () => [],
+  listChannelPlugins: () => pluginRegistry.list,
 }));
 
 import { noteSecurityWarnings } from "./doctor-security.js";
@@ -19,6 +20,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
   beforeEach(() => {
     note.mockClear();
+    pluginRegistry.list = [];
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -72,5 +74,32 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const message = lastMessage();
     expect(message).toContain("No channel security warnings detected");
     expect(message).not.toContain("Gateway bound");
+  });
+
+  it("shows explicit dmScope config command for multi-user DMs", async () => {
+    pluginRegistry.list = [
+      {
+        id: "whatsapp",
+        meta: { label: "WhatsApp" },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        security: {
+          resolveDmPolicy: () => ({
+            policy: "allowlist",
+            allowFrom: ["alice", "bob"],
+            allowFromPath: "channels.whatsapp.",
+            approveHint: "approve",
+          }),
+        },
+      },
+    ];
+    const cfg = { session: { dmScope: "main" } } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain('config set session.dmScope "per-channel-peer"');
   });
 });

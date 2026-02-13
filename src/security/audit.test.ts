@@ -589,6 +589,7 @@ describe("security audit", () => {
         expect.objectContaining({
           checkId: "channels.whatsapp.dm.scope_main_multiuser",
           severity: "warn",
+          remediation: expect.stringContaining('config set session.dmScope "per-channel-peer"'),
         }),
       ]),
     );

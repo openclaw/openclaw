@@ -87,6 +87,48 @@ describe("setupChannels", () => {
     expect(multiselect).not.toHaveBeenCalled();
   });
 
+  it("shows explicit dmScope config command in channel primer", async () => {
+    const note = vi.fn(async () => {});
+    const select = vi.fn(async () => "__done__");
+    const multiselect = vi.fn(async () => {
+      throw new Error("unexpected multiselect");
+    });
+    const text = vi.fn(async ({ message }: { message: string }) => {
+      throw new Error(`unexpected text prompt: ${message}`);
+    });
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note,
+      select,
+      multiselect,
+      text: text as unknown as WizardPrompter["text"],
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await setupChannels({} as OpenClawConfig, runtime, prompter, {
+      skipConfirm: true,
+    });
+
+    const sawPrimer = note.mock.calls.some(
+      ([message, title]) =>
+        title === "How channels work" &&
+        String(message).includes('config set session.dmScope "per-channel-peer"'),
+    );
+    expect(sawPrimer).toBe(true);
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
   it("prompts for configured channel action and skips configuration when told to skip", async () => {
     const select = vi.fn(async ({ message }: { message: string }) => {
       if (message === "Select channel (QuickStart)") {
