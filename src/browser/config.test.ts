@@ -140,6 +140,25 @@ describe("browser config", () => {
     expect(() => resolveBrowserConfig({ cdpUrl: "ws://127.0.0.1:18791" })).toThrow(/must be http/i);
   });
 
+  it("passes extra args through to resolved config (#14803)", () => {
+    const resolved = resolveBrowserConfig({
+      args: ["--use-angle=vulkan", "--enable-features=Vulkan"],
+    });
+    expect(resolved.args).toEqual(["--use-angle=vulkan", "--enable-features=Vulkan"]);
+  });
+
+  it("defaults args to empty array when omitted", () => {
+    const resolved = resolveBrowserConfig(undefined);
+    expect(resolved.args).toEqual([]);
+  });
+
+  it("filters out non-string and empty args entries", () => {
+    const resolved = resolveBrowserConfig({
+      args: ["--valid", "", 42, null, "--also-valid"] as unknown as string[],
+    });
+    expect(resolved.args).toEqual(["--valid", "--also-valid"]);
+  });
+
   it("does not add the built-in chrome extension profile if the derived relay port is already used", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
