@@ -5,6 +5,7 @@ import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
+  resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
   resolveStorePath,
   type SessionEntry,
@@ -120,11 +121,13 @@ export async function getStatusSummary(): Promise<StatusSummary> {
         const model = entry?.model ?? configModel ?? null;
         const contextTokens =
           entry?.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null;
-        const total = typeof entry?.totalTokens === "number" ? entry.totalTokens : null;
+        const total = resolveFreshSessionTotalTokens(entry);
+        const totalTokensFresh =
+          typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
         const remaining =
-          contextTokens != null && total != null ? Math.max(0, contextTokens - total) : null;
+          contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
         const pct =
-          contextTokens && contextTokens > 0 && total != null
+          contextTokens && contextTokens > 0 && total !== undefined
             ? Math.min(999, Math.round((total / contextTokens) * 100))
             : null;
         const parsedAgentId = parseAgentSessionKey(key)?.agentId;
@@ -146,6 +149,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
           inputTokens: entry?.inputTokens,
           outputTokens: entry?.outputTokens,
           totalTokens: total ?? null,
+          totalTokensFresh,
           remainingTokens: remaining,
           percentUsed: pct,
           model,

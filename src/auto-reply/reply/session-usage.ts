@@ -67,6 +67,7 @@ export async function persistSessionUsageUpdate(params: {
             outputTokens: output,
             // Missing a last-call snapshot means context utilization is stale/unknown.
             totalTokens,
+            totalTokensFresh: typeof totalTokens === "number",
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
             contextTokens: resolvedContextTokens,

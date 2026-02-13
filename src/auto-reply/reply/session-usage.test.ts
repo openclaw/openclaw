@@ -44,6 +44,7 @@ describe("persistSessionUsageUpdate", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     // totalTokens should reflect lastCallUsage (12_000 input), not accumulated (180_000)
     expect(stored[sessionKey].totalTokens).toBe(12_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
     // inputTokens/outputTokens still reflect accumulated usage for cost tracking
     expect(stored[sessionKey].inputTokens).toBe(180_000);
     expect(stored[sessionKey].outputTokens).toBe(10_000);
@@ -68,6 +69,7 @@ describe("persistSessionUsageUpdate", () => {
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBeUndefined();
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 
   it("uses promptTokens when available without lastCallUsage", async () => {
@@ -90,6 +92,7 @@ describe("persistSessionUsageUpdate", () => {
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(42_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
   it("keeps non-clamped lastCallUsage totalTokens when exceeding context window", async () => {
@@ -112,5 +115,6 @@ describe("persistSessionUsageUpdate", () => {
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(250_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 });

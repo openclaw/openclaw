@@ -180,6 +180,7 @@ describe("runReplyAgent messaging tool suppression", () => {
     expect(store[sessionKey]?.inputTokens).toBe(10);
     expect(store[sessionKey]?.outputTokens).toBe(5);
     expect(store[sessionKey]?.totalTokens).toBeUndefined();
+    expect(store[sessionKey]?.totalTokensFresh).toBe(false);
     expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
   });
 
@@ -211,6 +212,7 @@ describe("runReplyAgent messaging tool suppression", () => {
     expect(result).toBeUndefined();
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store[sessionKey]?.totalTokens).toBe(42_000);
+    expect(store[sessionKey]?.totalTokensFresh).toBe(true);
     expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
   });
 });
