@@ -39,6 +39,10 @@ const SMS_DANGEROUS_COMMANDS = ["sms.send"];
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = ["system.notify"];
 
+// Android nodes don't implement system.run/which, but they do support notifications.
+const ANDROID_SYSTEM_COMMANDS = ["system.notify"];
+
+// Full system commands for desktop platforms (macOS, Linux, Windows)
 const SYSTEM_COMMANDS = [
   "system.run",
   "system.which",
@@ -82,6 +86,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...REMINDERS_COMMANDS,
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
+    ...ANDROID_SYSTEM_COMMANDS,
   ],
   macos: [
     ...CANVAS_COMMANDS,
