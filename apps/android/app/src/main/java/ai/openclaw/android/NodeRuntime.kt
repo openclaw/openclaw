@@ -284,6 +284,8 @@ class NodeRuntime(context: Context) {
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
+  val gatewayToken: StateFlow<String> = prefs.gatewayToken
+  val gatewayPassword: StateFlow<String> = prefs.gatewayPassword
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
 
@@ -418,6 +420,12 @@ class NodeRuntime(context: Context) {
 
   fun setManualHost(value: String) {
     prefs.setManualHost(value)
+    // Auto-suggest port 443 and TLS for .ts.net hosts (Tailscale serve uses HTTPS/443).
+    // Only auto-set when port is still the default; user can still override afterward.
+    if (value.trim().endsWith(".ts.net", ignoreCase = true) && manualPort.value == SecurePrefs.DEFAULT_GATEWAY_PORT) {
+      prefs.setManualPort(443)
+      prefs.setManualTls(true)
+    }
   }
 
   fun setManualPort(value: Int) {
@@ -426,6 +434,14 @@ class NodeRuntime(context: Context) {
 
   fun setManualTls(value: Boolean) {
     prefs.setManualTls(value)
+  }
+
+  fun setGatewayToken(value: String) {
+    prefs.saveGatewayToken(value)
+  }
+
+  fun setGatewayPassword(value: String) {
+    prefs.saveGatewayPassword(value)
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
@@ -541,7 +557,7 @@ class NodeRuntime(context: Context) {
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-control-ui", clientMode = "ui"),
+      client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
   }
@@ -600,8 +616,14 @@ class NodeRuntime(context: Context) {
   fun connectManual() {
     val host = manualHost.value.trim()
     val port = manualPort.value
+    if (BuildConfig.DEBUG) {
+      android.util.Log.d("OpenClawGateway", "connectManual: host=$host port=$port")
+    }
     if (host.isEmpty() || port <= 0 || port > 65535) {
       _statusText.value = "Failed: invalid manual host/port"
+      if (BuildConfig.DEBUG) {
+        android.util.Log.d("OpenClawGateway", "connectManual: invalid host/port")
+      }
       return
     }
     connect(GatewayEndpoint.manual(host = host, port = port))
@@ -619,7 +641,9 @@ class NodeRuntime(context: Context) {
     val manual = endpoint.stableId.startsWith("manual|")
 
     if (manual) {
-      if (!manualTls.value) return null
+      // Auto-enable TLS for .ts.net hosts (Tailscale serve always uses HTTPS).
+      val isTailscale = endpoint.host.endsWith(".ts.net", ignoreCase = true)
+      if (!manualTls.value && !isTailscale) return null
       return GatewayTlsParams(
         required = true,
         expectedFingerprint = endpoint.tlsFingerprintSha256 ?: stored,

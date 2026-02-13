@@ -618,20 +618,50 @@ class GatewaySession(
     val host = parsed?.host?.trim().orEmpty()
     val port = parsed?.port ?: -1
     val scheme = parsed?.scheme?.trim().orEmpty().ifBlank { "http" }
+    // Preserve path and query from the advertised URL (e.g. reverse proxy path prefix).
+    val pathSuffix = buildString {
+      val p = parsed?.rawPath.orEmpty()
+      if (p.isNotBlank() && p != "/") append(p)
+      val q = parsed?.rawQuery
+      if (!q.isNullOrBlank()) append("?$q")
+    }
+    // Preserve explicit non-default port from the advertised URL.
+    val portSuffix = if (port > 0 && port != 443) ":$port" else ""
+
+    // If the advertised URL has a non-loopback .ts.net host, use HTTPS (preserve explicit port).
+    if (host.endsWith(".ts.net", ignoreCase = true)) {
+      return "https://$host$portSuffix$pathSuffix"
+    }
 
     if (trimmed.isNotBlank() && !isLoopbackHost(host)) {
       return trimmed
     }
 
+    // Tailnet DNS and endpoint host branches replace the advertised host entirely,
+    // so we don't carry over portSuffix (which came from the advertised URL, likely
+    // a loopback address). Use endpoint.canvasPort if explicitly configured.
+    val tailnetPortSuffix = endpoint.canvasPort?.let { if (it != 443) ":$it" else "" } ?: ""
+
+    // Prefer tailnet DNS → uses HTTPS via Tailscale serve (default port 443).
+    val tailnetHost = endpoint.tailnetDns?.trim().takeIf { !it.isNullOrEmpty() }
+    if (tailnetHost != null) {
+      return "https://$tailnetHost$tailnetPortSuffix$pathSuffix"
+    }
+
+    // Check if the endpoint host itself is a .ts.net name.
+    val endpointHost = endpoint.host.trim()
+    if (endpointHost.endsWith(".ts.net", ignoreCase = true)) {
+      return "https://$endpointHost$tailnetPortSuffix$pathSuffix"
+    }
+
     val fallbackHost =
-      endpoint.tailnetDns?.trim().takeIf { !it.isNullOrEmpty() }
-        ?: endpoint.lanHost?.trim().takeIf { !it.isNullOrEmpty() }
-        ?: endpoint.host.trim()
+      endpoint.lanHost?.trim().takeIf { !it.isNullOrEmpty() }
+        ?: endpointHost
     if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
 
     val fallbackPort = endpoint.canvasPort ?: if (port > 0) port else 18793
     val formattedHost = if (fallbackHost.contains(":")) "[${fallbackHost}]" else fallbackHost
-    return "$scheme://$formattedHost:$fallbackPort"
+    return "$scheme://$formattedHost:$fallbackPort$pathSuffix"
   }
 
   private fun isLoopbackHost(raw: String?): Boolean {
