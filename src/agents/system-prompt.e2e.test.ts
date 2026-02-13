@@ -111,6 +111,8 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("`[System Message] ...` blocks are internal context");
     expect(prompt).toContain("are not user-visible by default");
+    expect(prompt).toContain("reports completed cron/subagent work");
+    expect(prompt).toContain("rewrite it in your normal assistant voice");
   });
 
   it("guides subagent workflows to avoid polling loops", () => {

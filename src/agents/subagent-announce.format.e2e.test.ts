@@ -122,8 +122,9 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("Result:");
     expect(msg).toContain("raw subagent reply");
     expect(msg).toContain("Stats:");
-    expect(msg).toContain("Reply with a natural user update");
-    expect(msg).toContain("keep this internal context private");
+    expect(msg).toContain("A completed subagent task is ready for user delivery.");
+    expect(msg).toContain("Convert the result above into your normal assistant voice");
+    expect(msg).toContain("Keep this internal context private");
   });
 
   it("includes success status when outcome is ok", async () => {
@@ -183,8 +184,10 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("tokens 1.0k (in 12 / out 1.0k)");
     expect(msg).toContain("prompt/cache 197.0k");
     expect(msg).toContain("[sessionId: child-session-usage]");
-    expect(msg).toContain("Reply with a natural user update");
-    expect(msg).toContain("ONLY: NO_REPLY");
+    expect(msg).toContain("A completed subagent task is ready for user delivery.");
+    expect(msg).toContain(
+      "Reply ONLY: NO_REPLY if this exact result was already delivered to the user in this same turn.",
+    );
     expect(msg).toContain("step-0");
     expect(msg).toContain("step-139");
   });
