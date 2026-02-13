@@ -168,6 +168,8 @@ function localSecretsExist(storePath: string): boolean {
 function insertSecrets(storePath: string, secrets: Array<{ name: string; value: string }>): void {
   const db = openCryptoDb(storePath);
   try {
+    // Create table if missing (fresh DB before OlmMachine first init)
+    db.exec("CREATE TABLE IF NOT EXISTS secrets (secret_name BLOB NOT NULL, data BLOB NOT NULL)");
     const del = db.prepare("DELETE FROM secrets WHERE secret_name = ?");
     const ins = db.prepare("INSERT INTO secrets (secret_name, data) VALUES (?, ?)");
     for (const { name, value } of secrets) {
