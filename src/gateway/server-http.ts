@@ -51,7 +51,7 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
-import { resolveGatewayClientIp } from "./net.js";
+import { isPrivateOrLoopbackAddress, resolveGatewayClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
@@ -141,6 +141,13 @@ async function authorizeCanvasRequest(params: {
     trustedProxies,
   });
   if (!clientIp) {
+    return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
+  }
+
+  // IP-based fallback is only safe for machine-scoped addresses.
+  // Only allow IP-based fallback for private/loopback addresses to prevent
+  // cross-session access in shared-IP environments (corporate NAT, cloud).
+  if (!isPrivateOrLoopbackAddress(clientIp)) {
     return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
   }
   if (hasAuthorizedWsClientForIp(clients, clientIp)) {
