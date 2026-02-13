@@ -4,6 +4,7 @@ import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
 import path from "node:path";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { loadConfig } from "../config/config.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -53,6 +54,7 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { resolveSkillEnvForAgent } from "./skills.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
@@ -1040,7 +1042,20 @@ export function createExecTool(
         }
         const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
 
-        const nodeEnv = params.env ? { ...params.env } : undefined;
+        // Resolve skill environment variables for the agent
+        const cfg = loadConfig();
+        const skillEnv = agentId ? resolveSkillEnvForAgent({ agentId, config: cfg }) : {};
+
+        // Validate skill env vars through host env sanitizer to prevent security bypass
+        if (Object.keys(skillEnv).length > 0) {
+          validateHostEnv(skillEnv);
+        }
+
+        // Merge skill env vars with user-provided env vars (user env takes precedence)
+        const nodeEnv =
+          params.env || Object.keys(skillEnv).length > 0
+            ? { ...skillEnv, ...params.env }
+            : undefined;
 
         if (nodeEnv) {
           applyPathPrepend(nodeEnv, defaultPathPrepend, { requireExisting: true });

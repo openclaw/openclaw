@@ -87,3 +87,69 @@ export function applySkillEnvOverridesFromSnapshot(params: {
     }
   };
 }
+
+/**
+ * Resolves skill environment variables for a given agent.
+ * Returns a merged object of all env vars from the agent's assigned skills.
+ */
+export function resolveSkillEnvForAgent(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+}): Record<string, string> {
+  const { agentId, config } = params;
+  const env: Record<string, string> = {};
+
+  if (!config?.agents?.list) {
+    return env;
+  }
+
+  // Find the agent config
+  const agentConfig = config.agents.list.find((agent) => agent.id === agentId);
+  if (!agentConfig) {
+    return env;
+  }
+
+  // Get the agent's skills (undefined means all skills, empty array means no skills)
+  const agentSkills = agentConfig.skills;
+  if (agentSkills !== undefined && agentSkills.length === 0) {
+    return env;
+  }
+
+  // Iterate through skills and collect env vars
+  const skillEntries = config.skills?.entries;
+  if (!skillEntries || typeof skillEntries !== "object") {
+    return env;
+  }
+
+  for (const [skillKey, skillConfig] of Object.entries(skillEntries)) {
+    if (!skillConfig || typeof skillConfig !== "object") {
+      continue;
+    }
+
+    // Skip disabled skills
+    if (skillConfig.enabled === false) {
+      continue;
+    }
+
+    // If agent has specific skills list, check if this skill is included
+    if (agentSkills !== undefined && !agentSkills.includes(skillKey)) {
+      continue;
+    }
+
+    // Add skill env vars
+    if (skillConfig.env) {
+      for (const [envKey, envValue] of Object.entries(skillConfig.env)) {
+        if (envValue) {
+          env[envKey] = envValue;
+        }
+      }
+    }
+
+    // Note: We don't include skillConfig.apiKey here since primaryEnv
+    // would require resolving the skill metadata, which is not available
+    // without loading the actual skill entries. This can be enhanced later
+    // if needed, but env vars should cover most use cases.
+  }
+
+  return env;
+}

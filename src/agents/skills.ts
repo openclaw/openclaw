@@ -13,6 +13,7 @@ export {
 export {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
+  resolveSkillEnvForAgent,
 } from "./skills/env-overrides.js";
 export type {
   OpenClawSkillMetadata,
