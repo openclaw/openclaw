@@ -336,8 +336,13 @@ def cmd_read(args: argparse.Namespace) -> None:
             query = query.eq(key, value)
 
     # Apply search patterns (ILIKE with % wildcards)
+    # List = OR by default. Use {"col": {"all": ["%a%", "%b%"]}} for AND.
     for key, patterns in search.items():
-        if isinstance(patterns, list):
+        if isinstance(patterns, dict) and "all" in patterns:
+            # AND search: all patterns must match
+            for p in patterns["all"]:
+                query = query.ilike(key, p)
+        elif isinstance(patterns, list):
             or_conds = ",".join(f"{key}.ilike.{p}" for p in patterns)
             query = query.or_(or_conds)
         else:
@@ -490,6 +495,11 @@ def cmd_write(args: argparse.Namespace) -> None:
             op["data"] = normalize_numeric(op["data"])
         if op.get("updates"):
             op["updates"] = normalize_numeric(op["updates"])
+
+    # Validate required fields for create/upsert operations
+    for i, op in enumerate(sorted_ops):
+        if op["action"] in ("create", "upsert"):
+            _validate_required_fields(i, op)
 
     # Dry run — just preview
     if dry_run:
@@ -650,6 +660,43 @@ def _enrich_operation(op: dict[str, Any]) -> None:
     if op["action"] == "update" and op.get("updates"):
         if "updated_at" in columns and "updated_at" not in op["updates"]:
             op["updates"]["updated_at"] = now
+
+
+def _validate_required_fields(op_index: int, op: dict[str, Any]) -> None:
+    """Check that required fields (without defaults) are provided in create/upsert data."""
+    table = op["table"]
+    schema = get_table_schema(table)
+    if not schema:
+        return
+    columns = schema.get("columns", {})
+
+    # Find required columns that have no default and aren't auto-enriched
+    auto_fields = {"id", "created_at", "updated_at"}
+    required_no_default = []
+    for col_name, col_info in columns.items():
+        is_required = col_info.get("required") or not col_info.get("nullable", True)
+        has_default = bool(col_info.get("default"))
+        if is_required and not has_default and col_name not in auto_fields:
+            required_no_default.append(col_name)
+
+    if not required_no_default:
+        return
+
+    data = op.get("data")
+    if not data:
+        return
+
+    rows = data if isinstance(data, list) else [data]
+    for row_idx, row in enumerate(rows):
+        # Skip @ref values — they'll be resolved at execution time
+        provided = {k for k, v in row.items() if not (isinstance(v, str) and v.startswith("@"))}
+        missing = [c for c in required_no_default if c not in provided]
+        if missing:
+            loc = f"Operation {op_index}" + (f", row {row_idx}" if isinstance(data, list) else "")
+            error_exit(
+                f"{loc} ({op['action']} on {table}): missing required fields: {missing}",
+                hint=f"These columns have no default. Add them to your data or use 'inspect {table}' to check.",
+            )
 
 
 def _categorize_error(error_msg: str) -> str:

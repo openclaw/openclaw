@@ -107,8 +107,11 @@ python scripts/db_tool.py read <table_name> --filters '{"price": {"gt": 100, "lt
 # Find records containing specific text  
 python scripts/db_tool.py read <table_name> --search '{"name": "%<search_term>%"}'
 
-# Multiple search patterns (OR logic)
+# Multiple search patterns (OR — matches any)
 python scripts/db_tool.py read <table_name> --search '{"name": ["%<term1>%", "%<term2>%"]}'
+
+# Multiple search patterns (AND — matches all)
+python scripts/db_tool.py read <table_name> --search '{"name": {"all": ["%<term1>%", "%<term2>%"]}}'
 ```
 
 ### Combine filters + search + columns
@@ -417,6 +420,9 @@ All examples in this doc use bash-style for readability. **In PowerShell, escape
 
 # Multiple terms (OR)
 --search '{"<column>": ["%<term1>%", "%<term2>%"]}'
+
+# Multiple terms (AND — all must match)
+--search '{"<column>": {"all": ["%<term1>%", "%<term2>%"]}}'
 ```
 
 ### Common WriteIntent Structure
@@ -456,9 +462,10 @@ Run this whenever tables/columns change in Supabase. Uses the PostgREST OpenAPI 
 
 ## Known Limitations
 
-1. **Aggregate filters** — only support exact match and lists (IN), not operators like `{"gt": 100}`. Workaround: use `read` with operators first, then aggregate client-side.
-2. **Expression updates** — can't do `price * 1.1`. Read → calculate → write with literal values.
-3. **Some tables restrict aggregates** — RLS policies may block `dynamic_aggregate` on certain tables.
+1. **Aggregate filters** — only exact match and lists (IN), not operators like `{"gt": 100}`. Workaround: use `read` with operators, then aggregate client-side.
+2. **Aggregate HAVING** — may fail if the RPC doesn't recognize column aliases. Workaround: aggregate without HAVING, filter results client-side.
+3. **Expression updates** — can't do `price * 1.1`. Read → calculate → write with literal values.
+4. **Some tables restrict aggregates** — RLS policies may block `dynamic_aggregate` on certain tables.
 
 ---
 
