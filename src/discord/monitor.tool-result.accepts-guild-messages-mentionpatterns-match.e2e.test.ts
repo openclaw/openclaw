@@ -2,6 +2,7 @@ import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
 
 const sendMock = vi.fn();
@@ -52,9 +53,34 @@ beforeEach(() => {
   vi.useRealTimers();
   sendMock.mockReset().mockResolvedValue(undefined);
   updateLastRouteMock.mockReset();
-  dispatchMock.mockReset().mockImplementation(async ({ dispatcher }) => {
-    dispatcher.sendFinalReply({ text: "hi" });
-    return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+  dispatchMock.mockReset().mockImplementation(async (params: unknown) => {
+    if (
+      typeof params === "object" &&
+      params !== null &&
+      "dispatcher" in params &&
+      typeof params.dispatcher === "object" &&
+      params.dispatcher !== null &&
+      "sendFinalReply" in params.dispatcher &&
+      typeof params.dispatcher.sendFinalReply === "function"
+    ) {
+      params.dispatcher.sendFinalReply({ text: "hi" });
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    }
+    if (
+      typeof params === "object" &&
+      params !== null &&
+      "dispatcherOptions" in params &&
+      params.dispatcherOptions
+    ) {
+      const { dispatcher, markDispatchIdle } = createReplyDispatcherWithTyping(
+        params.dispatcherOptions as Parameters<typeof createReplyDispatcherWithTyping>[0],
+      );
+      dispatcher.sendFinalReply({ text: "final reply" });
+      await dispatcher.waitForIdle();
+      markDispatchIdle();
+      return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
+    }
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   });
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
@@ -150,87 +176,54 @@ describe("discord tool result dispatch", () => {
   );
 
   it(
-    "accepts guild messages when mentionPatterns match even if another user is mentioned",
+    "skips tool results for native slash commands",
+    { timeout: MENTION_PATTERNS_TEST_TIMEOUT_MS },
     async () => {
-      const { createDiscordMessageHandler } = await import("./monitor.js");
+      const { createDiscordNativeCommand } = await import("./monitor.js");
       const cfg = {
         agents: {
           defaults: {
             model: "anthropic/claude-opus-4-5",
+            humanDelay: { mode: "off" },
             workspace: "/tmp/openclaw",
           },
         },
         session: { store: "/tmp/openclaw-sessions.json" },
-        channels: {
-          discord: {
-            dm: { enabled: true, policy: "open" },
-            groupPolicy: "open",
-            guilds: { "*": { requireMention: true } },
-          },
-        },
-        messages: {
-          responsePrefix: "PFX",
-          groupChat: { mentionPatterns: ["\\bopenclaw\\b"] },
-        },
+        discord: { dm: { enabled: true, policy: "open" } },
       } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
-      const handler = createDiscordMessageHandler({
+      const command = createDiscordNativeCommand({
+        command: {
+          name: "verbose",
+          description: "Toggle verbose mode.",
+          acceptsArgs: true,
+        },
         cfg,
-        discordConfig: cfg.channels.discord,
+        discordConfig: cfg.discord,
         accountId: "default",
         token: "token",
-        runtime: {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: (code: number): never => {
-            throw new Error(`exit ${code}`);
-          },
-        },
-        botUserId: "bot-id",
-        guildHistories: new Map(),
-        historyLimit: 0,
-        mediaMaxBytes: 10_000,
-        textLimit: 2000,
-        replyToMode: "off",
-        dmEnabled: true,
-        groupDmEnabled: false,
-        guildEntries: { "*": { requireMention: true } },
+        sessionPrefix: "discord:slash",
+        ephemeralDefault: true,
       });
 
-      const client = {
-        fetchChannel: vi.fn().mockResolvedValue({
-          type: ChannelType.GuildText,
-          name: "general",
-        }),
-      } as unknown as Client;
+      const reply = vi.fn().mockResolvedValue(undefined);
+      const followUp = vi.fn().mockResolvedValue(undefined);
 
-      await handler(
-        {
-          message: {
-            id: "m2",
-            content: "openclaw: hello",
-            channelId: "c1",
-            timestamp: new Date().toISOString(),
-            type: MessageType.Default,
-            attachments: [],
-            embeds: [],
-            mentionedEveryone: false,
-            mentionedUsers: [{ id: "u2", bot: false, username: "Bea" }],
-            mentionedRoles: [],
-            author: { id: "u1", bot: false, username: "Ada" },
-          },
-          author: { id: "u1", bot: false, username: "Ada" },
-          member: { nickname: "Ada" },
-          guild: { id: "g1", name: "Guild" },
-          guild_id: "g1",
-        },
-        client,
-      );
+      await command.run({
+        user: { id: "u1", username: "Ada", globalName: "Ada" },
+        channel: { type: ChannelType.DM },
+        guild: null,
+        rawData: { id: "i1" },
+        options: { getString: vi.fn().mockReturnValue("on") },
+        reply,
+        followUp,
+      });
 
       expect(dispatchMock).toHaveBeenCalledTimes(1);
-      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(reply).toHaveBeenCalledTimes(1);
+      expect(followUp).toHaveBeenCalledTimes(0);
+      expect(reply.mock.calls[0]?.[0]?.content).toContain("final");
     },
-    MENTION_PATTERNS_TEST_TIMEOUT_MS,
   );
 
   it("accepts guild reply-to-bot messages as implicit mentions", async () => {

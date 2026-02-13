@@ -83,9 +83,7 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-    });
+    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
 
     const [event, context] = hookMocks.runner.runAfterToolCall.mock.calls[0];
     expect(event.toolName).toBe("read");
@@ -149,9 +147,7 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-    });
+    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
 
     const [event] = hookMocks.runner.runAfterToolCall.mock.calls[0];
     expect(event.error).toBeDefined();

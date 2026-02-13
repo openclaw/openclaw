@@ -187,7 +187,8 @@ export function getActiveTaskCount(): number {
  * already executing are waited on.
  */
 export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolean }> {
-  const POLL_INTERVAL_MS = 250;
+  // Keep shutdown/drain checks responsive without busy looping.
+  const POLL_INTERVAL_MS = 50;
   const deadline = Date.now() + timeoutMs;
   const activeAtStart = new Set<number>();
   for (const state of lanes.values()) {

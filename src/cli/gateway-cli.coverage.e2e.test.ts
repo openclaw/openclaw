@@ -55,14 +55,10 @@ async function withEnvOverride<T>(
 
 vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
-  async (importOriginal) => {
-    const mod = await importOriginal();
-    return {
-      ...mod,
-      callGateway: (opts: unknown) => callGateway(opts),
-      randomIdempotencyKey: () => "rk_test",
-    };
-  },
+  () => ({
+    callGateway: (opts: unknown) => callGateway(opts),
+    randomIdempotencyKey: () => "rk_test",
+  }),
 );
 
 vi.mock("../gateway/server.js", () => ({
