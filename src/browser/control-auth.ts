@@ -58,6 +58,11 @@ export async function ensureBrowserControlAuth(params: {
     return { auth };
   }
 
+  // Respect explicit trusted-proxy mode (no token/password needed).
+  if (params.cfg.gateway?.auth?.mode === "trusted-proxy") {
+    return { auth };
+  }
+
   // Re-read latest config to avoid racing with concurrent config writers.
   const latestCfg = loadConfig();
   const latestAuth = resolveBrowserControlAuth(latestCfg, env);
@@ -65,6 +70,9 @@ export async function ensureBrowserControlAuth(params: {
     return { auth: latestAuth };
   }
   if (latestCfg.gateway?.auth?.mode === "password") {
+    return { auth: latestAuth };
+  }
+  if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
     return { auth: latestAuth };
   }
 
