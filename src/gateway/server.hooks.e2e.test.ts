@@ -199,6 +199,115 @@ describe("gateway server hooks", () => {
     }
   });
 
+  test("rejects request sessionKey unless hooks.allowRequestSessionKey is enabled", async () => {
+    testState.hooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    try {
+      const denied = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({
+          message: "Do it",
+          sessionKey: "agent:main:dm:u99999",
+        }),
+      });
+      expect(denied.status).toBe(400);
+      const deniedBody = (await denied.json()) as { error?: string };
+      expect(deniedBody.error).toContain("hooks.allowRequestSessionKey");
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("respects hooks session policy for request + mapping session keys", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: "hook-secret",
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+      defaultSessionKey: "hook:ingress",
+      mappings: [
+        {
+          match: { path: "mapped-ok" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "hook:mapped:{{payload.id}}",
+        },
+        {
+          match: { path: "mapped-bad" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "agent:main:main",
+        },
+      ],
+    };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    try {
+      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+
+      const defaultRoute = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ message: "No key" }),
+      });
+      expect(defaultRoute.status).toBe(202);
+      await waitForSystemEvent();
+      const defaultCall = cronIsolatedRun.mock.calls[0]?.[0] as { sessionKey?: string } | undefined;
+      expect(defaultCall?.sessionKey).toBe("hook:ingress");
+      drainSystemEvents(resolveMainKey());
+
+      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+      const mappedOk = await fetch(`http://127.0.0.1:${port}/hooks/mapped-ok`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ subject: "hello", id: "42" }),
+      });
+      expect(mappedOk.status).toBe(202);
+      await waitForSystemEvent();
+      const mappedCall = cronIsolatedRun.mock.calls[0]?.[0] as { sessionKey?: string } | undefined;
+      expect(mappedCall?.sessionKey).toBe("hook:mapped:42");
+      drainSystemEvents(resolveMainKey());
+
+      const requestBadPrefix = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({
+          message: "Bad key",
+          sessionKey: "agent:main:main",
+        }),
+      });
+      expect(requestBadPrefix.status).toBe(400);
+
+      const mappedBadPrefix = await fetch(`http://127.0.0.1:${port}/hooks/mapped-bad`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ subject: "hello" }),
+      });
+      expect(mappedBadPrefix.status).toBe(400);
+    } finally {
+      await server.close();
+    }
+  });
+
   test("enforces hooks.allowedAgentIds for explicit agent routing", async () => {
     testState.hooksConfig = {
       enabled: true,
