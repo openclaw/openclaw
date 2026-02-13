@@ -1,4 +1,8 @@
-import { buildThreadKey, getThreadRegistry } from "../config/thread-registry.js";
+import {
+  buildThreadKey,
+  getThreadRegistry,
+  type ThreadBinding,
+} from "../config/thread-registry.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
 
 export {
@@ -265,6 +269,7 @@ export function resolveSessionKeyWithBinding(params: {
   sessionKey: string;
   boundSessions?: string[];
   parentSessionKey?: string;
+  threadBinding?: ThreadBinding;
 } {
   const { baseSessionKey, channel, accountId, threadId, useSuffix } = params;
   const trimmedThreadId = (threadId ?? "").trim();
@@ -280,9 +285,12 @@ export function resolveSessionKeyWithBinding(params: {
   const boundSessions = registry.lookup(threadKey);
 
   if (boundSessions.length > 0) {
+    const primaryKey = boundSessions[0];
+    const binding = registry.getBindingData(primaryKey);
     return {
-      sessionKey: boundSessions[0], // Primary bound session
+      sessionKey: primaryKey, // Primary bound session
       boundSessions,
+      threadBinding: binding,
     };
   }
 

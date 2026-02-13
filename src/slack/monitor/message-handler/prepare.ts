@@ -3,6 +3,7 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { PreparedSlackMessage } from "./types.js";
 import { resolveAckReaction } from "../../../agents/identity.js";
+import { isEmbeddedPiRunActive } from "../../../agents/pi-embedded-runner/runs.js";
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
 import {
@@ -30,12 +31,16 @@ import { logInboundDrop } from "../../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating.js";
 import { recordInboundSession } from "../../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
+import { loadSessionStore } from "../../../config/sessions/store.js";
+import { bindSessionToThread } from "../../../config/thread-registry.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { buildPairingReply } from "../../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import {
+  isSubagentSessionKey,
+  parseAgentSessionKey,
   resolveSessionKeyWithBinding,
   resolveThreadSessionKeys,
 } from "../../../routing/session-key.js";
@@ -48,6 +53,7 @@ import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
+import { fetchThreadHistoryForRevival } from "./thread-history.js";
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
@@ -203,19 +209,93 @@ export async function prepareSlackMessage(params: {
 
   // Check thread-binding registry first (explicit bindings take priority).
   // Falls back to the legacy suffix-based key when no binding is found.
-  const threadKeys = isThreadReply
-    ? resolveSessionKeyWithBinding({
-        baseSessionKey,
-        channel: "slack",
-        accountId: account.accountId,
-        threadId: threadTs,
-        parentSessionKey: ctx.threadInheritParent ? baseSessionKey : undefined,
-      })
-    : resolveThreadSessionKeys({
-        baseSessionKey,
-        threadId: undefined,
-      });
-  const sessionKey = threadKeys.sessionKey;
+  let sessionKey: string;
+  let parentSessionKey: string | undefined;
+  let threadRevivalContext: string | undefined;
+
+  if (isThreadReply) {
+    const threadKeys = resolveSessionKeyWithBinding({
+      baseSessionKey,
+      channel: "slack",
+      accountId: account.accountId,
+      threadId: threadTs,
+      parentSessionKey: ctx.threadInheritParent ? baseSessionKey : undefined,
+    });
+
+    sessionKey = threadKeys.sessionKey;
+    parentSessionKey = threadKeys.parentSessionKey;
+
+    // Thread revival: When a thread reply targets a dead subagent session,
+    // create a new thread-scoped session with context from the thread history.
+    if (threadKeys.boundSessions?.length && threadKeys.threadBinding) {
+      const primaryBoundKey = threadKeys.boundSessions[0];
+
+      // Check if the bound session is a completed subagent
+      if (isSubagentSessionKey(primaryBoundKey)) {
+        const parsed = parseAgentSessionKey(primaryBoundKey);
+        const agentId = parsed?.agentId;
+
+        if (agentId) {
+          // Check if the subagent run is still active
+          const storePath = resolveStorePath(cfg.session?.store, { agentId });
+          const store = loadSessionStore(storePath);
+          const entry = store[primaryBoundKey.toLowerCase()] ?? store[primaryBoundKey];
+          const sessionId = entry?.sessionId;
+          const isActive = sessionId ? isEmbeddedPiRunActive(sessionId) : false;
+
+          if (!isActive) {
+            // REVIVAL: Create new thread-scoped session key
+            const threadSessionKey = `agent:${agentId}:slack:channel:${message.channel}:thread:${threadTs}`;
+
+            // Re-bind the thread to the new session key
+            const binding = threadKeys.threadBinding;
+            try {
+              await bindSessionToThread({
+                storePath,
+                sessionKey: threadSessionKey,
+                binding: { ...binding, boundAt: Date.now() },
+              });
+              sessionKey = threadSessionKey;
+            } catch (err) {
+              ctx.logger.error(
+                "Failed to bind session to thread, falling back to original session key",
+                err,
+              );
+              // Fall back to the original session key
+            }
+
+            // Fetch thread history for context
+            const threadHistory = await fetchThreadHistoryForRevival({
+              channelId: message.channel,
+              threadTs: threadTs ?? "",
+              client: ctx.app.client,
+              botUserId: ctx.botUserId,
+              limit: 20,
+            });
+
+            // Build revival context message
+            const revivalPreamble = `[Thread Revival] This thread was originally handled by a sub-agent session that has completed. You are continuing the conversation in this thread as agent "${agentId}".`;
+
+            threadRevivalContext = threadHistory
+              ? `${revivalPreamble}\n\n${threadHistory}`
+              : revivalPreamble;
+
+            logVerbose(
+              `slack: thread revival — dead session ${primaryBoundKey} → new session ${threadSessionKey}`,
+            );
+          }
+        }
+      }
+    }
+  } else {
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey,
+      threadId: undefined,
+    });
+    sessionKey = threadKeys.sessionKey;
+    parentSessionKey = threadKeys.parentSessionKey;
+  }
+
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
@@ -452,6 +532,11 @@ export async function prepareSlackMessage(params: {
     });
   }
 
+  // Inject thread revival context if this is a revived thread
+  if (threadRevivalContext) {
+    combinedBody = `${threadRevivalContext}\n\n${combinedBody}`;
+  }
+
   const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
 
   const untrustedChannelMetadata = isRoomish
@@ -531,7 +616,7 @@ export async function prepareSlackMessage(params: {
     ReplyToId: threadContext.replyToId,
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
-    ParentSessionKey: threadKeys.parentSessionKey,
+    ParentSessionKey: parentSessionKey,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,

@@ -275,7 +275,7 @@ export function createSessionsSpawnTool(opts?: {
       let resolvedThreadBinding: ThreadBinding | undefined;
 
       if (threadBindingParams) {
-        const deliveryMode = threadBindingParams.deliveryMode ?? "thread-only";
+        const deliveryMode = threadBindingParams.deliveryMode ?? "thread+announcer";
 
         if (threadBindingParams.mode === "bind") {
           // Bind to an existing thread
