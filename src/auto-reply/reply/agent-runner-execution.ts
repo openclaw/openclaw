@@ -554,7 +554,8 @@ export async function runAgentTurnWithFallback(params: {
         try {
           // Delete transcript file if it exists
           if (corruptedSessionId) {
-            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
+            const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId, agentId);
             try {
               fs.unlinkSync(transcriptPath);
             } catch {
