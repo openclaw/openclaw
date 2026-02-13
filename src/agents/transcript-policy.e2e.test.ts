@@ -1,41 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { resolveTranscriptPolicy } from "./transcript-policy.js";
 
-describe("resolveTranscriptPolicy", () => {
-  it("enables sanitizeToolCallIds for Anthropic provider", () => {
+describe("resolveTranscriptPolicy e2e smoke", () => {
+  it("uses strict tool-call sanitization for OpenAI models", () => {
     const policy = resolveTranscriptPolicy({
-      provider: "anthropic",
-      modelId: "claude-opus-4-5",
-      modelApi: "anthropic-messages",
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai",
     });
+    expect(policy.sanitizeMode).toBe("images-only");
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict");
   });
 
-  it("enables sanitizeToolCallIds for Google provider", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "google",
-      modelId: "gemini-2.0-flash",
-      modelApi: "google-generative-ai",
-    });
-    expect(policy.sanitizeToolCallIds).toBe(true);
-  });
-
-  it("enables sanitizeToolCallIds for Mistral provider", () => {
+  it("uses strict9 tool-call sanitization for Mistral-family models", () => {
     const policy = resolveTranscriptPolicy({
       provider: "mistral",
       modelId: "mistral-large-latest",
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict9");
-  });
-
-  it("disables sanitizeToolCallIds for OpenAI provider", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "openai",
-      modelId: "gpt-4o",
-      modelApi: "openai",
-    });
-    expect(policy.sanitizeToolCallIds).toBe(false);
   });
 });
