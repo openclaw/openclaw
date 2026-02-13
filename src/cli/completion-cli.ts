@@ -234,16 +234,42 @@ export function registerCompletionCli(program: Command) {
       "Write completion scripts to $OPENCLAW_STATE_DIR/completions (no stdout)",
     )
     .option("-y, --yes", "Skip confirmation (non-interactive)", false)
+    .option("--full", "Load all subcommands for complete nested completions (slow, ~4-5s)", false)
     .action(async (options) => {
       const shell = options.shell ?? "zsh";
-      // Eagerly register all subcommands to build the full tree
-      const entries = getSubCliEntries();
-      for (const entry of entries) {
-        // Skip completion command itself to avoid cycle if we were to add it to the list
-        if (entry.name === "completion") {
-          continue;
+
+      // When caching, always use full mode to preserve nested completions
+      const shouldUseFull = options.full || options.writeState;
+
+      // Fast path: generate completions from metadata only (default for interactive use)
+      // This avoids loading all CLI modules and is 20-30x faster
+      // NOTE: These stubs are ONLY for completion generation, not for actual command execution
+      if (!shouldUseFull) {
+        const entries = getSubCliEntries();
+        // Register lightweight stubs for top-level commands
+        for (const entry of entries) {
+          if (entry.name === "completion") {
+            continue;
+          }
+          // Check if command already exists (for idempotency)
+          const existing = program.commands.find((cmd) => cmd.name() === entry.name);
+          if (!existing) {
+            // Register a minimal command with just name and description
+            // This is sufficient for completion script generation
+            program.command(entry.name).description(entry.description);
+          }
         }
-        await registerSubCliByName(program, entry.name);
+      } else {
+        // Slow path: eagerly register all subcommands to build the full tree
+        // This provides complete nested subcommand completions but takes ~4-5s
+        // Used when --full is passed or when caching with --write-state
+        const entries = getSubCliEntries();
+        for (const entry of entries) {
+          if (entry.name === "completion") {
+            continue;
+          }
+          await registerSubCliByName(program, entry.name);
+        }
       }
 
       if (options.writeState) {
