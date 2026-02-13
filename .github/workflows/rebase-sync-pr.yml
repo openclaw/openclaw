@@ -133,17 +133,17 @@ jobs:
             -q '.[0].number')
 
           BODY_FILE=$(mktemp)
-          cat > "$BODY_FILE" <<'EOF'
-Automated rebase sync PR.
-
-Policy enforced:
-- Rebase-only from `upstream/main`
-- No direct force-push to target branch
-- Temp branch push only
-- Build smoke checks completed before PR creation
-
-If conflicts or failed checks happen, automation stops and requires human intervention.
-EOF
+          {
+            echo "Automated rebase sync PR."
+            echo
+            echo "Policy enforced:"
+            echo "- Rebase-only from \\`upstream/main\\`"
+            echo "- No direct force-push to target branch"
+            echo "- Temp branch push only"
+            echo "- Build smoke checks completed before PR creation"
+            echo
+            echo "If conflicts or failed checks happen, automation stops and requires human intervention."
+          } > "$BODY_FILE"
 
           if [ -n "${PR_NUMBER}" ] && [ "${PR_NUMBER}" != "null" ]; then
             gh pr edit "$PR_NUMBER" \
