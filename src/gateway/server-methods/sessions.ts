@@ -69,6 +69,25 @@ function migrateAndPruneSessionStoreKey(params: {
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
+function archiveSessionTranscriptsForSession(params: {
+  sessionId: string | undefined;
+  storePath: string;
+  sessionFile?: string;
+  agentId?: string;
+  reason: "reset" | "deleted";
+}): string[] {
+  if (!params.sessionId) {
+    return [];
+  }
+  return archiveSessionTranscripts({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+    agentId: params.agentId,
+    reason: params.reason,
+  });
+}
+
 export const sessionsHandlers: GatewayRequestHandlers = {
   "sessions.list": ({ params, respond }) => {
     if (!validateSessionsListParams(params)) {
@@ -295,15 +314,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return nextEntry;
     });
     // Archive old transcript so it doesn't accumulate on disk (#14869).
-    if (oldSessionId) {
-      archiveSessionTranscripts({
-        sessionId: oldSessionId,
-        storePath,
-        sessionFile: oldSessionFile,
-        agentId: target.agentId,
-        reason: "reset",
-      });
-    }
+    archiveSessionTranscriptsForSession({
+      sessionId: oldSessionId,
+      storePath,
+      sessionFile: oldSessionFile,
+      agentId: target.agentId,
+      reason: "reset",
+    });
     respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
   },
   "sessions.delete": async ({ params, respond }) => {
@@ -372,16 +389,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     });
 
-    const archived =
-      deleteTranscript && sessionId
-        ? archiveSessionTranscripts({
-            sessionId,
-            storePath,
-            sessionFile: entry?.sessionFile,
-            agentId: target.agentId,
-            reason: "deleted",
-          })
-        : [];
+    const archived = deleteTranscript
+      ? archiveSessionTranscriptsForSession({
+          sessionId,
+          storePath,
+          sessionFile: entry?.sessionFile,
+          agentId: target.agentId,
+          reason: "deleted",
+        })
+      : [];
 
     respond(true, { ok: true, key: target.canonicalKey, deleted: existed, archived }, undefined);
   },
