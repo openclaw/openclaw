@@ -634,65 +634,60 @@ async function runKimiSearch(params: {
     },
   ];
 
-  // Step 1: Initial request — Kimi's $web_search is a builtin tool that
-  // triggers a server-side search. The first response returns
-  // finish_reason="tool_calls" with a search_id in the arguments.
-  const res1 = await fetch(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ model: params.model, messages, tools }),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
+  // Kimi's $web_search is a builtin tool that triggers server-side searches.
+  // The model may need multiple rounds — each round returns
+  // finish_reason="tool_calls" until it has enough information to answer.
+  const allCitations: string[] = [];
+  const MAX_ROUNDS = 5;
 
-  if (!res1.ok) {
-    const detail = await readResponseText(res1);
-    throw new Error(`Kimi API error (${res1.status}): ${detail || res1.statusText}`);
-  }
-
-  const data1 = (await res1.json()) as KimiSearchResponse;
-  const choice1 = data1.choices?.[0];
-
-  // If the model answered directly without searching, return immediately.
-  if (choice1?.finish_reason !== "tool_calls") {
-    return {
-      content: choice1?.message?.content ?? "No response",
-      citations: extractKimiCitations(data1),
-    };
-  }
-
-  // Step 2: Echo the tool call back so Kimi synthesizes an answer from
-  // the search results. Kimi's reasoning mode requires reasoning_content
-  // on the echoed assistant message.
-  const assistantMsg = choice1.message ?? {};
-  messages.push({
-    ...assistantMsg,
-    reasoning_content: "Searching the web for relevant information.",
-  });
-
-  for (const toolCall of assistantMsg.tool_calls ?? []) {
-    messages.push({
-      role: "tool",
-      tool_call_id: toolCall.id,
-      content: toolCall.function?.arguments ?? "{}",
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: params.model, messages, tools }),
+      signal: withTimeout(undefined, params.timeoutSeconds * 1000),
     });
+
+    if (!res.ok) {
+      const detail = await readResponseText(res);
+      throw new Error(`Kimi API error (${res.status}): ${detail || res.statusText}`);
+    }
+
+    const data = (await res.json()) as KimiSearchResponse;
+    allCitations.push(...extractKimiCitations(data));
+    const choice = data.choices?.[0];
+
+    // Model answered — return the final content.
+    if (choice?.finish_reason !== "tool_calls") {
+      return {
+        content: choice?.message?.content ?? "No response",
+        citations: [...new Set(allCitations)],
+      };
+    }
+
+    // Echo the assistant tool_calls back so Kimi can continue searching
+    // or synthesize the final answer. reasoning_content is required by
+    // Kimi's reasoning mode and must be non-empty.
+    const assistantMsg = choice.message ?? {};
+    messages.push({
+      ...assistantMsg,
+      reasoning_content: "Searching the web for relevant information.",
+    });
+
+    for (const toolCall of assistantMsg.tool_calls ?? []) {
+      messages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: toolCall.function?.arguments ?? "{}",
+      });
+    }
   }
 
-  const res2 = await fetch(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ model: params.model, messages, tools }),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
-
-  if (!res2.ok) {
-    const detail = await readResponseText(res2);
-    throw new Error(`Kimi API error (${res2.status}): ${detail || res2.statusText}`);
-  }
-
-  const data2 = (await res2.json()) as KimiSearchResponse;
-  const content = data2.choices?.[0]?.message?.content ?? "No response";
-
-  return { content, citations: extractKimiCitations(data2) };
+  // Exhausted all rounds — return whatever the last message had.
+  return {
+    content: "Search completed but no final answer was produced.",
+    citations: [...new Set(allCitations)],
+  };
 }
 
 function extractKimiCitations(data: KimiSearchResponse): string[] {
