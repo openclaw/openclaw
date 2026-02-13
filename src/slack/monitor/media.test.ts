@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import * as mediaStore from "../../media/store.js";
-import { fetchWithSlackAuth, resolveSlackMedia, resolveSlackThreadHistory } from "./media.js";
+import {
+  buildSlackMediaPayload,
+  fetchWithSlackAuth,
+  resolveSlackMedia,
+  resolveSlackMediaList,
+  resolveSlackThreadHistory,
+} from "./media.js";
 
 // Store original fetch
 const originalFetch = globalThis.fetch;
@@ -359,20 +365,14 @@ describe("resolveSlackMediaList", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    vi.resetModules();
     vi.restoreAllMocks();
   });
 
   it("returns all successfully downloaded files", async () => {
-    vi.doMock("../../media/store.js", () => ({
-      saveMediaBuffer: vi
-        .fn()
-        .mockResolvedValueOnce({ path: "/tmp/first.jpg", contentType: "image/jpeg" })
-        .mockResolvedValueOnce({ path: "/tmp/second.pdf", contentType: "application/pdf" })
-        .mockResolvedValueOnce({ path: "/tmp/third.png", contentType: "image/png" }),
-    }));
-
-    const { resolveSlackMediaList } = await import("./media.js");
+    vi.spyOn(mediaStore, "saveMediaBuffer")
+      .mockResolvedValueOnce({ path: "/tmp/first.jpg", contentType: "image/jpeg" })
+      .mockResolvedValueOnce({ path: "/tmp/second.pdf", contentType: "application/pdf" })
+      .mockResolvedValueOnce({ path: "/tmp/third.png", contentType: "image/png" });
 
     mockFetch
       .mockResolvedValueOnce(
@@ -420,13 +420,10 @@ describe("resolveSlackMediaList", () => {
   });
 
   it("skips failed downloads but returns successful ones", async () => {
-    vi.doMock("../../media/store.js", () => ({
-      saveMediaBuffer: vi
-        .fn()
-        .mockResolvedValueOnce({ path: "/tmp/second.jpg", contentType: "image/jpeg" }),
-    }));
-
-    const { resolveSlackMediaList } = await import("./media.js");
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/second.jpg",
+      contentType: "image/jpeg",
+    });
 
     // First file: network error, second file: success
     mockFetch.mockRejectedValueOnce(new Error("Network error")).mockResolvedValueOnce(
@@ -453,8 +450,6 @@ describe("resolveSlackMediaList", () => {
   });
 
   it("returns empty array when no files provided", async () => {
-    const { resolveSlackMediaList } = await import("./media.js");
-
     const result = await resolveSlackMediaList({
       files: [],
       token: "xoxb-test-token",
@@ -465,8 +460,6 @@ describe("resolveSlackMediaList", () => {
   });
 
   it("returns empty array when all downloads fail", async () => {
-    const { resolveSlackMediaList } = await import("./media.js");
-
     mockFetch.mockRejectedValueOnce(new Error("fail"));
 
     const result = await resolveSlackMediaList({
@@ -480,9 +473,7 @@ describe("resolveSlackMediaList", () => {
 });
 
 describe("buildSlackMediaPayload", () => {
-  it("populates singular fields from first item and arrays from all items", async () => {
-    const { buildSlackMediaPayload } = await import("./media.js");
-
+  it("populates singular fields from first item and arrays from all items", () => {
     const payload = buildSlackMediaPayload([
       { path: "/tmp/a.jpg", contentType: "image/jpeg", placeholder: "[Slack file: a.jpg]" },
       { path: "/tmp/b.pdf", contentType: "application/pdf", placeholder: "[Slack file: b.pdf]" },
@@ -496,18 +487,14 @@ describe("buildSlackMediaPayload", () => {
     expect(payload.MediaTypes).toEqual(["image/jpeg", "application/pdf"]);
   });
 
-  it("returns empty fields for empty list", async () => {
-    const { buildSlackMediaPayload } = await import("./media.js");
-
+  it("returns empty fields for empty list", () => {
     const payload = buildSlackMediaPayload([]);
 
     expect(payload.MediaPath).toBeUndefined();
     expect(payload.MediaPaths).toBeUndefined();
   });
 
-  it("preserves positional alignment when some items lack contentType", async () => {
-    const { buildSlackMediaPayload } = await import("./media.js");
-
+  it("preserves positional alignment when some items lack contentType", () => {
     const payload = buildSlackMediaPayload([
       { path: "/tmp/a.jpg", contentType: "image/jpeg", placeholder: "[Slack file: a.jpg]" },
       { path: "/tmp/b.bin", placeholder: "[Slack file: b.bin]" }, // no contentType
@@ -520,9 +507,7 @@ describe("buildSlackMediaPayload", () => {
     expect(payload.MediaTypes).toHaveLength(payload.MediaPaths!.length);
   });
 
-  it("handles single item list", async () => {
-    const { buildSlackMediaPayload } = await import("./media.js");
-
+  it("handles single item list", () => {
     const payload = buildSlackMediaPayload([
       { path: "/tmp/only.jpg", contentType: "image/jpeg", placeholder: "[Slack file: only.jpg]" },
     ]);
