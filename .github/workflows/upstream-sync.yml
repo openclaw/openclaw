@@ -55,12 +55,19 @@ jobs:
           set -euo pipefail
           BRANCH="sync/upstream-main-$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
           git checkout -B "${BRANCH}" origin/main
+          BASE_SHA="$(git rev-parse HEAD)"
           git merge --no-ff upstream/main -m "chore(sync): merge upstream/main"
+          if [[ "$(git rev-parse HEAD)" == "${BASE_SHA}" ]]; then
+            echo "SYNC_CREATED=false" >> "$GITHUB_ENV"
+            echo "Merge produced no changes; skipping PR creation."
+            exit 0
+          fi
           git push -u origin "${BRANCH}"
           echo "SYNC_BRANCH=${BRANCH}" >> "$GITHUB_ENV"
+          echo "SYNC_CREATED=true" >> "$GITHUB_ENV"
 
       - name: Open PR
-        if: steps.check.outputs.needs_sync == 'true'
+        if: steps.check.outputs.needs_sync == 'true' && env.SYNC_CREATED == 'true'
         env:
           GH_TOKEN: ${{ secrets.OPENCLAW_SYNC_PAT }}
           FALLBACK_GH_TOKEN: ${{ github.token }}
