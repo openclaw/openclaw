@@ -456,7 +456,7 @@ export function buildQianfanProvider(): ProviderConfig {
         reasoning: true,
         input: ["text"],
         cost: QIANFAN_DEFAULT_COST,
-        contextWindow: 20000,
+        contextWindow: 200000,
         maxTokens: 192000,
       },
       {
