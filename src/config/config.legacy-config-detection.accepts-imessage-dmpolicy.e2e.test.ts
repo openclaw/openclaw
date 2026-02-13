@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import {
+  loadConfig,
+  migrateLegacyConfig,
+  readConfigFileSnapshot,
+  validateConfigObject,
+} from "./config.js";
 import { withTempHome } from "./test-helpers.js";
 
 describe("legacy config detection", () => {
   it('accepts imessage.dmPolicy="open" with allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { imessage: { dmPolicy: "open", allowFrom: ["*"] } },
     });
@@ -16,8 +20,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults imessage.dmPolicy to pairing when imessage section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { imessage: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -25,8 +27,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults imessage.groupPolicy to allowlist when imessage section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { imessage: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -34,8 +34,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults discord.groupPolicy to allowlist when discord section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { discord: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -43,8 +41,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults slack.groupPolicy to allowlist when slack section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { slack: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -52,8 +48,6 @@ describe("legacy config detection", () => {
     }
   });
   it("defaults msteams.groupPolicy to allowlist when msteams section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({ channels: { msteams: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -61,8 +55,6 @@ describe("legacy config detection", () => {
     }
   });
   it("rejects unsafe executable config values", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { imessage: { cliPath: "imsg; rm -rf /" } },
       audio: { transcription: { command: ["whisper", "--model", "base"] } },
@@ -73,16 +65,12 @@ describe("legacy config detection", () => {
     }
   });
   it("accepts tools audio transcription without cli", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       audio: { transcription: { command: ["whisper", "--model", "base"] } },
     });
     expect(res.ok).toBe(true);
   });
   it("accepts path-like executable values with spaces", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { imessage: { cliPath: "/Applications/Imsg Tools/imsg" } },
       audio: {
@@ -94,8 +82,6 @@ describe("legacy config detection", () => {
     expect(res.ok).toBe(true);
   });
   it('rejects discord.dm.policy="open" without allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { discord: { dm: { policy: "open", allowFrom: ["123"] } } },
     });
@@ -105,8 +91,6 @@ describe("legacy config detection", () => {
     }
   });
   it('rejects slack.dm.policy="open" without allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] } } },
     });
@@ -116,8 +100,6 @@ describe("legacy config detection", () => {
     }
   });
   it("rejects legacy agent.model string", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       agent: { model: "anthropic/claude-opus-4-5" },
     });
@@ -127,8 +109,6 @@ describe("legacy config detection", () => {
     }
   });
   it("migrates telegram.requireMention to channels.telegram.groups.*.requireMention", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       telegram: { requireMention: false },
     });
@@ -139,8 +119,6 @@ describe("legacy config detection", () => {
     expect(res.config?.channels?.telegram?.requireMention).toBeUndefined();
   });
   it("migrates messages.tts.enabled to messages.tts.auto", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       messages: { tts: { enabled: true } },
     });
@@ -149,8 +127,6 @@ describe("legacy config detection", () => {
     expect(res.config?.messages?.tts?.enabled).toBeUndefined();
   });
   it("migrates legacy model config to agent.models + model lists", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       agent: {
         model: "anthropic/claude-opus-4-5",
@@ -184,8 +160,6 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { readConfigFileSnapshot } = await import("./config.js");
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
@@ -210,8 +184,6 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { readConfigFileSnapshot } = await import("./config.js");
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
@@ -238,8 +210,6 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
       expect(cfg.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
 
@@ -260,8 +230,6 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { readConfigFileSnapshot } = await import("./config.js");
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
@@ -286,8 +254,6 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { readConfigFileSnapshot } = await import("./config.js");
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
@@ -318,8 +284,6 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { readConfigFileSnapshot } = await import("./config.js");
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
@@ -348,8 +312,6 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { readConfigFileSnapshot } = await import("./config.js");
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
@@ -382,8 +344,6 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { readConfigFileSnapshot } = await import("./config.js");
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
@@ -406,8 +366,6 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { readConfigFileSnapshot } = await import("./config.js");
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
