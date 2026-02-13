@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - Slack: detect control commands when channel messages start with bot mention prefixes (for example, `@Bot /new`). (#14142) Thanks @beefiker.
 - Signal: enforce E.164 validation for the Signal bot account prompt so mistyped numbers are caught early. (#15063) Thanks @Duartemartins.
 - Discord: process DM reactions instead of silently dropping them. (#10418) Thanks @mcaxtr.
+- Discord: treat Administrator as full permissions in channel permission checks. Thanks @thewilloftheshadow.
 - Discord: respect replyToMode in threads. (#11062) Thanks @cordx56.
 - Heartbeat: filter noise-only system events so scheduled reminder notifications do not fire when cron runs carry only heartbeat markers. (#13317) Thanks @pvtclawn.
 - Signal: render mention placeholders as `@uuid`/`@phone` so mention gating and Clawdbot targeting work. (#2013) Thanks @alexgleason.
