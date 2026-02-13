@@ -615,7 +615,12 @@ export async function monitorZulipProvider(
 
           stage = "handle";
           for (const msg of messages) {
-            await handleMessage(msg);
+            // Fire-and-forget with error handling for concurrent processing
+            handleMessage(msg).catch((err) => {
+              runtime.error?.(`zulip: message processing failed: ${String(err)}`);
+            });
+            // Small stagger between starting each message for natural pacing
+            await sleep(200, abortSignal).catch(() => undefined);
           }
 
           retry = 0;
