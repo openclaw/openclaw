@@ -50,7 +50,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("uses proxy agent for gateway WebSocket when configured", async () => {
-    const { __testing } = await import("./provider.js");
+    const { createDiscordGatewayPlugin } = await import("./gateway-plugin.js");
     const { GatewayPlugin } = await import("@buape/carbon/gateway");
 
     const runtime = {
@@ -61,7 +61,7 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     };
 
-    const plugin = __testing.createDiscordGatewayPlugin({
+    const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
     });
@@ -82,7 +82,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("falls back to the default gateway plugin when proxy is invalid", async () => {
-    const { __testing } = await import("./provider.js");
+    const { createDiscordGatewayPlugin } = await import("./gateway-plugin.js");
     const { GatewayPlugin } = await import("@buape/carbon/gateway");
 
     const runtime = {
@@ -93,7 +93,7 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     };
 
-    const plugin = __testing.createDiscordGatewayPlugin({
+    const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "bad-proxy" },
       runtime,
     });
