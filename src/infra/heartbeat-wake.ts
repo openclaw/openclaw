@@ -146,6 +146,23 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () =
   handlerGeneration += 1;
   const generation = handlerGeneration;
   handler = next;
+  if (next) {
+    // New lifecycle starting (e.g. after SIGUSR1 in-process restart).
+    // Clear any timer metadata from the previous lifecycle so stale retry
+    // cooldowns do not delay a fresh handler.
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timer = null;
+    timerDueAt = null;
+    timerKind = null;
+    // Reset module-level execution state that may be stale from interrupted
+    // runs in the previous lifecycle. Without this, `running === true` from
+    // an interrupted heartbeat blocks all future schedule() attempts, and
+    // `scheduled === true` can cause spurious immediate re-runs.
+    running = false;
+    scheduled = false;
+  }
   if (handler && pendingWake) {
     schedule(DEFAULT_COALESCE_MS, "normal");
   }

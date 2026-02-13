@@ -29,10 +29,10 @@ type QueueEntry = {
 type LaneState = {
   lane: string;
   queue: QueueEntry[];
-  active: number;
   activeTaskIds: Set<number>;
   maxConcurrent: number;
   draining: boolean;
+  generation: number;
 };
 
 const lanes = new Map<string, LaneState>();
@@ -46,13 +46,21 @@ function getLaneState(lane: string): LaneState {
   const created: LaneState = {
     lane,
     queue: [],
-    active: 0,
     activeTaskIds: new Set(),
     maxConcurrent: 1,
     draining: false,
+    generation: 0,
   };
   lanes.set(lane, created);
   return created;
+}
+
+function completeTask(state: LaneState, taskId: number, taskGeneration: number): boolean {
+  if (taskGeneration !== state.generation) {
+    return false;
+  }
+  state.activeTaskIds.delete(taskId);
+  return true;
 }
 
 function drainLane(lane: string) {
@@ -63,7 +71,7 @@ function drainLane(lane: string) {
   state.draining = true;
 
   const pump = () => {
-    while (state.active < state.maxConcurrent && state.queue.length > 0) {
+    while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
       const entry = state.queue.shift() as QueueEntry;
       const waitedMs = Date.now() - entry.enqueuedAt;
       if (waitedMs >= entry.warnAfterMs) {
@@ -74,29 +82,31 @@ function drainLane(lane: string) {
       }
       logLaneDequeue(lane, waitedMs, state.queue.length);
       const taskId = nextTaskId++;
-      state.active += 1;
+      const taskGeneration = state.generation;
       state.activeTaskIds.add(taskId);
       void (async () => {
         const startTime = Date.now();
         try {
           const result = await entry.task();
-          state.active -= 1;
-          state.activeTaskIds.delete(taskId);
-          diag.debug(
-            `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.active} queued=${state.queue.length}`,
-          );
-          pump();
+          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+          if (completedCurrentGeneration) {
+            diag.debug(
+              `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
+            );
+            pump();
+          }
           entry.resolve(result);
         } catch (err) {
-          state.active -= 1;
-          state.activeTaskIds.delete(taskId);
+          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
           const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
           if (!isProbeLane) {
             diag.error(
               `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
             );
           }
-          pump();
+          if (completedCurrentGeneration) {
+            pump();
+          }
           entry.reject(err);
         }
       })();
@@ -134,7 +144,7 @@ export function enqueueCommandInLane<T>(
       warnAfterMs,
       onWait: opts?.onWait,
     });
-    logLaneEnqueue(cleaned, state.queue.length + state.active);
+    logLaneEnqueue(cleaned, state.queue.length + state.activeTaskIds.size);
     drainLane(cleaned);
   });
 }
@@ -155,13 +165,13 @@ export function getQueueSize(lane: string = CommandLane.Main) {
   if (!state) {
     return 0;
   }
-  return state.queue.length + state.active;
+  return state.queue.length + state.activeTaskIds.size;
 }
 
 export function getTotalQueueSize() {
   let total = 0;
   for (const s of lanes.values()) {
-    total += s.queue.length + s.active;
+    total += s.queue.length + s.activeTaskIds.size;
   }
   return total;
 }
@@ -181,13 +191,43 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
 }
 
 /**
+ * Reset all lane runtime state to idle. Used after SIGUSR1 in-process
+ * restarts where interrupted tasks' finally blocks may not run, leaving
+ * stale active task IDs that permanently block new work from draining.
+ *
+ * Bumps lane generation and clears execution counters so stale completions
+ * from old in-flight tasks are ignored. Queued entries are intentionally
+ * preserved — they represent pending user work that should still execute
+ * after restart.
+ *
+ * After resetting, drains any lanes that still have queued entries so
+ * preserved work is pumped immediately rather than waiting for a future
+ * `enqueueCommandInLane()` call (which may never come).
+ */
+export function resetAllLanes(): void {
+  const lanesToDrain: string[] = [];
+  for (const state of lanes.values()) {
+    state.generation += 1;
+    state.activeTaskIds.clear();
+    state.draining = false;
+    if (state.queue.length > 0) {
+      lanesToDrain.push(state.lane);
+    }
+  }
+  // Drain after the full reset pass so all lanes are in a clean state first.
+  for (const lane of lanesToDrain) {
+    drainLane(lane);
+  }
+}
+
+/**
  * Returns the total number of actively executing tasks across all lanes
  * (excludes queued-but-not-started entries).
  */
 export function getActiveTaskCount(): number {
   let total = 0;
   for (const s of lanes.values()) {
-    total += s.active;
+    total += s.activeTaskIds.size;
   }
   return total;
 }
