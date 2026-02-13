@@ -34,6 +34,7 @@ export type HookMappingContext = {
   headers: Record<string, string>;
   url: URL;
   path: string;
+  rawBody?: string;
 };
 
 export type HookAction =
@@ -422,6 +423,9 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
   }
   if (expr === "now") {
     return new Date().toISOString();
+  }
+  if (expr === "rawBody") {
+    return ctx.rawBody ?? "";
   }
   if (expr.startsWith("headers.")) {
     return getByPath(ctx.headers, expr.slice("headers.".length));
