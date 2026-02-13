@@ -41,7 +41,9 @@ const FIELD_TYPE_NAMES: Record<number, string> = {
 // ============ Core Functions ============
 
 /** Parse bitable URL and extract tokens */
-function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki: boolean } | null {
+function parseBitableUrl(
+  url: string,
+): { token: string; tableId?: string; isWiki: boolean } | null {
   try {
     const u = new URL(url);
     const tableId = u.searchParams.get("table") ?? undefined;
@@ -88,7 +90,10 @@ async function getAppTokenFromWiki(
 }
 
 /** Get bitable metadata from URL (handles both /base/ and /wiki/ URLs) */
-async function getBitableMeta(client: ReturnType<typeof createFeishuClient>, url: string) {
+async function getBitableMeta(
+  client: ReturnType<typeof createFeishuClient>,
+  url: string,
+) {
   const parsed = parseBitableUrl(url);
   if (!parsed) {
     throw new Error("Invalid URL format. Expected /base/XXX or /wiki/XXX URL");
@@ -250,20 +255,23 @@ async function updateRecord(
 
 const GetMetaSchema = Type.Object({
   url: Type.String({
-    description: "Bitable URL. Supports both formats: /base/XXX?table=YYY or /wiki/XXX?table=YYY",
+    description:
+      "Bitable URL. Supports both formats: /base/XXX?table=YYY or /wiki/XXX?table=YYY",
   }),
 });
 
 const ListFieldsSchema = Type.Object({
   app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
+    description:
+      "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
 });
 
 const ListRecordsSchema = Type.Object({
   app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
+    description:
+      "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   page_size: Type.Optional(
@@ -280,7 +288,8 @@ const ListRecordsSchema = Type.Object({
 
 const GetRecordSchema = Type.Object({
   app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
+    description:
+      "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   record_id: Type.String({ description: "Record ID to retrieve" }),
@@ -288,7 +297,8 @@ const GetRecordSchema = Type.Object({
 
 const CreateRecordSchema = Type.Object({
   app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
+    description:
+      "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   fields: Type.Record(Type.String(), Type.Any(), {
@@ -299,7 +309,8 @@ const CreateRecordSchema = Type.Object({
 
 const UpdateRecordSchema = Type.Object({
   app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
+    description:
+      "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   record_id: Type.String({ description: "Record ID to update" }),
@@ -312,14 +323,16 @@ const UpdateRecordSchema = Type.Object({
 
 export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_bitable: No config available, skipping bitable tools");
+    api.logger.debug?.(
+      "feishu_bitable: No config available, skipping bitable tools",
+    );
     return;
   }
 
   let validCfg: FeishuConfig;
 
   const feishuCfg = api.config?.channels?.feishu as FeishuConfig | undefined;
-  
+
   // Try single account config first (backward compatible)
   if (feishuCfg?.appId && feishuCfg?.appSecret) {
     // Single account mode - use top-level config
@@ -328,24 +341,13 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     // Multiple account mode - check accounts
     const accounts = listEnabledFeishuAccounts(api.config);
     if (accounts.length === 0) {
-      api.logger.debug?.("feishu_bitable: No Feishu accounts with credentials configured, skipping bitable tools");
+      api.logger.debug?.(
+        "feishu_bitable: No Feishu accounts with credentials configured, skipping bitable tools",
+      );
       return;
     }
-    // Filter accounts that have both appId and appSecret
-    const accountsWithCreds = accounts.filter(
-      (acc) => acc.config.appId && acc.config.appSecret
-    );
-    // Warn if not all accounts are well-configured
-    const misconfigured = accounts.filter(
-      (acc) => !acc.config.appId || !acc.config.appSecret
-    );
-    if (misconfigured.length > 0) {
-      api.logger.warn?.(
-        `feishu_bitable: ${misconfigured.length} account(s) missing appId/appSecret: ${misconfigured.map((a) => a.accountId).join(", ")}`
-      );
-    }
     // Use the first account with credentials
-    validCfg = accountsWithCreds[0].config;
+    validCfg = accounts[0].config;
   }
 
   const getClient = () => createFeishuClient(validCfg);
@@ -364,7 +366,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
           const result = await getBitableMeta(getClient(), url);
           return json(result);
         } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
+          return json({
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       },
     },
@@ -376,15 +380,21 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     {
       name: "feishu_bitable_list_fields",
       label: "Feishu Bitable List Fields",
-      description: "List all fields (columns) in a Bitable table with their types and properties",
+      description:
+        "List all fields (columns) in a Bitable table with their types and properties",
       parameters: ListFieldsSchema,
       async execute(_toolCallId, params) {
-        const { app_token, table_id } = params as { app_token: string; table_id: string };
+        const { app_token, table_id } = params as {
+          app_token: string;
+          table_id: string;
+        };
         try {
           const result = await listFields(getClient(), app_token, table_id);
           return json(result);
         } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
+          return json({
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       },
     },
@@ -396,7 +406,8 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     {
       name: "feishu_bitable_list_records",
       label: "Feishu Bitable List Records",
-      description: "List records (rows) from a Bitable table with pagination support",
+      description:
+        "List records (rows) from a Bitable table with pagination support",
       parameters: ListRecordsSchema,
       async execute(_toolCallId, params) {
         const { app_token, table_id, page_size, page_token } = params as {
@@ -406,10 +417,18 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
           page_token?: string;
         };
         try {
-          const result = await listRecords(getClient(), app_token, table_id, page_size, page_token);
+          const result = await listRecords(
+            getClient(),
+            app_token,
+            table_id,
+            page_size,
+            page_token,
+          );
           return json(result);
         } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
+          return json({
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       },
     },
@@ -430,10 +449,17 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
           record_id: string;
         };
         try {
-          const result = await getRecord(getClient(), app_token, table_id, record_id);
+          const result = await getRecord(
+            getClient(),
+            app_token,
+            table_id,
+            record_id,
+          );
           return json(result);
         } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
+          return json({
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       },
     },
@@ -454,10 +480,17 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
           fields: Record<string, unknown>;
         };
         try {
-          const result = await createRecord(getClient(), app_token, table_id, fields);
+          const result = await createRecord(
+            getClient(),
+            app_token,
+            table_id,
+            fields,
+          );
           return json(result);
         } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
+          return json({
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       },
     },
@@ -479,10 +512,18 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
           fields: Record<string, unknown>;
         };
         try {
-          const result = await updateRecord(getClient(), app_token, table_id, record_id, fields);
+          const result = await updateRecord(
+            getClient(),
+            app_token,
+            table_id,
+            record_id,
+            fields,
+          );
           return json(result);
         } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
+          return json({
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       },
     },
