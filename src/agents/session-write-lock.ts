@@ -16,7 +16,25 @@ type HeldLock = {
 const HELD_LOCKS = new Map<string, HeldLock>();
 const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
 type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
-const cleanupHandlers = new Map<CleanupSignal, () => void>();
+const CLEANUP_STATE_KEY = Symbol.for("openclaw.sessionWriteLockCleanupState");
+
+type CleanupState = {
+  registered: boolean;
+  cleanupHandlers: Map<CleanupSignal, () => void>;
+};
+
+function resolveCleanupState(): CleanupState {
+  const proc = process as NodeJS.Process & {
+    [CLEANUP_STATE_KEY]?: CleanupState;
+  };
+  if (!proc[CLEANUP_STATE_KEY]) {
+    proc[CLEANUP_STATE_KEY] = {
+      registered: false,
+      cleanupHandlers: new Map<CleanupSignal, () => void>(),
+    };
+  }
+  return proc[CLEANUP_STATE_KEY];
+}
 
 function isAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) {
@@ -52,13 +70,12 @@ function releaseAllLocksSync(): void {
   }
 }
 
-let cleanupRegistered = false;
-
 function handleTerminationSignal(signal: CleanupSignal): void {
   releaseAllLocksSync();
+  const cleanupState = resolveCleanupState();
   const shouldReraise = process.listenerCount(signal) === 1;
   if (shouldReraise) {
-    const handler = cleanupHandlers.get(signal);
+    const handler = cleanupState.cleanupHandlers.get(signal);
     if (handler) {
       process.off(signal, handler);
     }
@@ -71,10 +88,11 @@ function handleTerminationSignal(signal: CleanupSignal): void {
 }
 
 function registerCleanupHandlers(): void {
-  if (cleanupRegistered) {
+  const cleanupState = resolveCleanupState();
+  if (cleanupState.registered) {
     return;
   }
-  cleanupRegistered = true;
+  cleanupState.registered = true;
 
   // Cleanup on normal exit and process.exit() calls
   process.on("exit", () => {
@@ -85,7 +103,7 @@ function registerCleanupHandlers(): void {
   for (const signal of CLEANUP_SIGNALS) {
     try {
       const handler = () => handleTerminationSignal(signal);
-      cleanupHandlers.set(signal, handler);
+      cleanupState.cleanupHandlers.set(signal, handler);
       process.on(signal, handler);
     } catch {
       // Ignore unsupported signals on this platform.
