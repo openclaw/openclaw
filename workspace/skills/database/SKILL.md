@@ -437,9 +437,33 @@ All examples in this doc use bash-style for readability. **In PowerShell, escape
 
 ---
 
+## Schema Sync
+
+Keep `schema.json` in sync with the live database:
+
+```bash
+# Compare only (show drift)
+python scripts/sync_schema.py --compare-only
+
+# Sync (updates schema.json, backs up old one)
+python scripts/sync_schema.py
+```
+
+Run this whenever tables/columns change in Supabase. Uses the PostgREST OpenAPI spec — no manual work.
+
+---
+
+## Known Limitations
+
+1. **Aggregate filters** — only support exact match and lists (IN), not operators like `{"gt": 100}`. Workaround: use `read` with operators first, then aggregate client-side.
+2. **Expression updates** — can't do `price * 1.1`. Read → calculate → write with literal values.
+3. **Some tables restrict aggregates** — RLS policies may block `dynamic_aggregate` on certain tables.
+
+---
+
 ## References
 
-- `references/schema.json` — Complete database schema
+- `references/schema.json` — Complete database schema (sync with `sync_schema.py`)
 - `references/query_patterns.md` — More read/aggregate examples  
 - `references/write_patterns.md` — More WriteIntent examples
 
