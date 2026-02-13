@@ -687,7 +687,7 @@ export function resolveModelForTaskIntent(params: {
     return Boolean(merged.trivial?.trim() || merged.moderate?.trim() || merged.complex?.trim());
   })();
 
-  if (enabled && merged && merged.autoPickFromPool !== false) {
+  if (enabled && merged) {
     const rawOverride =
       (complexity === "trivial"
         ? merged.trivial

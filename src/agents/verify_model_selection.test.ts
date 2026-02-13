@@ -9,11 +9,11 @@ import {
 import { resolveDefaultModelForAgent, resolveCodingModelForAgent } from "./model-selection";
 import { resolveImplicitProviders } from "./models-config.providers";
 
-// Mock catalog with cost/recency variations
+// Mock catalog with cost/recency variations (uses current-gen models)
 const MOCK_CATALOG: ModelCatalogEntry[] = [
   {
-    id: "gpt-4o",
-    name: "GPT-4o",
+    id: "gpt-5",
+    name: "GPT-5",
     provider: "openai",
     reasoning: true,
     input: ["text", "image"],
@@ -21,8 +21,8 @@ const MOCK_CATALOG: ModelCatalogEntry[] = [
     contextWindow: 128000,
   },
   {
-    id: "gpt-4o-mini",
-    name: "GPT-4o Mini",
+    id: "gpt-5-nano",
+    name: "GPT-5 Nano",
     provider: "openai",
     reasoning: false,
     input: ["text"],
@@ -30,8 +30,8 @@ const MOCK_CATALOG: ModelCatalogEntry[] = [
     contextWindow: 128000,
   },
   {
-    id: "claude-3-5-sonnet-20241022",
-    name: "Claude 3.5 Sonnet",
+    id: "claude-sonnet-4-5",
+    name: "Claude Sonnet 4.5",
     provider: "anthropic",
     reasoning: true,
     input: ["text", "image"],
@@ -52,13 +52,13 @@ const MOCK_CATALOG: ModelCatalogEntry[] = [
 // Mock capabilities to align with catalog
 vi.mock("./model-capabilities", () => ({
   getModelCapabilitiesFromCatalog: (entry: ModelCatalogEntry) => {
-    if (entry.id === "gpt-4o-mini") {
+    if (entry.id === "gpt-5-nano") {
       return { performanceTier: "fast", costTier: "cheap", coding: true, reasoning: false };
     }
-    if (entry.id === "gpt-4o") {
+    if (entry.id === "gpt-5") {
       return { performanceTier: "powerful", costTier: "expensive", coding: true, reasoning: true };
     }
-    if (entry.id === "claude-3-5-sonnet-20241022") {
+    if (entry.id === "claude-sonnet-4-5") {
       return { performanceTier: "balanced", costTier: "moderate", coding: true, reasoning: true };
     }
     return { performanceTier: "fast", costTier: "expensive", coding: false };
@@ -92,7 +92,7 @@ describe("Model Selection Verification", () => {
       agents: {
         defaults: {
           model: { primary: "openai/legacy-model" },
-          codingModel: { primary: "anthropic/claude-3-5-sonnet-20241022" },
+          codingModel: { primary: "anthropic/claude-sonnet-4-5" },
         },
       },
       models: { providers: {} },
@@ -149,7 +149,7 @@ describe("Model Selection Verification", () => {
     // Verify coding model (Code) uses "codingModel" selector
     const codingRef = resolveCodingModelForAgent({ cfg: config });
     expect(codingRef.provider).toBe("anthropic");
-    expect(codingRef.model).toBe("claude-3-5-sonnet-20241022");
+    expect(codingRef.model).toBe("claude-sonnet-4-5");
   });
 
   it("Scenario 2: Auto Mode Selects Best Models", () => {
@@ -161,24 +161,23 @@ describe("Model Selection Verification", () => {
     // Initialize auto-selection
     initAutoModelSelection(MOCK_CATALOG, undefined, config);
 
-    // Worker role (cheap/fast) should get gpt-4o-mini
-    // Orchestrator role (balanced/expensive) should get claude-3-5-sonnet (balanced) or gpt-4o (expensive)
+    // Worker role (cheap/fast) should get gpt-5-nano
+    // Orchestrator role (balanced/expensive) should get claude-sonnet-4-5 (balanced) or gpt-5 (expensive)
     // rankModelsForRole prefers CHEAPEST that meets requirements.
     // Orchestrator requires "coding" + "reasoning", min "balanced".
-    // gpt-4o-mini: fast (fails balanced?), reasoning=false (fails).
-    // claude-3-5-sonnet: balanced (pass), coding=true, reasoning=true. Cost: moderate.
-    // gpt-4o: powerful (pass), coding=true, reasoning=true. Cost: expensive.
+    // gpt-5-nano: fast (fails balanced?), reasoning=false (fails).
+    // claude-sonnet-4-5: balanced (pass), coding=true, reasoning=true. Cost: moderate.
+    // gpt-5: powerful (pass), coding=true, reasoning=true. Cost: expensive.
 
-    // So Orchestrator should pick Claude 3.5 Sonnet (moderate < expensive).
+    // So Orchestrator should pick Claude Sonnet 4.5 (moderate < expensive).
 
     const selections = computeAutoSelections(MOCK_CATALOG, undefined, config);
     const worker = selections.get("worker");
     const orchestrator = selections.get("orchestrator");
 
-    expect(worker?.model).toBe("gpt-4o-mini");
-    // Both gpt-4o and claude-3.5 are "moderate" cost in capability registry.
-    // gpt-4o (v40) beats claude-3-5 (v35) on recency tie-breaker.
-    expect(orchestrator?.model).toBe("gpt-4o");
+    expect(worker?.model).toBe("gpt-5-nano");
+    // claude-sonnet-4-5 (moderate) is cheaper than gpt-5 (expensive).
+    expect(orchestrator?.model).toBe("claude-sonnet-4-5");
   });
 
   it("Scenario 3: Implicit Providers are Resolved", async () => {

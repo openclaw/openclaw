@@ -163,7 +163,7 @@ describe("agent task classification integration", () => {
       expect(result.ref.model).toBe("gpt-5-mini");
     });
 
-    it("does not auto-route by complexity when thinking auto-pick is disabled", () => {
+    it("still routes by complexity when autoPickFromPool is disabled (autoPickFromPool only controls pool-based selection)", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -184,9 +184,9 @@ describe("agent task classification integration", () => {
       const complexity = classifyComplexity(prompt);
 
       const result = resolveModelForTaskIntent({ cfg, taskType, complexity });
-      expect(result.reason).toBe("default");
-      expect(result.ref.provider).toBe("anthropic");
-      expect(result.ref.model).toBe("claude-sonnet-4-5");
+      expect(result.reason).toBe("complexity");
+      expect(result.ref.provider).toBe("openai");
+      expect(result.ref.model).toBe("gpt-5-nano");
     });
 
     it("does not let complexity override explicit coding model", () => {
