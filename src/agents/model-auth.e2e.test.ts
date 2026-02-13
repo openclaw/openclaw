@@ -2,7 +2,9 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { getApiKeyForModel, resolveApiKeyForProvider, resolveEnvApiKey } from "./model-auth.js";
 
 const oauthFixture = {
   access: "access-token",
@@ -30,10 +32,6 @@ describe("getApiKeyForModel", () => {
         `${JSON.stringify({ "openai-codex": oauthFixture }, null, 2)}\n`,
         "utf8",
       );
-
-      vi.resetModules();
-      const { ensureAuthProfileStore } = await import("./auth-profiles.js");
-      const { getApiKeyForModel } = await import("./model-auth.js");
 
       const model = {
         id: "codex-mini-latest",
@@ -131,9 +129,6 @@ describe("getApiKeyForModel", () => {
         "utf8",
       );
 
-      vi.resetModules();
-      const { resolveApiKeyForProvider } = await import("./model-auth.js");
-
       let error: unknown = null;
       try {
         await resolveApiKeyForProvider({ provider: "openai" });
@@ -174,9 +169,6 @@ describe("getApiKeyForModel", () => {
       delete process.env.ZAI_API_KEY;
       delete process.env.Z_AI_API_KEY;
 
-      vi.resetModules();
-      const { resolveApiKeyForProvider } = await import("./model-auth.js");
-
       let error: unknown = null;
       try {
         await resolveApiKeyForProvider({
@@ -210,9 +202,6 @@ describe("getApiKeyForModel", () => {
       delete process.env.ZAI_API_KEY;
       process.env.Z_AI_API_KEY = "zai-test-key";
 
-      vi.resetModules();
-      const { resolveApiKeyForProvider } = await import("./model-auth.js");
-
       const resolved = await resolveApiKeyForProvider({
         provider: "zai",
         store: { version: 1, profiles: {} },
@@ -239,9 +228,6 @@ describe("getApiKeyForModel", () => {
     try {
       process.env.SYNTHETIC_API_KEY = "synthetic-test-key";
 
-      vi.resetModules();
-      const { resolveApiKeyForProvider } = await import("./model-auth.js");
-
       const resolved = await resolveApiKeyForProvider({
         provider: "synthetic",
         store: { version: 1, profiles: {} },
@@ -263,9 +249,6 @@ describe("getApiKeyForModel", () => {
     try {
       process.env.QIANFAN_API_KEY = "qianfan-test-key";
 
-      vi.resetModules();
-      const { resolveApiKeyForProvider } = await import("./model-auth.js");
-
       const resolved = await resolveApiKeyForProvider({
         provider: "qianfan",
         store: { version: 1, profiles: {} },
@@ -286,9 +269,6 @@ describe("getApiKeyForModel", () => {
 
     try {
       process.env.AI_GATEWAY_API_KEY = "gateway-test-key";
-
-      vi.resetModules();
-      const { resolveApiKeyForProvider } = await import("./model-auth.js");
 
       const resolved = await resolveApiKeyForProvider({
         provider: "vercel-ai-gateway",
@@ -318,9 +298,6 @@ describe("getApiKeyForModel", () => {
       process.env.AWS_ACCESS_KEY_ID = "access-key";
       process.env.AWS_SECRET_ACCESS_KEY = "secret-key";
       process.env.AWS_PROFILE = "profile";
-
-      vi.resetModules();
-      const { resolveApiKeyForProvider } = await import("./model-auth.js");
 
       const resolved = await resolveApiKeyForProvider({
         provider: "amazon-bedrock",
@@ -380,9 +357,6 @@ describe("getApiKeyForModel", () => {
       process.env.AWS_SECRET_ACCESS_KEY = "secret-key";
       process.env.AWS_PROFILE = "profile";
 
-      vi.resetModules();
-      const { resolveApiKeyForProvider } = await import("./model-auth.js");
-
       const resolved = await resolveApiKeyForProvider({
         provider: "amazon-bedrock",
         store: { version: 1, profiles: {} },
@@ -441,9 +415,6 @@ describe("getApiKeyForModel", () => {
       delete process.env.AWS_SECRET_ACCESS_KEY;
       process.env.AWS_PROFILE = "profile";
 
-      vi.resetModules();
-      const { resolveApiKeyForProvider } = await import("./model-auth.js");
-
       const resolved = await resolveApiKeyForProvider({
         provider: "amazon-bedrock",
         store: { version: 1, profiles: {} },
@@ -494,9 +465,6 @@ describe("getApiKeyForModel", () => {
     try {
       process.env.VOYAGE_API_KEY = "voyage-test-key";
 
-      vi.resetModules();
-      const { resolveApiKeyForProvider } = await import("./model-auth.js");
-
       const resolved = await resolveApiKeyForProvider({
         provider: "voyage",
         store: { version: 1, profiles: {} },
@@ -518,9 +486,6 @@ describe("getApiKeyForModel", () => {
     try {
       process.env.ANTHROPIC_API_KEY = "sk-ant-test-\r\nkey";
 
-      vi.resetModules();
-      const { resolveEnvApiKey } = await import("./model-auth.js");
-
       const resolved = resolveEnvApiKey("anthropic");
       expect(resolved?.apiKey).toBe("sk-ant-test-key");
       expect(resolved?.source).toContain("ANTHROPIC_API_KEY");
@@ -539,8 +504,7 @@ describe("getApiKeyForModel", () => {
     try {
       delete process.env.HF_TOKEN;
       process.env.HUGGINGFACE_HUB_TOKEN = "hf_hub_xyz";
-      vi.resetModules();
-      const { resolveEnvApiKey } = await import("./model-auth.js");
+
       const resolved = resolveEnvApiKey("huggingface");
       expect(resolved?.apiKey).toBe("hf_hub_xyz");
       expect(resolved?.source).toContain("HUGGINGFACE_HUB_TOKEN");
@@ -564,8 +528,7 @@ describe("getApiKeyForModel", () => {
     try {
       process.env.HUGGINGFACE_HUB_TOKEN = "hf_hub_first";
       process.env.HF_TOKEN = "hf_second";
-      vi.resetModules();
-      const { resolveEnvApiKey } = await import("./model-auth.js");
+
       const resolved = resolveEnvApiKey("huggingface");
       expect(resolved?.apiKey).toBe("hf_hub_first");
       expect(resolved?.source).toContain("HUGGINGFACE_HUB_TOKEN");
@@ -589,8 +552,7 @@ describe("getApiKeyForModel", () => {
     try {
       delete process.env.HUGGINGFACE_HUB_TOKEN;
       process.env.HF_TOKEN = "hf_abc123";
-      vi.resetModules();
-      const { resolveEnvApiKey } = await import("./model-auth.js");
+
       const resolved = resolveEnvApiKey("huggingface");
       expect(resolved?.apiKey).toBe("hf_abc123");
       expect(resolved?.source).toContain("HF_TOKEN");
