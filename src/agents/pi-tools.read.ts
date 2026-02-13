@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { detectMime } from "../media/mime.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
@@ -268,19 +269,36 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   };
 }
 
-export function createSandboxedReadTool(root: string) {
-  const base = createReadTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(createOpenClawReadTool(base), root);
+type SandboxToolParams = {
+  root: string;
+  bridge: SandboxFsBridge;
+};
+
+export function createSandboxedReadTool(params: SandboxToolParams) {
+  const base = createReadTool(params.root, {
+    operations: createSandboxReadOperations(params),
+  }) as unknown as AnyAgentTool;
+  return wrapSandboxPathGuard(createOpenClawReadTool(base), params.root);
 }
 
-export function createSandboxedWriteTool(root: string) {
-  const base = createWriteTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write), root);
+export function createSandboxedWriteTool(params: SandboxToolParams) {
+  const base = createWriteTool(params.root, {
+    operations: createSandboxWriteOperations(params),
+  }) as unknown as AnyAgentTool;
+  return wrapSandboxPathGuard(
+    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write),
+    params.root,
+  );
 }
 
-export function createSandboxedEditTool(root: string) {
-  const base = createEditTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit), root);
+export function createSandboxedEditTool(params: SandboxToolParams) {
+  const base = createEditTool(params.root, {
+    operations: createSandboxEditOperations(params),
+  }) as unknown as AnyAgentTool;
+  return wrapSandboxPathGuard(
+    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit),
+    params.root,
+  );
 }
 
 export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
@@ -299,4 +317,54 @@ export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
       return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
     },
   };
+}
+
+function createSandboxReadOperations(params: SandboxToolParams) {
+  return {
+    readFile: (absolutePath: string) =>
+      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
+    access: async (absolutePath: string) => {
+      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+      if (!stat) {
+        throw createFsAccessError("ENOENT", absolutePath);
+      }
+    },
+    detectImageMimeType: async (absolutePath: string) => {
+      const buffer = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
+      const mime = await detectMime({ buffer, filePath: absolutePath });
+      return mime && mime.startsWith("image/") ? mime : undefined;
+    },
+  } as const;
+}
+
+function createSandboxWriteOperations(params: SandboxToolParams) {
+  return {
+    mkdir: async (dir: string) => {
+      await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
+    },
+    writeFile: async (absolutePath: string, content: string) => {
+      await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
+    },
+  } as const;
+}
+
+function createSandboxEditOperations(params: SandboxToolParams) {
+  return {
+    readFile: (absolutePath: string) =>
+      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
+    writeFile: (absolutePath: string, content: string) =>
+      params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+    access: async (absolutePath: string) => {
+      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+      if (!stat) {
+        throw createFsAccessError("ENOENT", absolutePath);
+      }
+    },
+  } as const;
+}
+
+function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
+  const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
+  error.code = code;
+  return error;
 }

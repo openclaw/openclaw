@@ -7,6 +7,7 @@ import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
 import { createSandboxedReadTool } from "./pi-tools.read.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
 const defaultTools = createOpenClawCodingTools();
@@ -467,7 +468,10 @@ describe("createOpenClawCodingTools", () => {
     const outsidePath = path.join(os.tmpdir(), "openclaw-outside.txt");
     await fs.writeFile(outsidePath, "outside", "utf8");
     try {
-      const readTool = createSandboxedReadTool(tmpDir);
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+      });
       await expect(readTool.execute("sandbox-1", { file_path: outsidePath })).rejects.toThrow(
         /sandbox root/i,
       );
