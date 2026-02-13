@@ -87,7 +87,7 @@ export async function applyAuthChoiceAnthropic(
         message: "Enter Anthropic API key",
         validate: validateApiKeyInput,
       });
-      await setAnthropicApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setAnthropicApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "anthropic:default",

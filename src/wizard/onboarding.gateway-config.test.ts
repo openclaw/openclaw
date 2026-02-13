@@ -73,7 +73,6 @@ describe("configureGatewayForOnboarding", () => {
       "reminders.add",
     ]);
   });
-
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
     mocks.randomToken.mockReturnValue("unused");
 

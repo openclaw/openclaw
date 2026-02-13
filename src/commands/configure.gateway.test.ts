@@ -70,7 +70,6 @@ describe("promptGatewayConfig", () => {
     const result = await promptGatewayConfig({}, runtime);
     expect(result.token).toBe("generated-token");
   });
-
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
     vi.clearAllMocks();
     mocks.resolveGatewayPort.mockReturnValue(18789);
