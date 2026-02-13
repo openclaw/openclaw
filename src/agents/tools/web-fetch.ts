@@ -409,7 +409,7 @@ async function runWebFetch(params: {
       timeoutMs: params.timeoutSeconds * 1000,
       init: {
         headers: {
-          Accept: "*/*",
+          Accept: "text/markdown, text/html;q=0.9, */*;q=0.8",
           "User-Agent": params.userAgent,
           "Accept-Language": "en-US,en;q=0.9",
         },
