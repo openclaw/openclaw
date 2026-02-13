@@ -19,6 +19,7 @@ import {
 } from "./group-mentions.js";
 import {
   listMatrixAccountIds,
+  resolveMatrixAccountConfig,
   resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
   type ResolvedMatrixAccount,
@@ -146,8 +147,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       baseUrl: account.homeserver,
     }),
     resolveAllowFrom: ({ cfg, accountId }) => {
-      const account = resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId });
-      return (account.config.dm?.allowFrom ?? []).map((entry: string | number) => String(entry));
+      const matrixConfig = resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId });
+      return (matrixConfig.dm?.allowFrom ?? []).map((entry: string | number) => String(entry));
     },
     formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },
@@ -183,7 +184,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     resolveToolPolicy: resolveMatrixGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) => (cfg as CoreConfig).channels?.matrix?.replyToMode ?? "off",
+    resolveReplyToMode: ({ cfg, accountId }) =>
+      resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }).replyToMode ?? "off",
     buildToolContext: ({ context, hasRepliedRef }) => {
       const currentTarget = context.To;
       return {
@@ -290,10 +292,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         .map((id) => ({ kind: "group", id }) as const);
       return ids;
     },
-    listPeersLive: async ({ cfg, query, limit }) =>
-      listMatrixDirectoryPeersLive({ cfg, query, limit }),
-    listGroupsLive: async ({ cfg, query, limit }) =>
-      listMatrixDirectoryGroupsLive({ cfg, query, limit }),
+    listPeersLive: async ({ cfg, accountId, query, limit }) =>
+      listMatrixDirectoryPeersLive({ cfg, accountId, query, limit }),
+    listGroupsLive: async ({ cfg, accountId, query, limit }) =>
+      listMatrixDirectoryGroupsLive({ cfg, accountId, query, limit }),
   },
   resolver: {
     resolveTargets: async ({ cfg, inputs, kind, runtime }) =>
