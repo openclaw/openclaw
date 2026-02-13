@@ -544,23 +544,25 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText });
     }
-    // Shared subagent announce flow is text-based; keep direct outbound delivery
-    // for media/channel payloads so structured content is preserved.
-    if (deliveryPayloadHasStructuredContent) {
-      try {
-        await deliverOutboundPayloads({
-          cfg: cfgWithAgentDefaults,
-          channel: resolvedDelivery.channel,
-          to: resolvedDelivery.to,
-          accountId: resolvedDelivery.accountId,
-          threadId: resolvedDelivery.threadId,
-          payloads: deliveryPayloads,
-          bestEffort: deliveryBestEffort,
-          deps: createOutboundSendDeps(params.deps),
-        });
-      } catch (err) {
-        if (!deliveryBestEffort) {
-          return withRunSession({ status: "error", summary, outputText, error: String(err) });
+    // Raw mode or structured content: deliver directly via outbound channel
+    // adapters, bypassing the subagent announce summarizer.
+    if (deliveryPayloadHasStructuredContent || deliveryPlan.mode === "raw") {
+      if (deliveryPayloads.length > 0) {
+        try {
+          await deliverOutboundPayloads({
+            cfg: cfgWithAgentDefaults,
+            channel: resolvedDelivery.channel,
+            to: resolvedDelivery.to,
+            accountId: resolvedDelivery.accountId,
+            threadId: resolvedDelivery.threadId,
+            payloads: deliveryPayloads,
+            bestEffort: deliveryBestEffort,
+            deps: createOutboundSendDeps(params.deps),
+          });
+        } catch (err) {
+          if (!deliveryBestEffort) {
+            return withRunSession({ status: "error", summary, outputText, error: String(err) });
+          }
         }
       }
     } else if (synthesizedText) {

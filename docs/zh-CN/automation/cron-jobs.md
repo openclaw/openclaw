@@ -136,7 +136,7 @@ Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway网关主�
 - 提示以 `[cron:<jobId> <任务名称>]` 为前缀，便于追踪。
 - 每次运行都会启动一个**全新的会话 ID**（不继承之前的对话）。
 - 如果未指定 `delivery`，隔离任务会默认以“announce”方式投递摘要。
-- `delivery.mode` 可选 `announce`（投递摘要）或 `none`（内部运行）。
+- `delivery.mode` 可选 `announce`（投递摘要）、`raw`（原文投递，跳过摘要器）或 `none`（内部运行）。
 
 对于嘈杂、频繁或"后台杂务"类任务，使用隔离任务可以避免污染你的主聊天记录。
 
@@ -172,7 +172,7 @@ Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway网关主�
 
 隔离任务可以通过顶层 `delivery` 配置投递输出：
 
-- `delivery.mode`：`announce`（投递摘要）或 `none`
+- `delivery.mode`：`announce`（投递摘要）、`raw`（原文投递）或 `none`
 - `delivery.channel`：`whatsapp` / `telegram` / `discord` / `slack` / `mattermost`（插件）/ `signal` / `imessage` / `last`
 - `delivery.to`：渠道特定的接收目标
 - `delivery.bestEffort`：投递失败时避免任务失败

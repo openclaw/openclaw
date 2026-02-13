@@ -99,7 +99,7 @@ A cron job is a stored record with:
 
 - a **schedule** (when it should run),
 - a **payload** (what it should do),
-- optional **delivery mode** (announce or none).
+- optional **delivery mode** (announce, raw, or none).
 - optional **agent binding** (`agentId`): run the job under a specific agent; if
   missing or unknown, the gateway falls back to the default agent.
 
@@ -141,7 +141,8 @@ Key behaviors:
 - Each run starts a **fresh session id** (no prior conversation carry-over).
 - Default behavior: if `delivery` is omitted, isolated jobs announce a summary (`delivery.mode = "announce"`).
 - `delivery.mode` (isolated-only) chooses what happens:
-  - `announce`: deliver a summary to the target channel and post a brief summary to the main session.
+  - `announce`: deliver a summarized version to the target channel and post a brief summary to the main session.
+  - `raw`: deliver the agent's output verbatim to the target channel, bypassing the announce summarizer.
   - `none`: internal only (no delivery, no main-session summary).
 - `wakeMode` controls when the main-session summary posts:
   - `now`: immediate heartbeat.
@@ -165,25 +166,31 @@ Common `agentTurn` fields:
 
 Delivery config (isolated jobs only):
 
-- `delivery.mode`: `none` | `announce`.
+- `delivery.mode`: `none` | `announce` | `raw`.
 - `delivery.channel`: `last` or a specific channel.
 - `delivery.to`: channel-specific target (phone/chat/channel id).
-- `delivery.bestEffort`: avoid failing the job if announce delivery fails.
+- `delivery.bestEffort`: avoid failing the job if delivery fails.
 
-Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
+Delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
 to target the chat instead. When `delivery.mode = "none"`, no summary is posted to the main session.
 
 If `delivery` is omitted for isolated jobs, OpenClaw defaults to `announce`.
 
 #### Announce delivery flow
 
-When `delivery.mode = "announce"`, cron delivers directly via the outbound channel adapters.
-The main agent is not spun up to craft or forward the message.
+When `delivery.mode = "announce"`, cron output is passed to the main agent session with an
+instruction to summarize it into 1-2 sentences. The main agent then delivers the summary
+to the target channel.
 
-Behavior details:
+#### Raw delivery flow
 
-- Content: delivery uses the isolated run's outbound payloads (text/media) with normal chunking and
-  channel formatting.
+When `delivery.mode = "raw"`, cron delivers the agent's output verbatim via the outbound
+channel adapters, bypassing the main-agent summarizer. Use this when the cron output should
+reach the user exactly as the isolated agent produced it (e.g., heartbeat messages with
+questions, status reports, or any output where summarization would lose important content).
+
+#### Common delivery behavior
+
 - Heartbeat-only responses (`HEARTBEAT_OK` with no real content) are not delivered.
 - If the isolated run already sent a message to the same target via the message tool, delivery is
   skipped to avoid duplicates.
@@ -213,7 +220,7 @@ Resolution priority:
 
 Isolated jobs can deliver output to a channel via the top-level `delivery` config:
 
-- `delivery.mode`: `announce` (deliver a summary) or `none`.
+- `delivery.mode`: `announce` (deliver a summary), `raw` (deliver verbatim), or `none`.
 - `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`.
 - `delivery.to`: channel-specific recipient target.
 

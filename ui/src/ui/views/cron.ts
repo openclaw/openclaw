@@ -213,6 +213,7 @@ export function renderCron(props: CronProps) {
                         })}
                     >
                       <option value="announce">Announce summary (default)</option>
+                      <option value="raw">Raw (verbatim, no summarizer)</option>
                       <option value="none">None (internal)</option>
                     </select>
                   </label>
@@ -227,7 +228,7 @@ export function renderCron(props: CronProps) {
                     />
                   </label>
                   ${
-                    props.form.deliveryMode === "announce"
+                    props.form.deliveryMode === "announce" || props.form.deliveryMode === "raw"
                       ? html`
                           <label class="field">
                             <span>Channel</span>
