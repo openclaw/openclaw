@@ -234,12 +234,22 @@ describe("web_search grok response parsing", () => {
   it("extracts content from direct output_text blocks (grok-4 + server-side tools)", () => {
     const result = extractGrokContent({
       output: [
-        { type: "web_search_call", id: "ws_1", status: "completed", action: { type: "search", query: "test" } },
+        {
+          type: "web_search_call",
+          id: "ws_1",
+          status: "completed",
+          action: { type: "search", query: "test" },
+        },
         {
           type: "output_text",
           text: "hello from direct output_text",
           annotations: [
-            { type: "url_citation", url: "https://example.com/direct", start_index: 0, end_index: 5 },
+            {
+              type: "url_citation",
+              url: "https://example.com/direct",
+              start_index: 0,
+              end_index: 5,
+            },
           ],
         },
       ],
