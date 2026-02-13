@@ -52,7 +52,7 @@ describe("session store lock (Promise chain mutex)", () => {
           const entry = store[key] as Record<string, unknown>;
           // Simulate async work so that without proper serialization
           // multiple readers would see the same stale value.
-          await sleep(Math.random() * 20);
+          await sleep(Math.random() * 3);
           entry.counter = (entry.counter as number) + 1;
           entry.tag = `writer-${i}`;
         }),
@@ -74,7 +74,7 @@ describe("session store lock (Promise chain mutex)", () => {
         storePath,
         sessionKey: key,
         update: async () => {
-          await sleep(30);
+          await sleep(9);
           return { modelOverride: "model-a" };
         },
       }),
@@ -82,7 +82,7 @@ describe("session store lock (Promise chain mutex)", () => {
         storePath,
         sessionKey: key,
         update: async () => {
-          await sleep(10);
+          await sleep(3);
           return { thinkingLevel: "high" as const };
         },
       }),
@@ -90,7 +90,7 @@ describe("session store lock (Promise chain mutex)", () => {
         storePath,
         sessionKey: key,
         update: async () => {
-          await sleep(20);
+          await sleep(6);
           return { systemPromptOverride: "custom" };
         },
       }),
@@ -168,22 +168,32 @@ describe("session store lock (Promise chain mutex)", () => {
 
     const opA = updateSessionStore(pathA, async (store) => {
       order.push("a-start");
-      await sleep(50);
+      await sleep(12);
       store.a = { ...store.a, modelOverride: "done-a" } as unknown as SessionEntry;
       order.push("a-end");
     });
 
     const opB = updateSessionStore(pathB, async (store) => {
       order.push("b-start");
-      await sleep(10);
+      await sleep(3);
       store.b = { ...store.b, modelOverride: "done-b" } as unknown as SessionEntry;
       order.push("b-end");
     });
 
     await Promise.all([opA, opB]);
 
-    // B should finish before A because they run in parallel and B sleeps less.
-    expect(order.indexOf("b-end")).toBeLessThan(order.indexOf("a-end"));
+    // Parallel behavior: both ops start before either one finishes.
+    const aStart = order.indexOf("a-start");
+    const bStart = order.indexOf("b-start");
+    const aEnd = order.indexOf("a-end");
+    const bEnd = order.indexOf("b-end");
+    const firstEnd = Math.min(aEnd, bEnd);
+    expect(aStart).toBeGreaterThanOrEqual(0);
+    expect(bStart).toBeGreaterThanOrEqual(0);
+    expect(aEnd).toBeGreaterThanOrEqual(0);
+    expect(bEnd).toBeGreaterThanOrEqual(0);
+    expect(aStart).toBeLessThan(firstEnd);
+    expect(bStart).toBeLessThan(firstEnd);
 
     expect(loadSessionStore(pathA).a?.modelOverride).toBe("done-a");
     expect(loadSessionStore(pathB).b?.modelOverride).toBe("done-b");
@@ -256,7 +266,7 @@ describe("session store lock (Promise chain mutex)", () => {
     const lockHolder = withSessionStoreLockForTest(
       storePath,
       async () => {
-        await sleep(80);
+        await sleep(40);
       },
       { timeoutMs: 2_000 },
     );
@@ -270,7 +280,7 @@ describe("session store lock (Promise chain mutex)", () => {
 
     await expect(timedOut).rejects.toThrow("timeout waiting for session store lock");
     await lockHolder;
-    await sleep(30);
+    await sleep(8);
     expect(timedOutRan).toBe(false);
   });
 
@@ -281,12 +291,22 @@ describe("session store lock (Promise chain mutex)", () => {
     });
 
     const write = updateSessionStore(storePath, async (store) => {
-      await sleep(60);
+      await sleep(18);
       store[key] = { ...store[key], modelOverride: "v" } as unknown as SessionEntry;
     });
 
-    await sleep(10);
-    await expect(fs.access(`${storePath}.lock`)).resolves.toBeUndefined();
+    const lockPath = `${storePath}.lock`;
+    let lockSeen = false;
+    for (let i = 0; i < 20; i += 1) {
+      try {
+        await fs.access(lockPath);
+        lockSeen = true;
+        break;
+      } catch {
+        await sleep(2);
+      }
+    }
+    expect(lockSeen).toBe(true);
     await write;
 
     const files = await fs.readdir(dir);
