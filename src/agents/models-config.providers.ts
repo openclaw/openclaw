@@ -121,6 +121,12 @@ interface OllamaTagsResponse {
   models: OllamaModel[];
 }
 
+type VllmModelsResponse = {
+  data?: Array<{
+    id?: string;
+  }>;
+};
+
 /**
  * Derive the Ollama native API base URL from a configured base URL.
  *
@@ -139,11 +145,6 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
 }
 
 async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionConfig[]> {
-type VllmModelsResponse = {
-  data?: Array<{
-    id?: string;
-  }>;
-};
   // Skip Ollama discovery in test environments
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
@@ -467,14 +468,6 @@ function buildMoonshotProvider(): ProviderConfig {
         maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
       },
     ],
-  };
-}
-
-function buildTogetherProvider(): ProviderConfig {
-  return {
-    baseUrl: TOGETHER_BASE_URL,
-    api: "openai-completions",
-    models: TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition),
   };
 }
 
