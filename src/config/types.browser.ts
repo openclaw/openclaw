@@ -36,6 +36,8 @@ export type BrowserConfig = {
   defaultProfile?: string;
   /** Named browser profiles with explicit CDP ports or URLs. */
   profiles?: Record<string, BrowserProfileConfig>;
+  /** Extra Chrome launch arguments appended to the built-in flags. */
+  args?: string[];
   /** Default snapshot options (applied by the browser tool/CLI when unset). */
   snapshotDefaults?: BrowserSnapshotDefaults;
 };

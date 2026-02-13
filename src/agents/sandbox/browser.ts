@@ -62,6 +62,7 @@ function buildSandboxBrowserResolvedConfig(params: {
     headless: params.headless,
     noSandbox: false,
     attachOnly: true,
+    args: [],
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     profiles: {
       [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {

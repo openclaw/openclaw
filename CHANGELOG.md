@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - Skills: remove duplicate `local-places` Google Places skill/proxy and keep `goplaces` as the single supported Google Places path.
 - Discord: send voice messages with waveform previews from local audio files (including silent delivery). (#7253) Thanks @nyanjou.
 - Discord: add configurable presence status/activity/type/url (custom status defaults to activity text). (#10855) Thanks @h0tp-ftw.
+- Browser: add `browser.args` config field for custom Chrome launch flags (e.g. `--use-angle=vulkan`). (#14803)
 
 ### Fixes
 

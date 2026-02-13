@@ -29,6 +29,7 @@ export type ResolvedBrowserConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
+  args: string[];
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
 };
@@ -210,6 +211,7 @@ export function resolveBrowserConfig(
     headless,
     noSandbox,
     attachOnly,
+    args: Array.isArray(cfg?.args) ? cfg.args.filter((a) => typeof a === "string" && a.trim()) : [],
     defaultProfile,
     profiles,
   };
