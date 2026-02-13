@@ -272,6 +272,9 @@ export async function startWebAppIfEnabled(
     }
   }
 
+  // Collect stderr lines for crash diagnostics.
+  const stderrLines: string[] = [];
+
   // Forward child stdout/stderr to the gateway log.
   child.stdout?.on("data", (data: Buffer) => {
     for (const line of data.toString().split("\n").filter(Boolean)) {
@@ -280,6 +283,7 @@ export async function startWebAppIfEnabled(
   });
   child.stderr?.on("data", (data: Buffer) => {
     for (const line of data.toString().split("\n").filter(Boolean)) {
+      stderrLines.push(line);
       log.warn(line);
     }
   });
@@ -290,11 +294,22 @@ export async function startWebAppIfEnabled(
 
   child.on("exit", (code, signal) => {
     if (code !== null && code !== 0) {
-      log.warn(`web app exited with code ${code}`);
+      log.error(`web app crashed (exit code ${code}) — http://localhost:${port} will not work`);
     } else if (signal) {
       log.info(`web app terminated by signal ${signal}`);
     }
   });
+
+  // Wait briefly for the child to either settle or crash on startup.
+  // Most fatal errors (missing modules, bad config) surface within a
+  // couple of seconds. Without this, we'd log "web app available" even
+  // though the process has already exited.
+  const crashed = await waitForStartupOrCrash(child, 3_000);
+  if (crashed) {
+    const detail = stderrLines.length > 0 ? `: ${stderrLines.slice(-3).join(" | ")}` : "";
+    log.error(`web app failed to start (exit code ${crashed.code})${detail}`);
+    return null;
+  }
 
   log.info(`web app available at http://localhost:${port}`);
 
@@ -318,6 +333,35 @@ export async function startWebAppIfEnabled(
       }
     },
   };
+}
+
+/**
+ * Wait up to `timeoutMs` for the child process to either stay alive
+ * (server started successfully) or exit (crash on startup).
+ *
+ * Returns null if the process is still running after the timeout,
+ * or `{ code }` if it exited during the wait.
+ */
+function waitForStartupOrCrash(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<{ code: number | null } | null> {
+  // Already exited before we even started waiting.
+  if (child.exitCode !== null) {
+    return Promise.resolve({ code: child.exitCode });
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      // Still running after timeout — assume healthy.
+      child.removeListener("exit", onExit);
+      resolve(null);
+    }, timeoutMs);
+    function onExit(code: number | null) {
+      clearTimeout(timer);
+      resolve({ code });
+    }
+    child.once("exit", onExit);
+  });
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

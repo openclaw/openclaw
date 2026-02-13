@@ -90,10 +90,12 @@ export async function finalizeOnboardingWizard(
   // gateway doesn't block on builds when it boots for the first time.
   const controlUiEnabled =
     nextConfig.gateway?.controlUi?.enabled ?? baseConfig.gateway?.controlUi?.enabled ?? true;
+  let webAppReady = false;
   if (!opts.skipUi && controlUiEnabled) {
     const webAppResult = await ensureWebAppBuilt(runtime, {
       webAppConfig: nextConfig.gateway?.webApp,
     });
+    webAppReady = webAppResult.ok;
     if (!webAppResult.ok && webAppResult.message) {
       runtime.error(webAppResult.message);
     }
@@ -328,13 +330,18 @@ export async function finalizeOnboardingWizard(
       "Token",
     );
 
+    const hatchOptions: { value: "tui" | "web" | "later"; label: string }[] = [
+      { value: "tui", label: "Hatch in TUI (recommended)" },
+    ];
+    // Only offer Web UI when the build is present so we don't open a dead URL.
+    if (webAppReady) {
+      hatchOptions.push({ value: "web", label: "Open the Web UI" });
+    }
+    hatchOptions.push({ value: "later", label: "Do this later" });
+
     hatchChoice = await prompter.select({
       message: "How do you want to hatch your bot?",
-      options: [
-        { value: "tui", label: "Hatch in TUI (recommended)" },
-        { value: "web", label: "Open the Web UI" },
-        { value: "later", label: "Do this later" },
-      ],
+      options: hatchOptions,
       initialValue: "tui",
     });
 

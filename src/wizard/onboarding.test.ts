@@ -291,6 +291,130 @@ describe("runOnboardingWizard", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
+  it("hides Web UI hatch option when web app build is not available", async () => {
+    // Simulate a global install where the standalone build is missing.
+    ensureWebAppBuilt.mockResolvedValueOnce({
+      ok: false,
+      built: false,
+      message: "Web app standalone build not found.",
+    });
+
+    const selectCalls: { message: string; options: { value: string }[] }[] = [];
+    const select: WizardPrompter["select"] = vi.fn(async (opts) => {
+      selectCalls.push(opts as (typeof selectCalls)[0]);
+      if (opts.message === "How do you want to hatch your bot?") {
+        return "tui";
+      }
+      return "quickstart";
+    });
+
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-"));
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select,
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        workspace: workspaceDir,
+        authChoice: "skip",
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+      },
+      runtime,
+      prompter,
+    );
+
+    // The hatch prompt should NOT include the "web" option.
+    const hatchCall = selectCalls.find((c) => c.message === "How do you want to hatch your bot?");
+    expect(hatchCall).toBeDefined();
+    const hatchValues = hatchCall!.options.map((o) => o.value);
+    expect(hatchValues).toContain("tui");
+    expect(hatchValues).not.toContain("web");
+    expect(hatchValues).toContain("later");
+
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  it("shows Web UI hatch option when web app build is available", async () => {
+    // Default mock returns ok: true — web app is available.
+    const selectCalls: { message: string; options: { value: string }[] }[] = [];
+    const select: WizardPrompter["select"] = vi.fn(async (opts) => {
+      selectCalls.push(opts as (typeof selectCalls)[0]);
+      if (opts.message === "How do you want to hatch your bot?") {
+        return "tui";
+      }
+      return "quickstart";
+    });
+
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-"));
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select,
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        workspace: workspaceDir,
+        authChoice: "skip",
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+      },
+      runtime,
+      prompter,
+    );
+
+    // The hatch prompt SHOULD include the "web" option.
+    const hatchCall = selectCalls.find((c) => c.message === "How do you want to hatch your bot?");
+    expect(hatchCall).toBeDefined();
+    const hatchValues = hatchCall!.options.map((o) => o.value);
+    expect(hatchValues).toContain("tui");
+    expect(hatchValues).toContain("web");
+    expect(hatchValues).toContain("later");
+
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
   it("shows the web search hint at the end of onboarding", async () => {
     const prevBraveKey = process.env.BRAVE_API_KEY;
     delete process.env.BRAVE_API_KEY;

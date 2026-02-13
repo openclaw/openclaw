@@ -1,6 +1,6 @@
 {
   "name": "ironclaw",
-  "version": "2026.2.10-1.5",
+  "version": "2026.2.10-1.8",
   "description": "AI-powered CRM platform with multi-channel agent gateway, DuckDB workspace, and knowledge management",
   "keywords": [],
   "license": "MIT",
@@ -113,7 +113,7 @@
     "web:build": "pnpm --dir apps/web build",
     "web:dev": "pnpm --dir apps/web dev",
     "web:install": "pnpm --dir apps/web install",
-    "web:prepack": "cp -r apps/web/public apps/web/.next/standalone/apps/web/public && cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static"
+    "web:prepack": "cp -r apps/web/public apps/web/.next/standalone/apps/web/public && cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static && bash scripts/standalone-hoist-pnpm.sh"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",

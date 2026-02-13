@@ -173,6 +173,10 @@ npm version "$VERSION" --no-git-tag-version --allow-same-version "${NPM_FLAGS[@]
 
 # ── build ────────────────────────────────────────────────────────────────────
 
+# The `prepack` script (triggered by `npm publish`) runs the full build chain:
+#   pnpm build && pnpm ui:build && pnpm web:build && pnpm web:prepack
+# Running `pnpm build` here is a redundant fail-fast: catch CLI build errors
+# before committing to a publish attempt.
 if [[ "$SKIP_BUILD" != true ]]; then
   echo "building..."
   pnpm build
@@ -185,6 +189,15 @@ fi
 # the most recently published version.
 echo "publishing ${PACKAGE_NAME}@${VERSION}..."
 npm publish --access public --tag latest "${NPM_FLAGS[@]}"
+
+# Verify the standalone web app was included in the published package.
+# `prepack` should have built it; if this file is missing, the web UI
+# won't work for users who install globally.
+STANDALONE_SERVER="apps/web/.next/standalone/apps/web/server.js"
+if [[ ! -f "$STANDALONE_SERVER" ]]; then
+  echo "warning: standalone web app build not found after publish ($STANDALONE_SERVER)"
+  echo "         users may not get a working Web UI — check the prepack step"
+fi
 
 echo ""
 echo "published ${PACKAGE_NAME}@${VERSION}"

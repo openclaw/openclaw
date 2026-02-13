@@ -189,8 +189,9 @@ describe("server-web-app", () => {
 
     function mockChildProcess() {
       const events: Record<string, ((...args: unknown[]) => void)[]> = {};
+      const onceEvents: Record<string, ((...args: unknown[]) => void)[]> = {};
       const child = {
-        exitCode: null,
+        exitCode: null as number | null,
         killed: false,
         pid: 12345,
         stdout: { on: vi.fn() },
@@ -199,9 +200,28 @@ describe("server-web-app", () => {
           events[event] = events[event] || [];
           events[event].push(cb);
         }),
+        once: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          onceEvents[event] = onceEvents[event] || [];
+          onceEvents[event].push(cb);
+        }),
+        removeListener: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          const arr = onceEvents[event];
+          if (arr) {
+            const idx = arr.indexOf(cb);
+            if (idx >= 0) {
+              arr.splice(idx, 1);
+            }
+          }
+        }),
         kill: vi.fn(),
         _emit: (event: string, ...args: unknown[]) => {
           for (const cb of events[event] || []) {
+            cb(...args);
+          }
+          // Fire and remove once listeners.
+          const once = onceEvents[event] || [];
+          onceEvents[event] = [];
+          for (const cb of once) {
             cb(...args);
           }
         },
@@ -241,6 +261,7 @@ describe("server-web-app", () => {
     });
 
     it("starts standalone server.js in production mode", async () => {
+      vi.useFakeTimers();
       const { startWebAppIfEnabled } = await import("./server-web-app.js");
       mockChildProcess();
 
@@ -256,7 +277,9 @@ describe("server-web-app", () => {
       });
 
       const log = makeLog();
-      const result = await startWebAppIfEnabled({ enabled: true, port: 4000 }, log);
+      const resultPromise = startWebAppIfEnabled({ enabled: true, port: 4000 }, log);
+      await vi.advanceTimersByTimeAsync(3_500);
+      const result = await resultPromise;
 
       expect(result).not.toBeNull();
       expect(result!.port).toBe(4000);
@@ -272,9 +295,11 @@ describe("server-web-app", () => {
       expect(log.info).toHaveBeenCalledWith(expect.stringContaining("standalone"));
       expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("installing"));
       expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("building"));
+      vi.useRealTimers();
     });
 
     it("falls back to legacy next start when BUILD_ID exists but no standalone", async () => {
+      vi.useFakeTimers();
       const { startWebAppIfEnabled } = await import("./server-web-app.js");
       mockChildProcess();
 
@@ -295,12 +320,15 @@ describe("server-web-app", () => {
       });
 
       const log = makeLog();
-      const result = await startWebAppIfEnabled({ enabled: true }, log);
+      const resultPromise = startWebAppIfEnabled({ enabled: true }, log);
+      await vi.advanceTimersByTimeAsync(3_500);
+      const result = await resultPromise;
 
       expect(result).not.toBeNull();
       expect(log.warn).toHaveBeenCalledWith(
         expect.stringContaining("falling back to legacy next start"),
       );
+      vi.useRealTimers();
     });
 
     it("returns null with error for global install when no build exists", async () => {
@@ -324,6 +352,7 @@ describe("server-web-app", () => {
     });
 
     it("uses default port when not specified", async () => {
+      vi.useFakeTimers();
       const { startWebAppIfEnabled, DEFAULT_WEB_APP_PORT } = await import("./server-web-app.js");
       mockChildProcess();
 
@@ -338,11 +367,15 @@ describe("server-web-app", () => {
         return false;
       });
 
-      const result = await startWebAppIfEnabled({ enabled: true }, makeLog());
+      const resultPromise = startWebAppIfEnabled({ enabled: true }, makeLog());
+      await vi.advanceTimersByTimeAsync(3_500);
+      const result = await resultPromise;
       expect(result!.port).toBe(DEFAULT_WEB_APP_PORT);
+      vi.useRealTimers();
     });
 
     it("stop() sends SIGTERM then resolves on exit", async () => {
+      vi.useFakeTimers();
       const { startWebAppIfEnabled } = await import("./server-web-app.js");
       const child = mockChildProcess();
 
@@ -357,7 +390,9 @@ describe("server-web-app", () => {
         return false;
       });
 
-      const result = await startWebAppIfEnabled({ enabled: true }, makeLog());
+      const resultPromise = startWebAppIfEnabled({ enabled: true }, makeLog());
+      await vi.advanceTimersByTimeAsync(3_500);
+      const result = await resultPromise;
       expect(result).not.toBeNull();
 
       // Simulate: process hasn't exited yet.
@@ -367,6 +402,37 @@ describe("server-web-app", () => {
       // Simulate the exit event.
       child._emit("exit", 0, null);
       await stopPromise;
+      vi.useRealTimers();
+    });
+
+    it("returns null and logs error when child process crashes on startup", async () => {
+      vi.useFakeTimers();
+      const { startWebAppIfEnabled } = await import("./server-web-app.js");
+      const child = mockChildProcess();
+
+      existsSyncSpy.mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith(path.join("apps", "web", "package.json"))) {
+          return true;
+        }
+        if (s.includes(path.join(".next", "standalone", "apps", "web", "server.js"))) {
+          return true;
+        }
+        return false;
+      });
+
+      const log = makeLog();
+      const resultPromise = startWebAppIfEnabled({ enabled: true }, log);
+
+      // Simulate the child crashing immediately (e.g. Cannot find module 'next').
+      child.exitCode = 1;
+      child._emit("exit", 1, null);
+
+      const result = await resultPromise;
+
+      expect(result).toBeNull();
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining("web app failed to start"));
+      vi.useRealTimers();
     });
   });
 });
