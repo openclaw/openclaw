@@ -231,25 +231,38 @@ describe("skills-cli", () => {
         return;
       }
 
-      const report = buildWorkspaceSkillStatus("/tmp", {
-        managedSkillsDir: "/nonexistent",
-      });
+      const previousBundledDir = process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+      try {
+        process.env.OPENCLAW_BUNDLED_SKILLS_DIR = bundledDir;
 
-      // Should have loaded some skills
-      expect(report.skills.length).toBeGreaterThan(0);
+        const report = buildWorkspaceSkillStatus("/tmp", {
+          managedSkillsDir: "/nonexistent",
+        });
 
-      // Format should work without errors
-      const listOutput = formatSkillsList(report, {});
-      expect(listOutput).toContain("Skills");
+        // Should have loaded some skills
+        expect(report.skills.length).toBeGreaterThan(0);
 
-      const checkOutput = formatSkillsCheck(report, {});
-      expect(checkOutput).toContain("Total:");
+        // Format should work without errors
+        const listOutput = formatSkillsList(report, {});
+        expect(listOutput).toContain("Skills");
 
-      // JSON output should be valid
-      const jsonOutput = formatSkillsList(report, { json: true });
-      const parsed = JSON.parse(jsonOutput);
-      expect(parsed.skills).toBeInstanceOf(Array);
+        const checkOutput = formatSkillsCheck(report, {});
+        expect(checkOutput).toContain("Total:");
+
+        // JSON output should be valid
+        const jsonOutput = formatSkillsList(report, { json: true });
+        const parsed = JSON.parse(jsonOutput);
+        expect(parsed.skills).toBeInstanceOf(Array);
+      } finally {
+        if (typeof previousBundledDir === "string") {
+          process.env.OPENCLAW_BUNDLED_SKILLS_DIR = previousBundledDir;
+        } else {
+          delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        }
+      }
     });
+
+    // (integration tests continue below)
 
     it("formats info for a real bundled skill (peekaboo)", () => {
       const bundledDir = resolveBundledSkillsDir();
@@ -257,20 +270,31 @@ describe("skills-cli", () => {
         return;
       }
 
-      const report = buildWorkspaceSkillStatus("/tmp", {
-        managedSkillsDir: "/nonexistent",
-      });
+      const previousBundledDir = process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+      try {
+        process.env.OPENCLAW_BUNDLED_SKILLS_DIR = bundledDir;
 
-      // peekaboo is a bundled skill that should always exist
-      const peekaboo = report.skills.find((s) => s.name === "peekaboo");
-      if (!peekaboo) {
-        // Skip if peekaboo not found
-        return;
+        const report = buildWorkspaceSkillStatus("/tmp", {
+          managedSkillsDir: "/nonexistent",
+        });
+
+        // peekaboo is a bundled skill that should always exist
+        const peekaboo = report.skills.find((s) => s.name === "peekaboo");
+        if (!peekaboo) {
+          // Skip if peekaboo not found
+          return;
+        }
+
+        const output = formatSkillInfo(report, "peekaboo", {});
+        expect(output).toContain("peekaboo");
+        expect(output).toContain("Details:");
+      } finally {
+        if (typeof previousBundledDir === "string") {
+          process.env.OPENCLAW_BUNDLED_SKILLS_DIR = previousBundledDir;
+        } else {
+          delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        }
       }
-
-      const output = formatSkillInfo(report, "peekaboo", {});
-      expect(output).toContain("peekaboo");
-      expect(output).toContain("Details:");
     });
   });
 });

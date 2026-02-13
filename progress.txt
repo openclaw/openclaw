@@ -13,6 +13,7 @@ Started: Thursday, February 12th, 2026 — 5:32 PM
 - Runtime abstraction for logging: `RuntimeEnv` with `log`, `error`, `warn`, `debug`, `exit`
 - Skills directory is resolved via `resolveBundledSkillsDir()` from `agents/skills/bundled-dir.js`
 - Can override skills dir with `OPENCLAW_BUNDLED_SKILLS_DIR` env var in tests
+- When mutating `process.env` in tests, restore by `delete process.env.VAR` (not assignment) when the previous value was undefined; assigning `undefined` sets the literal string "undefined".
 
 ---
 
@@ -97,9 +98,15 @@ Started: Thursday, February 12th, 2026 — 5:32 PM
 - Added optional `fix` instructions per check to help users resolve failures quickly
 - Added rich output support: uses ✓/✗ icons and colors them when terminal styling is enabled
 - Updated `checkCommand` to use the new formatter and route fix instructions through `note(..., "Fix")`
+- Stabilized test suite by fixing skills CLI integration test env restore and increasing media-group flush headroom
 
 **Files changed:**
-- `src/commands/check.ts` - Added `fix` field to results + new formatter
-- `src/commands/check.test.ts` - Added formatter unit tests
+- `src/commands/check.ts`
+- `src/commands/check.test.ts`
+- `src/cli/skills-cli.test.ts`
+- `src/telegram/bot.media.downloads-media-file-path-no-file-download.test.ts`
+
+**Learnings:**
+- Avoid assigning `process.env.FOO = undefined` in tests; it becomes the string "undefined" and can break other tests.
 
 ---

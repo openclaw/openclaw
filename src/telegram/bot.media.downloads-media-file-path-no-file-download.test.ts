@@ -294,7 +294,8 @@ describe("telegram media groups", () => {
   });
 
   const MEDIA_GROUP_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
-  const MEDIA_GROUP_FLUSH_MS = MEDIA_GROUP_TIMEOUT_MS + 25;
+  // Allow extra headroom for parallel vitest shards / CI jitter.
+  const MEDIA_GROUP_FLUSH_MS = MEDIA_GROUP_TIMEOUT_MS + 250;
 
   it(
     "buffers messages with same media_group_id and processes them together",
