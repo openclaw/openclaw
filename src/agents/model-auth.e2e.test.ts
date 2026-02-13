@@ -532,4 +532,79 @@ describe("getApiKeyForModel", () => {
       }
     }
   });
+
+  it("resolveEnvApiKey('huggingface') returns HUGGINGFACE_HUB_TOKEN when set", async () => {
+    const prevHub = process.env.HUGGINGFACE_HUB_TOKEN;
+    const prevHf = process.env.HF_TOKEN;
+    try {
+      delete process.env.HF_TOKEN;
+      process.env.HUGGINGFACE_HUB_TOKEN = "hf_hub_xyz";
+      vi.resetModules();
+      const { resolveEnvApiKey } = await import("./model-auth.js");
+      const resolved = resolveEnvApiKey("huggingface");
+      expect(resolved?.apiKey).toBe("hf_hub_xyz");
+      expect(resolved?.source).toContain("HUGGINGFACE_HUB_TOKEN");
+    } finally {
+      if (prevHub === undefined) {
+        delete process.env.HUGGINGFACE_HUB_TOKEN;
+      } else {
+        process.env.HUGGINGFACE_HUB_TOKEN = prevHub;
+      }
+      if (prevHf === undefined) {
+        delete process.env.HF_TOKEN;
+      } else {
+        process.env.HF_TOKEN = prevHf;
+      }
+    }
+  });
+
+  it("resolveEnvApiKey('huggingface') prefers HUGGINGFACE_HUB_TOKEN over HF_TOKEN when both set", async () => {
+    const prevHub = process.env.HUGGINGFACE_HUB_TOKEN;
+    const prevHf = process.env.HF_TOKEN;
+    try {
+      process.env.HUGGINGFACE_HUB_TOKEN = "hf_hub_first";
+      process.env.HF_TOKEN = "hf_second";
+      vi.resetModules();
+      const { resolveEnvApiKey } = await import("./model-auth.js");
+      const resolved = resolveEnvApiKey("huggingface");
+      expect(resolved?.apiKey).toBe("hf_hub_first");
+      expect(resolved?.source).toContain("HUGGINGFACE_HUB_TOKEN");
+    } finally {
+      if (prevHub === undefined) {
+        delete process.env.HUGGINGFACE_HUB_TOKEN;
+      } else {
+        process.env.HUGGINGFACE_HUB_TOKEN = prevHub;
+      }
+      if (prevHf === undefined) {
+        delete process.env.HF_TOKEN;
+      } else {
+        process.env.HF_TOKEN = prevHf;
+      }
+    }
+  });
+
+  it("resolveEnvApiKey('huggingface') returns HF_TOKEN when only HF_TOKEN set", async () => {
+    const prevHub = process.env.HUGGINGFACE_HUB_TOKEN;
+    const prevHf = process.env.HF_TOKEN;
+    try {
+      delete process.env.HUGGINGFACE_HUB_TOKEN;
+      process.env.HF_TOKEN = "hf_abc123";
+      vi.resetModules();
+      const { resolveEnvApiKey } = await import("./model-auth.js");
+      const resolved = resolveEnvApiKey("huggingface");
+      expect(resolved?.apiKey).toBe("hf_abc123");
+      expect(resolved?.source).toContain("HF_TOKEN");
+    } finally {
+      if (prevHub === undefined) {
+        delete process.env.HUGGINGFACE_HUB_TOKEN;
+      } else {
+        process.env.HUGGINGFACE_HUB_TOKEN = prevHub;
+      }
+      if (prevHf === undefined) {
+        delete process.env.HF_TOKEN;
+      } else {
+        process.env.HF_TOKEN = prevHf;
+      }
+    }
+  });
 });

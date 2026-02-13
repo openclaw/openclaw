@@ -23,6 +23,7 @@ import {
   applySyntheticConfig,
   applyVeniceConfig,
   applyTogetherConfig,
+  applyHuggingfaceConfig,
   applyVercelAiGatewayConfig,
   applyLitellmConfig,
   applyXaiConfig,
@@ -42,6 +43,7 @@ import {
   setXaiApiKey,
   setVeniceApiKey,
   setTogetherApiKey,
+  setHuggingfaceApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
@@ -642,6 +644,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyTogetherConfig(nextConfig);
+  }
+
+  if (authChoice === "huggingface-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "huggingface",
+      cfg: baseConfig,
+      flagValue: opts.huggingfaceApiKey,
+      flagName: "--huggingface-api-key",
+      envVar: "HF_TOKEN",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setHuggingfaceApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "huggingface:default",
+      provider: "huggingface",
+      mode: "api_key",
+    });
+    return applyHuggingfaceConfig(nextConfig);
   }
 
   if (authChoice === "custom-api-key") {

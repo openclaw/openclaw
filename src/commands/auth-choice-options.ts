@@ -1,35 +1,13 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { AuthChoice } from "./onboard-types.js";
+import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
+
+export type { AuthChoiceGroupId };
 
 export type AuthChoiceOption = {
   value: AuthChoice;
   label: string;
   hint?: string;
 };
-
-export type AuthChoiceGroupId =
-  | "openai"
-  | "anthropic"
-  | "vllm"
-  | "google"
-  | "copilot"
-  | "openrouter"
-  | "litellm"
-  | "ai-gateway"
-  | "cloudflare-ai-gateway"
-  | "moonshot"
-  | "zai"
-  | "xiaomi"
-  | "opencode-zen"
-  | "minimax"
-  | "synthetic"
-  | "venice"
-  | "qwen"
-  | "together"
-  | "qianfan"
-  | "xai"
-  | "custom";
-
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
@@ -146,6 +124,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["together-api-key"],
   },
   {
+    value: "huggingface",
+    label: "Hugging Face",
+    hint: "Inference API (HF token)",
+    choices: ["huggingface-api-key"],
+  },
+  {
     value: "venice",
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",
@@ -237,6 +221,11 @@ export function buildAuthChoiceOptions(params: {
     value: "together-api-key",
     label: "Together AI API key",
     hint: "Access to Llama, DeepSeek, Qwen, and more open models",
+  });
+  options.push({
+    value: "huggingface-api-key",
+    label: "Hugging Face API key (HF token)",
+    hint: "Inference Providers — OpenAI-compatible chat",
   });
   options.push({
     value: "github-copilot",

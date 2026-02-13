@@ -10,6 +10,12 @@ import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import {
+  discoverHuggingfaceModels,
+  HUGGINGFACE_BASE_URL,
+  HUGGINGFACE_MODEL_CATALOG,
+  buildHuggingfaceModelDefinition,
+} from "./huggingface-models.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import {
   buildSyntheticModelDefinition,
@@ -542,6 +548,25 @@ async function buildOllamaProvider(configuredBaseUrl?: string): Promise<Provider
   };
 }
 
+async function buildHuggingfaceProvider(apiKey?: string): Promise<ProviderConfig> {
+  // Resolve env var name to value for discovery (GET /v1/models requires Bearer token).
+  const resolvedSecret =
+    apiKey?.trim() !== ""
+      ? /^[A-Z][A-Z0-9_]*$/.test(apiKey!.trim())
+        ? (process.env[apiKey!.trim()] ?? "").trim()
+        : apiKey!.trim()
+      : "";
+  const models =
+    resolvedSecret !== ""
+      ? await discoverHuggingfaceModels(resolvedSecret)
+      : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
+  return {
+    baseUrl: HUGGINGFACE_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 function buildTogetherProvider(): ProviderConfig {
   return {
     baseUrl: TOGETHER_BASE_URL,
@@ -712,6 +737,17 @@ export async function resolveImplicitProviders(params: {
     providers.together = {
       ...buildTogetherProvider(),
       apiKey: togetherKey,
+    };
+  }
+
+  const huggingfaceKey =
+    resolveEnvApiKeyVarName("huggingface") ??
+    resolveApiKeyFromProfiles({ provider: "huggingface", store: authStore });
+  if (huggingfaceKey) {
+    const hfProvider = await buildHuggingfaceProvider(huggingfaceKey);
+    providers.huggingface = {
+      ...hfProvider,
+      apiKey: huggingfaceKey,
     };
   }
 
