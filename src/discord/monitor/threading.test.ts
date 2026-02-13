@@ -115,12 +115,9 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
 
 describe("maybeCreateDiscordAutoThread", () => {
   it("returns existing thread ID when creation fails due to race condition", async () => {
-    // First call succeeds (simulating another agent creating the thread)
-    let callCount = 0;
     const client = {
       rest: {
         post: async () => {
-          callCount++;
           throw new Error("A thread has already been created on this message");
         },
         get: async () => {
