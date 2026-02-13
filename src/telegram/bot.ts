@@ -62,6 +62,10 @@ export type TelegramBotOptions = {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
   };
+  testTimings?: {
+    mediaGroupFlushMs?: number;
+    textFragmentGapMs?: number;
+  };
 };
 
 export function getTelegramSequentialKey(ctx: {

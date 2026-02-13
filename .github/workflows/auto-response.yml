@@ -131,6 +131,8 @@ jobs:
               }
             }
 
+            const invalidLabel = "invalid";
+
             const pullRequest = context.payload.pull_request;
             if (pullRequest) {
               const labelCount = labelSet.size;
@@ -149,6 +151,26 @@ jobs:
                 });
                 return;
               }
+              if (labelSet.has(invalidLabel)) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  state: "closed",
+                });
+                return;
+              }
+            }
+
+            if (issue && labelSet.has(invalidLabel)) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: "closed",
+                state_reason: "not_planned",
+              });
+              return;
             }
 
             const rule = rules.find((item) => labelSet.has(item.label));
