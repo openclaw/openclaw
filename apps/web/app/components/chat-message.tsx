@@ -179,14 +179,14 @@ const mdComponents: Components = {
 	),
 };
 
-/* ─── Chat message (Dench-inspired free-flowing text) ─── */
+/* ─── Chat message ─── */
 
 export function ChatMessage({ message }: { message: UIMessage }) {
 	const isUser = message.role === "user";
 	const segments = groupParts(message.parts);
 
 	if (isUser) {
-		// User: right-aligned subtle pill (like Dench)
+		// User: right-aligned subtle pill
 		const textContent = segments
 			.filter(
 				(s): s is { type: "text"; text: string } =>

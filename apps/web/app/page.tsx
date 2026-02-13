@@ -39,7 +39,7 @@ export default function Home() {
         className="font-instrument text-5xl md:text-6xl tracking-tight mb-3 text-center"
         style={{ color: "var(--color-text)" }}
       >
-        Dench
+        Ironclaw
       </h1>
 
       {/* Tagline */}

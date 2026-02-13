@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Dench",
+  title: "Ironclaw",
   description:
-    "AI CRM with an agent that connects to your apps and does the work for you",
+    "AI Workspace with an agent that connects to your apps and does the work for you",
 };
 
 export default function RootLayout({

@@ -1,6 +1,6 @@
 {
   "name": "ironclaw",
-  "version": "2026.2.10-1.10",
+  "version": "2026.2.10-1.11",
   "description": "AI-powered CRM platform with multi-channel agent gateway, DuckDB workspace, and knowledge management",
   "keywords": [],
   "license": "MIT",
