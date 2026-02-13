@@ -56,22 +56,6 @@ Protocol details:
 ## Connection lifecycle (single client)
 
 ```mermaid
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#ffffff',
-    'primaryTextColor': '#000000',
-    'primaryBorderColor': '#000000',
-    'lineColor': '#000000',
-    'secondaryColor': '#f9f9fb',
-    'tertiaryColor': '#ffffff',
-    'clusterBkg': '#f9f9fb',
-    'clusterBorder': '#000000',
-    'nodeBorder': '#000000',
-    'mainBkg': '#ffffff',
-    'edgeLabelBackground': '#ffffff'
-  }
-}}%%
 sequenceDiagram
     participant Client
     participant Gateway

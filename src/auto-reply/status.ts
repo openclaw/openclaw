@@ -13,12 +13,14 @@ import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/us
 import {
   resolveMainSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { listPluginCommands } from "../plugins/commands.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   getTtsMaxLength,
   getTtsProvider,
@@ -59,6 +61,7 @@ type StatusArgs = {
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   sessionScope?: SessionScope;
+  sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedVerbose?: VerboseLevel;
@@ -165,6 +168,8 @@ const formatQueueDetails = (queue?: QueueStatus) => {
 const readUsageFromSessionLog = (
   sessionId?: string,
   sessionEntry?: SessionEntry,
+  sessionKey?: string,
+  storePath?: string,
 ):
   | {
       input: number;
@@ -178,7 +183,17 @@ const readUsageFromSessionLog = (
   if (!sessionId) {
     return undefined;
   }
-  const logPath = resolveSessionFilePath(sessionId, sessionEntry);
+  let logPath: string;
+  try {
+    const agentId = sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
+    logPath = resolveSessionFilePath(
+      sessionId,
+      sessionEntry,
+      resolveSessionFilePathOptions({ agentId, storePath }),
+    );
+  } catch {
+    return undefined;
+  }
   if (!fs.existsSync(logPath)) {
     return undefined;
   }
@@ -333,7 +348,12 @@ export function buildStatusMessage(args: StatusArgs): string {
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionLog(entry?.sessionId, entry);
+    const logUsage = readUsageFromSessionLog(
+      entry?.sessionId,
+      entry,
+      args.sessionKey,
+      args.sessionStorePath,
+    );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
       if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {

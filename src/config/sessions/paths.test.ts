@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
@@ -74,5 +75,20 @@ describe("session path safety", () => {
   it("uses agent sessions dir fallback for transcript path", () => {
     const resolved = resolveSessionTranscriptPath("sess-1", "main");
     expect(resolved.endsWith(path.join("agents", "main", "sessions", "sess-1.jsonl"))).toBe(true);
+  });
+
+  it("prefers storePath when resolving session file options", () => {
+    const opts = resolveSessionFilePathOptions({
+      storePath: "/tmp/custom/agent-store/sessions.json",
+      agentId: "ops",
+    });
+    expect(opts).toEqual({
+      sessionsDir: path.resolve("/tmp/custom/agent-store"),
+    });
+  });
+
+  it("falls back to agentId when storePath is absent", () => {
+    const opts = resolveSessionFilePathOptions({ agentId: "ops" });
+    expect(opts).toEqual({ agentId: "ops" });
   });
 });

@@ -33,6 +33,26 @@ export function resolveDefaultSessionStorePath(agentId?: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 
+export type SessionFilePathOptions = {
+  agentId?: string;
+  sessionsDir?: string;
+};
+
+export function resolveSessionFilePathOptions(params: {
+  agentId?: string;
+  storePath?: string;
+}): SessionFilePathOptions | undefined {
+  const storePath = params.storePath?.trim();
+  if (storePath) {
+    return { sessionsDir: path.dirname(path.resolve(storePath)) };
+  }
+  const agentId = params.agentId?.trim();
+  if (agentId) {
+    return { agentId };
+  }
+  return undefined;
+}
+
 export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 export function validateSessionId(sessionId: string): string {
@@ -43,7 +63,7 @@ export function validateSessionId(sessionId: string): string {
   return trimmed;
 }
 
-function resolveSessionsDir(opts?: { agentId?: string; sessionsDir?: string }): string {
+function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   const sessionsDir = opts?.sessionsDir?.trim();
   if (sessionsDir) {
     return path.resolve(sessionsDir);
@@ -95,7 +115,7 @@ export function resolveSessionTranscriptPath(
 export function resolveSessionFilePath(
   sessionId: string,
   entry?: { sessionFile?: string },
-  opts?: { agentId?: string; sessionsDir?: string },
+  opts?: SessionFilePathOptions,
 ): string {
   const sessionsDir = resolveSessionsDir(opts);
   const candidate = entry?.sessionFile?.trim();
