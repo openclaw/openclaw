@@ -21,6 +21,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { throwIfAborted } from "./abort.js";
@@ -337,6 +338,7 @@ export async function deliverOutboundPayloads(params: {
     const normalized = normalizeWhatsAppPayload(payload);
     return normalized ? [normalized] : [];
   });
+  const hookRunner = getGlobalHookRunner();
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
@@ -345,9 +347,37 @@ export async function deliverOutboundPayloads(params: {
     };
     try {
       throwIfAborted(abortSignal);
+
+      // Run message_sending plugin hook (may modify content or cancel)
+      let effectivePayload = payload;
+      if (hookRunner?.hasHooks("message_sending")) {
+        try {
+          const sendingResult = await hookRunner.runMessageSending(
+            {
+              to,
+              content: payloadSummary.text,
+              metadata: { channel, accountId, mediaUrls: payloadSummary.mediaUrls },
+            },
+            {
+              channelId: channel,
+              accountId: accountId ?? undefined,
+            },
+          );
+          if (sendingResult?.cancel) {
+            continue;
+          }
+          if (sendingResult?.content != null) {
+            effectivePayload = { ...payload, text: sendingResult.content };
+            payloadSummary.text = sendingResult.content;
+          }
+        } catch {
+          // Don't block delivery on hook failure
+        }
+      }
+
       params.onPayload?.(payloadSummary);
-      if (handler.sendPayload && payload.channelData) {
-        results.push(await handler.sendPayload(payload));
+      if (handler.sendPayload && effectivePayload.channelData) {
+        results.push(await handler.sendPayload(effectivePayload));
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
@@ -370,7 +400,40 @@ export async function deliverOutboundPayloads(params: {
           results.push(await handler.sendMedia(caption, url));
         }
       }
+      // Run message_sent plugin hook (fire-and-forget) on success
+      if (hookRunner?.hasHooks("message_sent")) {
+        void hookRunner
+          .runMessageSent(
+            {
+              to,
+              content: payloadSummary.text,
+              success: true,
+            },
+            {
+              channelId: channel,
+              accountId: accountId ?? undefined,
+            },
+          )
+          .catch(() => {});
+      }
     } catch (err) {
+      // Run message_sent plugin hook on failure (fire-and-forget)
+      if (hookRunner?.hasHooks("message_sent")) {
+        void hookRunner
+          .runMessageSent(
+            {
+              to,
+              content: payloadSummary.text,
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            },
+            {
+              channelId: channel,
+              accountId: accountId ?? undefined,
+            },
+          )
+          .catch(() => {});
+      }
       if (!params.bestEffort) {
         throw err;
       }

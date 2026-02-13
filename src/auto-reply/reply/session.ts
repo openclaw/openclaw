@@ -27,6 +27,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -381,6 +382,46 @@ export async function initSessionState(params: {
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
   };
+
+  // Run session plugin hooks (fire-and-forget)
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner && isNewSession) {
+    const effectiveSessionId = sessionId ?? "";
+
+    // If replacing an existing session, fire session_end for the old one
+    if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
+      if (hookRunner.hasHooks("session_end")) {
+        void hookRunner
+          .runSessionEnd(
+            {
+              sessionId: previousSessionEntry.sessionId,
+              messageCount: 0,
+            },
+            {
+              sessionId: previousSessionEntry.sessionId,
+              agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+            },
+          )
+          .catch(() => {});
+      }
+    }
+
+    // Fire session_start for the new session
+    if (hookRunner.hasHooks("session_start")) {
+      void hookRunner
+        .runSessionStart(
+          {
+            sessionId: effectiveSessionId,
+            resumedFrom: previousSessionEntry?.sessionId,
+          },
+          {
+            sessionId: effectiveSessionId,
+            agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+          },
+        )
+        .catch(() => {});
+    }
+  }
 
   return {
     sessionCtx,
