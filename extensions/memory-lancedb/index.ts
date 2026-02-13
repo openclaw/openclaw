@@ -138,7 +138,7 @@ class MemoryDB {
   }
 
   /** Check that the existing table's vector column matches the configured dimension. */
-  private async validateVectorDimension(table: lancedb.Table): Promise<void> {
+  private async validateVectorDimension(table: LanceDB.Table): Promise<void> {
     const schema = await table.schema();
     // Use loop instead of .find() — Arrow Schema.fields may not be a standard Array
     let storedDim: number | undefined;
@@ -164,6 +164,7 @@ class MemoryDB {
 
   /** Initialize without dimension validation (used by reindex to access mismatched tables). */
   async initializeUnchecked(): Promise<void> {
+    const lancedb = await loadLanceDB();
     this.db = await lancedb.connect(this.dbPath);
     const tables = await this.db.tableNames();
     if (tables.includes(TABLE_NAME)) {
