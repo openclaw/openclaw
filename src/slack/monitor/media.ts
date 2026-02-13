@@ -115,6 +115,23 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   return fetch(resolvedUrl.toString(), { redirect: "follow" });
 }
 
+/**
+ * Slack voice messages (audio clips, huddle recordings) carry a `subtype` of
+ * `"slack_audio"` but are served with a `video/*` MIME type (e.g. `video/mp4`,
+ * `video/webm`).  Override the primary type to `audio/` so the
+ * media-understanding pipeline routes them to transcription.
+ */
+function resolveSlackMediaMimetype(
+  file: SlackFile,
+  fetchedContentType?: string,
+): string | undefined {
+  const mime = fetchedContentType ?? file.mimetype;
+  if (file.subtype === "slack_audio" && mime?.startsWith("video/")) {
+    return mime.replace("video/", "audio/");
+  }
+  return mime;
+}
+
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
@@ -144,16 +161,17 @@ export async function resolveSlackMedia(params: {
       if (fetched.buffer.byteLength > params.maxBytes) {
         continue;
       }
+      const effectiveMime = resolveSlackMediaMimetype(file, fetched.contentType);
       const saved = await saveMediaBuffer(
         fetched.buffer,
-        fetched.contentType ?? file.mimetype,
+        effectiveMime,
         "inbound",
         params.maxBytes,
       );
       const label = fetched.fileName ?? file.name;
       return {
         path: saved.path,
-        contentType: saved.contentType,
+        contentType: effectiveMime ?? saved.contentType,
         placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
       };
     } catch {
