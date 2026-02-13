@@ -34,3 +34,22 @@ describe("rewriteUpdateFlagArgv", () => {
     ]);
   });
 });
+
+describe("runCli process.exit on success", () => {
+  it("source code calls process.exit(0) after parseAsync and tryRouteCli", async () => {
+    // Verify the fix is present in the source by checking that process.exit(0)
+    // is called in both success paths. We read the source directly to avoid
+    // the complexity of mocking all CLI dependencies.
+    const fs = await import("node:fs");
+    const source = fs.readFileSync(
+      new URL("./run-main.ts", import.meta.url).pathname.replace(/\.ts$/, ".ts"),
+      "utf-8",
+    );
+
+    // After tryRouteCli returns true, process.exit(0) should be called
+    expect(source).toMatch(/tryRouteCli\(.*\)\)\s*\{[\s\S]*?process\.exit\(0\)/);
+
+    // After program.parseAsync completes, process.exit(0) should be called
+    expect(source).toMatch(/parseAsync\(.*\);[\s\S]*?process\.exit\(0\)/);
+  });
+});

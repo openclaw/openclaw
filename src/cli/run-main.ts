@@ -34,7 +34,7 @@ export async function runCli(argv: string[] = process.argv) {
   assertSupportedRuntime();
 
   if (await tryRouteCli(normalizedArgv)) {
-    return;
+    process.exit(0);
   }
 
   // Capture all console output into structured logs while keeping stdout/stderr behavior.
@@ -69,6 +69,13 @@ export async function runCli(argv: string[] = process.argv) {
   }
 
   await program.parseAsync(parseArgv);
+
+  // Force-exit after successful command completion. Eager side-effect imports
+  // (messaging providers, plugin loaders) can create persistent connections or
+  // timers that keep the Node.js event loop alive indefinitely. Long-lived
+  // commands (gateway start, tui, etc.) never return from parseAsync(), so
+  // this only affects short-lived commands that complete normally.
+  process.exit(0);
 }
 
 function stripWindowsNodeExec(argv: string[]): string[] {
