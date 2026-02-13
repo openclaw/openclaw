@@ -20,10 +20,10 @@ Use `trusted-proxy` auth mode when:
 
 ## When NOT to Use
 
-- If you can use `gateway.bind: "loopback"` with Tailscale Serve instead (simpler, safer)
-- If your proxy doesn't authenticate users (just a TLS terminator)
-- If there's any path to the Gateway that bypasses the proxy
+- If your proxy doesn't authenticate users (just a TLS terminator or load balancer)
+- If there's any path to the Gateway that bypasses the proxy (firewall holes, internal network access)
 - If you're unsure whether your proxy correctly strips/overwrites forwarded headers
+- If you only need personal single-user access (consider Tailscale Serve + loopback for simpler setup)
 
 ## How It Works
 
