@@ -57,6 +57,7 @@ describe("config io write", () => {
               defaults: {
                 cliBackends: {
                   codex: {
+                    command: "codex",
                     env: {
                       OPENAI_API_KEY: "${OPENAI_API_KEY}",
                     },
@@ -110,9 +111,14 @@ describe("config io write", () => {
         configPath,
         JSON.stringify(
           {
-            channels: {
-              discord: {
-                allowFrom: ["${DISCORD_USER_ID}", "123"],
+            agents: {
+              defaults: {
+                cliBackends: {
+                  codex: {
+                    command: "codex",
+                    args: ["${DISCORD_USER_ID}", "123"],
+                  },
+                },
               },
             },
           },
@@ -131,23 +137,41 @@ describe("config io write", () => {
       expect(snapshot.valid).toBe(true);
 
       const next = structuredClone(snapshot.config);
-      const allowFrom = Array.isArray(next.channels?.discord?.allowFrom)
-        ? next.channels?.discord?.allowFrom
-        : [];
-      next.channels = {
-        ...next.channels,
-        discord: {
-          ...next.channels?.discord,
-          allowFrom: [...allowFrom, "456"],
+      const codexBackend = next.agents?.defaults?.cliBackends?.codex;
+      const args = Array.isArray(codexBackend?.args) ? codexBackend?.args : [];
+      next.agents = {
+        ...next.agents,
+        defaults: {
+          ...next.agents?.defaults,
+          cliBackends: {
+            ...next.agents?.defaults?.cliBackends,
+            codex: {
+              ...codexBackend,
+              command: typeof codexBackend?.command === "string" ? codexBackend.command : "codex",
+              args: [...args, "456"],
+            },
+          },
         },
       };
 
       await io.writeConfigFile(next);
 
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        channels: { discord?: { allowFrom?: string[] } };
+        agents: {
+          defaults: {
+            cliBackends: {
+              codex: {
+                args: string[];
+              };
+            };
+          };
+        };
       };
-      expect(persisted.channels.discord?.allowFrom).toEqual(["${DISCORD_USER_ID}", "123", "456"]);
+      expect(persisted.agents.defaults.cliBackends.codex.args).toEqual([
+        "${DISCORD_USER_ID}",
+        "123",
+        "456",
+      ]);
     });
   });
 });
