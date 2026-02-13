@@ -73,7 +73,7 @@ describe("resolveCronSession", () => {
 
   it("always generates a new sessionId for cron keys", () => {
     vi.mocked(loadSessionStore).mockReturnValue({
-      "cron:test-job": {
+      "agent:main:cron:test-job": {
         sessionId: "existing-session-id",
         updatedAt: 1000,
       },
@@ -81,7 +81,7 @@ describe("resolveCronSession", () => {
 
     const result = resolveCronSession({
       cfg: {} as OpenClawConfig,
-      sessionKey: "cron:test-job",
+      sessionKey: "agent:main:cron:test-job",
       agentId: "main",
       nowMs: Date.now(),
     });

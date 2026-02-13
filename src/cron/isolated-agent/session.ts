@@ -14,7 +14,7 @@ export function resolveCronSession(params: {
   });
   const store = loadSessionStore(storePath);
   const entry = store[params.sessionKey];
-  const isCronKey = params.sessionKey.startsWith("cron:");
+  const isCronKey = /(?:^|:)cron:/.test(params.sessionKey);
   const sessionId = !isCronKey && entry?.sessionId ? entry.sessionId : crypto.randomUUID();
   const isNewSession = sessionId !== entry?.sessionId;
   const systemSent = false;
