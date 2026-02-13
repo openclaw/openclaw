@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as skillScanner from "../security/skill-scanner.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
@@ -449,18 +450,9 @@ describe("installPluginFromArchive", () => {
   });
 
   it("continues install when scanner throws", async () => {
-    vi.resetModules();
-    vi.doMock("../security/skill-scanner.js", async () => {
-      const actual = await vi.importActual<typeof import("../security/skill-scanner.js")>(
-        "../security/skill-scanner.js",
-      );
-      return {
-        ...actual,
-        scanDirectoryWithSummary: async () => {
-          throw new Error("scanner exploded");
-        },
-      };
-    });
+    const scanSpy = vi
+      .spyOn(skillScanner, "scanDirectoryWithSummary")
+      .mockRejectedValueOnce(new Error("scanner exploded"));
 
     const tmpDir = makeTempDir();
     const pluginDir = path.join(tmpDir, "plugin-src");
@@ -492,9 +484,7 @@ describe("installPluginFromArchive", () => {
 
     expect(result.ok).toBe(true);
     expect(warnings.some((w) => w.includes("code safety scan failed"))).toBe(true);
-
-    vi.doUnmock("../security/skill-scanner.js");
-    vi.resetModules();
+    scanSpy.mockRestore();
   });
 });
 
