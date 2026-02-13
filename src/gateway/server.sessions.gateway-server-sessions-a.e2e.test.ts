@@ -419,6 +419,41 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.list returns entry.model written by cron run (#13429)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-model-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+        "cron:daily-report": {
+          sessionId: "sess-cron",
+          updatedAt: Date.now(),
+          label: "Cron: daily-report",
+          modelProvider: "google-gemini-cli",
+          model: "gemini-3-pro-preview",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const list = await rpcReq<{
+      sessions: Array<{ key: string; model?: string; modelProvider?: string }>;
+    }>(ws, "sessions.list", { includeGlobal: false, includeUnknown: false });
+
+    expect(list.ok).toBe(true);
+    const cronSession = list.payload?.sessions.find((s) => s.key.includes("cron:daily-report"));
+    expect(cronSession).toBeDefined();
+    expect(cronSession?.model).toBe("gemini-3-pro-preview");
+    expect(cronSession?.modelProvider).toBe("google-gemini-cli");
+
+    ws.close();
+  });
+
   test("sessions.delete rejects main and aborts active runs", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
     const storePath = path.join(dir, "sessions.json");
