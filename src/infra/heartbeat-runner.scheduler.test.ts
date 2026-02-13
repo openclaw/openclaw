@@ -87,6 +87,57 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("cleanup is idempotent and does not clear a newer runner's handler", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy1 = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runSpy2 = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const cfg = {
+      agents: { defaults: { heartbeat: { every: "30m" } } },
+    } as OpenClawConfig;
+
+    // Start runner A
+    const runnerA = startHeartbeatRunner({ cfg, runOnce: runSpy1 });
+
+    // Start runner B (simulates lifecycle reload)
+    const runnerB = startHeartbeatRunner({ cfg, runOnce: runSpy2 });
+
+    // Stop runner A (stale cleanup) — should NOT kill runner B's handler
+    runnerA.stop();
+
+    // Runner B should still fire
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy2).toHaveBeenCalledTimes(1);
+    expect(runSpy1).not.toHaveBeenCalled();
+
+    // Double-stop should be safe (idempotent)
+    runnerA.stop();
+
+    runnerB.stop();
+  });
+
+  it("run() returns skipped when runner is stopped", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    runner.stop();
+
+    // After stopping, no heartbeats should fire
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
   it("reschedules timer when runOnce returns requests-in-flight", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
