@@ -87,6 +87,19 @@ export type GatewayAuthConfig = {
   password?: string;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /** Rate-limit configuration for failed authentication attempts. */
+  rateLimit?: GatewayAuthRateLimitConfig;
+};
+
+export type GatewayAuthRateLimitConfig = {
+  /** Maximum failed attempts per IP before blocking.  @default 10 */
+  maxAttempts?: number;
+  /** Sliding window duration in milliseconds.  @default 60000 (1 min) */
+  windowMs?: number;
+  /** Lockout duration in milliseconds after the limit is exceeded.  @default 300000 (5 min) */
+  lockoutMs?: number;
+  /** Exempt localhost/loopback addresses from auth rate limiting.  @default true */
+  exemptLoopback?: boolean;
 };
 
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";

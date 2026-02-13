@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
@@ -8,9 +9,9 @@ import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
+  sendGatewayAuthFailure,
   sendJson,
   sendMethodNotAllowed,
-  sendUnauthorized,
   setSseHeaders,
   writeDone,
 } from "./http-common.js";
@@ -20,6 +21,7 @@ type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   trustedProxies?: string[];
+  rateLimiter?: AuthRateLimiter;
 };
 
 type OpenAiChatMessage = {
@@ -189,9 +191,10 @@ export async function handleOpenAiHttpRequest(
     connectAuth: { token, password: token },
     req,
     trustedProxies: opts.trustedProxies,
+    rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    sendGatewayAuthFailure(res, authResult);
     return true;
   }
 

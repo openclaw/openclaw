@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   filterToolsByPolicy,
@@ -24,10 +25,10 @@ import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
+  sendGatewayAuthFailure,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
-  sendUnauthorized,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
 
@@ -118,7 +119,12 @@ function mergeActionIntoArgsIfSupported(params: {
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { auth: ResolvedGatewayAuth; maxBodyBytes?: number; trustedProxies?: string[] },
+  opts: {
+    auth: ResolvedGatewayAuth;
+    maxBodyBytes?: number;
+    trustedProxies?: string[];
+    rateLimiter?: AuthRateLimiter;
+  },
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (url.pathname !== "/tools/invoke") {
@@ -137,9 +143,10 @@ export async function handleToolsInvokeHttpRequest(
     connectAuth: token ? { token, password: token } : null,
     req,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    sendGatewayAuthFailure(res, authResult);
     return true;
   }
 
