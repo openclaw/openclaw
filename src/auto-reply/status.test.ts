@@ -348,9 +348,6 @@ describe("buildStatusMessage", () => {
   it("prefers cached prompt tokens from the session log", async () => {
     await withTempHome(
       async (dir) => {
-        vi.resetModules();
-        const { buildStatusMessage: buildStatusMessageDynamic } = await import("./status.js");
-
         const sessionId = "sess-1";
         const logPath = path.join(
           dir,
@@ -383,7 +380,7 @@ describe("buildStatusMessage", () => {
           "utf-8",
         );
 
-        const text = buildStatusMessageDynamic({
+        const text = buildStatusMessage({
           agent: {
             model: "anthropic/claude-opus-4-5",
             contextTokens: 32_000,
@@ -410,9 +407,6 @@ describe("buildStatusMessage", () => {
   it("reads transcript usage for non-default agents", async () => {
     await withTempHome(
       async (dir) => {
-        vi.resetModules();
-        const { buildStatusMessage: buildStatusMessageDynamic } = await import("./status.js");
-
         const sessionId = "sess-worker1";
         const logPath = path.join(
           dir,
@@ -445,7 +439,7 @@ describe("buildStatusMessage", () => {
           "utf-8",
         );
 
-        const text = buildStatusMessageDynamic({
+        const text = buildStatusMessage({
           agent: {
             model: "anthropic/claude-opus-4-5",
             contextTokens: 32_000,
@@ -472,9 +466,6 @@ describe("buildStatusMessage", () => {
   it("reads transcript usage using explicit agentId when sessionKey is missing", async () => {
     await withTempHome(
       async (dir) => {
-        vi.resetModules();
-        const { buildStatusMessage: buildStatusMessageDynamic } = await import("./status.js");
-
         const sessionId = "sess-worker2";
         const logPath = path.join(
           dir,
@@ -507,7 +498,7 @@ describe("buildStatusMessage", () => {
           "utf-8",
         );
 
-        const text = buildStatusMessageDynamic({
+        const text = buildStatusMessage({
           agent: {
             model: "anthropic/claude-opus-4-5",
             contextTokens: 32_000,
