@@ -228,6 +228,57 @@ export const icons = {
       />
     </svg>
   `,
+  gitBranch: html`
+    <svg viewBox="0 0 24 24">
+      <line x1="6" x2="6" y1="3" y2="15" />
+      <circle cx="18" cy="6" r="3" />
+      <circle cx="6" cy="18" r="3" />
+      <path d="M18 9a9 9 0 0 1-9 9" />
+    </svg>
+  `,
+  history: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M12 7v5l4 2" />
+    </svg>
+  `,
+  calendar: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
+      <line x1="16" x2="16" y1="2" y2="6" />
+      <line x1="8" x2="8" y1="2" y2="6" />
+      <line x1="3" x2="21" y1="10" y2="10" />
+    </svg>
+  `,
+  diff: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M12 3v14" />
+      <path d="M5 10h14" />
+      <path d="M5 21h14" />
+    </svg>
+  `,
+  eye: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  `,
+  chevronDown: html`
+    <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+  `,
+  chevronRight: html`
+    <svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+  `,
+  plus: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M5 12h14" />
+      <path d="M12 5v14" />
+    </svg>
+  `,
+  minus: html`
+    <svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg>
+  `,
 } as const;
 
 export type IconName = keyof typeof icons;

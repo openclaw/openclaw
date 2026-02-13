@@ -13,6 +13,12 @@ import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
+  AgentHQAgentInfo,
+  AgentHQHistoryResult,
+  AgentHQStatsResult,
+  AgentHQDiffResult,
+  AgentHQSummary,
+  AgentHQViewMode,
   ConfigSnapshot,
   ConfigUiHints,
   CronJob,
@@ -219,6 +225,28 @@ export class OpenClawApp extends LitElement {
   @state() agentSkillsError: string | null = null;
   @state() agentSkillsReport: SkillStatusReport | null = null;
   @state() agentSkillsAgentId: string | null = null;
+
+  // AgentHQ state - Evolution tracking
+  @state() agenthqLoading = false;
+  @state() agenthqHistoryLoading = false;
+  @state() agenthqStatsLoading = false;
+  @state() agenthqDiffLoading = false;
+  @state() agenthqSummaryLoading = false;
+  @state() agenthqError: string | null = null;
+  @state() agenthqAgents: AgentHQAgentInfo[] = [];
+  @state() agenthqSelectedAgentId: string | null = null;
+  @state() agenthqHistory: AgentHQHistoryResult | null = null;
+  @state() agenthqStats: AgentHQStatsResult | null = null;
+  @state() agenthqDiff: AgentHQDiffResult | null = null;
+  @state() agenthqSummaries: Map<string, AgentHQSummary> = new Map();
+  @state() agenthqViewMode: AgentHQViewMode = "visual";
+  @state() agenthqSelectedCommit: string | null = null;
+  @state() agenthqSelectedFile: string | null = null;
+  @state() agenthqFileFilter: string[] = [];
+  @state() agenthqExpandedCommits: Set<string> = new Set();
+  @state() agenthqSummaryEnabled = false;
+  @state() agenthqSummaryModel: string | null = null;
+  @state() agenthqSummaryProvider: string | null = null;
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;

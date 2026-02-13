@@ -772,3 +772,86 @@ export type LogEntry = {
   message?: string | null;
   meta?: Record<string, unknown> | null;
 };
+
+// ============================================================
+// AgentHQ Types
+// ============================================================
+
+export type AgentHQCommitFile = {
+  name: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  additions: number;
+  deletions: number;
+};
+
+export type AgentHQHistoryEntry = {
+  sha: string;
+  shortSha: string;
+  message: string;
+  author: string;
+  authorEmail: string;
+  timestamp: number;
+  files: AgentHQCommitFile[];
+};
+
+export type AgentHQHistoryResult = {
+  agentId: string;
+  workspace: string;
+  entries: AgentHQHistoryEntry[];
+  hasMore: boolean;
+  isGitRepo: boolean;
+};
+
+export type AgentHQActivityDay = {
+  date: string;
+  count: number;
+  magnitude: number;
+  files: string[];
+};
+
+export type AgentHQStatsResult = {
+  agentId: string;
+  totalCommits: number;
+  filesChanged: Record<string, number>;
+  activityByDay: AgentHQActivityDay[];
+  lastChangeAt: number | null;
+  firstChangeAt: number | null;
+  isGitRepo: boolean;
+};
+
+export type AgentHQDiffHunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: Array<{ type: "context" | "add" | "remove"; content: string }>;
+};
+
+export type AgentHQDiffResult = {
+  sha: string;
+  fileName: string;
+  before: string | null;
+  after: string | null;
+  hunks: AgentHQDiffHunk[];
+};
+
+export type AgentHQSummary = {
+  sha: string;
+  agentId: string;
+  generatedAt: number;
+  model: string;
+  changes: string[];
+  impact: string;
+  evolutionScore: number;
+};
+
+export type AgentHQAgentInfo = {
+  agentId: string;
+  workspace: string | null;
+  isGitRepo: boolean;
+  totalCommits: number;
+  lastChangeAt: number | null;
+  filesChanged: Record<string, number>;
+};
+
+export type AgentHQViewMode = "visual" | "timeline" | "heatmap" | "diff";

@@ -7,6 +7,18 @@ import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.h
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
+import {
+  loadAgentHQAgents,
+  loadAgentHQStats,
+  loadAgentHQDiff,
+  loadAgentHQSummary,
+  selectAgentHQAgent,
+  setAgentHQViewMode,
+  toggleAgentHQCommitExpanded,
+  setAgentHQFileFilter,
+  setAgentHQSummaryEnabled,
+  setAgentHQSummaryModel,
+} from "./controllers/agenthq.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -62,6 +74,7 @@ const debouncedLoadUsage = (state: UsageState) => {
   }
   usageDateDebounceTimeout = window.setTimeout(() => void loadUsage(state), 400);
 };
+import { renderAgentHQ } from "./views/agenthq.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -947,6 +960,65 @@ export function renderApp(state: AppViewState) {
                     ? { primary, fallbacks: normalized }
                     : { fallbacks: normalized };
                   updateConfigFormValue(state, basePath, next);
+                },
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "agenthq"
+            ? renderAgentHQ({
+                loading: state.agenthqLoading,
+                historyLoading: state.agenthqHistoryLoading,
+                statsLoading: state.agenthqStatsLoading,
+                diffLoading: state.agenthqDiffLoading,
+                summaryLoading: state.agenthqSummaryLoading,
+                error: state.agenthqError,
+                agents: state.agenthqAgents,
+                selectedAgentId: state.agenthqSelectedAgentId,
+                history: state.agenthqHistory,
+                stats: state.agenthqStats,
+                diff: state.agenthqDiff,
+                summaries: state.agenthqSummaries,
+                viewMode: state.agenthqViewMode,
+                selectedCommit: state.agenthqSelectedCommit,
+                selectedFile: state.agenthqSelectedFile,
+                fileFilter: state.agenthqFileFilter,
+                expandedCommits: state.agenthqExpandedCommits,
+                summaryEnabled: state.agenthqSummaryEnabled,
+                summaryModel: state.agenthqSummaryModel,
+                summaryProvider: state.agenthqSummaryProvider,
+                availableModels: [], // TODO: Wire to actual models from hello
+                onRefresh: () => {
+                  void loadAgentHQAgents(state);
+                },
+                onSelectAgent: (agentId) => {
+                  void selectAgentHQAgent(state, agentId);
+                },
+                onSetViewMode: (mode) => {
+                  setAgentHQViewMode(state, mode);
+                  if (mode === "heatmap" && state.agenthqSelectedAgentId) {
+                    void loadAgentHQStats(state);
+                  }
+                },
+                onSelectCommit: (sha, fileName) => {
+                  void loadAgentHQDiff(state, sha, fileName);
+                  state.agenthqViewMode = "diff";
+                },
+                onToggleCommit: (sha) => {
+                  toggleAgentHQCommitExpanded(state, sha);
+                },
+                onSetFileFilter: (files) => {
+                  void setAgentHQFileFilter(state, files);
+                },
+                onToggleSummary: (enabled) => {
+                  setAgentHQSummaryEnabled(state, enabled);
+                },
+                onSetSummaryModel: (model, provider) => {
+                  setAgentHQSummaryModel(state, model, provider);
+                },
+                onGenerateSummary: (sha) => {
+                  void loadAgentHQSummary(state, sha);
                 },
               })
             : nothing

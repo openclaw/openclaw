@@ -13,6 +13,12 @@ import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
+  AgentHQAgentInfo,
+  AgentHQHistoryResult,
+  AgentHQStatsResult,
+  AgentHQDiffResult,
+  AgentHQSummary,
+  AgentHQViewMode,
   ChannelsStatusSnapshot,
   ConfigSnapshot,
   ConfigUiHints,
@@ -142,6 +148,27 @@ export type AppViewState = {
   agentSkillsError: string | null;
   agentSkillsReport: SkillStatusReport | null;
   agentSkillsAgentId: string | null;
+  // AgentHQ state - Evolution tracking
+  agenthqLoading: boolean;
+  agenthqHistoryLoading: boolean;
+  agenthqStatsLoading: boolean;
+  agenthqDiffLoading: boolean;
+  agenthqSummaryLoading: boolean;
+  agenthqError: string | null;
+  agenthqAgents: AgentHQAgentInfo[];
+  agenthqSelectedAgentId: string | null;
+  agenthqHistory: AgentHQHistoryResult | null;
+  agenthqStats: AgentHQStatsResult | null;
+  agenthqDiff: AgentHQDiffResult | null;
+  agenthqSummaries: Map<string, AgentHQSummary>;
+  agenthqViewMode: AgentHQViewMode;
+  agenthqSelectedCommit: string | null;
+  agenthqSelectedFile: string | null;
+  agenthqFileFilter: string[];
+  agenthqExpandedCommits: Set<string>;
+  agenthqSummaryEnabled: boolean;
+  agenthqSummaryModel: string | null;
+  agenthqSummaryProvider: string | null;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

@@ -1,6 +1,7 @@
 import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { agentHandlers } from "./server-methods/agent.js";
+import { agenthqHandlers } from "./server-methods/agenthq.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { browserHandlers } from "./server-methods/browser.js";
 import { channelsHandlers } from "./server-methods/channels.js";
@@ -72,6 +73,12 @@ const READ_METHODS = new Set([
   "node.list",
   "node.describe",
   "chat.history",
+  "agenthq.history.list",
+  "agenthq.history.diff",
+  "agenthq.history.stats",
+  "agenthq.file.at",
+  "agenthq.agents.list",
+  "agenthq.summary.generate",
 ]);
 const WRITE_METHODS = new Set([
   "send",
@@ -187,6 +194,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...usageHandlers,
   ...agentHandlers,
   ...agentsHandlers,
+  ...agenthqHandlers,
   ...browserHandlers,
 };
 
