@@ -299,6 +299,7 @@ export async function monitorLineProvider(
     path: normalizedPath,
     pluginId: "line",
     accountId: resolvedAccountId,
+    requireAuth: false,
     log: (msg) => logVerbose(msg),
     handler: async (req: IncomingMessage, res: ServerResponse) => {
       // Handle GET requests for webhook verification

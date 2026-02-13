@@ -12,7 +12,7 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setZaloRuntime(api.runtime);
     api.registerChannel({ plugin: zaloPlugin, dock: zaloDock });
-    api.registerHttpHandler(handleZaloWebhookRequest);
+    api.registerHttpHandler({ handler: handleZaloWebhookRequest, requireAuth: false });
   },
 };
 

@@ -1,6 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "../auth.js";
+import { sendUnauthorized } from "../http-common.js";
+import { getBearerToken } from "../http-utils.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -12,8 +15,10 @@ export type PluginHttpRequestHandler = (
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
   log: SubsystemLogger;
+  auth?: ResolvedGatewayAuth;
+  trustedProxies?: string[];
 }): PluginHttpRequestHandler {
-  const { registry, log } = params;
+  const { registry, log, auth, trustedProxies } = params;
   return async (req, res) => {
     const routes = registry.httpRoutes ?? [];
     const handlers = registry.httpHandlers ?? [];
@@ -21,10 +26,44 @@ export function createGatewayPluginRequestHandler(params: {
       return false;
     }
 
+    let authOk: boolean | undefined;
+    const authorize = async (respond: boolean): Promise<boolean> => {
+      if (!auth) {
+        return true;
+      }
+      if (authOk === true) {
+        return true;
+      }
+      if (authOk === false) {
+        if (respond) {
+          sendUnauthorized(res);
+        }
+        return false;
+      }
+      const token = getBearerToken(req);
+      const authResult = await authorizeGatewayConnect({
+        auth,
+        connectAuth: token ? { token, password: token } : null,
+        req,
+        trustedProxies,
+      });
+      authOk = authResult.ok;
+      if (authResult.ok) {
+        return true;
+      }
+      if (respond) {
+        sendUnauthorized(res);
+      }
+      return false;
+    };
+
     if (routes.length > 0) {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = routes.find((entry) => entry.path === url.pathname);
       if (route) {
+        if (route.requireAuth !== false && !(await authorize(true))) {
+          return true;
+        }
         try {
           await route.handler(req, res);
           return true;
@@ -41,6 +80,9 @@ export function createGatewayPluginRequestHandler(params: {
     }
 
     for (const entry of handlers) {
+      if (entry.requireAuth !== false && !(await authorize(false))) {
+        return false;
+      }
       try {
         const handled = await entry.handler(req, res);
         if (handled) {

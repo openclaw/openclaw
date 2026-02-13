@@ -190,6 +190,7 @@ describe("POST /tools/invoke", () => {
       {
         pluginId: "test-plugin",
         source: "test",
+        requireAuth: true,
         handler: pluginHandler as unknown as (
           req: import("node:http").IncomingMessage,
           res: import("node:http").ServerResponse,

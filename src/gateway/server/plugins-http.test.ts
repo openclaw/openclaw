@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import type { ResolvedGatewayAuth } from "../auth.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
 
@@ -18,6 +19,18 @@ const makeResponse = (): {
   } as unknown as ServerResponse;
   return { res, setHeader, end };
 };
+
+const makeAuth = (): ResolvedGatewayAuth => ({
+  mode: "token",
+  token: "secret",
+  allowTailscale: false,
+});
+
+const makeRequest = (params: { url?: string; token?: string } = {}): IncomingMessage =>
+  ({
+    url: params.url,
+    headers: params.token ? { authorization: `Bearer ${params.token}` } : {},
+  }) as IncomingMessage;
 
 describe("createGatewayPluginRequestHandler", () => {
   it("returns false when no handlers are registered", async () => {
@@ -39,8 +52,8 @@ describe("createGatewayPluginRequestHandler", () => {
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry({
         httpHandlers: [
-          { pluginId: "first", handler: first, source: "first" },
-          { pluginId: "second", handler: second, source: "second" },
+          { pluginId: "first", handler: first, requireAuth: true, source: "first" },
+          { pluginId: "second", handler: second, requireAuth: true, source: "second" },
         ],
       }),
       log: { warn: vi.fn() } as unknown as Parameters<
@@ -67,10 +80,13 @@ describe("createGatewayPluginRequestHandler", () => {
             pluginId: "route",
             path: "/demo",
             handler: routeHandler,
+            requireAuth: true,
             source: "route",
           },
         ],
-        httpHandlers: [{ pluginId: "fallback", handler: fallback, source: "fallback" }],
+        httpHandlers: [
+          { pluginId: "fallback", handler: fallback, requireAuth: true, source: "fallback" },
+        ],
       }),
       log: { warn: vi.fn() } as unknown as Parameters<
         typeof createGatewayPluginRequestHandler
@@ -96,6 +112,7 @@ describe("createGatewayPluginRequestHandler", () => {
             handler: async () => {
               throw new Error("boom");
             },
+            requireAuth: true,
             source: "boom",
           },
         ],
@@ -110,5 +127,85 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
+  });
+
+  it("rejects unauthenticated plugin routes by default", async () => {
+    const routeHandler = vi.fn(async () => {});
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "route",
+            path: "/demo",
+            handler: routeHandler,
+            requireAuth: true,
+            source: "route",
+          },
+        ],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+      auth: makeAuth(),
+    });
+
+    const { res, setHeader, end } = makeResponse();
+    const handled = await handler(makeRequest({ url: "/demo" }), res);
+    expect(handled).toBe(true);
+    expect(routeHandler).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(401);
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "application/json; charset=utf-8");
+    expect(end).toHaveBeenCalled();
+  });
+
+  it("allows public plugin routes without auth", async () => {
+    const routeHandler = vi.fn(async () => {});
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "route",
+            path: "/demo",
+            handler: routeHandler,
+            requireAuth: false,
+            source: "route",
+          },
+        ],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+      auth: makeAuth(),
+    });
+
+    const { res } = makeResponse();
+    const handled = await handler(makeRequest({ url: "/demo" }), res);
+    expect(handled).toBe(true);
+    expect(routeHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips auth-required handlers without credentials", async () => {
+    const handlerFn = vi.fn(async () => true);
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpHandlers: [
+          {
+            pluginId: "handler",
+            handler: handlerFn,
+            requireAuth: true,
+            source: "handler",
+          },
+        ],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+      auth: makeAuth(),
+    });
+
+    const { res } = makeResponse();
+    const handled = await handler(makeRequest(), res);
+    expect(handled).toBe(false);
+    expect(handlerFn).not.toHaveBeenCalled();
   });
 });
