@@ -54,7 +54,6 @@ async function writeConfigFile(home: string, config: Record<string, unknown>): P
 describe("config cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.resetModules();
   });
 
   afterEach(() => {

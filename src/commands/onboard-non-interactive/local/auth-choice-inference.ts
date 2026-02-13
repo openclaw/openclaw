@@ -18,6 +18,8 @@ type AuthChoiceFlagOptions = Pick<
   | "kimiCodeApiKey"
   | "syntheticApiKey"
   | "veniceApiKey"
+  | "togetherApiKey"
+  | "huggingfaceApiKey"
   | "zaiApiKey"
   | "xiaomiApiKey"
   | "minimaxApiKey"
@@ -44,11 +46,13 @@ const AUTH_CHOICE_FLAG_MAP = [
   { flag: "kimiCodeApiKey", authChoice: "kimi-code-api-key", label: "--kimi-code-api-key" },
   { flag: "syntheticApiKey", authChoice: "synthetic-api-key", label: "--synthetic-api-key" },
   { flag: "veniceApiKey", authChoice: "venice-api-key", label: "--venice-api-key" },
+  { flag: "togetherApiKey", authChoice: "together-api-key", label: "--together-api-key" },
   { flag: "zaiApiKey", authChoice: "zai-api-key", label: "--zai-api-key" },
   { flag: "xiaomiApiKey", authChoice: "xiaomi-api-key", label: "--xiaomi-api-key" },
   { flag: "xaiApiKey", authChoice: "xai-api-key", label: "--xai-api-key" },
   { flag: "minimaxApiKey", authChoice: "minimax-api", label: "--minimax-api-key" },
   { flag: "opencodeZenApiKey", authChoice: "opencode-zen", label: "--opencode-zen-api-key" },
+  { flag: "huggingfaceApiKey", authChoice: "huggingface-api-key", label: "--huggingface-api-key" },
   { flag: "litellmApiKey", authChoice: "litellm-api-key", label: "--litellm-api-key" },
 ] satisfies ReadonlyArray<AuthChoiceFlag>;
 

@@ -12,7 +12,6 @@ import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import {
   resolveMainSessionKey,
-  resolveFreshSessionTotalTokens,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
@@ -59,6 +58,7 @@ type QueueStatus = {
 type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
+  agentId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   sessionScope?: SessionScope;
@@ -169,6 +169,7 @@ const formatQueueDetails = (queue?: QueueStatus) => {
 const readUsageFromSessionLog = (
   sessionId?: string,
   sessionEntry?: SessionEntry,
+  agentId?: string,
   sessionKey?: string,
   storePath?: string,
 ):
@@ -186,11 +187,12 @@ const readUsageFromSessionLog = (
   }
   let logPath: string;
   try {
-    const agentId = sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
+    const resolvedAgentId =
+      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
     logPath = resolveSessionFilePath(
       sessionId,
       sessionEntry,
-      resolveSessionFilePathOptions({ agentId, storePath }),
+      resolveSessionFilePathOptions({ agentId: resolvedAgentId, storePath }),
     );
   } catch {
     return undefined;
@@ -344,7 +346,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
-  let totalTokens = resolveFreshSessionTotalTokens(entry);
+  let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
@@ -352,6 +354,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     const logUsage = readUsageFromSessionLog(
       entry?.sessionId,
       entry,
+      args.agentId,
       args.sessionKey,
       args.sessionStorePath,
     );

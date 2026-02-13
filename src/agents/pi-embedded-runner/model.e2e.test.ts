@@ -1,0 +1,85 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../pi-model-discovery.js", () => ({
+  discoverAuthStorage: vi.fn(() => ({ mocked: true })),
+  discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
+}));
+
+import { discoverModels } from "../pi-model-discovery.js";
+import { buildInlineProviderModels, resolveModel } from "./model.js";
+
+const makeModel = (id: string) => ({
+  id,
+  name: id,
+  reasoning: false,
+  input: ["text"] as const,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 1,
+  maxTokens: 1,
+});
+
+beforeEach(() => {
+  vi.mocked(discoverModels).mockReturnValue({
+    find: vi.fn(() => null),
+  } as unknown as ReturnType<typeof discoverModels>);
+});
+
+describe("pi embedded model e2e smoke", () => {
+  it("attaches provider ids and provider-level baseUrl for inline models", () => {
+    const providers = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+    expect(result).toEqual([
+      {
+        ...makeModel("custom-model"),
+        provider: "custom",
+        baseUrl: "http://localhost:8000",
+        api: undefined,
+      },
+    ]);
+  });
+
+  it("builds an openai-codex forward-compat fallback for gpt-5.3-codex", () => {
+    const templateModel = {
+      id: "gpt-5.2-codex",
+      name: "GPT-5.2 Codex",
+      provider: "openai-codex",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 272000,
+      maxTokens: 128000,
+    };
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "openai-codex" && modelId === "gpt-5.2-codex") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+    });
+  });
+
+  it("keeps unknown-model errors for non-forward-compat IDs", () => {
+    const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: openai-codex/gpt-4.1-mini");
+  });
+});
