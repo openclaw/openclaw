@@ -75,7 +75,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<Buffer> {
     const target = this.resolvePath(params);
-    const result = await this.runCommand('set -euo pipefail; cat -- "$1"', {
+    const result = await this.runCommand('set -eu; cat -- "$1"', {
       args: [target.containerPath],
       signal: params.signal,
     });
@@ -97,8 +97,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       : Buffer.from(params.data, params.encoding ?? "utf8");
     const script =
       params.mkdir === false
-        ? 'set -euo pipefail; cat >"$1"'
-        : 'set -euo pipefail; dir=$(dirname -- "$1"); if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi; cat >"$1"';
+        ? 'set -eu; cat >"$1"'
+        : 'set -eu; dir=$(dirname -- "$1"); if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi; cat >"$1"';
     await this.runCommand(script, {
       args: [target.containerPath],
       stdin: buffer,
@@ -109,7 +109,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     this.ensureWriteAccess("create directories");
     const target = this.resolvePath(params);
-    await this.runCommand('set -euo pipefail; mkdir -p -- "$1"', {
+    await this.runCommand('set -eu; mkdir -p -- "$1"', {
       args: [target.containerPath],
       signal: params.signal,
     });
@@ -128,7 +128,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       Boolean,
     );
     const rmCommand = flags.length > 0 ? `rm ${flags.join(" ")}` : "rm";
-    await this.runCommand(`set -euo pipefail; ${rmCommand} -- "$1"`, {
+    await this.runCommand(`set -eu; ${rmCommand} -- "$1"`, {
       args: [target.containerPath],
       signal: params.signal,
     });
@@ -144,7 +144,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const from = this.resolvePath({ filePath: params.from, cwd: params.cwd });
     const to = this.resolvePath({ filePath: params.to, cwd: params.cwd });
     await this.runCommand(
-      'set -euo pipefail; dir=$(dirname -- "$2"); if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi; mv -- "$1" "$2"',
+      'set -eu; dir=$(dirname -- "$2"); if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi; mv -- "$1" "$2"',
       {
         args: [from.containerPath, to.containerPath],
         signal: params.signal,
@@ -158,7 +158,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null> {
     const target = this.resolvePath(params);
-    const result = await this.runCommand('set -euo pipefail; stat -c "%F|%s|%Y" -- "$1"', {
+    const result = await this.runCommand('set -eu; stat -c "%F|%s|%Y" -- "$1"', {
       args: [target.containerPath],
       signal: params.signal,
       allowFailure: true,
