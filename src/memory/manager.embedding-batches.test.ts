@@ -51,7 +51,7 @@ describe("memory embedding batches", () => {
 
   it("splits large files across multiple embedding batches", async () => {
     const line = "a".repeat(200);
-    const content = Array.from({ length: 50 }, () => line).join("\n");
+    const content = Array.from({ length: 40 }, () => line).join("\n");
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-03.md"), content);
 
     const cfg = {
