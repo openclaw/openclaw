@@ -8,6 +8,11 @@ import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import { mergeAllowlist, summarizeMapping } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
 import { warn } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  isTransientNetworkError,
+  registerUnhandledRejectionHandler,
+} from "../../infra/unhandled-rejections.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
@@ -357,6 +362,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
 
+  // Suppress transient network errors that escape Slack Bolt's internal handling.
+  // Without this, a temporary network drop causes an unhandled promise rejection
+  // that crashes the entire gateway process. Telegram and WhatsApp monitors
+  // already register equivalent handlers.
+  const unregisterRejectionHandler = registerUnhandledRejectionHandler((err) => {
+    if (isTransientNetworkError(err)) {
+      runtime.error?.(`[slack] Suppressed transient network error: ${formatErrorMessage(err)}`);
+      return true;
+    }
+    return false;
+  });
+
   try {
     if (slackMode === "socket") {
       await app.start();
@@ -373,6 +390,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       });
     });
   } finally {
+    unregisterRejectionHandler();
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
     await app.stop().catch(() => undefined);
