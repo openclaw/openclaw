@@ -1,4 +1,4 @@
-// Allowed command prefixes for setupCommand -- package managers and common build tools
+// Allowed command prefixes for setupCommand -- package managers, build tools, and safe builtins
 export const ALLOWED_COMMAND_PREFIXES = [
   "npm",
   "npx",
@@ -13,6 +13,7 @@ export const ALLOWED_COMMAND_PREFIXES = [
   "cargo",
   "go",
   "make",
+  "echo",
 ] as const;
 
 // Shell metacharacters and dangerous characters that enable command injection (CWE-78)

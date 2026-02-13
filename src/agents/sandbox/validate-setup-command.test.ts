@@ -17,6 +17,8 @@ describe("validateSetupCommand", () => {
       "make build",
       "git clone https://example.com/repo",
       "npx create-react-app my-app",
+      "echo work",
+      "echo global",
     ];
     for (const cmd of allowed) {
       it(`allows: ${cmd}`, () => {

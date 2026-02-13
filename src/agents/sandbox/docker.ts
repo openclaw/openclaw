@@ -243,12 +243,11 @@ async function createSandboxContainer(params: {
   if (cfg.setupCommand?.trim()) {
     const result = validateSetupCommand(cfg.setupCommand);
     if (!result.valid) {
-      defaultRuntime.log(
-        `Blocked unsafe setupCommand: ${result.reason}. Command: ${cfg.setupCommand}`,
+      throw new Error(
+        `setupCommand validation failed: ${result.reason}. Command: ${cfg.setupCommand}`,
       );
-    } else {
-      await execDocker(["exec", "-i", name, "sh", "-lc", cfg.setupCommand]);
     }
+    await execDocker(["exec", "-i", name, "sh", "-lc", cfg.setupCommand]);
   }
 }
 
