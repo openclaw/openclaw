@@ -7,13 +7,14 @@ const include = baseTest.include ?? [
   "extensions/**/*.test.ts",
   "test/format-error.test.ts",
 ];
+const extraIncludes = ["ui/src/**/*.node.test.ts"];
 const exclude = baseTest.exclude ?? [];
 
 export default defineConfig({
   ...baseConfig,
   test: {
     ...baseTest,
-    include,
+    include: [...include, ...extraIncludes],
     exclude: [...exclude, "src/gateway/**", "extensions/**"],
   },
 });
