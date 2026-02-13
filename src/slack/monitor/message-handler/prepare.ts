@@ -399,7 +399,11 @@ export async function prepareSlackMessage(params: {
       GroupSubject: isRoomish ? roomLabel : undefined,
       From: slackFrom,
     }) ?? (isDirectMessage ? senderName : roomLabel);
-  const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
+  const threadInfo =
+    isThreadReply && threadTs
+      ? ` thread_ts: ${threadTs}${message.parent_user_id ? ` parent_user_id: ${message.parent_user_id}` : ""}`
+      : "";
+  const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
   const storePath = resolveStorePath(ctx.cfg.session?.store, {
     agentId: route.agentId,
   });

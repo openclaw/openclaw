@@ -5,19 +5,24 @@ import path from "node:path";
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
-const runs = [
-  {
-    name: "unit",
-    args: ["vitest", "run", "--config", "vitest.unit.config.ts"],
-  },
-  {
-    name: "extensions",
-    args: ["vitest", "run", "--config", "vitest.extensions.config.ts"],
-  },
-  {
-    name: "gateway",
-    args: ["vitest", "run", "--config", "vitest.gateway.config.ts"],
-  },
+const unitIsolatedFiles = [
+  "src/plugins/loader.test.ts",
+  "src/plugins/tools.optional.test.ts",
+  "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
+  "src/security/fix.test.ts",
+  "src/utils.test.ts",
+  "src/auto-reply/tool-meta.test.ts",
+  "src/commands/auth-choice.test.ts",
+  "src/media/store.header-ext.test.ts",
+  "src/browser/server.covers-additional-endpoint-branches.test.ts",
+  "src/browser/server.post-tabs-open-profile-unknown-returns-404.test.ts",
+  "src/browser/server.agent-contract-snapshot-endpoints.test.ts",
+  "src/browser/server.agent-contract-form-layout-act-commands.test.ts",
+  "src/browser/server.serves-status-starts-browser-requested.test.ts",
+  "src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts",
+  "src/browser/server.auth-token-gates-http.test.ts",
+  "src/browser/server-context.remote-tab-ops.test.ts",
+  "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
 ];
 
 const children = new Set();
@@ -25,6 +30,62 @@ const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isMacOS = process.platform === "darwin" || process.env.RUNNER_OS === "macOS";
 const isWindows = process.platform === "win32" || process.env.RUNNER_OS === "Windows";
 const isWindowsCi = isCI && isWindows;
+const useVmForks =
+  process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
+  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows);
+const runs = [
+  ...(useVmForks
+    ? [
+        {
+          name: "unit-fast",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            "--pool=vmForks",
+            ...unitIsolatedFiles.flatMap((file) => ["--exclude", file]),
+          ],
+        },
+        {
+          name: "unit-isolated",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            "--pool=forks",
+            ...unitIsolatedFiles,
+          ],
+        },
+      ]
+    : [
+        {
+          name: "unit",
+          args: ["vitest", "run", "--config", "vitest.unit.config.ts"],
+        },
+      ]),
+  {
+    name: "extensions",
+    args: [
+      "vitest",
+      "run",
+      "--config",
+      "vitest.extensions.config.ts",
+      ...(useVmForks ? ["--pool=vmForks"] : []),
+    ],
+  },
+  {
+    name: "gateway",
+    args: [
+      "vitest",
+      "run",
+      "--config",
+      "vitest.gateway.config.ts",
+      ...(useVmForks ? ["--pool=vmForks"] : []),
+    ],
+  },
+];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
 const shardCount = isWindowsCi
   ? Number.isFinite(shardOverride) && shardOverride > 1
@@ -32,14 +93,22 @@ const shardCount = isWindowsCi
     : 2
   : 1;
 const windowsCiArgs = isWindowsCi ? ["--dangerouslyIgnoreUnhandledErrors"] : [];
+const silentArgs =
+  process.env.OPENCLAW_TEST_SHOW_PASSED_LOGS === "1" ? [] : ["--silent=passed-only"];
 const rawPassthroughArgs = process.argv.slice(2);
 const passthroughArgs =
   rawPassthroughArgs[0] === "--" ? rawPassthroughArgs.slice(1) : rawPassthroughArgs;
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
-const parallelRuns = runs.filter((entry) => entry.name !== "gateway");
-const serialRuns = runs.filter((entry) => entry.name === "gateway");
+// Keep gateway serial on Windows CI and CI by default; run in parallel locally
+// for lower wall-clock time. CI can opt in via OPENCLAW_TEST_PARALLEL_GATEWAY=1.
+const keepGatewaySerial =
+  isWindowsCi ||
+  process.env.OPENCLAW_TEST_SERIAL_GATEWAY === "1" ||
+  (isCI && process.env.OPENCLAW_TEST_PARALLEL_GATEWAY !== "1");
+const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
+const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const defaultUnitWorkers = localWorkers;
 const defaultExtensionsWorkers = Math.max(1, Math.min(4, Math.floor(localWorkers / 4)));
@@ -55,6 +124,9 @@ const maxWorkersForRun = (name) => {
     return null;
   }
   if (isCI && isMacOS) {
+    return 1;
+  }
+  if (name === "unit-isolated") {
     return 1;
   }
   if (name === "extensions") {
@@ -120,11 +192,12 @@ const runOnce = (entry, extraArgs = []) =>
           ...entry.args,
           "--maxWorkers",
           String(maxWorkers),
+          ...silentArgs,
           ...reporterArgs,
           ...windowsCiArgs,
           ...extraArgs,
         ]
-      : [...entry.args, ...reporterArgs, ...windowsCiArgs, ...extraArgs];
+      : [...entry.args, ...silentArgs, ...reporterArgs, ...windowsCiArgs, ...extraArgs];
     const nodeOptions = process.env.NODE_OPTIONS ?? "";
     const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
@@ -168,8 +241,16 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 if (passthroughArgs.length > 0) {
   const maxWorkers = maxWorkersForRun("unit");
   const args = maxWorkers
-    ? ["vitest", "run", "--maxWorkers", String(maxWorkers), ...windowsCiArgs, ...passthroughArgs]
-    : ["vitest", "run", ...windowsCiArgs, ...passthroughArgs];
+    ? [
+        "vitest",
+        "run",
+        "--maxWorkers",
+        String(maxWorkers),
+        ...silentArgs,
+        ...windowsCiArgs,
+        ...passthroughArgs,
+      ]
+    : ["vitest", "run", ...silentArgs, ...windowsCiArgs, ...passthroughArgs];
   const nodeOptions = process.env.NODE_OPTIONS ?? "";
   const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
     (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),

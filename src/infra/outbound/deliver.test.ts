@@ -14,6 +14,12 @@ import {
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
+const hookMocks = vi.hoisted(() => ({
+  runner: {
+    hasHooks: vi.fn(() => false),
+    runMessageSent: vi.fn(async () => {}),
+  },
+}));
 
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
@@ -24,12 +30,19 @@ vi.mock("../../config/sessions.js", async () => {
     appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
   };
 });
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => hookMocks.runner,
+}));
 
 const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
 
 describe("deliverOutboundPayloads", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
+    hookMocks.runner.hasHooks.mockReset();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runMessageSent.mockReset();
+    hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -421,6 +434,86 @@ describe("deliverOutboundPayloads", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({ text: "report.pdf" }),
     );
+  });
+
+  it("emits message_sent success for text-only deliveries", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "+1555", content: "hello", success: true }),
+        expect.objectContaining({ channelId: "whatsapp" }),
+      );
+    });
+  });
+
+  it("emits message_sent success for sendPayload deliveries", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
+    const sendText = vi.fn();
+    const sendMedia = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendPayload, sendText, sendMedia },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "payload text", channelData: { mode: "custom" } }],
+    });
+
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
+        expect.objectContaining({ channelId: "matrix" }),
+      );
+    });
+  });
+
+  it("emits message_sent failure when delivery errors", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const sendWhatsApp = vi.fn().mockRejectedValue(new Error("downstream failed"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "hi" }],
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow("downstream failed");
+
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "+1555",
+          content: "hi",
+          success: false,
+          error: "downstream failed",
+        }),
+        expect.objectContaining({ channelId: "whatsapp" }),
+      );
+    });
   });
 });
 

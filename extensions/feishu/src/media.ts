@@ -359,10 +359,13 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
+  /** Use "media" for audio/video files, "file" for documents */
+  msgType?: "file" | "media";
   replyToMessageId?: string;
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, fileKey, replyToMessageId, accountId } = params;
+  const msgType = params.msgType ?? "file";
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -382,7 +385,7 @@ export async function sendFileFeishu(params: {
       path: { message_id: replyToMessageId },
       data: {
         content,
-        msg_type: "file",
+        msg_type: msgType,
       },
     });
 
@@ -401,7 +404,7 @@ export async function sendFileFeishu(params: {
     data: {
       receive_id: receiveId,
       content,
-      msg_type: "file",
+      msg_type: msgType,
     },
   });
 
@@ -524,6 +527,15 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    return sendFileFeishu({ cfg, to, fileKey, replyToMessageId, accountId });
+    // Feishu requires msg_type "media" for audio/video, "file" for documents
+    const isMedia = fileType === "mp4" || fileType === "opus";
+    return sendFileFeishu({
+      cfg,
+      to,
+      fileKey,
+      msgType: isMedia ? "media" : "file",
+      replyToMessageId,
+      accountId,
+    });
   }
 }

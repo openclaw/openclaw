@@ -17,6 +17,7 @@ import {
 import {
   resolveGroupSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -316,7 +317,11 @@ export async function runPreparedReply(
     }
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
+  const sessionFile = resolveSessionFilePath(
+    sessionIdFinal,
+    sessionEntry,
+    resolveSessionFilePathOptions({ agentId, storePath }),
+  );
   const queueBodyBase = baseBodyForPrompt;
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
