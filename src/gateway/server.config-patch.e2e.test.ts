@@ -41,6 +41,7 @@ describe("gateway config.patch", () => {
         params: {
           raw: JSON.stringify({
             gateway: { mode: "local" },
+            plugins: { slots: { memory: "none" } },
             channels: { telegram: { botToken: "token-1" } },
           }),
         },
@@ -51,6 +52,13 @@ describe("gateway config.patch", () => {
       (o) => o.type === "res" && o.id === setId,
     );
     expect(setRes.ok).toBe(true);
+
+    const initialRaw = await fs.readFile(CONFIG_PATH, "utf-8");
+    const initial = JSON.parse(initialRaw) as {
+      channels?: { telegram?: { botToken?: string } };
+    };
+    const initialBotToken = initial.channels?.telegram?.botToken;
+    expect(typeof initialBotToken).toBe("string");
 
     const getId = "req-get";
     ws.send(
@@ -121,7 +129,7 @@ describe("gateway config.patch", () => {
     const stored = JSON.parse(storedRaw) as {
       channels?: { telegram?: { botToken?: string } };
     };
-    expect(stored.channels?.telegram?.botToken).toBe("token-1");
+    expect(stored.channels?.telegram?.botToken).toBe(initialBotToken);
   });
 
   it("preserves credentials on config.set when raw contains redacted sentinels", async () => {
@@ -134,6 +142,7 @@ describe("gateway config.patch", () => {
         params: {
           raw: JSON.stringify({
             gateway: { mode: "local" },
+            plugins: { slots: { memory: "none" } },
             channels: { telegram: { botToken: "token-1" } },
           }),
         },
@@ -144,6 +153,13 @@ describe("gateway config.patch", () => {
       (o) => o.type === "res" && o.id === setId,
     );
     expect(setRes.ok).toBe(true);
+
+    const initialRaw = await fs.readFile(CONFIG_PATH, "utf-8");
+    const initial = JSON.parse(initialRaw) as {
+      channels?: { telegram?: { botToken?: string } };
+    };
+    const initialBotToken = initial.channels?.telegram?.botToken;
+    expect(typeof initialBotToken).toBe("string");
 
     const getId = "req-get-sentinel-1";
     ws.send(
@@ -190,7 +206,7 @@ describe("gateway config.patch", () => {
     const stored = JSON.parse(storedRaw) as {
       channels?: { telegram?: { botToken?: string } };
     };
-    expect(stored.channels?.telegram?.botToken).toBe("token-1");
+    expect(stored.channels?.telegram?.botToken).toBe(initialBotToken);
   });
 
   it("writes config, stores sentinel, and schedules restart", async () => {
@@ -203,6 +219,7 @@ describe("gateway config.patch", () => {
         params: {
           raw: JSON.stringify({
             gateway: { mode: "local" },
+            plugins: { slots: { memory: "none" } },
             channels: { telegram: { botToken: "token-1" } },
           }),
         },
@@ -288,6 +305,7 @@ describe("gateway config.patch", () => {
         params: {
           raw: JSON.stringify({
             gateway: { mode: "local" },
+            plugins: { slots: { memory: "none" } },
           }),
         },
       }),
@@ -317,6 +335,315 @@ describe("gateway config.patch", () => {
     expect(patchRes.error?.message).toContain("base hash");
   });
 
+  it("skips restart when only agents-scoped paths change", async () => {
+    const setId = "req-set-agents-noop";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: setId,
+        method: "config.set",
+        params: {
+          raw: JSON.stringify({
+            gateway: { mode: "local" },
+            plugins: { slots: { memory: "none" } },
+          }),
+        },
+      }),
+    );
+    const setRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === setId,
+    );
+    expect(setRes.ok).toBe(true);
+
+    const getId = "req-get-agents-noop";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: getId,
+        method: "config.get",
+        params: {},
+      }),
+    );
+    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
+      ws,
+      (o) => o.type === "res" && o.id === getId,
+    );
+    expect(getRes.ok).toBe(true);
+    const baseHash = resolveConfigSnapshotHash({
+      hash: getRes.payload?.hash,
+      raw: getRes.payload?.raw,
+    });
+    expect(typeof baseHash).toBe("string");
+
+    const patchId = "req-patch-agents-noop";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: patchId,
+        method: "config.patch",
+        params: {
+          raw: JSON.stringify({
+            agents: {
+              list: [{ id: "default", default: true }, { id: "work" }],
+            },
+          }),
+          baseHash,
+        },
+      }),
+    );
+    const patchRes = await onceMessage<{
+      ok: boolean;
+      payload?: {
+        restart?: { ok?: boolean; skipped?: boolean; reason?: string; signal?: string };
+        reloadPlan?: {
+          changedPaths?: string[];
+          restartGateway?: boolean;
+          noopPaths?: string[];
+        };
+      };
+    }>(ws, (o) => o.type === "res" && o.id === patchId);
+    expect(patchRes.ok).toBe(true);
+    expect(patchRes.payload?.restart?.ok).toBe(true);
+    expect(patchRes.payload?.restart?.skipped).toBe(true);
+    expect(patchRes.payload?.restart?.reason).toBe("no-restart-needed");
+    expect(patchRes.payload?.restart?.signal).toBeUndefined();
+    expect(patchRes.payload?.reloadPlan?.restartGateway).toBe(false);
+    expect((patchRes.payload?.reloadPlan?.noopPaths ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("still restarts when gateway-scoped paths change", async () => {
+    const setId = "req-set-gw-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: setId,
+        method: "config.set",
+        params: {
+          raw: JSON.stringify({
+            gateway: { mode: "local" },
+            plugins: { slots: { memory: "none" } },
+          }),
+        },
+      }),
+    );
+    const setRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === setId,
+    );
+    expect(setRes.ok).toBe(true);
+
+    const getId = "req-get-gw-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: getId,
+        method: "config.get",
+        params: {},
+      }),
+    );
+    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
+      ws,
+      (o) => o.type === "res" && o.id === getId,
+    );
+    expect(getRes.ok).toBe(true);
+    const baseHash = resolveConfigSnapshotHash({
+      hash: getRes.payload?.hash,
+      raw: getRes.payload?.raw,
+    });
+    expect(typeof baseHash).toBe("string");
+
+    const patchId = "req-patch-gw-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: patchId,
+        method: "config.patch",
+        params: {
+          raw: JSON.stringify({
+            gateway: { mode: "remote" },
+          }),
+          baseHash,
+          restartDelayMs: 0,
+        },
+      }),
+    );
+    const patchRes = await onceMessage<{
+      ok: boolean;
+      payload?: {
+        restart?: { ok?: boolean; skipped?: boolean; signal?: string };
+        reloadPlan?: {
+          restartGateway?: boolean;
+          restartReasons?: string[];
+        };
+      };
+    }>(ws, (o) => o.type === "res" && o.id === patchId);
+    expect(patchRes.ok).toBe(true);
+    expect(patchRes.payload?.restart?.ok).toBe(true);
+    expect(patchRes.payload?.restart?.skipped).toBeUndefined();
+    expect(patchRes.payload?.restart?.signal).toBe("SIGUSR1");
+    expect(patchRes.payload?.reloadPlan?.restartGateway).toBe(true);
+    expect((patchRes.payload?.reloadPlan?.restartReasons ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("skips restart for mixed noop-only changes", async () => {
+    const setId = "req-set-mixed-noop";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: setId,
+        method: "config.set",
+        params: {
+          raw: JSON.stringify({
+            gateway: { mode: "local" },
+            plugins: { slots: { memory: "none" } },
+          }),
+        },
+      }),
+    );
+    const setRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === setId,
+    );
+    expect(setRes.ok).toBe(true);
+
+    const getId = "req-get-mixed-noop";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: getId,
+        method: "config.get",
+        params: {},
+      }),
+    );
+    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
+      ws,
+      (o) => o.type === "res" && o.id === getId,
+    );
+    expect(getRes.ok).toBe(true);
+    const baseHash = resolveConfigSnapshotHash({
+      hash: getRes.payload?.hash,
+      raw: getRes.payload?.raw,
+    });
+    expect(typeof baseHash).toBe("string");
+
+    const patchId = "req-patch-mixed-noop";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: patchId,
+        method: "config.patch",
+        params: {
+          raw: JSON.stringify({
+            agents: {
+              list: [{ id: "default", default: true }, { id: "work" }],
+            },
+            models: {
+              mode: "replace",
+            },
+          }),
+          baseHash,
+        },
+      }),
+    );
+    const patchRes = await onceMessage<{
+      ok: boolean;
+      payload?: {
+        restart?: { ok?: boolean; skipped?: boolean; reason?: string; signal?: string };
+        reloadPlan?: {
+          restartGateway?: boolean;
+          noopPaths?: string[];
+        };
+      };
+    }>(ws, (o) => o.type === "res" && o.id === patchId);
+    expect(patchRes.ok).toBe(true);
+    expect(patchRes.payload?.restart?.ok).toBe(true);
+    expect(patchRes.payload?.restart?.skipped).toBe(true);
+    expect(patchRes.payload?.restart?.reason).toBe("no-restart-needed");
+    expect(patchRes.payload?.restart?.signal).toBeUndefined();
+    expect(patchRes.payload?.reloadPlan?.restartGateway).toBe(false);
+    expect((patchRes.payload?.reloadPlan?.noopPaths ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("restarts when mixed changes include restart-required paths", async () => {
+    const setId = "req-set-mixed-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: setId,
+        method: "config.set",
+        params: {
+          raw: JSON.stringify({
+            gateway: { mode: "local" },
+            plugins: { slots: { memory: "none" } },
+          }),
+        },
+      }),
+    );
+    const setRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === setId,
+    );
+    expect(setRes.ok).toBe(true);
+
+    const getId = "req-get-mixed-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: getId,
+        method: "config.get",
+        params: {},
+      }),
+    );
+    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
+      ws,
+      (o) => o.type === "res" && o.id === getId,
+    );
+    expect(getRes.ok).toBe(true);
+    const baseHash = resolveConfigSnapshotHash({
+      hash: getRes.payload?.hash,
+      raw: getRes.payload?.raw,
+    });
+    expect(typeof baseHash).toBe("string");
+
+    const patchId = "req-patch-mixed-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: patchId,
+        method: "config.patch",
+        params: {
+          raw: JSON.stringify({
+            agents: {
+              list: [{ id: "default", default: true }, { id: "work" }],
+            },
+            gateway: { mode: "remote" },
+          }),
+          baseHash,
+          restartDelayMs: 0,
+        },
+      }),
+    );
+    const patchRes = await onceMessage<{
+      ok: boolean;
+      payload?: {
+        restart?: { ok?: boolean; skipped?: boolean; signal?: string };
+        reloadPlan?: {
+          restartGateway?: boolean;
+          restartReasons?: string[];
+          noopPaths?: string[];
+        };
+      };
+    }>(ws, (o) => o.type === "res" && o.id === patchId);
+    expect(patchRes.ok).toBe(true);
+    expect(patchRes.payload?.restart?.ok).toBe(true);
+    expect(patchRes.payload?.restart?.skipped).toBeUndefined();
+    expect(patchRes.payload?.restart?.signal).toBe("SIGUSR1");
+    expect(patchRes.payload?.reloadPlan?.restartGateway).toBe(true);
+    expect((patchRes.payload?.reloadPlan?.restartReasons ?? []).length).toBeGreaterThan(0);
+    expect((patchRes.payload?.reloadPlan?.noopPaths ?? []).length).toBeGreaterThan(0);
+  });
+
   it("requires base hash for config.set when config exists", async () => {
     const setId = "req-set-3";
     ws.send(
@@ -327,6 +654,7 @@ describe("gateway config.patch", () => {
         params: {
           raw: JSON.stringify({
             gateway: { mode: "local" },
+            plugins: { slots: { memory: "none" } },
           }),
         },
       }),
