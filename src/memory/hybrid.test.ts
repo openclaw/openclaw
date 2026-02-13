@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 
 describe("memory hybrid helpers", () => {
-  it("buildFtsQuery tokenizes and AND-joins", () => {
-    expect(buildFtsQuery("hello world")).toBe('"hello" AND "world"');
-    expect(buildFtsQuery("FOO_bar baz-1")).toBe('"FOO_bar" AND "baz" AND "1"');
+  it("buildFtsQuery tokenizes and OR-joins", () => {
+    expect(buildFtsQuery("hello world")).toBe('"hello" OR "world"');
+    expect(buildFtsQuery("FOO_bar baz-1")).toBe('"FOO_bar" OR "baz" OR "1"');
     expect(buildFtsQuery("   ")).toBeNull();
   });
 
