@@ -225,7 +225,11 @@ export async function initSessionState(params: {
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
 
-  if (!isNewSession && freshEntry) {
+  // When this is the first user message in a thread, the session entry may already
+  // exist (created by recordInboundSession in prepare.ts), but we should still treat
+  // it as a new session so that thread context (history/starter/fork) is applied.
+  const forceNewForThread = Boolean(ctx.IsFirstThreadTurn) && !resetTriggered;
+  if (!isNewSession && freshEntry && !forceNewForThread) {
     sessionId = entry.sessionId;
     systemSent = entry.systemSent ?? false;
     abortedLastRun = entry.abortedLastRun ?? false;

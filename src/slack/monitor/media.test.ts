@@ -298,3 +298,132 @@ describe("resolveSlackMedia", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("resolveSlackThreadHistory", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("paginates and returns the latest N messages across pages", async () => {
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 200 }, (_, i) => ({
+          text: `msg-${i + 1}`,
+          user: "U1",
+          ts: `${i + 1}.000`,
+        })),
+        response_metadata: { next_cursor: "cursor-2" },
+      })
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 60 }, (_, i) => ({
+          text: `msg-${i + 201}`,
+          user: "U1",
+          ts: `${i + 201}.000`,
+        })),
+        response_metadata: { next_cursor: "" },
+      });
+    const { resolveSlackThreadHistory } = await import("./media.js");
+    const client = {
+      conversations: { replies },
+    } as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      currentMessageTs: "260.000",
+      limit: 5,
+    });
+
+    expect(replies).toHaveBeenCalledTimes(2);
+    expect(replies).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        channel: "C1",
+        ts: "1.000",
+        limit: 200,
+        inclusive: true,
+      }),
+    );
+    expect(replies).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "C1",
+        ts: "1.000",
+        limit: 200,
+        inclusive: true,
+        cursor: "cursor-2",
+      }),
+    );
+    expect(result.map((entry) => entry.ts)).toEqual([
+      "255.000",
+      "256.000",
+      "257.000",
+      "258.000",
+      "259.000",
+    ]);
+  });
+
+  it("includes file-only messages and drops empty-only entries", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        { text: "  ", ts: "1.000", files: [{ name: "screenshot.png" }] },
+        { text: "   ", ts: "2.000" },
+        { text: "hello", ts: "3.000", user: "U1" },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const { resolveSlackThreadHistory } = await import("./media.js");
+    const client = {
+      conversations: { replies },
+    } as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0]?.text).toBe("[attached: screenshot.png]");
+    expect(result[1]?.text).toBe("hello");
+  });
+
+  it("returns empty when limit is zero without calling Slack API", async () => {
+    const replies = vi.fn();
+    const { resolveSlackThreadHistory } = await import("./media.js");
+    const client = {
+      conversations: { replies },
+    } as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 0,
+    });
+
+    expect(result).toEqual([]);
+    expect(replies).not.toHaveBeenCalled();
+  });
+
+  it("returns empty when Slack API throws", async () => {
+    const replies = vi.fn().mockRejectedValueOnce(new Error("slack down"));
+    const { resolveSlackThreadHistory } = await import("./media.js");
+    const client = {
+      conversations: { replies },
+    } as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 20,
+    });
+
+    expect(result).toEqual([]);
+  });
+});
