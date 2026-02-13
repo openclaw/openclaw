@@ -1203,6 +1203,14 @@ export class MemoryIndexManager {
       });
     }
 
+    const fileHashes = new Map<string, string>();
+    const rows = this.db
+      .prepare(`SELECT path, hash FROM files WHERE source = ?`)
+      .all("sessions") as { path: string; hash: string }[];
+    for (const row of rows) {
+      fileHashes.set(row.path, row.hash);
+    }
+
     const tasks = files.map((absPath) => async () => {
       if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
         if (params.progress) {
@@ -1225,10 +1233,8 @@ export class MemoryIndexManager {
         }
         return;
       }
-      const record = this.db
-        .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-        .get(entry.path, "sessions") as { hash: string } | undefined;
-      if (!params.needsFullReindex && record?.hash === entry.hash) {
+      const existingHash = fileHashes.get(entry.path);
+      if (!params.needsFullReindex && existingHash === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
