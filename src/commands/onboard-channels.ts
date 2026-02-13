@@ -20,6 +20,7 @@ import {
 } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isChannelConfigured } from "../config/plugin-auto-enable.js";
+import { BUNDLED_ENABLED_BY_DEFAULT } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -299,6 +300,24 @@ export async function setupChannels(
     accountOverrides.whatsapp = options.whatsappAccountId.trim();
   }
 
+  // Re-enable bundled-default plugins that were explicitly disabled (e.g. by
+  // a previous Doctor run or external config edit). Onboarding should always
+  // offer these plugins for selection.
+  {
+    let needsReload = false;
+    for (const pluginId of BUNDLED_ENABLED_BY_DEFAULT) {
+      if (next.plugins?.entries?.[pluginId]?.enabled === false) {
+        const result = enablePluginInConfig(next, pluginId);
+        next = result.config;
+        needsReload = true;
+      }
+    }
+    if (needsReload) {
+      const workspaceDir = resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
+      reloadOnboardingPluginRegistry({ cfg: next, runtime, workspaceDir });
+    }
+  }
+
   const { installedPlugins, catalogEntries, statusByChannel, statusLines } =
     await collectChannelStatus({ cfg: next, options, accountOverrides });
   if (!options?.skipStatusNote && statusLines.length > 0) {
@@ -445,6 +464,14 @@ export async function setupChannels(
 
   const ensureBundledPluginEnabled = async (channel: ChannelChoice): Promise<boolean> => {
     if (getChannelPlugin(channel)) {
+      // Plugin is already loaded in memory (e.g. running from source where the
+      // extension directory is on the load path). Still persist
+      // plugins.entries.<id>.enabled = true so that gateway daemon restarts
+      // also load the plugin without requiring `openclaw doctor --fix`.
+      if (next.plugins?.entries?.[channel]?.enabled !== true) {
+        const result = enablePluginInConfig(next, channel);
+        next = result.config;
+      }
       return true;
     }
     const result = enablePluginInConfig(next, channel);
@@ -608,21 +635,31 @@ export async function setupChannels(
   };
 
   if (options?.quickstartDefaults) {
-    const { entries } = getChannelEntries();
-    const choice = (await prompter.select({
-      message: "Select channel (QuickStart)",
-      options: [
-        ...buildSelectionOptions(entries),
-        {
-          value: "__skip__",
-          label: "Skip for now",
-          hint: `You can add channels later via \`${formatCliCommand("openclaw channels add")}\``,
-        },
-      ],
-      initialValue: quickstartDefault,
-    })) as ChannelChoice | "__skip__";
-    if (choice !== "__skip__") {
+    const skipValue = "__skip__" as const;
+    let initialValue: ChannelChoice | typeof skipValue =
+      options?.initialSelection?.[0] ?? quickstartDefault;
+    while (true) {
+      const { entries } = getChannelEntries();
+      const choice = (await prompter.select({
+        message: "Select channel (QuickStart)",
+        options: [
+          ...buildSelectionOptions(entries),
+          {
+            value: skipValue,
+            label: selection.length > 0 ? "Finished" : "Skip for now",
+            hint:
+              selection.length > 0
+                ? "Done"
+                : `You can add channels later via \`${formatCliCommand("openclaw channels add")}\``,
+          },
+        ],
+        initialValue,
+      })) as ChannelChoice | typeof skipValue;
+      if (choice === skipValue) {
+        break;
+      }
       await handleChannelChoice(choice);
+      initialValue = skipValue; // default to "Finished" on subsequent iterations
     }
   } else {
     const doneValue = "__done__" as const;

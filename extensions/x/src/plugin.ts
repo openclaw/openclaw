@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../../src/plugin-sdk/index.js";
 import { handleXAction } from "../../../src/agents/tools/x-actions.js";
 import { buildChannelConfigSchema } from "../../../src/plugin-sdk/index.js";
 import { XConfigSchema } from "./config-schema.js";
+import { xOnboardingAdapter } from "./onboarding.js";
 import { getXRuntime } from "./runtime.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
@@ -60,6 +61,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
   } satisfies ChannelCapabilities,
 
   configSchema: buildChannelConfigSchema(XConfigSchema),
+  onboarding: xOnboardingAdapter,
 
   agentPrompt: {
     messageToolHints: () => [

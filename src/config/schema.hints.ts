@@ -162,6 +162,20 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.maxResults": "Web Search Max Results",
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
   "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
+  "tools.web.search.qveris.toolId": "QVeris Web Search Tool ID",
+  "tools.web.search.qveris.apiKey": "QVeris Web Search API Key",
+  "tools.web.search.qveris.baseUrl": "QVeris Web Search Base URL",
+  "tools.web.search.grok.apiKey": "Grok Web Search API Key",
+  "tools.web.search.grok.model": "Grok Web Search Model",
+  "tools.web.search.grok.inlineCitations": "Grok Inline Citations",
+  "tools.qveris.enabled": "Enable QVeris Tools",
+  "tools.qveris.apiKey": "QVeris API Key",
+  "tools.qveris.baseUrl": "QVeris API Base URL",
+  "tools.qveris.timeoutSeconds": "QVeris Timeout (sec)",
+  "tools.qveris.maxResponseSize": "QVeris Max Response Size",
+  "tools.qveris.searchLimit": "QVeris Search Limit",
+  "tools.qveris.preSearchEnabled": "QVeris Pre-Search",
+  "tools.qveris.preSearchByteThreshold": "QVeris Pre-Search Byte Threshold",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.timeoutSeconds": "Web Fetch Timeout (sec)",
@@ -444,11 +458,32 @@ const FIELD_HELP: Record<string, string> = {
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
   "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
-  "tools.web.search.provider": 'Search provider ("brave" or "perplexity").',
+  "tools.web.search.provider":
+    'Search provider ("brave", "perplexity", "grok", or "qveris"). When QVeris is enabled, defaults to "qveris".',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
   "tools.web.search.maxResults": "Default number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
+  "tools.web.search.qveris.toolId":
+    'QVeris tool ID for web search (e.g. "xiaosu.smartsearch.search.retrieve.v2.6c50f296_domestic").',
+  "tools.web.search.qveris.apiKey":
+    "QVeris API key for web search (falls back to tools.qveris.apiKey or QVERIS_API_KEY env var).",
+  "tools.web.search.qveris.baseUrl":
+    "QVeris API base URL for web search (falls back to tools.qveris.baseUrl).",
+  "tools.web.search.grok.apiKey": "Grok API key for web search.",
+  "tools.web.search.grok.model": 'Grok model override (default: "grok-3").',
+  "tools.web.search.grok.inlineCitations":
+    "Enable inline citations in Grok search results (default: true).",
+  "tools.qveris.enabled":
+    "Enable QVeris dynamic tool search and execution across domains like finance and research.",
+  "tools.qveris.apiKey":
+    "QVeris API key (fallback: QVERIS_API_KEY env var). Required for QVeris tools and web_search via QVeris.",
+  "tools.qveris.baseUrl": "QVeris API base URL override.",
+  "tools.qveris.timeoutSeconds": "Timeout in seconds for QVeris tool requests.",
+  "tools.qveris.maxResponseSize": "Max response size in bytes for QVeris tool calls.",
+  "tools.qveris.searchLimit": "Max number of tools to search when using QVeris.",
+  "tools.qveris.preSearchEnabled": "Enable pre-search optimization for QVeris tool discovery.",
+  "tools.qveris.preSearchByteThreshold": "Byte threshold for QVeris pre-search optimization.",
   "tools.web.search.perplexity.apiKey":
     "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var).",
   "tools.web.search.perplexity.baseUrl":

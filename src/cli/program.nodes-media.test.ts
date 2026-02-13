@@ -27,6 +27,7 @@ vi.mock("../commands/configure.js", () => ({
     "workspace",
     "model",
     "web",
+    "qveris",
     "gateway",
     "daemon",
     "channels",

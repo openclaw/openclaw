@@ -11,6 +11,7 @@ export const CONFIGURE_WIZARD_SECTIONS = [
   "workspace",
   "model",
   "web",
+  "qveris",
   "gateway",
   "daemon",
   "channels",
@@ -35,6 +36,11 @@ export const CONFIGURE_SECTION_OPTIONS: Array<{
   { value: "workspace", label: "Workspace", hint: "Set workspace + sessions" },
   { value: "model", label: "Model", hint: "Pick provider + credentials" },
   { value: "web", label: "Web tools", hint: "Configure Brave search + fetch" },
+  {
+    value: "qveris",
+    label: "QVeris",
+    hint: "Configure QVeris tools + set web_search provider",
+  },
   { value: "gateway", label: "Gateway", hint: "Port, bind, auth, tailscale" },
   {
     value: "daemon",

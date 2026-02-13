@@ -40,6 +40,7 @@ import {
   summarizeExistingConfig,
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
+import { promptQverisConfig } from "./onboard-qveris.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
 
@@ -322,6 +323,10 @@ export async function runConfigureWizard(
         nextConfig = await promptWebToolsConfig(nextConfig, runtime);
       }
 
+      if (selected.includes("qveris")) {
+        nextConfig = await promptQverisConfig(nextConfig, prompter);
+      }
+
       if (selected.includes("gateway")) {
         const gateway = await promptGatewayConfig(nextConfig, runtime);
         nextConfig = gateway.config;
@@ -441,6 +446,11 @@ export async function runConfigureWizard(
 
         if (choice === "web") {
           nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+          await persistConfig();
+        }
+
+        if (choice === "qveris") {
+          nextConfig = await promptQverisConfig(nextConfig, prompter);
           await persistConfig();
         }
 

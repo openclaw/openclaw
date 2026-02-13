@@ -1,102 +1,216 @@
-/**
- * X channel CLI onboarding wizard.
- *
- * Note: This uses a simplified prompt-based schema, not the full ChannelOnboardingAdapter interface.
- */
+import type { ChannelOnboardingAdapter } from "../../../src/channels/plugins/onboarding-types.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { promptAccountId } from "../../../src/channels/plugins/onboarding/helpers.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
+import { getXRuntime } from "./runtime.js";
 
-/**
- * X onboarding adapter for CLI setup.
- */
-export const xOnboardingAdapter = {
-  /**
-   * Get onboarding prompts for X channel.
-   */
-  getPrompts: () => [
-    {
-      key: "consumerKey",
-      type: "text" as const,
-      label: "Consumer Key (API Key)",
-      help: "From X Developer Portal",
-      required: true,
-    },
-    {
-      key: "consumerSecret",
-      type: "password" as const,
-      label: "Consumer Secret (API Secret)",
-      help: "From X Developer Portal",
-      required: true,
-    },
-    {
-      key: "accessToken",
-      type: "text" as const,
-      label: "Access Token",
-      help: "From X Developer Portal",
-      required: true,
-    },
-    {
-      key: "accessTokenSecret",
-      type: "password" as const,
-      label: "Access Token Secret",
-      help: "From X Developer Portal",
-      required: true,
-    },
-    {
-      key: "pollIntervalSeconds",
-      type: "number" as const,
-      label: "Poll Interval (seconds)",
-      help: "How often to check for new mentions (min: 15, default: 60)",
-      required: false,
-      default: 60,
-    },
-  ],
+const channel = "x" as const;
 
-  /**
-   * Validate onboarding input.
-   */
-  validate: (input: Record<string, unknown>) => {
-    const errors: string[] = [];
+type XCredentialInput = {
+  consumerKey: string;
+  consumerSecret: string;
+  accessToken: string;
+  accessTokenSecret: string;
+  pollIntervalSeconds?: number;
+  proxy?: string;
+};
 
-    if (!input.consumerKey) {
-      errors.push("Consumer Key is required");
-    }
-    if (!input.consumerSecret) {
-      errors.push("Consumer Secret is required");
-    }
-    if (!input.accessToken) {
-      errors.push("Access Token is required");
-    }
-    if (!input.accessTokenSecret) {
-      errors.push("Access Token Secret is required");
-    }
+function parsePollIntervalSeconds(input: string): number | undefined {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed < 15) {
+    return undefined;
+  }
+  return parsed;
+}
 
-    const pollInterval = input.pollIntervalSeconds as number | undefined;
-    if (pollInterval !== undefined && pollInterval < 15) {
-      errors.push("Poll interval must be at least 15 seconds");
-    }
+function writeAccountConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  input: XCredentialInput;
+}): OpenClawConfig {
+  const { cfg, accountId, input } = params;
+  const existingX = cfg.channels?.x ?? {};
+  const accountPatch = {
+    enabled: true,
+    consumerKey: input.consumerKey,
+    consumerSecret: input.consumerSecret,
+    accessToken: input.accessToken,
+    accessTokenSecret: input.accessTokenSecret,
+    ...(input.pollIntervalSeconds ? { pollIntervalSeconds: input.pollIntervalSeconds } : {}),
+    ...(input.proxy ? { proxy: input.proxy } : {}),
+  };
 
-    return errors.length > 0 ? errors.join("; ") : null;
-  },
-
-  /**
-   * Apply onboarding input to config.
-   */
-  applyToConfig: (cfg: Record<string, unknown>, input: Record<string, unknown>) => {
-    const channels = (cfg.channels ?? {}) as Record<string, unknown>;
-    const xConfig = {
-      enabled: true,
-      consumerKey: input.consumerKey,
-      consumerSecret: input.consumerSecret,
-      accessToken: input.accessToken,
-      accessTokenSecret: input.accessTokenSecret,
-      ...(input.pollIntervalSeconds ? { pollIntervalSeconds: input.pollIntervalSeconds } : {}),
-    };
-
+  if (accountId === DEFAULT_ACCOUNT_ID && !existingX.accounts) {
     return {
       ...cfg,
       channels: {
-        ...channels,
-        x: xConfig,
+        ...cfg.channels,
+        x: {
+          ...existingX,
+          ...accountPatch,
+        },
       },
     };
+  }
+
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      x: {
+        ...existingX,
+        enabled: true,
+        accounts: {
+          ...existingX.accounts,
+          [accountId]: {
+            ...existingX.accounts?.[accountId],
+            ...accountPatch,
+          },
+        },
+      },
+    },
+  };
+}
+
+export const xOnboardingAdapter: ChannelOnboardingAdapter = {
+  channel,
+  getStatus: async ({ cfg }) => {
+    const configured = getXRuntime()
+      .channel.x.listXAccountIds(cfg)
+      .some((accountId) =>
+        getXRuntime().channel.x.isXAccountConfigured(
+          getXRuntime().channel.x.resolveXAccount(cfg, accountId),
+        ),
+      );
+    return {
+      channel,
+      configured,
+      statusLines: [`X (Twitter): ${configured ? "configured" : "needs API credentials"}`],
+      selectionHint: configured ? "configured · credentials present" : "new · add credentials",
+      quickstartScore: configured ? 1 : 10,
+    };
   },
+  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
+    await prompter.note(
+      [
+        "Create credentials in the X Developer Portal (API key/secret + access token/secret).",
+        "For mentions/replies to work, app and account permissions must allow read/write access.",
+        `Docs: ${formatDocsLink("/channels/x")}`,
+      ].join("\n"),
+      "X credentials",
+    );
+
+    const xOverride = accountOverrides.x?.trim();
+    const defaultAccountId = getXRuntime().channel.x.defaultAccountId ?? DEFAULT_ACCOUNT_ID;
+    let xAccountId = xOverride ? normalizeAccountId(xOverride) : defaultAccountId;
+    if (shouldPromptAccountIds && !xOverride) {
+      xAccountId = await promptAccountId({
+        cfg,
+        prompter,
+        label: "X",
+        currentId: xAccountId,
+        listAccountIds: (nextCfg) => getXRuntime().channel.x.listXAccountIds(nextCfg),
+        defaultAccountId,
+      });
+    }
+
+    const existing = getXRuntime().channel.x.resolveXAccount(cfg, xAccountId);
+    const hasExistingCreds = getXRuntime().channel.x.isXAccountConfigured(existing);
+    const keepExisting =
+      hasExistingCreds &&
+      (await prompter.confirm({
+        message: "X credentials already configured. Keep existing credentials?",
+        initialValue: true,
+      }));
+
+    let next = cfg;
+    if (!keepExisting) {
+      const consumerKey = (
+        await prompter.text({
+          message: "X Consumer Key (API Key)",
+          initialValue: existing?.consumerKey ?? "",
+          validate: (value) => (value.trim() ? undefined : "Required"),
+        })
+      ).trim();
+      const consumerSecret = (
+        await prompter.text({
+          message: "X Consumer Secret (API Secret)",
+          initialValue: existing?.consumerSecret ?? "",
+          validate: (value) => (value.trim() ? undefined : "Required"),
+        })
+      ).trim();
+      const accessToken = (
+        await prompter.text({
+          message: "X Access Token",
+          initialValue: existing?.accessToken ?? "",
+          validate: (value) => (value.trim() ? undefined : "Required"),
+        })
+      ).trim();
+      const accessTokenSecret = (
+        await prompter.text({
+          message: "X Access Token Secret",
+          initialValue: existing?.accessTokenSecret ?? "",
+          validate: (value) => (value.trim() ? undefined : "Required"),
+        })
+      ).trim();
+      const pollIntervalInput = await prompter.text({
+        message: "Poll interval in seconds (optional, min 15)",
+        initialValue: existing?.pollIntervalSeconds ? String(existing.pollIntervalSeconds) : "60",
+        validate: (value) => {
+          const trimmed = value.trim();
+          if (!trimmed) {
+            return undefined;
+          }
+          const parsed = Number.parseInt(trimmed, 10);
+          if (!Number.isFinite(parsed) || parsed < 15) {
+            return "Must be a number >= 15";
+          }
+          return undefined;
+        },
+      });
+      const proxyInput = await prompter.text({
+        message: "HTTP proxy URL (optional)",
+        initialValue: existing?.proxy ?? "",
+        placeholder: "http://127.0.0.1:7890",
+      });
+
+      next = writeAccountConfig({
+        cfg: next,
+        accountId: xAccountId,
+        input: {
+          consumerKey,
+          consumerSecret,
+          accessToken,
+          accessTokenSecret,
+          pollIntervalSeconds: parsePollIntervalSeconds(pollIntervalInput),
+          proxy: proxyInput.trim() || undefined,
+        },
+      });
+    } else {
+      next = {
+        ...next,
+        channels: {
+          ...next.channels,
+          x: {
+            ...next.channels?.x,
+            enabled: true,
+          },
+        },
+      };
+    }
+
+    return { cfg: next, accountId: xAccountId };
+  },
+  disable: (cfg) => ({
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      x: { ...cfg.channels?.x, enabled: false },
+    },
+  }),
 };

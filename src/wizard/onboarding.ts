@@ -29,6 +29,7 @@ import {
   summarizeExistingConfig,
 } from "../commands/onboard-helpers.js";
 import { setupInternalHooks } from "../commands/onboard-hooks.js";
+import { promptQverisConfig } from "../commands/onboard-qveris.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
 import {
@@ -418,6 +419,7 @@ export async function runOnboardingWizard(
   }
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
+  nextConfig = await promptQverisConfig(nextConfig, prompter);
 
   const gateway = await configureGatewayForOnboarding({
     flow,
