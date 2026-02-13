@@ -1,139 +1,89 @@
-# ADR-001: Cloud.ru FM Integration via Claude Code Proxy
+# ADR-001: Cloud.ru FM Proxy Integration Architecture
 
-## Status: PROPOSED
-
-## Date: 2026-02-12
-
-## Bounded Context: Agent Execution / Proxy Management
+## Status: ACCEPTED
+## Date: 2026-02-13 (v2 — rewritten after DDD analysis + brutal honesty review + research)
 
 ## Context
 
-OpenClaw needs to use cloud.ru Evolution Foundation Models (GLM-4.7, GLM-4.7-Flash,
-Qwen3-Coder-480B) as the LLM backend for user-facing conversations. The user's
-strategic decision is to leverage Claude Code's multi-agent architecture (tool calling,
-MCP, multi-step reasoning, session persistence) to boost task quality beyond what the
-raw model provides alone.
+OpenClaw needs Cloud.ru Evolution Foundation Models (GLM-4.7, Qwen3-Coder-480B). Cloud.ru FM uses OpenAI-compatible API at `https://foundation-models.api.cloud.ru/v1/`; Claude Code expects Anthropic-format. A protocol translation layer is needed.
 
-### Problem
+OpenClaw already has `claude-cli` backend spawning Claude Code as subprocess (`src/agents/cli-runner.ts`). The `claude-code-proxy` Docker container translates Anthropic -> OpenAI format.
 
-Claude Code speaks the Anthropic API protocol (`x-api-key`, `anthropic-version`,
-`/messages`). Cloud.ru FM speaks OpenAI-compatible protocol (`Authorization: Bearer`,
-`/v1/chat/completions`). Additionally, Claude Code requests models by Anthropic names
-(`claude-opus-4-6`, `claude-sonnet-4-5`, `claude-haiku-4-5`) while cloud.ru uses its
-own model IDs (`zai-org/GLM-4.7`, `Qwen/Qwen3-Coder-480B-A35B-Instruct`).
+### Platform Context (from Research)
 
-### Forces
+Cloud.ru Evolution AI Factory provides 6 integrated services:
+- **Foundation Models**: 20+ LLMs (GLM-4.7, Qwen3, DeepSeek, GigaChat) via OpenAI-compatible API
+- **AI Agents**: Visual editor, MCP integration, A2A protocol (up to 5 agents)
+- **Managed RAG**: Knowledge bases, vector search, document parsing
+- **ML Inference**: Custom model deployment with auto-scaling
+- **ML Finetuning**: LoRA/QLoRA on proprietary data
+- **Notebooks**: Jupyter-like GPU environments
 
-- Protocol incompatibility (Anthropic vs OpenAI)
-- Model name mismatch (Claude names vs cloud.ru names)
-- Tool calling format differences (Anthropic tool_use vs OpenAI function_calling)
-- GLM-4.7 known tool calling instabilities (sglang #15721)
-- Need for localhost-only security (API key exposure)
-- Docker-based deployment preferred for isolation
+### Why Proxy (Not Direct API)
+
+Despite OpenAI-compatible endpoints, 3 incompatibilities require a proxy layer:
+1. **Auth format**: Claude Code sends `x-api-key` + `anthropic-version`; Cloud.ru expects `Authorization: Bearer`
+2. **Model mapping**: Claude Code requests `claude-opus-4-6`; Cloud.ru uses `zai-org/GLM-4.7`
+3. **Tool call format**: GLM sometimes simulates tool calls in text instead of structured `tool_calls` (Insight #055)
+
+### Target Users
+
+- **Russian market**: No VPN, Russian payment cards, FZ-152 compliant data storage
+- **Free tier**: GLM-4.7-Flash available at zero cost for development
+- **MAX Messenger**: Pre-installed on all Russian smartphones since Sep 2025 — primary user channel
 
 ## Decision
 
-Use **claude-code-proxy** (Docker image `legard/claude-code-proxy:latest`) as the
-protocol translation layer between Claude Code and cloud.ru FM API.
-
-### Architecture
-
+### Architecture Flow
 ```
-OpenClaw runCliAgent()
-  → spawns: claude -p --output-format json
-    → Claude Code (ANTHROPIC_BASE_URL=http://localhost:8082)
-      → claude-code-proxy (Docker, port 8082)
-        → cloud.ru FM API (https://foundation-models.api.cloud.ru/v1/)
+User -> MAX/Telegram/Web -> OpenClaw Gateway -> runCliAgent()
+  -> claude -p -> Claude Code
+    -> ANTHROPIC_BASE_URL=localhost:8082 -> claude-code-proxy (Docker)
+      -> cloud.ru FM API (15 req/s rate limit) -> GLM-4.7 / Qwen3 / Flash
 ```
 
-### Proxy Configuration
+### Bounded Contexts (DDD)
 
-```yaml
-# docker-compose.yml
-services:
-  claude-code-proxy:
-    image: legard/claude-code-proxy:latest
-    ports:
-      - "127.0.0.1:8082:8082"
-    environment:
-      OPENAI_API_KEY: "${CLOUDRU_API_KEY}"
-      OPENAI_BASE_URL: "https://foundation-models.api.cloud.ru/v1"
-      BIG_MODEL: "zai-org/GLM-4.7"
-      MIDDLE_MODEL: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
-      SMALL_MODEL: "zai-org/GLM-4.7-Flash"
-      HOST: "0.0.0.0"
-      PORT: "8082"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-```
+| Context | Responsibility | Files |
+|---------|---------------|-------|
+| **Onboarding** | Credential capture, config mutation | auth-choice.apply.cloudru-fm.ts, onboard-cloudru-fm.ts |
+| **Configuration** | Type-safe schema, Zod validation | cloudru-fm.constants.ts, onboard-types.ts |
+| **Execution** | CLI backend merge, model routing | cli-backends.ts, cli-runner.ts |
+| **Infrastructure** | Docker proxy lifecycle | cloudru-proxy-template.ts, cloudru-proxy-health.ts |
 
-### OpenClaw CLI Backend Override
+### Key Design Decisions
 
-```json
-{
-  "agents": {
-    "defaults": {
-      "cliBackends": {
-        "claude-cli": {
-          "env": {
-            "ANTHROPIC_BASE_URL": "http://localhost:8082",
-            "ANTHROPIC_API_KEY": "cloudru-proxy-key"
-          }
-        }
-      }
-    }
-  }
-}
-```
+1. **Sentinel API key** (`not-a-real-key-proxy-only`): Claude Code requires non-empty ANTHROPIC_API_KEY; proxy ignores it
+2. **clearEnv scoped to override**: Extended clearEnv applied only to cloudru-fm backend, not global DEFAULT_CLAUDE_BACKEND
+3. **Localhost-only binding**: Docker ports `127.0.0.1:8082` AND `[::1]:8082` — CRITICAL for security (prevents API key exposure)
+4. **API key in .env only**: Never in openclaw.json; referenced as `${CLOUDRU_API_KEY}` in Docker Compose
+5. **.env append (not overwrite)**: Preserves existing .env content
+6. **Rate limit awareness**: Cloud.ru FM has 15 req/s per key; `serialize: true` in backend config prevents bursting
 
-This works because `mergeBackendConfig()` in `cli-backends.ts:95-110` merges
-user-provided `env` with the default backend config, and `cli-runner.ts:222-228`
-applies the merged env to the subprocess.
+### Known GLM Behavioral Issues (from Research)
+
+| # | Issue | Severity | Mitigation |
+|---|-------|----------|------------|
+| 1 | Ignores XML skill sections | High | Use dispatch tables, not XML |
+| 2 | Simulates tool calls in text | High | Proxy validates tool_calls format |
+| 3 | Streaming parse crash (tag duplication) | Medium | sglang #15721 — proxy handles |
+| 4 | Context loss with prompts >4000 chars | Medium | Keep system prompts compact |
+| 5 | RLHF refusals (GLM-4.6, potentially Flash) | Medium | Anti-refusal instructions |
+| 6 | Thinking mode conflicts with streaming | Medium | Disable thinking for agentic tasks |
+| 7 | Code reformatting by model | Low | EditorConfig + linters |
 
 ## Consequences
 
-### Positive
-
-- Zero changes to Claude Code itself — only env config
-- Zero changes to OpenClaw core — uses existing `claude-cli` backend
-- Full multi-agent architecture available (tool calling, MCP, sessions)
-- GLM-4.7-Flash is free tier — zero cost for basic usage
-- Docker isolation for proxy — clean deployment
-
-### Negative
-
-- Additional infrastructure component (proxy Docker container)
-- Single point of failure (proxy crash = no LLM)
-- Proxy does not support multi-provider routing
-- GLM-4.7 tool calling instability may surface through Claude Code
-- `serialize: true` in default backend limits to 1 concurrent request
-
-### Risks
-
-| Risk | Probability | Impact | Mitigation |
-|------|:-----------:|:------:|-----------|
-| Proxy crashes under load | Low | High | Docker restart policy, health checks |
-| GLM tool calling failures | Medium | High | Proxy validation, fallback to text |
-| API key exposure | Low | Critical | localhost-only binding, .env files |
-| Rate limit (15 req/s) | Medium | Medium | Request queuing in OpenClaw |
-| Streaming timeout | Medium | Low | Increase REQUEST_TIMEOUT env |
-
-## Alternatives Considered
-
-1. **OpenCode CLI as backend** — Natively supports cloud.ru but lacks Claude Code's
-   agentic depth (no CLAUDE.md, no hooks, no swarms). Score: 7.6/10 vs 8.0/10.
-2. **Direct API calls** — Simpler but loses multi-step reasoning, tool orchestration,
-   and session persistence that Claude Code provides.
-3. **Fork Claude Code** — Too invasive, maintenance burden on every upstream update.
+- Zero Claude Code modifications required
+- +50-100ms proxy latency per request
+- Docker required (manual setup documented as fallback)
+- `serialize: true` limits to 1 concurrent request per agent
+- Enables future integration with Cloud.ru AI Agents (A2A protocol) and Managed RAG
 
 ## References
 
-- `src/agents/cli-backends.ts` — CLI backend configuration and merging
-- `src/agents/cli-runner.ts` — CLI agent execution (subprocess spawning)
+- [Cloud.ru FM API](https://foundation-models.api.cloud.ru/v1/)
+- [Cloud.ru Wiki: Claude Code + Evo FM](https://wiki.cloud.ru/spaces/IA/pages/630602538)
 - [claude-code-proxy](https://github.com/fuergaosi233/claude-code-proxy)
-- [Cloud.ru FM API](https://cloud.ru/docs/foundation-models/ug/topics/api-ref)
-- [sglang #15721](https://github.com/sgl-project/sglang/issues/15721) — GLM tool call bug
+- `docs/ccli-max-cloudru-fm/RESEARCH.md` — Full Claude Code vs OpenCode comparison
+- `docs/ccli-max-cloudru-fm/research/` — Architecture, AI Agents, MAX integration research
