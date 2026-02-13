@@ -19,6 +19,7 @@ const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
 const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
+const setupOnboardingShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
@@ -71,6 +72,10 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 
 vi.mock("../tui/tui.js", () => ({
   runTui,
+}));
+
+vi.mock("./onboarding.completion.js", () => ({
+  setupOnboardingShellCompletion,
 }));
 
 describe("runOnboardingWizard", () => {

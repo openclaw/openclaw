@@ -212,11 +212,12 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("stores xAI API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-xai-", async ({ configPath, runtime }) => {
+      const rawKey = "xai-test-\r\nkey";
       await runNonInteractive(
         {
           nonInteractive: true,
           authChoice: "xai-api-key",
-          xaiApiKey: "xai-test-key",
+          xaiApiKey: rawKey,
           skipHealth: true,
           skipChannels: true,
           skipSkills: true,
@@ -272,7 +273,8 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("stores token auth profile", async () => {
     await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
-      const token = `sk-ant-oat01-${"a".repeat(80)}`;
+      const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
+      const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
       await runNonInteractive(
         {
@@ -301,7 +303,7 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(profile?.type).toBe("token");
       if (profile?.type === "token") {
         expect(profile.provider).toBe("anthropic");
-        expect(profile.token).toBe(token);
+        expect(profile.token).toBe(cleanToken);
       }
     });
   }, 60_000);
