@@ -18,6 +18,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Configure git
         run: |
@@ -35,6 +36,7 @@ jobs:
             TOKEN="${FALLBACK_GH_TOKEN}"
           fi
           echo "SYNC_TOKEN=${TOKEN}" >> "$GITHUB_ENV"
+          git config --local --unset-all http.https://github.com/.extraheader || true
           git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
       - name: Add upstream and fetch
