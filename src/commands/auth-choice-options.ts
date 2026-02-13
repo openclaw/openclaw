@@ -26,6 +26,7 @@ export type AuthChoiceGroupId =
   | "qwen"
   | "together"
   | "qianfan"
+  | "mistral"
   | "xai"
   | "custom";
 
@@ -139,6 +140,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["together-api-key"],
   },
   {
+    value: "mistral",
+    label: "Mistral AI",
+    hint: "API key",
+    choices: ["mistral-api-key"],
+  },
+  {
     value: "venice",
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",
@@ -216,6 +223,7 @@ export function buildAuthChoiceOptions(params: {
     label: "Kimi Code API key (subscription)",
   });
   options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
+  options.push({ value: "mistral-api-key", label: "Mistral AI API key" });
   options.push({
     value: "venice-api-key",
     label: "Venice AI API key",

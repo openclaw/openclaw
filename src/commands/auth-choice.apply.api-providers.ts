@@ -25,6 +25,8 @@ import {
   applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
   applyMoonshotProviderConfigCn,
+  applyMistralConfig,
+  applyMistralProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
@@ -52,6 +54,7 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
+  MISTRAL_DEFAULT_MODEL_REF,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
@@ -64,6 +67,7 @@ import {
   setTogetherApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
+  setMistralApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
@@ -122,6 +126,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "together-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
+    } else if (params.opts.tokenProvider === "mistral") {
+      authChoice = "mistral-api-key";
     } else if (params.opts.tokenProvider === "qianfan") {
       authChoice = "qianfan-api-key";
     }
@@ -935,6 +941,53 @@ export async function applyAuthChoiceApiProviders(
     return { config: nextConfig, agentModelOverride };
   }
 
+  if (authChoice === "mistral-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "mistral") {
+      await setMistralApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    const envKey = resolveEnvApiKey("mistral");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing MISTRAL_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setMistralApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Mistral AI API key",
+        validate: validateApiKeyInput,
+      });
+      await setMistralApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "mistral:default",
+      provider: "mistral",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: MISTRAL_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyMistralConfig,
+        applyProviderConfig: applyMistralProviderConfig,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
   if (authChoice === "together-api-key") {
     let hasCredential = false;
 
@@ -996,7 +1049,7 @@ export async function applyAuthChoiceApiProviders(
   if (authChoice === "qianfan-api-key") {
     let hasCredential = false;
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "qianfan") {
-      setQianfanApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      await setQianfanApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
       hasCredential = true;
     }
 
@@ -1016,7 +1069,7 @@ export async function applyAuthChoiceApiProviders(
         initialValue: true,
       });
       if (useExisting) {
-        setQianfanApiKey(envKey.apiKey, params.agentDir);
+        await setQianfanApiKey(envKey.apiKey, params.agentDir);
         hasCredential = true;
       }
     }
@@ -1025,7 +1078,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter QIANFAN API key",
         validate: validateApiKeyInput,
       });
-      setQianfanApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setQianfanApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "qianfan:default",

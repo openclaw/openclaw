@@ -11,6 +11,7 @@ type AuthChoiceFlagOptions = Pick<
   | "anthropicApiKey"
   | "geminiApiKey"
   | "openaiApiKey"
+  | "mistralApiKey"
   | "openrouterApiKey"
   | "aiGatewayApiKey"
   | "cloudflareAiGatewayApiKey"
@@ -33,6 +34,7 @@ const AUTH_CHOICE_FLAG_MAP = [
   { flag: "anthropicApiKey", authChoice: "apiKey", label: "--anthropic-api-key" },
   { flag: "geminiApiKey", authChoice: "gemini-api-key", label: "--gemini-api-key" },
   { flag: "openaiApiKey", authChoice: "openai-api-key", label: "--openai-api-key" },
+  { flag: "mistralApiKey", authChoice: "mistral-api-key", label: "--mistral-api-key" },
   { flag: "openrouterApiKey", authChoice: "openrouter-api-key", label: "--openrouter-api-key" },
   { flag: "aiGatewayApiKey", authChoice: "ai-gateway-api-key", label: "--ai-gateway-api-key" },
   {
