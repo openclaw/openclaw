@@ -519,6 +519,8 @@ async function runWebFetch(params: {
 
     const contentType = res.headers.get("content-type") ?? "application/octet-stream";
     const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
+    // Lowercase for case-insensitive MIME type comparisons (Content-Type is case-insensitive per RFC 7231)
+    const ct = normalizedContentType.toLowerCase();
     const body = await readResponseText(res);
 
     let title: string | undefined;
@@ -527,10 +529,10 @@ async function runWebFetch(params: {
 
     // Cloudflare Markdown for Agents: if server returns text/markdown, use directly
     // This can reduce token consumption by ~80% vs HTML extraction
-    if (contentType.includes("text/markdown")) {
+    if (ct === "text/markdown") {
       extractor = "markdown-native";
       // text is already markdown, no extraction needed
-    } else if (contentType.includes("text/html")) {
+    } else if (ct === "text/html") {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,
@@ -558,7 +560,7 @@ async function runWebFetch(params: {
           "Web fetch extraction failed: Readability disabled and Firecrawl unavailable.",
         );
       }
-    } else if (contentType.includes("application/json")) {
+    } else if (ct === "application/json") {
       try {
         text = JSON.stringify(JSON.parse(body), null, 2);
         extractor = "json";
