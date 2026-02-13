@@ -42,7 +42,8 @@ describeLive("Discord tool feedback display", () => {
   let channelId: string;
   let events: MessageEvent[];
   const nonce = randomBytes(4).toString("hex");
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const channelName = `e2e-${today}-${nonce}`;
   const probePath = path.join(os.tmpdir(), `e2e-probe-${nonce}.txt`);
 
@@ -111,18 +112,28 @@ describeLive("Discord tool feedback display", () => {
     } catch {
       /* already gone */
     }
-    // Delete ephemeral channel.
-    if (client && channelId) {
+    // Prune E2E channels older than 7 days (based on the date in the
+    // channel name). Keep the current test channel for inspection.
+    if (client) {
       try {
-        const channel = await client.channels.fetch(channelId);
-        if (channel && "delete" in channel) {
-          await channel.delete();
+        const guild = await client.guilds.fetch(GUILD_ID);
+        const channels = await guild.channels.fetch();
+        const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        for (const [, ch] of channels) {
+          if (!ch) continue;
+          const match = ch.name.match(/^e2e-(\d{4}-\d{2}-\d{2})-/);
+          if (!match) continue;
+          const channelDate = new Date(match[1]).getTime();
+          if (Number.isNaN(channelDate) || channelDate >= cutoff) continue;
+          try {
+            await ch.delete();
+          } catch {
+            /* best effort */
+          }
         }
       } catch {
         /* best effort */
       }
-    }
-    if (client) {
       await client.destroy();
     }
   });
