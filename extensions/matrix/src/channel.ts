@@ -145,19 +145,26 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       configured: account.configured,
       baseUrl: account.homeserver,
     }),
-    resolveAllowFrom: ({ cfg }) =>
-      ((cfg as CoreConfig).channels?.matrix?.dm?.allowFrom ?? []).map((entry) => String(entry)),
+    resolveAllowFrom: ({ account }) =>
+      (account.config.dm?.allowFrom ?? []).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },
   security: {
-    resolveDmPolicy: ({ account }) => ({
-      policy: account.config.dm?.policy ?? "pairing",
-      allowFrom: account.config.dm?.allowFrom ?? [],
-      policyPath: "channels.matrix.dm.policy",
-      allowFromPath: "channels.matrix.dm.allowFrom",
-      approveHint: formatPairingApproveHint("matrix"),
-      normalizeEntry: (raw) => normalizeMatrixUserId(raw),
-    }),
+    resolveDmPolicy: ({ account }) => {
+      const accountId = account.accountId;
+      const prefix =
+        accountId && accountId !== "default"
+          ? `channels.matrix.accounts.${accountId}.dm`
+          : "channels.matrix.dm";
+      return {
+        policy: account.config.dm?.policy ?? "pairing",
+        allowFrom: account.config.dm?.allowFrom ?? [],
+        policyPath: `${prefix}.policy`,
+        allowFromPath: `${prefix}.allowFrom`,
+        approveHint: formatPairingApproveHint("matrix"),
+        normalizeEntry: (raw) => normalizeMatrixUserId(raw),
+      };
+    },
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;
       const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
