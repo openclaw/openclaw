@@ -17,7 +17,7 @@ status: not_started
 | 8 | Agent 上下文 + 用量 | ✅ | 2026-02-13 | 30290a1 |
 | 9 | Agent 工具 + Skills | ✅ | 2026-02-13 | cd1ca40 |
 | 10 | Telegram 核心 Bot | ✅ | 2026-02-13 | b2026c1 |
-| 11 | Telegram 媒体/Webhook/群组 | ✅ | 2026-02-13 | pending |
+| 11 | Telegram 媒体/Webhook/群组 | ✅ | 2026-02-13 | afb5899 |
 | 12 | 用户管理 + 权限 | ⬜ | - | - |
 | 13 | 消息路由（全链路） | ⬜ | - | - |
 | 14 | CLI 命令行 | ⬜ | - | - |
