@@ -32,6 +32,7 @@ const removeOwnReactionsDiscord = vi.fn(async () => ({ removed: ["👍"] }));
 const removeReactionDiscord = vi.fn(async () => ({}));
 const searchMessagesDiscord = vi.fn(async () => ({}));
 const sendMessageDiscord = vi.fn(async () => ({}));
+const sendVoiceMessageDiscord = vi.fn(async () => ({}));
 const sendPollDiscord = vi.fn(async () => ({}));
 const sendStickerDiscord = vi.fn(async () => ({}));
 const setChannelPermissionDiscord = vi.fn(async () => ({ ok: true }));
@@ -64,6 +65,7 @@ vi.mock("../../discord/send.js", () => ({
   removeReactionDiscord: (...args: unknown[]) => removeReactionDiscord(...args),
   searchMessagesDiscord: (...args: unknown[]) => searchMessagesDiscord(...args),
   sendMessageDiscord: (...args: unknown[]) => sendMessageDiscord(...args),
+  sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscord(...args),
   sendPollDiscord: (...args: unknown[]) => sendPollDiscord(...args),
   sendStickerDiscord: (...args: unknown[]) => sendStickerDiscord(...args),
   setChannelPermissionDiscord: (...args: unknown[]) => setChannelPermissionDiscord(...args),
@@ -233,6 +235,43 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.results?.messages?.[0]?.[0]?.timestampUtc).toBe(
       new Date(expectedMs).toISOString(),
     );
+  });
+
+  it("sends voice messages from a local file path", async () => {
+    sendVoiceMessageDiscord.mockClear();
+    sendMessageDiscord.mockClear();
+
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        path: "/tmp/voice.mp3",
+        asVoice: true,
+        silent: true,
+      },
+      enableAllActions,
+    );
+
+    expect(sendVoiceMessageDiscord).toHaveBeenCalledWith("channel:123", "/tmp/voice.mp3", {
+      replyTo: undefined,
+      silent: true,
+    });
+    expect(sendMessageDiscord).not.toHaveBeenCalled();
+  });
+
+  it("rejects voice messages that include content", async () => {
+    await expect(
+      handleDiscordMessagingAction(
+        "sendMessage",
+        {
+          to: "channel:123",
+          mediaUrl: "/tmp/voice.mp3",
+          asVoice: true,
+          content: "hello",
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow(/Voice messages cannot include text content/);
   });
 
   it("forwards optional thread content", async () => {
