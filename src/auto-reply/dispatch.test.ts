@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
-import { withReplyDispatcher } from "./dispatch.js";
+import { dispatchInboundMessage, withReplyDispatcher } from "./dispatch.js";
+import { buildTestCtx } from "./reply/test-ctx.js";
 
 function createDispatcher(record: string[]): ReplyDispatcher {
   return {
@@ -57,5 +59,33 @@ describe("withReplyDispatcher", () => {
 
     expect(onSettled).toHaveBeenCalledTimes(1);
     expect(order).toEqual(["run", "markComplete", "waitForIdle", "onSettled"]);
+  });
+
+  it("dispatchInboundMessage owns dispatcher lifecycle", async () => {
+    const order: string[] = [];
+    const dispatcher = {
+      sendToolResult: () => true,
+      sendBlockReply: () => true,
+      sendFinalReply: () => {
+        order.push("sendFinalReply");
+        return true;
+      },
+      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      markComplete: () => {
+        order.push("markComplete");
+      },
+      waitForIdle: async () => {
+        order.push("waitForIdle");
+      },
+    } satisfies ReplyDispatcher;
+
+    await dispatchInboundMessage({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
   });
 });

@@ -40,12 +40,16 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
-  return await dispatchReplyFromConfig({
-    ctx: finalized,
-    cfg: params.cfg,
+  return await withReplyDispatcher({
     dispatcher: params.dispatcher,
-    replyOptions: params.replyOptions,
-    replyResolver: params.replyResolver,
+    run: () =>
+      dispatchReplyFromConfig({
+        ctx: finalized,
+        cfg: params.cfg,
+        dispatcher: params.dispatcher,
+        replyOptions: params.replyOptions,
+        replyResolver: params.replyResolver,
+      }),
   });
 }
 
@@ -59,23 +63,20 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping(
     params.dispatcherOptions,
   );
-  return await withReplyDispatcher({
-    dispatcher,
-    run: async () =>
-      dispatchInboundMessage({
-        ctx: params.ctx,
-        cfg: params.cfg,
-        dispatcher,
-        replyResolver: params.replyResolver,
-        replyOptions: {
-          ...params.replyOptions,
-          ...replyOptions,
-        },
-      }),
-    onSettled: () => {
-      markDispatchIdle();
-    },
-  });
+  try {
+    return await dispatchInboundMessage({
+      ctx: params.ctx,
+      cfg: params.cfg,
+      dispatcher,
+      replyResolver: params.replyResolver,
+      replyOptions: {
+        ...params.replyOptions,
+        ...replyOptions,
+      },
+    });
+  } finally {
+    markDispatchIdle();
+  }
 }
 
 export async function dispatchInboundMessageWithDispatcher(params: {
@@ -86,15 +87,11 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const dispatcher = createReplyDispatcher(params.dispatcherOptions);
-  return await withReplyDispatcher({
+  return await dispatchInboundMessage({
+    ctx: params.ctx,
+    cfg: params.cfg,
     dispatcher,
-    run: async () =>
-      dispatchInboundMessage({
-        ctx: params.ctx,
-        cfg: params.cfg,
-        dispatcher,
-        replyResolver: params.replyResolver,
-        replyOptions: params.replyOptions,
-      }),
+    replyResolver: params.replyResolver,
+    replyOptions: params.replyOptions,
   });
 }

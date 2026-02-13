@@ -278,7 +278,6 @@ export async function dispatchReplyFromConfig(params: {
       } else {
         queuedFinal = dispatcher.sendFinalReply(payload);
       }
-      await dispatcher.waitForIdle();
       const counts = dispatcher.getQueuedCounts();
       counts.final += routedFinalCount;
       recordProcessed("completed", { reason: "fast_abort" });
@@ -443,8 +442,6 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
-    await dispatcher.waitForIdle();
-
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
     recordProcessed("completed");
@@ -454,9 +451,5 @@ export async function dispatchReplyFromConfig(params: {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
     throw err;
-  } finally {
-    // Always clear the dispatcher reservation so a leaked pending count
-    // can never permanently block gateway restarts.
-    dispatcher.markComplete();
   }
 }
