@@ -67,7 +67,7 @@ describe("registerTelegramNativeCommands", () => {
     });
   });
 
-  it("keeps skill commands unscoped without a matching binding", () => {
+  it("scopes skill commands to default agent without a matching binding (#15599)", () => {
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "butler" }],
@@ -76,7 +76,10 @@ describe("registerTelegramNativeCommands", () => {
 
     registerTelegramNativeCommands(buildParams(cfg, "bot-a"));
 
-    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({ cfg });
+    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
+      cfg,
+      agentIds: ["main"],
+    });
   });
 
   it("truncates Telegram command registration to 100 commands", () => {
