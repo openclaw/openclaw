@@ -48,7 +48,8 @@ export type CronServiceDeps = {
     sessionKey?: string;
     /**
      * `true` when the isolated run already delivered its output to the target
-     * channel.  See: https://github.com/openclaw/openclaw/issues/15692
+     * channel (including matching messaging-tool sends). See:
+     * https://github.com/openclaw/openclaw/issues/15692
      */
     delivered?: boolean;
   }>;
