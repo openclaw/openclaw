@@ -8,7 +8,11 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { loadSessionEntry } from "./session-utils.js";
+import {
+  loadSessionEntry,
+  pruneLegacyStoreKeys,
+  resolveGatewaySessionStoreTarget,
+} from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
@@ -41,6 +45,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const sessionId = entry?.sessionId ?? randomUUID();
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
+          const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey, store });
+          pruneLegacyStoreKeys({
+            store,
+            canonicalKey: target.canonicalKey,
+            candidates: target.storeKeys,
+          });
           store[canonicalKey] = {
             sessionId,
             updatedAt: now,
@@ -58,7 +68,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
       // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
       ctx.addChatRun(sessionId, {
-        sessionKey,
+        sessionKey: canonicalKey,
         clientRunId: `voice-${randomUUID()}`,
       });
 
@@ -66,7 +76,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         {
           message: text,
           sessionId,
-          sessionKey,
+          sessionKey: canonicalKey,
           thinking: "low",
           deliver: false,
           messageChannel: "node",
@@ -113,11 +123,18 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
+      const cfg = loadConfig();
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
+          const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey, store });
+          pruneLegacyStoreKeys({
+            store,
+            canonicalKey: target.canonicalKey,
+            candidates: target.storeKeys,
+          });
           store[canonicalKey] = {
             sessionId,
             updatedAt: now,
@@ -136,7 +153,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         {
           message,
           sessionId,
-          sessionKey,
+          sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,
           deliver,
           to,

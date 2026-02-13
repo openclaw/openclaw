@@ -419,6 +419,129 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.preview resolves legacy mixed-case main alias with custom mainKey", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-preview-alias-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+    testState.sessionConfig = { mainKey: "work" };
+    const sessionId = "sess-legacy-main";
+    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "assistant", content: "Legacy alias transcript" } }),
+    ];
+    await fs.writeFile(transcriptPath, lines.join("\n"), "utf-8");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:ops:MAIN": {
+            sessionId,
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { ws } = await openClient();
+    const preview = await rpcReq<{
+      previews: Array<{
+        key: string;
+        status: string;
+        items: Array<{ role: string; text: string }>;
+      }>;
+    }>(ws, "sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
+
+    expect(preview.ok).toBe(true);
+    const entry = preview.payload?.previews[0];
+    expect(entry?.key).toBe("main");
+    expect(entry?.status).toBe("ok");
+    expect(entry?.items[0]?.text).toContain("Legacy alias transcript");
+
+    ws.close();
+  });
+
+  test("sessions.resolve and mutators clean legacy main-alias ghost keys", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-cleanup-alias-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+    testState.sessionConfig = { mainKey: "work" };
+    const sessionId = "sess-alias-cleanup";
+    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+    await fs.writeFile(
+      transcriptPath,
+      `${Array.from({ length: 8 })
+        .map((_, idx) => JSON.stringify({ role: "assistant", content: `line ${idx}` }))
+        .join("\n")}\n`,
+      "utf-8",
+    );
+
+    const writeRawStore = async (store: Record<string, unknown>) => {
+      await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+    };
+    const readStore = async () =>
+      JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, Record<string, unknown>>;
+
+    await writeRawStore({
+      "agent:ops:MAIN": { sessionId, updatedAt: Date.now() - 2_000 },
+      "agent:ops:Main": { sessionId, updatedAt: Date.now() - 1_000 },
+    });
+
+    const { ws } = await openClient();
+
+    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+      key: "main",
+    });
+    expect(resolved.ok).toBe(true);
+    expect(resolved.payload?.key).toBe("agent:ops:work");
+    let store = await readStore();
+    expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
+
+    await writeRawStore({
+      ...store,
+      "agent:ops:MAIN": { ...store["agent:ops:work"] },
+    });
+    const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
+      key: "main",
+      thinkingLevel: "medium",
+    });
+    expect(patched.ok).toBe(true);
+    expect(patched.payload?.key).toBe("agent:ops:work");
+    store = await readStore();
+    expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
+    expect(store["agent:ops:work"]?.thinkingLevel).toBe("medium");
+
+    await writeRawStore({
+      ...store,
+      "agent:ops:MAIN": { ...store["agent:ops:work"] },
+    });
+    const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
+      key: "main",
+      maxLines: 3,
+    });
+    expect(compacted.ok).toBe(true);
+    expect(compacted.payload?.compacted).toBe(true);
+    store = await readStore();
+    expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
+
+    await writeRawStore({
+      ...store,
+      "agent:ops:MAIN": { ...store["agent:ops:work"] },
+    });
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", { key: "main" });
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.key).toBe("agent:ops:work");
+    store = await readStore();
+    expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
+
+    ws.close();
+  });
+
   test("sessions.delete rejects main and aborts active runs", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
     const storePath = path.join(dir, "sessions.json");
