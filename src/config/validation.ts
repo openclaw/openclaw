@@ -156,7 +156,38 @@ export function validateConfigObjectWithPlugins(raw: unknown):
       issues: ConfigValidationIssue[];
       warnings: ConfigValidationIssue[];
     } {
-  const base = validateConfigObject(raw);
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true });
+}
+
+export function validateConfigObjectRawWithPlugins(raw: unknown):
+  | {
+      ok: true;
+      config: OpenClawConfig;
+      warnings: ConfigValidationIssue[];
+    }
+  | {
+      ok: false;
+      issues: ConfigValidationIssue[];
+      warnings: ConfigValidationIssue[];
+    } {
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
+}
+
+function validateConfigObjectWithPluginsBase(
+  raw: unknown,
+  opts: { applyDefaults: boolean },
+):
+  | {
+      ok: true;
+      config: OpenClawConfig;
+      warnings: ConfigValidationIssue[];
+    }
+  | {
+      ok: false;
+      issues: ConfigValidationIssue[];
+      warnings: ConfigValidationIssue[];
+    } {
+  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }
