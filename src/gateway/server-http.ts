@@ -38,6 +38,7 @@ import {
   normalizeHookHeaders,
   normalizeWakePayload,
   readJsonBody,
+  resolveHookSessionKey,
   resolveHookTargetAgentId,
   resolveHookChannel,
   resolveHookDeliver,
@@ -266,8 +267,18 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
         return true;
       }
+      const sessionKey = resolveHookSessionKey({
+        hooksConfig,
+        source: "request",
+        sessionKey: normalized.value.sessionKey,
+      });
+      if (!sessionKey.ok) {
+        sendJson(res, 400, { ok: false, error: sessionKey.error });
+        return true;
+      }
       const runId = dispatchAgentHook({
         ...normalized.value,
+        sessionKey: sessionKey.value,
         agentId: resolveHookTargetAgentId(hooksConfig, normalized.value.agentId),
       });
       sendJson(res, 202, { ok: true, runId });
@@ -309,12 +320,21 @@ export function createHooksRequestHandler(
             sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
             return true;
           }
+          const sessionKey = resolveHookSessionKey({
+            hooksConfig,
+            source: "mapping",
+            sessionKey: mapped.action.sessionKey,
+          });
+          if (!sessionKey.ok) {
+            sendJson(res, 400, { ok: false, error: sessionKey.error });
+            return true;
+          }
           const runId = dispatchAgentHook({
             message: mapped.action.message,
             name: mapped.action.name ?? "Hook",
             agentId: resolveHookTargetAgentId(hooksConfig, mapped.action.agentId),
             wakeMode: mapped.action.wakeMode,
-            sessionKey: mapped.action.sessionKey ?? "",
+            sessionKey: sessionKey.value,
             deliver: resolveHookDeliver(mapped.action.deliver),
             channel,
             to: mapped.action.to,

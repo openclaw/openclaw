@@ -275,6 +275,8 @@ function collectGatewayConfigFindings(
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const remotelyExposed =
+    bind !== "loopback" || tailscaleMode === "serve" || tailscaleMode === "funnel";
 
   if (bind !== "loopback" && !hasSharedSecret) {
     findings.push({
@@ -359,6 +361,25 @@ function collectGatewayConfigFindings(
       severity: "warn",
       title: "Gateway token looks short",
       detail: `gateway auth token is ${token.length} chars; prefer a long random token.`,
+    });
+  }
+
+  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
+  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  if (chatCompletionsEnabled || responsesEnabled) {
+    const enabledEndpoints = [
+      chatCompletionsEnabled ? "/v1/chat/completions" : null,
+      responsesEnabled ? "/v1/responses" : null,
+    ].filter((value): value is string => Boolean(value));
+    findings.push({
+      checkId: "gateway.http.session_key_override_enabled",
+      severity: remotelyExposed ? "warn" : "info",
+      title: "HTTP APIs accept explicit session key override headers",
+      detail:
+        `${enabledEndpoints.join(", ")} support x-openclaw-session-key. ` +
+        "Any authenticated caller can route requests into arbitrary sessions.",
+      remediation:
+        "Treat HTTP API credentials as full-trust, disable unused endpoints, and avoid sharing tokens across tenants.",
     });
   }
 

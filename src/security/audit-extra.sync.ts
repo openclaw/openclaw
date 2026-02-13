@@ -75,6 +75,15 @@ function looksLikeEnvRef(value: string): boolean {
   return v.startsWith("${") && v.endsWith("}");
 }
 
+function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
+  const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
+  if (bind !== "loopback") {
+    return true;
+  }
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+  return tailscaleMode === "serve" || tailscaleMode === "funnel";
+}
+
 type ModelRef = { id: string; source: string };
 
 function addModel(models: ModelRef[], raw: unknown, source: string) {
@@ -408,6 +417,51 @@ export function collectHooksHardeningFindings(cfg: OpenClawConfig): SecurityAudi
       title: "Hooks base path is '/'",
       detail: "hooks.path='/' would shadow other HTTP endpoints and is unsafe.",
       remediation: "Use a dedicated path like '/hooks'.",
+    });
+  }
+
+  const allowRequestSessionKey = cfg.hooks?.allowRequestSessionKey === true;
+  const defaultSessionKey =
+    typeof cfg.hooks?.defaultSessionKey === "string" ? cfg.hooks.defaultSessionKey.trim() : "";
+  const allowedPrefixes = Array.isArray(cfg.hooks?.allowedSessionKeyPrefixes)
+    ? cfg.hooks.allowedSessionKeyPrefixes
+        .map((prefix) => prefix.trim())
+        .filter((prefix) => prefix.length > 0)
+    : [];
+  const remoteExposure = isGatewayRemotelyExposed(cfg);
+
+  if (!defaultSessionKey) {
+    findings.push({
+      checkId: "hooks.default_session_key_unset",
+      severity: "warn",
+      title: "hooks.defaultSessionKey is not configured",
+      detail:
+        "Hook agent runs without explicit sessionKey use generated per-request keys. Set hooks.defaultSessionKey to keep hook ingress scoped to a known session.",
+      remediation: 'Set hooks.defaultSessionKey (for example, "hook:ingress").',
+    });
+  }
+
+  if (allowRequestSessionKey) {
+    findings.push({
+      checkId: "hooks.request_session_key_enabled",
+      severity: remoteExposure ? "critical" : "warn",
+      title: "External hook payloads may override sessionKey",
+      detail:
+        "hooks.allowRequestSessionKey=true allows `/hooks/agent` callers to choose the session key. Treat hook token holders as full-trust unless you also restrict prefixes.",
+      remediation:
+        "Set hooks.allowRequestSessionKey=false (recommended) or constrain hooks.allowedSessionKeyPrefixes.",
+    });
+  }
+
+  if (allowRequestSessionKey && allowedPrefixes.length === 0) {
+    findings.push({
+      checkId: "hooks.request_session_key_prefixes_missing",
+      severity: remoteExposure ? "critical" : "warn",
+      title: "Request sessionKey override is enabled without prefix restrictions",
+      detail:
+        "hooks.allowRequestSessionKey=true and hooks.allowedSessionKeyPrefixes is unset/empty, so request payloads can target arbitrary session key shapes.",
+      remediation:
+        'Set hooks.allowedSessionKeyPrefixes (for example, ["hook:"]) or disable request overrides.',
     });
   }
 

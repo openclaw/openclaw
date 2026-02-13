@@ -43,7 +43,7 @@ export function createGatewayHooksRequestHandler(params: {
     timeoutSeconds?: number;
     allowUnsafeExternalContent?: boolean;
   }) => {
-    const sessionKey = value.sessionKey.trim() ? value.sessionKey.trim() : `hook:${randomUUID()}`;
+    const sessionKey = value.sessionKey.trim();
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
