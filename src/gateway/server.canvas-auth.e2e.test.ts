@@ -268,6 +268,7 @@ describe("gateway canvas host auth", () => {
           maxAttempts: 1,
           windowMs: 60_000,
           lockoutMs: 60_000,
+          exemptLoopback: false,
         });
         const canvasWss = new WebSocketServer({ noServer: true });
         const canvasHost: CanvasHostHandler = {
