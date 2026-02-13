@@ -44,12 +44,13 @@ describe("persistSessionUsageUpdate", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     // totalTokens should reflect lastCallUsage (12_000 input), not accumulated (180_000)
     expect(stored[sessionKey].totalTokens).toBe(12_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
     // inputTokens/outputTokens still reflect accumulated usage for cost tracking
     expect(stored[sessionKey].inputTokens).toBe(180_000);
     expect(stored[sessionKey].outputTokens).toBe(10_000);
   });
 
-  it("falls back to accumulated usage for totalTokens when lastCallUsage not provided", async () => {
+  it("marks totalTokens as unknown when no fresh context snapshot is available", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
@@ -67,10 +68,34 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(50_000);
+    expect(stored[sessionKey].totalTokens).toBeUndefined();
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 
-  it("caps totalTokens at context window even with lastCallUsage", async () => {
+  it("uses promptTokens when available without lastCallUsage", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 50_000, output: 5_000, total: 55_000 },
+      promptTokens: 42_000,
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(42_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+  });
+
+  it("keeps non-clamped lastCallUsage totalTokens when exceeding context window", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
@@ -89,7 +114,7 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    // Capped at context window
-    expect(stored[sessionKey].totalTokens).toBe(200_000);
+    expect(stored[sessionKey].totalTokens).toBe(250_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 });

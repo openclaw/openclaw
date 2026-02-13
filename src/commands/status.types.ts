@@ -16,6 +16,7 @@ export type SessionStatus = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens: number | null;
+  totalTokensFresh: boolean;
   remainingTokens: number | null;
   percentUsed: number | null;
   model: string | null;

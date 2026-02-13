@@ -474,14 +474,16 @@ export async function runCronIsolatedAgentTurn(params: {
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
-      cronSession.sessionEntry.inputTokens = input;
-      cronSession.sessionEntry.outputTokens = output;
-      cronSession.sessionEntry.totalTokens =
+      const totalTokens =
         deriveSessionTotalTokens({
           usage,
           contextTokens,
           promptTokens,
         }) ?? input;
+      cronSession.sessionEntry.inputTokens = input;
+      cronSession.sessionEntry.outputTokens = output;
+      cronSession.sessionEntry.totalTokens = totalTokens;
+      cronSession.sessionEntry.totalTokensFresh = true;
     }
     await persistSessionEntry();
   }

@@ -18,6 +18,7 @@ export async function persistRunSessionUsage(params: PersistRunSessionUsageParam
     sessionKey: params.sessionKey,
     usage: params.usage,
     lastCallUsage: params.lastCallUsage,
+    promptTokens: params.promptTokens,
     modelUsed: params.modelUsed,
     providerUsed: params.providerUsed,
     contextTokensUsed: params.contextTokensUsed,
