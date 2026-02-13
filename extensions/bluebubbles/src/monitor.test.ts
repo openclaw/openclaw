@@ -404,7 +404,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it("returns 400 when request body times out (Slow-Loris protection)", async () => {
+    it("returns 408 when request body times out (Slow-Loris protection)", async () => {
       vi.useFakeTimers();
       try {
         const account = createMockAccount();
@@ -439,7 +439,7 @@ describe("BlueBubbles webhook monitor", () => {
 
         const handled = await handledPromise;
         expect(handled).toBe(true);
-        expect(res.statusCode).toBe(400);
+        expect(res.statusCode).toBe(408);
         expect(req.destroy).toHaveBeenCalled();
       } finally {
         vi.useRealTimers();

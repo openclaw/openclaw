@@ -68,6 +68,11 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
     // Ensure backup is parseable before restoring.
     JSON.parse(backupRaw);
     fsSync.copyFileSync(backupPath, credsPath);
+    try {
+      fsSync.chmodSync(credsPath, 0o600);
+    } catch {
+      // best-effort on platforms that support it
+    }
     logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
   } catch {
     // ignore

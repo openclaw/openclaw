@@ -30,6 +30,9 @@ export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
 
+const workspaceTemplateCache = new Map<string, Promise<string>>();
+let gitAvailabilityPromise: Promise<boolean> | null = null;
+
 function stripFrontMatter(content: string): string {
   if (!content.startsWith("---")) {
     return content;
@@ -45,15 +48,30 @@ function stripFrontMatter(content: string): string {
 }
 
 async function loadTemplate(name: string): Promise<string> {
-  const templateDir = await resolveWorkspaceTemplateDir();
-  const templatePath = path.join(templateDir, name);
+  const cached = workspaceTemplateCache.get(name);
+  if (cached) {
+    return cached;
+  }
+
+  const pending = (async () => {
+    const templateDir = await resolveWorkspaceTemplateDir();
+    const templatePath = path.join(templateDir, name);
+    try {
+      const content = await fs.readFile(templatePath, "utf-8");
+      return stripFrontMatter(content);
+    } catch {
+      throw new Error(
+        `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
+      );
+    }
+  })();
+
+  workspaceTemplateCache.set(name, pending);
   try {
-    const content = await fs.readFile(templatePath, "utf-8");
-    return stripFrontMatter(content);
-  } catch {
-    throw new Error(
-      `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
-    );
+    return await pending;
+  } catch (error) {
+    workspaceTemplateCache.delete(name);
+    throw error;
   }
 }
 
@@ -99,12 +117,20 @@ async function hasGitRepo(dir: string): Promise<boolean> {
 }
 
 async function isGitAvailable(): Promise<boolean> {
-  try {
-    const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
-    return result.code === 0;
-  } catch {
-    return false;
+  if (gitAvailabilityPromise) {
+    return gitAvailabilityPromise;
   }
+
+  gitAvailabilityPromise = (async () => {
+    try {
+      const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
+      return result.code === 0;
+    } catch {
+      return false;
+    }
+  })();
+
+  return gitAvailabilityPromise;
 }
 
 async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {

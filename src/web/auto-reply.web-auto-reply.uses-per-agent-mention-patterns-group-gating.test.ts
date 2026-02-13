@@ -78,7 +78,7 @@ const _makeSessionStore = async (
             ? String((err as { code?: unknown }).code)
             : null;
         if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-          await new Promise((resolve) => setTimeout(resolve, 25));
+          await new Promise((resolve) => setTimeout(resolve, 5));
           continue;
         }
         throw err;

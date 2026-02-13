@@ -173,3 +173,17 @@ export function hasHeartbeatWakeHandler() {
 export function hasPendingHeartbeatWake() {
   return pendingWake !== null || Boolean(timer) || scheduled;
 }
+
+export function resetHeartbeatWakeStateForTests() {
+  if (timer) {
+    clearTimeout(timer);
+  }
+  timer = null;
+  timerDueAt = null;
+  timerKind = null;
+  pendingWake = null;
+  scheduled = false;
+  running = false;
+  handlerGeneration += 1;
+  handler = null;
+}

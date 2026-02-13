@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseCameraSnapPayload, parseCameraClipPayload } from "./nodes-camera.js";
 
 const messageCommand = vi.fn();
 const statusCommand = vi.fn();
@@ -460,5 +461,172 @@ describe("cli program (nodes media)", () => {
     expect(runtime.error.mock.calls.some(([msg]) => /invalid facing/i.test(String(msg)))).toBe(
       true,
     );
+  });
+
+  describe("URL-based payloads", () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeAll(() => {
+      originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response("url-content", {
+            status: 200,
+            headers: { "content-length": String("11") },
+          }),
+      ) as unknown as typeof globalThis.fetch;
+    });
+
+    afterAll(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it("runs nodes camera snap with url payload", async () => {
+      callGateway.mockImplementation(async (opts: { method?: string }) => {
+        if (opts.method === "node.list") {
+          return {
+            ts: Date.now(),
+            nodes: [
+              {
+                nodeId: "ios-node",
+                displayName: "iOS Node",
+                remoteIp: "192.168.0.88",
+                connected: true,
+              },
+            ],
+          };
+        }
+        if (opts.method === "node.invoke") {
+          return {
+            ok: true,
+            nodeId: "ios-node",
+            command: "camera.snap",
+            payload: {
+              format: "jpg",
+              url: "https://example.com/photo.jpg",
+              width: 640,
+              height: 480,
+            },
+          };
+        }
+        return { ok: true };
+      });
+
+      const program = buildProgram();
+      runtime.log.mockClear();
+      await program.parseAsync(
+        ["nodes", "camera", "snap", "--node", "ios-node", "--facing", "front"],
+        { from: "user" },
+      );
+
+      const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+      const mediaPath = out.replace(/^MEDIA:/, "").trim();
+      expect(mediaPath).toMatch(/openclaw-camera-snap-front-.*\.jpg$/);
+
+      try {
+        await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("url-content");
+      } finally {
+        await fs.unlink(mediaPath).catch(() => {});
+      }
+    });
+
+    it("runs nodes camera clip with url payload", async () => {
+      callGateway.mockImplementation(async (opts: { method?: string }) => {
+        if (opts.method === "node.list") {
+          return {
+            ts: Date.now(),
+            nodes: [
+              {
+                nodeId: "ios-node",
+                displayName: "iOS Node",
+                remoteIp: "192.168.0.88",
+                connected: true,
+              },
+            ],
+          };
+        }
+        if (opts.method === "node.invoke") {
+          return {
+            ok: true,
+            nodeId: "ios-node",
+            command: "camera.clip",
+            payload: {
+              format: "mp4",
+              url: "https://example.com/clip.mp4",
+              durationMs: 5000,
+              hasAudio: true,
+            },
+          };
+        }
+        return { ok: true };
+      });
+
+      const program = buildProgram();
+      runtime.log.mockClear();
+      await program.parseAsync(
+        ["nodes", "camera", "clip", "--node", "ios-node", "--duration", "5000"],
+        { from: "user" },
+      );
+
+      const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+      const mediaPath = out.replace(/^MEDIA:/, "").trim();
+      expect(mediaPath).toMatch(/openclaw-camera-clip-front-.*\.mp4$/);
+
+      try {
+        await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("url-content");
+      } finally {
+        await fs.unlink(mediaPath).catch(() => {});
+      }
+    });
+  });
+
+  describe("parseCameraSnapPayload with url", () => {
+    it("accepts url without base64", () => {
+      const result = parseCameraSnapPayload({
+        format: "jpg",
+        url: "https://example.com/photo.jpg",
+        width: 640,
+        height: 480,
+      });
+      expect(result.url).toBe("https://example.com/photo.jpg");
+      expect(result.base64).toBeUndefined();
+    });
+
+    it("accepts both base64 and url", () => {
+      const result = parseCameraSnapPayload({
+        format: "jpg",
+        base64: "aGk=",
+        url: "https://example.com/photo.jpg",
+        width: 640,
+        height: 480,
+      });
+      expect(result.base64).toBe("aGk=");
+      expect(result.url).toBe("https://example.com/photo.jpg");
+    });
+
+    it("rejects payload with neither base64 nor url", () => {
+      expect(() => parseCameraSnapPayload({ format: "jpg", width: 640, height: 480 })).toThrow(
+        "invalid camera.snap payload",
+      );
+    });
+  });
+
+  describe("parseCameraClipPayload with url", () => {
+    it("accepts url without base64", () => {
+      const result = parseCameraClipPayload({
+        format: "mp4",
+        url: "https://example.com/clip.mp4",
+        durationMs: 3000,
+        hasAudio: true,
+      });
+      expect(result.url).toBe("https://example.com/clip.mp4");
+      expect(result.base64).toBeUndefined();
+    });
+
+    it("rejects payload with neither base64 nor url", () => {
+      expect(() =>
+        parseCameraClipPayload({ format: "mp4", durationMs: 3000, hasAudio: true }),
+      ).toThrow("invalid camera.clip payload");
+    });
   });
 });

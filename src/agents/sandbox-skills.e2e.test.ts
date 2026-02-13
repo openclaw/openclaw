@@ -1,49 +1,21 @@
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveSandboxContext } from "./sandbox.js";
 
-type SpawnCall = {
-  command: string;
-  args: string[];
-};
+vi.mock("./sandbox/docker.js", () => ({
+  ensureSandboxContainer: vi.fn(async () => "openclaw-sbx-test"),
+}));
 
-const spawnCalls: SpawnCall[] = [];
+vi.mock("./sandbox/browser.js", () => ({
+  ensureSandboxBrowser: vi.fn(async () => null),
+}));
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawn: (command: string, args: string[]) => {
-      spawnCalls.push({ command, args });
-      const child = new EventEmitter() as {
-        stdout?: Readable;
-        stderr?: Readable;
-        on: (event: string, cb: (...args: unknown[]) => void) => void;
-      };
-      child.stdout = new Readable({ read() {} });
-      child.stderr = new Readable({ read() {} });
-
-      const dockerArgs = command === "docker" ? args : [];
-      const shouldFailContainerInspect =
-        dockerArgs[0] === "inspect" &&
-        dockerArgs[1] === "-f" &&
-        dockerArgs[2] === "{{.State.Running}}";
-      const shouldSucceedImageInspect = dockerArgs[0] === "image" && dockerArgs[1] === "inspect";
-
-      const code = shouldFailContainerInspect ? 1 : 0;
-      if (shouldSucceedImageInspect) {
-        queueMicrotask(() => child.emit("close", 0));
-      } else {
-        queueMicrotask(() => child.emit("close", code));
-      }
-      return child;
-    },
-  };
-});
+vi.mock("./sandbox/prune.js", () => ({
+  maybePruneSandboxes: vi.fn(async () => undefined),
+}));
 
 async function writeSkill(params: { dir: string; name: string; description: string }) {
   const { dir, name, description } = params;
@@ -74,25 +46,18 @@ describe("sandbox skill mirroring", () => {
   let envSnapshot: Record<string, string | undefined>;
 
   beforeEach(() => {
-    spawnCalls.length = 0;
     envSnapshot = { ...process.env };
   });
 
   afterEach(() => {
     restoreEnv(envSnapshot);
-    vi.resetModules();
   });
 
   const runContext = async (workspaceAccess: "none" | "ro") => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-state-"));
-    const bundledDir = path.join(stateDir, "bundled-skills");
+    const bundledDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-skills-"));
     await fs.mkdir(bundledDir, { recursive: true });
 
-    process.env.OPENCLAW_STATE_DIR = stateDir;
     process.env.OPENCLAW_BUNDLED_SKILLS_DIR = bundledDir;
-    vi.resetModules();
-
-    const { resolveSandboxContext } = await import("./sandbox.js");
 
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
     await writeSkill({
@@ -108,7 +73,7 @@ describe("sandbox skill mirroring", () => {
             mode: "all",
             scope: "session",
             workspaceAccess,
-            workspaceRoot: path.join(stateDir, "sandboxes"),
+            workspaceRoot: path.join(bundledDir, "sandboxes"),
           },
         },
       },

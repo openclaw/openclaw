@@ -2,9 +2,24 @@ import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SandboxDockerConfig } from "./sandbox.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
 describe("Agent-specific tool filtering", () => {
+  const sandboxFsBridgeStub: SandboxFsBridge = {
+    resolvePath: () => ({
+      hostPath: "/tmp/sandbox",
+      relativePath: "",
+      containerPath: "/workspace",
+    }),
+    readFile: async () => Buffer.from(""),
+    writeFile: async () => {},
+    mkdirp: async () => {},
+    remove: async () => {},
+    rename: async () => {},
+    stat: async () => null,
+  };
+
   it("should apply global tool policy when no agent-specific policy exists", () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -483,6 +498,7 @@ describe("Agent-specific tool filtering", () => {
           allow: ["read", "write", "exec"],
           deny: [],
         },
+        fsBridge: sandboxFsBridgeStub,
         browserAllowHostControl: false,
       },
     });

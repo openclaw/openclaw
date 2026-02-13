@@ -7,7 +7,6 @@ type SanitizeSessionHistory =
   typeof import("./pi-embedded-runner/google.js").sanitizeSessionHistory;
 let sanitizeSessionHistory: SanitizeSessionHistory;
 
-// Mock dependencies
 vi.mock("./pi-embedded-helpers.js", async () => {
   const actual = await vi.importActual("./pi-embedded-helpers.js");
   return {
@@ -17,25 +16,20 @@ vi.mock("./pi-embedded-helpers.js", async () => {
   };
 });
 
-// We don't mock session-transcript-repair.js as it is a pure function and complicates mocking.
-// We rely on the real implementation which should pass through our simple messages.
-
-describe("sanitizeSessionHistory", () => {
+describe("sanitizeSessionHistory e2e smoke", () => {
   const mockSessionManager = {
     getEntries: vi.fn().mockReturnValue([]),
     appendCustomEntry: vi.fn(),
   } as unknown as SessionManager;
-
   const mockMessages: AgentMessage[] = [{ role: "user", content: "hello" }];
 
   beforeEach(async () => {
     vi.resetAllMocks();
     vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
-    vi.resetModules();
     ({ sanitizeSessionHistory } = await import("./pi-embedded-runner/google.js"));
   });
 
-  it("sanitizes tool call ids for Google model APIs", async () => {
+  it("applies full sanitize policy for google model APIs", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(true);
 
     await sanitizeSessionHistory({
@@ -53,14 +47,13 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("sanitizes tool call ids with strict9 for Mistral models", async () => {
+  it("applies strict tool-call sanitization for openai-responses", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "openai-responses",
-      provider: "openrouter",
-      modelId: "mistralai/devstral-2512:free",
+      provider: "openai",
       sessionManager: mockSessionManager,
       sessionId: "test-session",
     });
@@ -69,194 +62,14 @@ describe("sanitizeSessionHistory", () => {
       mockMessages,
       "session:history",
       expect.objectContaining({
-        sanitizeMode: "full",
+        sanitizeMode: "images-only",
         sanitizeToolCallIds: true,
-        toolCallIdMode: "strict9",
+        toolCallIdMode: "strict",
       }),
     );
   });
 
-  it("sanitizes tool call ids for Anthropic APIs", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
-
-    await sanitizeSessionHistory({
-      messages: mockMessages,
-      modelApi: "anthropic-messages",
-      provider: "anthropic",
-      sessionManager: mockSessionManager,
-      sessionId: "test-session",
-    });
-
-    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
-      mockMessages,
-      "session:history",
-      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: true }),
-    );
-  });
-
-  it("does not sanitize tool call ids for openai-responses", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
-
-    await sanitizeSessionHistory({
-      messages: mockMessages,
-      modelApi: "openai-responses",
-      provider: "openai",
-      sessionManager: mockSessionManager,
-      sessionId: "test-session",
-    });
-
-    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
-      mockMessages,
-      "session:history",
-      expect.objectContaining({ sanitizeMode: "images-only", sanitizeToolCallIds: false }),
-    );
-  });
-
-  it("annotates inter-session user messages before context sanitization", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
-
-    const messages: AgentMessage[] = [
-      {
-        role: "user",
-        content: "forwarded instruction",
-        provenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:req",
-          sourceTool: "sessions_send",
-        },
-      } as unknown as AgentMessage,
-    ];
-
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-responses",
-      provider: "openai",
-      sessionManager: mockSessionManager,
-      sessionId: "test-session",
-    });
-
-    const first = result[0] as Extract<AgentMessage, { role: "user" }>;
-    expect(first.role).toBe("user");
-    expect(typeof first.content).toBe("string");
-    expect(first.content as string).toContain("[Inter-session message]");
-    expect(first.content as string).toContain("sourceSession=agent:main:req");
-  });
-
-  it("keeps reasoning-only assistant messages for openai-responses", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
-
-    const messages: AgentMessage[] = [
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        stopReason: "aborted",
-        content: [
-          {
-            type: "thinking",
-            thinking: "reasoning",
-            thinkingSignature: "sig",
-          },
-        ],
-      },
-    ];
-
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-responses",
-      provider: "openai",
-      sessionManager: mockSessionManager,
-      sessionId: "test-session",
-    });
-
-    expect(result).toHaveLength(2);
-    expect(result[1]?.role).toBe("assistant");
-  });
-
-  it("does not synthesize tool results for openai-responses", async () => {
-    const messages: AgentMessage[] = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      },
-    ];
-
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-responses",
-      provider: "openai",
-      sessionManager: mockSessionManager,
-      sessionId: "test-session",
-    });
-
-    expect(result).toHaveLength(1);
-    expect(result[0]?.role).toBe("assistant");
-  });
-
-  it("drops malformed tool calls missing input or arguments", async () => {
-    const messages: AgentMessage[] = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read" }],
-      },
-      { role: "user", content: "hello" },
-    ];
-
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-responses",
-      provider: "openai",
-      sessionManager: mockSessionManager,
-      sessionId: "test-session",
-    });
-
-    expect(result.map((msg) => msg.role)).toEqual(["user"]);
-  });
-
-  it("does not downgrade openai reasoning when the model has not changed", async () => {
-    const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [
-      {
-        type: "custom",
-        customType: "model-snapshot",
-        data: {
-          timestamp: Date.now(),
-          provider: "openai",
-          modelApi: "openai-responses",
-          modelId: "gpt-5.2-codex",
-        },
-      },
-    ];
-    const sessionManager = {
-      getEntries: vi.fn(() => sessionEntries),
-      appendCustomEntry: vi.fn((customType: string, data: unknown) => {
-        sessionEntries.push({ type: "custom", customType, data });
-      }),
-    } as unknown as SessionManager;
-    const messages: AgentMessage[] = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_test", type: "reasoning" }),
-          },
-        ],
-      },
-    ];
-
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-responses",
-      provider: "openai",
-      modelId: "gpt-5.2-codex",
-      sessionManager,
-      sessionId: "test-session",
-    });
-
-    expect(result).toEqual(messages);
-  });
-
-  it("downgrades openai reasoning only when the model changes", async () => {
+  it("downgrades openai reasoning blocks when the model snapshot changed", async () => {
     const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [
       {
         type: "custom",

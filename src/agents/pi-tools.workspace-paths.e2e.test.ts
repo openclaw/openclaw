@@ -3,11 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingTools } from "./pi-tools.js";
-
-vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: () => undefined,
-  resolvePluginTools: () => [],
-}));
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 vi.mock("../infra/shell-env.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
@@ -105,7 +101,10 @@ describe("workspace path resolution", () => {
 
   it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      const tools = createOpenClawCodingTools({ workspaceDir, exec: { host: "gateway" } });
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        exec: { host: "gateway", ask: "off", security: "full" },
+      });
       const execTool = tools.find((tool) => tool.name === "exec");
       expect(execTool).toBeDefined();
 
@@ -128,7 +127,10 @@ describe("workspace path resolution", () => {
   it("lets exec workdir override the workspace default", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-override-", async (overrideDir) => {
-        const tools = createOpenClawCodingTools({ workspaceDir, exec: { host: "gateway" } });
+        const tools = createOpenClawCodingTools({
+          workspaceDir,
+          exec: { host: "gateway", ask: "off", security: "full" },
+        });
         const execTool = tools.find((tool) => tool.name === "exec");
         expect(execTool).toBeDefined();
 
@@ -163,6 +165,7 @@ describe("sandboxed workspace paths", () => {
           workspaceAccess: "rw",
           containerName: "openclaw-sbx-test",
           containerWorkdir: "/workspace",
+          fsBridge: createHostSandboxFsBridge(sandboxDir),
           docker: {
             image: "openclaw-sandbox:bookworm-slim",
             containerPrefix: "openclaw-sbx-",

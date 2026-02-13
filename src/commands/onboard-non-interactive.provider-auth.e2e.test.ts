@@ -330,6 +330,24 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   }, 60_000);
 
+  it("rejects vLLM auth choice in non-interactive mode", async () => {
+    await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async ({ runtime }) => {
+      await expect(
+        runNonInteractive(
+          {
+            nonInteractive: true,
+            authChoice: "vllm",
+            skipHealth: true,
+            skipChannels: true,
+            skipSkills: true,
+            json: true,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow('Auth choice "vllm" requires interactive mode.');
+    });
+  }, 60_000);
+
   it("stores LiteLLM API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-litellm-", async ({ configPath, runtime }) => {
       await runNonInteractive(
@@ -428,6 +446,36 @@ describe("onboard (non-interactive): provider auth", () => {
         provider: "cloudflare-ai-gateway",
         key: "cf-gateway-test-key",
         metadata: { accountId: "cf-account-id", gatewayId: "cf-gateway-id" },
+      });
+    });
+  }, 60_000);
+
+  it("infers Together auth choice from --together-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-together-infer-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          togetherApiKey: "together-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["together:default"]?.provider).toBe("together");
+      expect(cfg.auth?.profiles?.["together:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("together/moonshotai/Kimi-K2.5");
+      await expectApiKeyProfile({
+        profileId: "together:default",
+        provider: "together",
+        key: "together-test-key",
       });
     });
   }, 60_000);

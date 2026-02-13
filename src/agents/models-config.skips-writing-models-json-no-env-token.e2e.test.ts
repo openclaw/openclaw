@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-models-" });
@@ -67,9 +69,6 @@ describe("models-config", () => {
       delete process.env.OLLAMA_API_KEY;
 
       try {
-        vi.resetModules();
-        const { ensureOpenClawModelsJson } = await import("./models-config.js");
-
         const agentDir = path.join(home, "agent-empty");
         const result = await ensureOpenClawModelsJson(
           {
@@ -136,10 +135,6 @@ describe("models-config", () => {
   });
   it("writes models.json for configured providers", async () => {
     await withTempHome(async () => {
-      vi.resetModules();
-      const { ensureOpenClawModelsJson } = await import("./models-config.js");
-      const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
-
       await ensureOpenClawModelsJson(MODELS_CONFIG);
 
       const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
@@ -153,13 +148,9 @@ describe("models-config", () => {
   });
   it("adds minimax provider when MINIMAX_API_KEY is set", async () => {
     await withTempHome(async () => {
-      vi.resetModules();
       const prevKey = process.env.MINIMAX_API_KEY;
       process.env.MINIMAX_API_KEY = "sk-minimax-test";
       try {
-        const { ensureOpenClawModelsJson } = await import("./models-config.js");
-        const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
-
         await ensureOpenClawModelsJson({});
 
         const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
@@ -190,13 +181,9 @@ describe("models-config", () => {
   });
   it("adds synthetic provider when SYNTHETIC_API_KEY is set", async () => {
     await withTempHome(async () => {
-      vi.resetModules();
       const prevKey = process.env.SYNTHETIC_API_KEY;
       process.env.SYNTHETIC_API_KEY = "sk-synthetic-test";
       try {
-        const { ensureOpenClawModelsJson } = await import("./models-config.js");
-        const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
-
         await ensureOpenClawModelsJson({});
 
         const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");

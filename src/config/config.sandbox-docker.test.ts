@@ -1,9 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { validateConfigObject } from "./config.js";
 
 describe("sandbox docker config", () => {
-  it("accepts binds array in sandbox.docker config", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
+  it("accepts binds array in sandbox.docker config", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
@@ -38,9 +37,7 @@ describe("sandbox docker config", () => {
     }
   });
 
-  it("rejects non-string values in binds array", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
+  it("rejects non-string values in binds array", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
