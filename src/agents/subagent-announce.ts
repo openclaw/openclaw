@@ -165,7 +165,7 @@ function loadRequesterSessionEntry(requesterSessionKey: string) {
   return { cfg, entry, canonicalKey };
 }
 
-async function maybeQueueSubagentAnnounce(params: {
+export async function maybeQueueSubagentAnnounce(params: {
   requesterSessionKey: string;
   triggerMessage: string;
   summaryLine?: string;

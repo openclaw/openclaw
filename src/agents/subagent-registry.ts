@@ -3,6 +3,7 @@ import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
+import { subscribeSubagentProgress } from "./subagent-progress.js";
 import {
   loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk,
@@ -25,6 +26,8 @@ export type SubagentRunRecord = {
   archiveAtMs?: number;
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
+  /** Cleanup function to stop progress subscription (runtime-only, not persisted). */
+  stopProgress?: () => void;
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
@@ -248,6 +251,10 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
   if (!entry) {
     return;
   }
+  // Stop progress subscription when cleaning up.
+  entry.stopProgress?.();
+  entry.stopProgress = undefined;
+
   if (!didAnnounce) {
     // Allow retry on the next wake if announce was deferred or failed.
     entry.cleanupHandled = false;
@@ -289,6 +296,7 @@ export function registerSubagentRun(params: {
   cleanup: "delete" | "keep";
   label?: string;
   runTimeoutSeconds?: number;
+  enableProgress?: boolean;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -296,7 +304,7 @@ export function registerSubagentRun(params: {
   const archiveAtMs = archiveAfterMs ? now + archiveAfterMs : undefined;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, params.runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
-  subagentRuns.set(params.runId, {
+  const entry: SubagentRunRecord = {
     runId: params.runId,
     childSessionKey: params.childSessionKey,
     requesterSessionKey: params.requesterSessionKey,
@@ -309,7 +317,20 @@ export function registerSubagentRun(params: {
     startedAt: now,
     archiveAtMs,
     cleanupHandled: false,
-  });
+  };
+
+  // Start progress subscription unless explicitly disabled.
+  if (params.enableProgress !== false) {
+    entry.stopProgress = subscribeSubagentProgress({
+      runId: params.runId,
+      childSessionKey: params.childSessionKey,
+      requesterSessionKey: params.requesterSessionKey,
+      requesterOrigin,
+      label: params.label,
+    });
+  }
+
+  subagentRuns.set(params.runId, entry);
   ensureListener();
   persistSubagentRuns();
   if (archiveAfterMs) {
@@ -390,6 +411,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
 }
 
 export function resetSubagentRegistryForTests() {
+  for (const entry of subagentRuns.values()) {
+    entry.stopProgress?.();
+  }
   subagentRuns.clear();
   resumedRuns.clear();
   stopSweeper();
@@ -408,6 +432,10 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 }
 
 export function releaseSubagentRun(runId: string) {
+  const entry = subagentRuns.get(runId);
+  if (entry) {
+    entry.stopProgress?.();
+  }
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) {
     persistSubagentRuns();
