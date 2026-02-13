@@ -76,8 +76,17 @@ const WEB_CHAT_DIR = join(homedir(), ".openclaw", "web-chat");
 const INDEX_FILE = join(WEB_CHAT_DIR, "index.json");
 
 // ── Singleton registry ──
+// Store on globalThis so the Map survives Next.js HMR reloads in dev mode.
+// Without this, hot-reloading any server module resets the Map, orphaning
+// running child processes and dropping SSE streams mid-flight.
 
-const activeRuns = new Map<string, ActiveRun>();
+const GLOBAL_KEY = "__openclaw_activeRuns" as const;
+
+const activeRuns: Map<string, ActiveRun> =
+	(globalThis as Record<string, unknown>)[GLOBAL_KEY] as Map<string, ActiveRun> ??
+	new Map<string, ActiveRun>();
+
+(globalThis as Record<string, unknown>)[GLOBAL_KEY] = activeRuns;
 
 // ── Public API ──
 

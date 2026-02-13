@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { type ColumnDef, type CellContext } from "@tanstack/react-table";
 import { DataTable, type RowAction } from "./data-table";
+import { RelationSelect } from "./relation-select";
 
 /* ─── Types ─── */
 
@@ -182,8 +183,9 @@ function EditableCell({
 		if (editing && inputRef.current) {inputRef.current.focus();}
 	}, [editing]);
 
-	// Non-editable types: render read-only
-	const isEditable = !["relation", "user"].includes(field.type);
+	// Non-editable types: render read-only (relations are now editable via dropdown)
+	const isEditable = !["user"].includes(field.type);
+	const isRelation = field.type === "relation" && !!field.related_object_name;
 
 	const save = useCallback(async (val: string) => {
 		try {
@@ -214,7 +216,6 @@ function EditableCell({
 
 	// Read-only display for non-editable types
 	if (!isEditable) {
-		if (field.type === "relation") {return <RelationCell value={initialValue} field={field} relationLabels={relationLabels} onNavigate={onNavigate} />;}
 		if (field.type === "user") {return <UserCell value={initialValue} members={members} />;}
 		return <span className="truncate block max-w-[300px]">{String(initialValue ?? "")}</span>;
 	}
@@ -222,6 +223,26 @@ function EditableCell({
 	// Editing mode — Excel-style seamless inline editing
 	if (editing) {
 		let editInput;
+		if (isRelation) {
+			return (
+				<div
+					className="-mx-3 -my-2 px-3 py-2"
+					style={{
+						background: "var(--color-bg)",
+						boxShadow: "inset 0 0 0 2px var(--color-accent)",
+					}}
+				>
+					<RelationSelect
+						relatedObjectName={field.related_object_name!}
+						value={String(initialValue ?? "")}
+						multiple={field.relationship_type === "many_to_many"}
+						onChange={(v) => { save(v); setEditing(false); }}
+						variant="inline"
+						autoFocus
+					/>
+				</div>
+			);
+		}
 		if (field.type === "enum" && field.enum_values) {
 			editInput = (
 				<select
@@ -283,6 +304,20 @@ function EditableCell({
 
 	// Display mode — double-click to edit
 	const displayValue = initialValue;
+
+	// Relation fields: show chips with double-click to edit
+	if (isRelation) {
+		return (
+			<div
+				onDoubleClick={() => setEditing(true)}
+				className="cursor-cell min-h-[1.5em]"
+				title="Double-click to edit"
+			>
+				<RelationCell value={initialValue} field={field} relationLabels={relationLabels} onNavigate={onNavigate} />
+			</div>
+		);
+	}
+
 	return (
 		<div
 			onDoubleClick={() => setEditing(true)}
@@ -685,6 +720,14 @@ function AddEntryModal({
 										}}
 										placeholder={field.name}
 									/>
+								) : isRelation && field.related_object_name ? (
+									<RelationSelect
+										relatedObjectName={field.related_object_name}
+										value={values[field.name] ?? ""}
+										multiple={field.relationship_type === "many_to_many"}
+										onChange={(v) => updateField(field.name, v)}
+										placeholder={`Select ${field.related_object_name}...`}
+									/>
 								) : isUser ? (
 									<select
 										value={values[field.name] ?? ""}
@@ -712,7 +755,7 @@ function AddEntryModal({
 											color: "var(--color-text)",
 											border: "1px solid var(--color-border)",
 										}}
-										placeholder={isRelation ? `${field.related_object_name ?? field.name} ID` : field.name}
+										placeholder={field.name}
 									/>
 								)}
 							</div>

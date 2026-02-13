@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { RelationSelect } from "./relation-select";
 
 
 // --- Types ---
@@ -511,6 +512,22 @@ export function EntryDetailModal({
                       style={{ color: "var(--color-text)" }}
                     >
                       {editingField === field.name ? (
+                        field.type === "relation" && field.related_object_name ? (
+                          <div className="flex items-center gap-2 w-full">
+                            <div className="flex-1">
+                              <RelationSelect
+                                relatedObjectName={field.related_object_name}
+                                value={String(value ?? "")}
+                                multiple={field.relationship_type === "many_to_many"}
+                                onChange={(v) => { handleSaveField(field.name, v); }}
+                                autoFocus
+                              />
+                            </div>
+                            <button type="button" onClick={() => setEditingField(null)} className="px-2 py-1 text-xs rounded-lg flex-shrink-0" style={{ color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}>
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
                         <form
                           onSubmit={(e) => { e.preventDefault(); handleSaveField(field.name, editValue); }}
                           className="flex items-center gap-2 w-full"
@@ -556,16 +573,17 @@ export function EntryDetailModal({
                             Cancel
                           </button>
                         </form>
+                        )
                       ) : (
                         <div
-                          className={`flex-1 ${!["relation", "user"].includes(field.type) ? "cursor-pointer hover:opacity-80" : ""}`}
+                          className={`flex-1 ${!["user"].includes(field.type) ? "cursor-pointer hover:opacity-80" : ""}`}
                           onClick={() => {
-                            if (!["relation", "user"].includes(field.type)) {
+                            if (!["user"].includes(field.type)) {
                               setEditingField(field.name);
                               setEditValue(String(value ?? ""));
                             }
                           }}
-                          title={!["relation", "user"].includes(field.type) ? "Click to edit" : undefined}
+                          title={!["user"].includes(field.type) ? "Click to edit" : undefined}
                         >
                           <FieldValue
                             value={value}
