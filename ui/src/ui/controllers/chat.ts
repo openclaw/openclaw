@@ -163,6 +163,7 @@ export async function sendChatMessage(
     state.chatStream = null;
     state.chatStreamStartedAt = null;
     state.lastError = error;
+    _pendingOptimisticMsg = null;
     state.chatMessages = [
       ...state.chatMessages,
       {
