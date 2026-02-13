@@ -116,7 +116,10 @@ describe("before_tool_call hook integration", () => {
 
     expect(execute).not.toHaveBeenCalled();
     expect(result).toBeDefined();
-    const details = (result as Record<string, unknown>).details as Record<string, unknown>;
+    const details = (result as unknown as Record<string, unknown>).details as Record<
+      string,
+      unknown
+    >;
     expect(details.status).toBe("approval-pending");
     expect(details.tool).toBe("exec");
     expect(details.agentId).toBe("a1");
@@ -134,7 +137,10 @@ describe("before_tool_call hook integration", () => {
     const result = await tool.execute("call-default-reason", { x: 1 }, undefined, undefined);
 
     expect(execute).not.toHaveBeenCalled();
-    const details = (result as Record<string, unknown>).details as Record<string, unknown>;
+    const details = (result as unknown as Record<string, unknown>).details as Record<
+      string,
+      unknown
+    >;
     expect(details.status).toBe("approval-pending");
     expect(details.reason).toBe("Tool call requires approval");
   });
@@ -154,7 +160,10 @@ describe("before_tool_call hook integration", () => {
     // Should not throw — needsApproval takes precedence, returning a result.
     const result = await tool.execute("call-both", {}, undefined, undefined);
     expect(execute).not.toHaveBeenCalled();
-    const details = (result as Record<string, unknown>).details as Record<string, unknown>;
+    const details = (result as unknown as Record<string, unknown>).details as Record<
+      string,
+      unknown
+    >;
     expect(details.status).toBe("approval-pending");
   });
 

@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import type { GatewayRequestHandlers } from "./types.js";
 import { AgentShieldApprovalManager } from "../agentshield-approval-manager.js";
 import { listGatewayMethods } from "../server-methods-list.js";
 import { createAgentShieldApprovalHandlers } from "./agentshield-approval.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 const HANDLER_KEYS = [
   "agentshield.approval.request",
