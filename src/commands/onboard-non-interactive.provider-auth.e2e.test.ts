@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
 type RuntimeMock = {
@@ -104,7 +104,6 @@ async function withOnboardEnv(
   process.env.HOME = tempHome;
   process.env.OPENCLAW_STATE_DIR = tempHome;
   process.env.OPENCLAW_CONFIG_PATH = configPath;
-  vi.resetModules();
 
   const runtime: RuntimeMock = {
     log: () => {},
@@ -328,6 +327,37 @@ describe("onboard (non-interactive): provider auth", () => {
       }>(configPath);
 
       expect(cfg.agents?.defaults?.model?.primary).toBe(OPENAI_DEFAULT_MODEL);
+    });
+  }, 60_000);
+
+  it("stores LiteLLM API key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-litellm-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          authChoice: "litellm-api-key",
+          litellmApiKey: "litellm-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["litellm:default"]?.provider).toBe("litellm");
+      expect(cfg.auth?.profiles?.["litellm:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("litellm/claude-opus-4-6");
+      await expectApiKeyProfile({
+        profileId: "litellm:default",
+        provider: "litellm",
+        key: "litellm-test-key",
+      });
     });
   }, 60_000);
 
