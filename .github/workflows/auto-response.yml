@@ -89,7 +89,8 @@ jobs:
               }
             }
 
-            if (!hasTriggerLabel) {
+            const isLabelEvent = context.payload.action === "labeled";
+            if (!hasTriggerLabel && !isLabelEvent) {
               return;
             }
 
