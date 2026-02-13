@@ -10,6 +10,7 @@ import {
 import {
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
+  pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 
@@ -57,16 +58,13 @@ export async function resolveSessionKeyFromResolveParams(params: {
       };
     }
     await updateSessionStore(target.storePath, (s) => {
+      const liveTarget = resolveGatewaySessionStoreTarget({ cfg, key, store: s });
+      const canonicalKey = liveTarget.canonicalKey;
       // Migrate the first legacy entry to the canonical key.
-      if (!s[target.canonicalKey] && s[legacyKey]) {
-        s[target.canonicalKey] = s[legacyKey];
+      if (!s[canonicalKey] && s[legacyKey]) {
+        s[canonicalKey] = s[legacyKey];
       }
-      // Delete ALL legacy case-variant keys to fully clean up ghost duplicates.
-      for (const candidate of target.storeKeys) {
-        if (candidate !== target.canonicalKey && s[candidate]) {
-          delete s[candidate];
-        }
-      }
+      pruneLegacyStoreKeys({ store: s, canonicalKey, candidates: liveTarget.storeKeys });
     });
     return { ok: true, key: target.canonicalKey };
   }

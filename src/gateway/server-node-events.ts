@@ -8,7 +8,11 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { findStoreKeysIgnoreCase, loadSessionEntry } from "./session-utils.js";
+import {
+  loadSessionEntry,
+  pruneLegacyStoreKeys,
+  resolveGatewaySessionStoreTarget,
+} from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
@@ -41,11 +45,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const sessionId = entry?.sessionId ?? randomUUID();
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
-          for (const variant of findStoreKeysIgnoreCase(store, canonicalKey)) {
-            if (variant !== canonicalKey) {
-              delete store[variant];
-            }
-          }
+          const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey, store });
+          pruneLegacyStoreKeys({
+            store,
+            canonicalKey: target.canonicalKey,
+            candidates: target.storeKeys,
+          });
           store[canonicalKey] = {
             sessionId,
             updatedAt: now,
@@ -118,16 +123,18 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
+      const cfg = loadConfig();
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
-          for (const variant of findStoreKeysIgnoreCase(store, canonicalKey)) {
-            if (variant !== canonicalKey) {
-              delete store[variant];
-            }
-          }
+          const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey, store });
+          pruneLegacyStoreKeys({
+            store,
+            canonicalKey: target.canonicalKey,
+            candidates: target.storeKeys,
+          });
           store[canonicalKey] = {
             sessionId,
             updatedAt: now,

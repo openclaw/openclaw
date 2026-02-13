@@ -40,8 +40,9 @@ import {
 } from "../protocol/index.js";
 import {
   canonicalizeSpawnedByForAgent,
-  findStoreKeysIgnoreCase,
   loadSessionEntry,
+  pruneLegacyStoreKeys,
+  resolveGatewaySessionStoreTarget,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -297,11 +298,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
-          for (const variant of findStoreKeysIgnoreCase(store, canonicalSessionKey)) {
-            if (variant !== canonicalSessionKey) {
-              delete store[variant];
-            }
-          }
+          const target = resolveGatewaySessionStoreTarget({
+            cfg,
+            key: requestedSessionKey,
+            store,
+          });
+          pruneLegacyStoreKeys({
+            store,
+            canonicalKey: target.canonicalKey,
+            candidates: target.storeKeys,
+          });
           store[canonicalSessionKey] = nextEntry;
         });
       }

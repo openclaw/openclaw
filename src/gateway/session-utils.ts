@@ -19,6 +19,7 @@ import {
   buildGroupDisplayName,
   canonicalizeMainSessionAlias,
   loadSessionStore,
+  resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
   resolveStorePath,
@@ -235,6 +236,35 @@ export function findStoreKeysIgnoreCase(
     }
   }
   return matches;
+}
+
+/**
+ * Remove legacy key variants for one canonical session key.
+ * Candidates can include aliases (for example, "agent:ops:main" when canonical is "agent:ops:work").
+ */
+export function pruneLegacyStoreKeys(params: {
+  store: Record<string, unknown>;
+  canonicalKey: string;
+  candidates: Iterable<string>;
+}) {
+  const keysToDelete = new Set<string>();
+  for (const candidate of params.candidates) {
+    const trimmed = String(candidate ?? "").trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed !== params.canonicalKey) {
+      keysToDelete.add(trimmed);
+    }
+    for (const match of findStoreKeysIgnoreCase(params.store, trimmed)) {
+      if (match !== params.canonicalKey) {
+        keysToDelete.add(match);
+      }
+    }
+  }
+  for (const key of keysToDelete) {
+    delete params.store[key];
+  }
 }
 
 export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
@@ -469,6 +499,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
   scanLegacyKeys?: boolean;
+  store?: Record<string, SessionEntry>;
 }): {
   agentId: string;
   storePath: string;
@@ -498,10 +529,13 @@ export function resolveGatewaySessionStoreTarget(params: {
     // Build a set of scan targets: all known keys plus the main alias key so we
     // catch legacy entries stored under "agent:{id}:MAIN" when mainKey != "main".
     const scanTargets = new Set(storeKeys);
-    scanTargets.add(`agent:${agentId}:main`);
+    const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
+    if (canonicalKey === agentMainKey) {
+      scanTargets.add(`agent:${agentId}:main`);
+    }
     // Scan the on-disk store for case variants of every target to find
     // legacy mixed-case entries (e.g. "agent:ops:MAIN" when canonical is "agent:ops:work").
-    const store = loadSessionStore(storePath);
+    const store = params.store ?? loadSessionStore(storePath);
     for (const seed of scanTargets) {
       for (const legacyKey of findStoreKeysIgnoreCase(store, seed)) {
         storeKeys.add(legacyKey);

@@ -28,10 +28,10 @@ import {
 } from "../protocol/index.js";
 import {
   archiveFileOnDisk,
-  findStoreKeysIgnoreCase,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
+  pruneLegacyStoreKeys,
   readSessionPreviewItemsFromTranscript,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
@@ -42,6 +42,31 @@ import {
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+
+function migrateAndPruneSessionStoreKey(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  key: string;
+  store: Record<string, SessionEntry>;
+}) {
+  const target = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.key,
+    store: params.store,
+  });
+  const primaryKey = target.canonicalKey;
+  if (!params.store[primaryKey]) {
+    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
+    if (existingKey) {
+      params.store[primaryKey] = params.store[existingKey];
+    }
+  }
+  pruneLegacyStoreKeys({
+    store: params.store,
+    canonicalKey: primaryKey,
+    candidates: target.storeKeys,
+  });
+  return { target, primaryKey, entry: params.store[primaryKey] };
+}
 
 export const sessionsHandlers: GatewayRequestHandlers = {
   "sessions.list": ({ params, respond }) => {
@@ -105,18 +130,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     for (const key of keys) {
       try {
-        const target = resolveGatewaySessionStoreTarget({ cfg, key, scanLegacyKeys: false });
-        const store = storeCache.get(target.storePath) ?? loadSessionStore(target.storePath);
-        storeCache.set(target.storePath, store);
-        const entry =
-          store[target.canonicalKey] ??
-          target.storeKeys.map((candidate) => store[candidate]).find(Boolean) ??
-          // Case-insensitive fallback for legacy mixed-case store keys (store already loaded).
-          (() => {
-            const lowered = target.canonicalKey.toLowerCase();
-            const legacyHit = Object.keys(store).find((k) => k.toLowerCase() === lowered);
-            return legacyHit ? store[legacyHit] : undefined;
-          })();
+        const storeTarget = resolveGatewaySessionStoreTarget({ cfg, key, scanLegacyKeys: false });
+        const store =
+          storeCache.get(storeTarget.storePath) ?? loadSessionStore(storeTarget.storePath);
+        storeCache.set(storeTarget.storePath, store);
+        const target = resolveGatewaySessionStoreTarget({
+          cfg,
+          key,
+          store,
+        });
+        const entry = target.storeKeys.map((candidate) => store[candidate]).find(Boolean);
         if (!entry?.sessionId) {
           previews.push({ key, status: "missing", items: [] });
           continue;
@@ -186,19 +209,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const storePath = target.storePath;
     const applied = await updateSessionStore(storePath, async (store) => {
-      const primaryKey = target.storeKeys[0] ?? key;
-      // Migrate first legacy entry to canonical key, then clean up all case variants.
-      if (!store[primaryKey]) {
-        const existingKey = target.storeKeys.find((candidate) => store[candidate]);
-        if (existingKey) {
-          store[primaryKey] = store[existingKey];
-        }
-      }
-      for (const variant of findStoreKeysIgnoreCase(store, primaryKey)) {
-        if (variant !== primaryKey) {
-          delete store[variant];
-        }
-      }
+      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
       return await applySessionsPatchToStore({
         cfg,
         store,
@@ -249,19 +260,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const storePath = target.storePath;
     const next = await updateSessionStore(storePath, (store) => {
-      const primaryKey = target.storeKeys[0] ?? key;
-      // Migrate first legacy entry to canonical key, then clean up all case variants.
-      if (!store[primaryKey]) {
-        const existingKey = target.storeKeys.find((candidate) => store[candidate]);
-        if (existingKey) {
-          store[primaryKey] = store[existingKey];
-        }
-      }
-      for (const variant of findStoreKeysIgnoreCase(store, primaryKey)) {
-        if (variant !== primaryKey) {
-          delete store[variant];
-        }
-      }
+      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
       const entry = store[primaryKey];
       const now = Date.now();
       const nextEntry: SessionEntry = {
@@ -352,19 +351,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
     await updateSessionStore(storePath, (store) => {
-      const primaryKey = target.storeKeys[0] ?? key;
-      // Migrate first legacy entry to canonical key, then clean up all case variants.
-      if (!store[primaryKey]) {
-        const existingKey = target.storeKeys.find((candidate) => store[candidate]);
-        if (existingKey) {
-          store[primaryKey] = store[existingKey];
-        }
-      }
-      for (const variant of findStoreKeysIgnoreCase(store, primaryKey)) {
-        if (variant !== primaryKey) {
-          delete store[variant];
-        }
-      }
+      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
       if (store[primaryKey]) {
         delete store[primaryKey];
       }
@@ -420,20 +407,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const storePath = target.storePath;
     // Lock + read in a short critical section; transcript work happens outside.
     const compactTarget = await updateSessionStore(storePath, (store) => {
-      const primaryKey = target.storeKeys[0] ?? key;
-      // Migrate first legacy entry to canonical key, then clean up all case variants.
-      if (!store[primaryKey]) {
-        const existingKey = target.storeKeys.find((candidate) => store[candidate]);
-        if (existingKey) {
-          store[primaryKey] = store[existingKey];
-        }
-      }
-      for (const variant of findStoreKeysIgnoreCase(store, primaryKey)) {
-        if (variant !== primaryKey) {
-          delete store[variant];
-        }
-      }
-      return { entry: store[primaryKey], primaryKey };
+      const { entry, primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
+      return { entry, primaryKey };
     });
     const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;

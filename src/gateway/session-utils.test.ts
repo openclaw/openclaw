@@ -10,6 +10,7 @@ import {
   deriveSessionTitle,
   listSessionsFromStore,
   parseGroupKey,
+  pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionStoreKey,
 } from "./session-utils.js";
@@ -180,6 +181,21 @@ describe("gateway session utils", () => {
     expect(target.canonicalKey).toBe("agent:ops:work");
     // storeKeys must include the legacy mixed-case alias key
     expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:MAIN"]));
+  });
+
+  test("pruneLegacyStoreKeys removes alias and case-variant ghost keys", () => {
+    const store: Record<string, unknown> = {
+      "agent:ops:work": { sessionId: "canonical", updatedAt: 3 },
+      "agent:ops:MAIN": { sessionId: "legacy-upper", updatedAt: 1 },
+      "agent:ops:Main": { sessionId: "legacy-mixed", updatedAt: 2 },
+      "agent:ops:main": { sessionId: "legacy-lower", updatedAt: 4 },
+    };
+    pruneLegacyStoreKeys({
+      store,
+      canonicalKey: "agent:ops:work",
+      candidates: ["agent:ops:work", "agent:ops:main"],
+    });
+    expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
   });
 });
 
