@@ -147,7 +147,7 @@ export function renderOverview(props: OverviewProps) {
                 <div class="field" style="margin-top: 8px;">
                   <span>Gateway Token</span>
                   <div style="padding: 8px 12px; background: var(--bg-subtle, #f5f5f5); border-radius: 4px; color: var(--text-secondary, #666); font-size: 0.95em;">
-                    Trusted Proxy
+                    Trusted Proxy mode
                   </div>
                 </div>
               `
