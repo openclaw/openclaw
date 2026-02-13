@@ -120,12 +120,17 @@ function updateProviderStatus(metrics: ProviderHealthMetrics): void {
       metrics.cooldownUntil = Date.now() + HEALTH_CONFIG.cooldownDurationMs;
       return;
     }
-  } else if (errorRate >= HEALTH_CONFIG.degradedErrorRate) {
+    // Stay degraded while accumulating violations (don't reset violations)
     metrics.status = "degraded";
     return;
   }
 
-  // Healthy
+  if (errorRate >= HEALTH_CONFIG.degradedErrorRate) {
+    metrics.status = "degraded";
+    return;
+  }
+
+  // Truly healthy — reset violation counter
   metrics.status = "active";
   metrics.errorRateViolations = 0;
 }

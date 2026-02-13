@@ -68,7 +68,7 @@ describe("normalization", () => {
       const ref = parseModelRef("anthropic/opus@prod");
       expect(ref).toEqual({
         provider: "anthropic",
-        model: "claude-opus-4-5",
+        model: "claude-opus-4-6",
         accountTag: "prod",
       });
     });

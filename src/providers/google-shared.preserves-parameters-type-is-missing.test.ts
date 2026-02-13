@@ -53,7 +53,7 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = asRecord(converted?.[0]?.functionDeclarations?.[0]?.parameters);
+    const params = asRecord(converted?.[0]?.functionDeclarations?.[0]?.parametersJsonSchema);
 
     expect(params.type).toBeUndefined();
     expect(params.properties).toBeDefined();
@@ -93,7 +93,7 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = asRecord(converted?.[0]?.functionDeclarations?.[0]?.parameters);
+    const params = asRecord(converted?.[0]?.functionDeclarations?.[0]?.parametersJsonSchema);
     const properties = asRecord(params.properties);
     const mode = asRecord(properties.mode);
     const options = asRecord(properties.options);
@@ -134,7 +134,7 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = asRecord(converted?.[0]?.functionDeclarations?.[0]?.parameters);
+    const params = asRecord(converted?.[0]?.functionDeclarations?.[0]?.parametersJsonSchema);
     const config = asRecord(asRecord(params.properties).config);
     const configProps = asRecord(config.properties);
     const retries = asRecord(configProps.retries);

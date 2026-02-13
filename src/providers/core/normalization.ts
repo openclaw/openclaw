@@ -112,10 +112,15 @@ export function normalizeModelId(provider: ProviderId, model: string): string {
   // Anthropic-specific normalization
   if (provider === "anthropic") {
     const lower = trimmed.toLowerCase();
+    // Versioned aliases
     if (lower === "opus-4.6") return "claude-opus-4-6";
     if (lower === "opus-4.5") return "claude-opus-4-5";
     if (lower === "sonnet-4.5") return "claude-sonnet-4-5";
     if (lower === "haiku-4.5") return "claude-haiku-4-5";
+    // Bare family names resolve to latest version
+    if (lower === "opus") return "claude-opus-4-6";
+    if (lower === "sonnet") return "claude-sonnet-4-5";
+    if (lower === "haiku") return "claude-haiku-4-5";
   }
 
   // Google-specific normalization
