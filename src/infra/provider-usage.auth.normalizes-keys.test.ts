@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { resolveProviderAuths } from "./provider-usage.auth.js";
 

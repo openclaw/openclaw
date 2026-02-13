@@ -73,6 +73,7 @@ Docs: https://docs.openclaw.ai
 - Gateway: drain active turns before restart to prevent message loss. (#13931) Thanks @0xRaini.
 - Gateway: auto-generate auth token during install to prevent launchd restart loops. (#13813) Thanks @cathrynlavery.
 - Gateway: prevent `undefined`/missing token in auth config. (#13809) Thanks @asklee-klawd.
+- Configure/Gateway: reject literal `"undefined"`/`"null"` token input and validate gateway password prompt values to avoid invalid password-mode configs. (#13767) Thanks @omair445.
 - Gateway: handle async `EPIPE` on stdout/stderr during shutdown. (#13414) Thanks @keshav55.
 - Gateway/Control UI: resolve missing dashboard assets when `openclaw` is installed globally via symlink-based Node managers (nvm/fnm/n/Homebrew). (#14919) Thanks @aynorica.
 - Cron: use requested `agentId` for isolated job auth resolution. (#13983) Thanks @0xRaini.
