@@ -83,7 +83,10 @@ export function buildEmbeddedExtensionPaths(params: {
   model: Model<Api> | undefined;
 }): string[] {
   const paths: string[] = [];
-  if (resolveCompactionMode(params.cfg) === "safeguard") {
+  const compactionMode = resolveCompactionMode(params.cfg);
+  if (compactionMode === "rolling") {
+    paths.push(resolvePiExtensionPath("compaction-rolling"));
+  } else if (compactionMode === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
