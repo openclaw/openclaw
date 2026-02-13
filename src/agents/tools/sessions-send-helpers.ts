@@ -55,7 +55,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     if (!normalizedChannel) {
       return id;
     }
-    if (normalizedChannel === "discord" || normalizedChannel === "slack") {
+    if (normalizedChannel === "slack") {
       return `channel:${id}`;
     }
     return kind === "channel" ? `channel:${id}` : `group:${id}`;

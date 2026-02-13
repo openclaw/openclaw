@@ -231,16 +231,6 @@ export async function collectPluginsTrustFindings(params: {
         hasString((account as Record<string, unknown>)[key]),
       );
 
-    const discordConfigured =
-      hasString(params.cfg.channels?.discord?.token) ||
-      Boolean(
-        params.cfg.channels?.discord?.accounts &&
-        Object.values(params.cfg.channels.discord.accounts).some((a) =>
-          hasAccountStringKey(a, "token"),
-        ),
-      ) ||
-      hasString(process.env.DISCORD_BOT_TOKEN);
-
     const telegramConfigured =
       hasString(params.cfg.channels?.telegram?.botToken) ||
       hasString(params.cfg.channels?.telegram?.tokenFile) ||
@@ -265,12 +255,6 @@ export async function collectPluginsTrustFindings(params: {
       hasString(process.env.SLACK_APP_TOKEN);
 
     const skillCommandsLikelyExposed =
-      (discordConfigured &&
-        resolveNativeSkillsEnabled({
-          providerId: "discord",
-          providerSetting: params.cfg.channels?.discord?.commands?.nativeSkills,
-          globalSetting: params.cfg.commands?.nativeSkills,
-        })) ||
       (telegramConfigured &&
         resolveNativeSkillsEnabled({
           providerId: "telegram",

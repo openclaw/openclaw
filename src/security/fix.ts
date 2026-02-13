@@ -288,15 +288,7 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
     changes.push('logging.redactSensitive=off -> "tools"');
   }
 
-  for (const channel of [
-    "telegram",
-    "whatsapp",
-    "discord",
-    "signal",
-    "imessage",
-    "slack",
-    "msteams",
-  ]) {
+  for (const channel of ["telegram", "whatsapp", "slack"]) {
     setGroupPolicyAllowlist({ cfg: next, channel, changes, policyFlips });
   }
 
