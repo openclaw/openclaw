@@ -101,6 +101,13 @@ export type RunCronAgentTurnResult = {
   error?: string;
   sessionId?: string;
   sessionKey?: string;
+  /**
+   * `true` when the isolated run already delivered its output to the target
+   * channel (via outbound payloads or the subagent announce flow).  Callers
+   * should skip posting a summary to the main session to avoid duplicate
+   * messages.  See: https://github.com/openclaw/openclaw/issues/15692
+   */
+  delivered?: boolean;
 };
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -518,6 +525,7 @@ export async function runCronIsolatedAgentTurn(params: {
       }),
     );
 
+  let delivered = false;
   if (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery) {
     if (resolvedDelivery.error) {
       if (!deliveryBestEffort) {
@@ -558,6 +566,7 @@ export async function runCronIsolatedAgentTurn(params: {
           bestEffort: deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
         });
+        delivered = true;
       } catch (err) {
         if (!deliveryBestEffort) {
           return withRunSession({ status: "error", summary, outputText, error: String(err) });
@@ -594,7 +603,9 @@ export async function runCronIsolatedAgentTurn(params: {
           outcome: { status: "ok" },
           announceType: "cron job",
         });
-        if (!didAnnounce) {
+        if (didAnnounce) {
+          delivered = true;
+        } else {
           const message = "cron announce delivery failed";
           if (!deliveryBestEffort) {
             return withRunSession({
@@ -615,5 +626,5 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
-  return withRunSession({ status: "ok", summary, outputText });
+  return withRunSession({ status: "ok", summary, outputText, delivered });
 }
