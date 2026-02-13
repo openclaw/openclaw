@@ -2,21 +2,28 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ensureTailscaleEndpoint,
+  resetGmailSetupUtilsCachesForTest,
+  resolvePythonExecutablePath,
+} from "./gmail-setup-utils.js";
 
 const itUnix = process.platform === "win32" ? it.skip : it;
+const runCommandWithTimeoutMock = vi.fn();
+
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+}));
 
 beforeEach(() => {
-  vi.resetModules();
+  runCommandWithTimeoutMock.mockReset();
+  resetGmailSetupUtilsCachesForTest();
 });
 
 describe("resolvePythonExecutablePath", () => {
   itUnix(
     "resolves a working python path and caches the result",
     async () => {
-      vi.doMock("../process/exec.js", () => ({
-        runCommandWithTimeout: vi.fn(),
-      }));
-
       const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-python-"));
       const originalPath = process.env.PATH;
       try {
@@ -32,10 +39,7 @@ describe("resolvePythonExecutablePath", () => {
 
         process.env.PATH = `${shimDir}${path.delimiter}/usr/bin`;
 
-        const { resolvePythonExecutablePath } = await import("./gmail-setup-utils.js");
-        const { runCommandWithTimeout } = await import("../process/exec.js");
-        const runCommand = vi.mocked(runCommandWithTimeout);
-        runCommand.mockResolvedValue({
+        runCommandWithTimeoutMock.mockResolvedValue({
           stdout: `${realPython}\n`,
           stderr: "",
           code: 0,
@@ -49,7 +53,7 @@ describe("resolvePythonExecutablePath", () => {
         process.env.PATH = "/bin";
         const cached = await resolvePythonExecutablePath();
         expect(cached).toBe(realPython);
-        expect(runCommand).toHaveBeenCalledTimes(1);
+        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
       } finally {
         process.env.PATH = originalPath;
         await fs.rm(tmp, { recursive: true, force: true });
@@ -61,15 +65,7 @@ describe("resolvePythonExecutablePath", () => {
 
 describe("ensureTailscaleEndpoint", () => {
   it("includes stdout and exit code when tailscale serve fails", async () => {
-    vi.doMock("../process/exec.js", () => ({
-      runCommandWithTimeout: vi.fn(),
-    }));
-
-    const { ensureTailscaleEndpoint } = await import("./gmail-setup-utils.js");
-    const { runCommandWithTimeout } = await import("../process/exec.js");
-    const runCommand = vi.mocked(runCommandWithTimeout);
-
-    runCommand
+    runCommandWithTimeoutMock
       .mockResolvedValueOnce({
         stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net." } }),
         stderr: "",
@@ -102,15 +98,7 @@ describe("ensureTailscaleEndpoint", () => {
   });
 
   it("includes JSON parse failure details with stdout", async () => {
-    vi.doMock("../process/exec.js", () => ({
-      runCommandWithTimeout: vi.fn(),
-    }));
-
-    const { ensureTailscaleEndpoint } = await import("./gmail-setup-utils.js");
-    const { runCommandWithTimeout } = await import("../process/exec.js");
-    const runCommand = vi.mocked(runCommandWithTimeout);
-
-    runCommand.mockResolvedValueOnce({
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
       stdout: "not-json",
       stderr: "",
       code: 0,

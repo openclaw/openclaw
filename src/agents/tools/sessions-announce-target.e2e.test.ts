@@ -58,7 +58,6 @@ const installRegistry = async () => {
 describe("resolveAnnounceTarget", () => {
   beforeEach(async () => {
     callGatewayMock.mockReset();
-    vi.resetModules();
     await installRegistry();
   });
 
