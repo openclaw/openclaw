@@ -16,8 +16,8 @@ import { randomToken } from "./onboard-helpers.js";
 
 type GatewayAuthChoice = "token" | "password";
 
-/** Reject undefined, empty, and the literal string "undefined" (a common serialization bug). */
-function sanitizeAuthValue(value: string | undefined): string | undefined {
+/** Reject undefined, empty, and common JS string-coercion artifacts for token auth. */
+function sanitizeTokenValue(value: string | undefined): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -49,10 +49,10 @@ export function buildGatewayAuthConfig(params: {
 
   if (params.mode === "token") {
     // Keep token mode always valid: treat empty/undefined/"undefined"/"null" as missing and generate a token.
-    const token = sanitizeAuthValue(params.token) ?? randomToken();
+    const token = sanitizeTokenValue(params.token) ?? randomToken();
     return { ...base, mode: "token", token };
   }
-  const password = sanitizeAuthValue(params.password);
+  const password = params.password?.trim();
   return { ...base, mode: "password", ...(password && { password }) };
 }
 

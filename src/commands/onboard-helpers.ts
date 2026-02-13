@@ -82,6 +82,20 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   return trimmed;
 }
 
+export function validateGatewayPasswordInput(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return "Required";
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "Required";
+  }
+  if (trimmed === "undefined" || trimmed === "null") {
+    return 'Cannot be the literal string "undefined" or "null"';
+  }
+  return undefined;
+}
+
 export function printWizardHeader(runtime: RuntimeEnv) {
   const header = [
     "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",

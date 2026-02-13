@@ -4,6 +4,7 @@ import {
   openUrl,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
+  validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -128,5 +129,25 @@ describe("normalizeGatewayTokenInput", () => {
 
   it('rejects the literal string "null"', () => {
     expect(normalizeGatewayTokenInput("null")).toBe("");
+  });
+});
+
+describe("validateGatewayPasswordInput", () => {
+  it("requires a non-empty password", () => {
+    expect(validateGatewayPasswordInput("")).toBe("Required");
+    expect(validateGatewayPasswordInput("   ")).toBe("Required");
+  });
+
+  it("rejects literal string coercion artifacts", () => {
+    expect(validateGatewayPasswordInput("undefined")).toBe(
+      'Cannot be the literal string "undefined" or "null"',
+    );
+    expect(validateGatewayPasswordInput("null")).toBe(
+      'Cannot be the literal string "undefined" or "null"',
+    );
+  });
+
+  it("accepts a normal password", () => {
+    expect(validateGatewayPasswordInput(" secret ")).toBeUndefined();
   });
 });
