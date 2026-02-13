@@ -91,7 +91,6 @@ describe("browser extension install", () => {
       const dir = path.join(tmp, "browser", "chrome-extension");
       writeManifest(dir);
 
-      vi.resetModules();
       const { Command } = await import("commander");
       const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
 

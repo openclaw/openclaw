@@ -61,7 +61,6 @@ beforeEach(async () => {
   process.env.TELEGRAM_BOT_TOKEN = "";
   process.env.DISCORD_BOT_TOKEN = "";
   testConfig = {};
-  vi.resetModules();
   await setRegistry(createTestRegistry([]));
   callGatewayMock.mockReset();
   webAuthExists.mockReset().mockResolvedValue(false);
