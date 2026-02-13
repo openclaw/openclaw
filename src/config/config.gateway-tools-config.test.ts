@@ -1,9 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { validateConfigObject } from "./config.js";
 
 describe("gateway.tools config", () => {
-  it("accepts gateway.tools allow and deny lists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
+  it("accepts gateway.tools allow and deny lists", () => {
     const res = validateConfigObject({
       gateway: {
         tools: {
@@ -15,9 +14,7 @@ describe("gateway.tools config", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects invalid gateway.tools values", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
+  it("rejects invalid gateway.tools values", () => {
     const res = validateConfigObject({
       gateway: {
         tools: {
