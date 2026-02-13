@@ -242,6 +242,8 @@ enum ExecApprovalsPromptPresenter {
         stack.orientation = .vertical
         stack.spacing = 8
         stack.alignment = .leading
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
 
         let commandTitle = NSTextField(labelWithString: "Command")
         commandTitle.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
@@ -258,16 +260,19 @@ enum ExecApprovalsPromptPresenter {
         commandText.textContainer?.lineFragmentPadding = 0
         commandText.textContainer?.widthTracksTextView = true
         commandText.isHorizontallyResizable = false
-        commandText.isVerticallyResizable = false
+        commandText.isVerticallyResizable = true
 
         let commandScroll = NSScrollView()
         commandScroll.borderType = .lineBorder
-        commandScroll.hasVerticalScroller = false
+        commandScroll.hasVerticalScroller = true
         commandScroll.hasHorizontalScroller = false
+        commandScroll.autohidesScrollers = true
         commandScroll.documentView = commandText
         commandScroll.translatesAutoresizingMaskIntoConstraints = false
+        commandScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
         commandScroll.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true
         commandScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
+        commandScroll.heightAnchor.constraint(lessThanOrEqualToConstant: 120).isActive = true
         stack.addArrangedSubview(commandScroll)
 
         let contextTitle = NSTextField(labelWithString: "Context")

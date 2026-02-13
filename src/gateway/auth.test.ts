@@ -1,5 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeGatewayConnect } from "./auth.js";
+
+function createLimiterSpy(): AuthRateLimiter & {
+  check: ReturnType<typeof vi.fn>;
+  recordFailure: ReturnType<typeof vi.fn>;
+  reset: ReturnType<typeof vi.fn>;
+} {
+  return {
+    check: vi.fn(() => ({ allowed: true, remaining: 10, retryAfterMs: 0 })),
+    recordFailure: vi.fn(),
+    reset: vi.fn(),
+    size: () => 0,
+    prune: () => {},
+    dispose: () => {},
+  };
+}
 
 describe("gateway auth", () => {
   it("does not throw when req is missing socket", async () => {
@@ -97,5 +113,39 @@ describe("gateway auth", () => {
     expect(res.ok).toBe(true);
     expect(res.method).toBe("tailscale");
     expect(res.user).toBe("peter");
+  });
+
+  it("uses proxy-aware request client IP by default for rate-limit checks", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      } as never,
+      trustedProxies: ["127.0.0.1"],
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_mismatch");
+    expect(limiter.check).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
+    expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
+  });
+
+  it("passes custom rate-limit scope to limiter operations", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: { password: "wrong" },
+      rateLimiter: limiter,
+      rateLimitScope: "custom-scope",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("password_mismatch");
+    expect(limiter.check).toHaveBeenCalledWith(undefined, "custom-scope");
+    expect(limiter.recordFailure).toHaveBeenCalledWith(undefined, "custom-scope");
   });
 });

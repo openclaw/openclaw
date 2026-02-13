@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -28,10 +29,14 @@ import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js"
 import { collectConfigEnvVars } from "./env-vars.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import { applyMergePatch } from "./merge-patch.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
-import { validateConfigObjectWithPlugins } from "./validation.js";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 import { compareOpenClawVersions } from "./version.js";
 
 // Re-export for backwards compatibility
@@ -90,6 +95,49 @@ function coerceConfig(value: unknown): OpenClawConfig {
     return {};
   }
   return value as OpenClawConfig;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cloneUnknown<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function createMergePatch(base: unknown, target: unknown): unknown {
+  if (!isPlainObject(base) || !isPlainObject(target)) {
+    return cloneUnknown(target);
+  }
+
+  const patch: Record<string, unknown> = {};
+  const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
+  for (const key of keys) {
+    const hasBase = key in base;
+    const hasTarget = key in target;
+    if (!hasTarget) {
+      patch[key] = null;
+      continue;
+    }
+    const targetValue = target[key];
+    if (!hasBase) {
+      patch[key] = cloneUnknown(targetValue);
+      continue;
+    }
+    const baseValue = base[key];
+    if (isPlainObject(baseValue) && isPlainObject(targetValue)) {
+      const childPatch = createMergePatch(baseValue, targetValue);
+      if (isPlainObject(childPatch) && Object.keys(childPatch).length === 0) {
+        continue;
+      }
+      patch[key] = childPatch;
+      continue;
+    }
+    if (!isDeepStrictEqual(baseValue, targetValue)) {
+      patch[key] = cloneUnknown(targetValue);
+    }
+  }
+  return patch;
 }
 
 async function rotateConfigBackups(configPath: string, ioFs: typeof fs.promises): Promise<void> {
@@ -353,6 +401,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         exists: false,
         raw: null,
         parsed: {},
+        resolved: {},
         valid: true,
         config,
         hash,
@@ -372,6 +421,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           exists: true,
           raw,
           parsed: {},
+          resolved: {},
           valid: false,
           config: {},
           hash,
@@ -398,6 +448,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           exists: true,
           raw,
           parsed: parsedRes.parsed,
+          resolved: coerceConfig(parsedRes.parsed),
           valid: false,
           config: coerceConfig(parsedRes.parsed),
           hash,
@@ -426,6 +477,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           exists: true,
           raw,
           parsed: parsedRes.parsed,
+          resolved: coerceConfig(resolved),
           valid: false,
           config: coerceConfig(resolved),
           hash,
@@ -445,6 +497,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           exists: true,
           raw,
           parsed: parsedRes.parsed,
+          resolved: coerceConfig(resolvedConfigRaw),
           valid: false,
           config: coerceConfig(resolvedConfigRaw),
           hash,
@@ -460,6 +513,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         exists: true,
         raw,
         parsed: parsedRes.parsed,
+        // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
+        // for config set/unset operations (issue #6070)
+        resolved: coerceConfig(resolvedConfigRaw),
         valid: true,
         config: normalizeConfigPaths(
           applyTalkApiKey(
@@ -481,6 +537,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         exists: true,
         raw: null,
         parsed: {},
+        resolved: {},
         valid: false,
         config: {},
         hash: hashConfigRaw(null),
@@ -493,7 +550,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
   async function writeConfigFile(cfg: OpenClawConfig) {
     clearConfigCache();
-    const validated = validateConfigObjectWithPlugins(cfg);
+    let persistCandidate: unknown = cfg;
+    const snapshot = await readConfigFileSnapshot();
+    if (snapshot.valid && snapshot.exists) {
+      const patch = createMergePatch(snapshot.config, cfg);
+      persistCandidate = applyMergePatch(snapshot.resolved, patch);
+    }
+
+    const validated = validateConfigObjectRawWithPlugins(persistCandidate);
     if (!validated.ok) {
       const issue = validated.issues[0];
       const pathLabel = issue?.path ? issue.path : "<root>";
@@ -507,7 +571,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfg)), null, 2)
+    // Do NOT apply runtime defaults when writing — user config should only contain
+    // explicitly set values. Runtime defaults are applied when loading (issue #6070).
+    const json = JSON.stringify(stampConfigVersion(validated.config), null, 2)
       .trimEnd()
       .concat("\n");
 

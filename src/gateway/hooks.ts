@@ -17,12 +17,19 @@ export type HooksConfigResolved = {
   maxBodyBytes: number;
   mappings: HookMappingResolved[];
   agentPolicy: HookAgentPolicyResolved;
+  sessionPolicy: HookSessionPolicyResolved;
 };
 
 export type HookAgentPolicyResolved = {
   defaultAgentId: string;
   knownAgentIds: Set<string>;
   allowedAgentIds?: Set<string>;
+};
+
+export type HookSessionPolicyResolved = {
+  defaultSessionKey?: string;
+  allowRequestSessionKey: boolean;
+  allowedSessionKeyPrefixes?: string[];
 };
 
 export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | null {
@@ -47,6 +54,26 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
   const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
+  const defaultSessionKey = resolveSessionKey(cfg.hooks?.defaultSessionKey);
+  const allowedSessionKeyPrefixes = resolveAllowedSessionKeyPrefixes(
+    cfg.hooks?.allowedSessionKeyPrefixes,
+  );
+  if (
+    defaultSessionKey &&
+    allowedSessionKeyPrefixes &&
+    !isSessionKeyAllowedByPrefix(defaultSessionKey, allowedSessionKeyPrefixes)
+  ) {
+    throw new Error("hooks.defaultSessionKey must match hooks.allowedSessionKeyPrefixes");
+  }
+  if (
+    !defaultSessionKey &&
+    allowedSessionKeyPrefixes &&
+    !isSessionKeyAllowedByPrefix("hook:example", allowedSessionKeyPrefixes)
+  ) {
+    throw new Error(
+      "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
+    );
+  }
   return {
     basePath: trimmed,
     token,
@@ -56,6 +83,11 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       defaultAgentId,
       knownAgentIds,
       allowedAgentIds,
+    },
+    sessionPolicy: {
+      defaultSessionKey,
+      allowRequestSessionKey: cfg.hooks?.allowRequestSessionKey === true,
+      allowedSessionKeyPrefixes,
     },
   };
 }
@@ -87,6 +119,39 @@ function resolveAllowedAgentIds(raw: string[] | undefined): Set<string> | undefi
     return undefined;
   }
   return allowed;
+}
+
+function resolveSessionKey(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
+  return value ? value : undefined;
+}
+
+function normalizeSessionKeyPrefix(raw: string): string | undefined {
+  const value = raw.trim().toLowerCase();
+  return value ? value : undefined;
+}
+
+function resolveAllowedSessionKeyPrefixes(raw: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const set = new Set<string>();
+  for (const prefix of raw) {
+    const normalized = normalizeSessionKeyPrefix(prefix);
+    if (!normalized) {
+      continue;
+    }
+    set.add(normalized);
+  }
+  return set.size > 0 ? Array.from(set) : undefined;
+}
+
+function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): boolean {
+  const normalized = sessionKey.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return prefixes.some((prefix) => normalized.startsWith(prefix));
 }
 
 export function extractHookToken(req: IncomingMessage): string | undefined {
@@ -186,7 +251,7 @@ export type HookAgentPayload = {
   name: string;
   agentId?: string;
   wakeMode: "now" | "next-heartbeat";
-  sessionKey: string;
+  sessionKey?: string;
   deliver: boolean;
   channel: HookMessageChannel;
   to?: string;
@@ -253,11 +318,43 @@ export function isHookAgentAllowed(
 }
 
 export const getHookAgentPolicyError = () => "agentId is not allowed by hooks.allowedAgentIds";
+export const getHookSessionKeyRequestPolicyError = () =>
+  "sessionKey is disabled for external /hooks/agent payloads; set hooks.allowRequestSessionKey=true to enable";
+export const getHookSessionKeyPrefixError = (prefixes: string[]) =>
+  `sessionKey must start with one of: ${prefixes.join(", ")}`;
 
-export function normalizeAgentPayload(
-  payload: Record<string, unknown>,
-  opts?: { idFactory?: () => string },
-):
+export function resolveHookSessionKey(params: {
+  hooksConfig: HooksConfigResolved;
+  source: "request" | "mapping";
+  sessionKey?: string;
+  idFactory?: () => string;
+}): { ok: true; value: string } | { ok: false; error: string } {
+  const requested = resolveSessionKey(params.sessionKey);
+  if (requested) {
+    if (params.source === "request" && !params.hooksConfig.sessionPolicy.allowRequestSessionKey) {
+      return { ok: false, error: getHookSessionKeyRequestPolicyError() };
+    }
+    const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+    if (allowedPrefixes && !isSessionKeyAllowedByPrefix(requested, allowedPrefixes)) {
+      return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
+    }
+    return { ok: true, value: requested };
+  }
+
+  const defaultSessionKey = params.hooksConfig.sessionPolicy.defaultSessionKey;
+  if (defaultSessionKey) {
+    return { ok: true, value: defaultSessionKey };
+  }
+
+  const generated = `hook:${(params.idFactory ?? randomUUID)()}`;
+  const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+  if (allowedPrefixes && !isSessionKeyAllowedByPrefix(generated, allowedPrefixes)) {
+    return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
+  }
+  return { ok: true, value: generated };
+}
+
+export function normalizeAgentPayload(payload: Record<string, unknown>):
   | {
       ok: true;
       value: HookAgentPayload;
@@ -274,11 +371,8 @@ export function normalizeAgentPayload(
     typeof agentIdRaw === "string" && agentIdRaw.trim() ? agentIdRaw.trim() : undefined;
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKeyRaw = payload.sessionKey;
-  const idFactory = opts?.idFactory ?? randomUUID;
   const sessionKey =
-    typeof sessionKeyRaw === "string" && sessionKeyRaw.trim()
-      ? sessionKeyRaw.trim()
-      : `hook:${idFactory()}`;
+    typeof sessionKeyRaw === "string" && sessionKeyRaw.trim() ? sessionKeyRaw.trim() : undefined;
   const channel = resolveHookChannel(payload.channel);
   if (!channel) {
     return { ok: false, error: getHookChannelError() };

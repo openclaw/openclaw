@@ -3,8 +3,15 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { FailoverReason } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 
-export const BILLING_ERROR_USER_MESSAGE =
-  "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+export function formatBillingErrorMessage(provider?: string): string {
+  const providerName = provider?.trim();
+  if (providerName) {
+    return `⚠️ ${providerName} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
+  }
+  return "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+}
+
+export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
@@ -31,7 +38,9 @@ export function isContextOverflowError(errorMessage?: string): boolean {
 
 const CONTEXT_WINDOW_TOO_SMALL_RE = /context window.*(too small|minimum is)/i;
 const CONTEXT_OVERFLOW_HINT_RE =
-  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|(?:prompt|request|input).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
+  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|prompt.*(too (?:large|long)|exceed|over|limit|max(?:imum)?)|(?:request|input).*(?:context|window|length|token).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
+const RATE_LIMIT_HINT_RE =
+  /rate limit|too many requests|requests per (?:minute|hour|day)|quota|throttl|429\b/i;
 
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
@@ -49,6 +58,9 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (isContextOverflowError(errorMessage)) {
     return true;
   }
+  if (RATE_LIMIT_HINT_RE.test(errorMessage)) {
+    return false;
+  }
   return CONTEXT_OVERFLOW_HINT_RE.test(errorMessage);
 }
 
@@ -65,9 +77,13 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   if (!hasCompactionTerm) {
     return false;
   }
-  // For compaction failures, also accept "context overflow" without colon
-  // since the error message itself describes a compaction/summarization failure
-  return isContextOverflowError(errorMessage) || lower.includes("context overflow");
+  // Treat any likely overflow shape as a compaction failure when compaction terms are present.
+  // Providers often vary wording (e.g. "context window exceeded") across APIs.
+  if (isLikelyContextOverflowError(errorMessage)) {
+    return true;
+  }
+  // Keep explicit fallback for bare "context overflow" strings.
+  return lower.includes("context overflow");
 }
 
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -388,7 +404,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string },
+  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -450,7 +466,7 @@ export function formatAssistantErrorText(
   }
 
   if (isBillingErrorMessage(raw)) {
-    return BILLING_ERROR_USER_MESSAGE;
+    return formatBillingErrorMessage(opts?.provider);
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
@@ -535,7 +551,7 @@ const ERROR_PATTERNS = {
   overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
   timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
   billing: [
-    /\b402\b/,
+    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
     "insufficient credits",
     "credit balance",

@@ -132,9 +132,8 @@ describe("logs cli", () => {
     it("formats local time in plain mode when localTime is true", () => {
       const utcTime = "2025-01-01T12:00:00.000Z";
       const result = formatLogTimestamp(utcTime, "plain", true);
-      // Should be local time without 'Z' suffix
-      expect(result).not.toContain("Z");
-      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+      // Should be local time with explicit timezone offset (not 'Z' suffix).
+      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
       // The exact time depends on timezone, but should be different from UTC
       expect(result).not.toBe(utcTime);
     });

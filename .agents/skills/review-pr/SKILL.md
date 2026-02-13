@@ -123,7 +123,7 @@ Minimum JSON shape:
     "result": "pass"
   },
   "docs": "up_to_date|missing|not_applicable",
-  "changelog": "required|not_required"
+  "changelog": "required"
 }
 ```
 

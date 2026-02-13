@@ -92,6 +92,27 @@ describe("readFirstUserMessageFromTranscript", () => {
     expect(result).toBe("First user question");
   });
 
+  test("skips inter-session user messages by default", () => {
+    const sessionId = "test-session-inter-session";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({
+        message: {
+          role: "user",
+          content: "Forwarded by session tool",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      }),
+      JSON.stringify({
+        message: { role: "user", content: "Real user message" },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
+    expect(result).toBe("Real user message");
+  });
+
   test("returns null when no user messages exist", () => {
     const sessionId = "test-session-4";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -505,5 +526,30 @@ describe("resolveSessionTranscriptCandidates", () => {
     expect(fallback).toBe(
       path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "sessions", "sess-1.jsonl"),
     );
+  });
+});
+
+describe("resolveSessionTranscriptCandidates safety", () => {
+  test("drops unsafe session IDs instead of producing traversal paths", () => {
+    const candidates = resolveSessionTranscriptCandidates(
+      "../etc/passwd",
+      "/tmp/openclaw/agents/main/sessions/sessions.json",
+    );
+
+    expect(candidates).toEqual([]);
+  });
+
+  test("drops unsafe sessionFile candidates and keeps safe fallbacks", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const candidates = resolveSessionTranscriptCandidates(
+      "sess-safe",
+      storePath,
+      "../../etc/passwd",
+    );
+    const normalizedCandidates = candidates.map((value) => path.resolve(value));
+    const expectedFallback = path.resolve(path.dirname(storePath), "sess-safe.jsonl");
+
+    expect(candidates.some((value) => value.includes("etc/passwd"))).toBe(false);
+    expect(normalizedCandidates).toContain(expectedFallback);
   });
 });

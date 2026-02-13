@@ -32,6 +32,7 @@ export {
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   applyZaiConfig,
+  applyZaiProviderConfig,
 } from "./onboard-auth.config-core.js";
 export {
   applyMinimaxApiConfig,
@@ -78,6 +79,7 @@ export {
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
   buildMoonshotModelDefinition,
+  buildZaiModelDefinition,
   DEFAULT_MINIMAX_BASE_URL,
   MOONSHOT_CN_BASE_URL,
   QIANFAN_BASE_URL,
@@ -91,4 +93,10 @@ export {
   MOONSHOT_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
+  resolveZaiBaseUrl,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_DEFAULT_MODEL_ID,
+  ZAI_CODING_GLOBAL_BASE_URL,
+  ZAI_CN_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
 } from "./onboard-auth.models.js";

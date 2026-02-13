@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { validateConfigObjectWithPlugins } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
 
 async function writePluginFixture(params: {
@@ -30,13 +31,15 @@ async function writePluginFixture(params: {
 }
 
 describe("config plugin validation", () => {
+  const validateInHome = (home: string, raw: unknown) => {
+    process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+    return validateConfigObjectWithPlugins(raw);
+  };
+
   it("rejects missing plugin load paths", async () => {
     await withTempHome(async (home) => {
-      process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-      vi.resetModules();
-      const { validateConfigObjectWithPlugins } = await import("./config.js");
       const missingPath = path.join(home, "missing-plugin");
-      const res = validateConfigObjectWithPlugins({
+      const res = validateInHome(home, {
         agents: { list: [{ id: "pi" }] },
         plugins: { enabled: false, load: { paths: [missingPath] } },
       });
@@ -53,10 +56,7 @@ describe("config plugin validation", () => {
 
   it("rejects missing plugin ids in entries", async () => {
     await withTempHome(async (home) => {
-      process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-      vi.resetModules();
-      const { validateConfigObjectWithPlugins } = await import("./config.js");
-      const res = validateConfigObjectWithPlugins({
+      const res = validateInHome(home, {
         agents: { list: [{ id: "pi" }] },
         plugins: { enabled: false, entries: { "missing-plugin": { enabled: true } } },
       });
@@ -72,10 +72,7 @@ describe("config plugin validation", () => {
 
   it("rejects missing plugin ids in allow/deny/slots", async () => {
     await withTempHome(async (home) => {
-      process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-      vi.resetModules();
-      const { validateConfigObjectWithPlugins } = await import("./config.js");
-      const res = validateConfigObjectWithPlugins({
+      const res = validateInHome(home, {
         agents: { list: [{ id: "pi" }] },
         plugins: {
           enabled: false,
@@ -99,7 +96,6 @@ describe("config plugin validation", () => {
 
   it("surfaces plugin config diagnostics", async () => {
     await withTempHome(async (home) => {
-      process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
       const pluginDir = path.join(home, "bad-plugin");
       await writePluginFixture({
         dir: pluginDir,
@@ -114,9 +110,7 @@ describe("config plugin validation", () => {
         },
       });
 
-      vi.resetModules();
-      const { validateConfigObjectWithPlugins } = await import("./config.js");
-      const res = validateConfigObjectWithPlugins({
+      const res = validateInHome(home, {
         agents: { list: [{ id: "pi" }] },
         plugins: {
           enabled: true,
@@ -138,10 +132,7 @@ describe("config plugin validation", () => {
 
   it("accepts known plugin ids", async () => {
     await withTempHome(async (home) => {
-      process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-      vi.resetModules();
-      const { validateConfigObjectWithPlugins } = await import("./config.js");
-      const res = validateConfigObjectWithPlugins({
+      const res = validateInHome(home, {
         agents: { list: [{ id: "pi" }] },
         plugins: { enabled: false, entries: { discord: { enabled: true } } },
       });
@@ -151,7 +142,6 @@ describe("config plugin validation", () => {
 
   it("accepts plugin heartbeat targets", async () => {
     await withTempHome(async (home) => {
-      process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
       const pluginDir = path.join(home, "bluebubbles-plugin");
       await writePluginFixture({
         dir: pluginDir,
@@ -160,9 +150,7 @@ describe("config plugin validation", () => {
         schema: { type: "object" },
       });
 
-      vi.resetModules();
-      const { validateConfigObjectWithPlugins } = await import("./config.js");
-      const res = validateConfigObjectWithPlugins({
+      const res = validateInHome(home, {
         agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },
         plugins: { enabled: false, load: { paths: [pluginDir] } },
       });
@@ -172,10 +160,7 @@ describe("config plugin validation", () => {
 
   it("rejects unknown heartbeat targets", async () => {
     await withTempHome(async (home) => {
-      process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-      vi.resetModules();
-      const { validateConfigObjectWithPlugins } = await import("./config.js");
-      const res = validateConfigObjectWithPlugins({
+      const res = validateInHome(home, {
         agents: { defaults: { heartbeat: { target: "not-a-channel" } }, list: [{ id: "pi" }] },
       });
       expect(res.ok).toBe(false);

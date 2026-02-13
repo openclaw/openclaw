@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   filterToolsByPolicy,
@@ -24,15 +25,31 @@ import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
+  sendGatewayAuthFailure,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
-  sendUnauthorized,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+
+/**
+ * Tools denied via HTTP /tools/invoke regardless of session policy.
+ * Prevents RCE and privilege escalation from HTTP API surface.
+ * Configurable via gateway.tools.{deny,allow} in openclaw.json.
+ */
+const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
+  // Session orchestration — spawning agents remotely is RCE
+  "sessions_spawn",
+  // Cross-session injection — message injection across sessions
+  "sessions_send",
+  // Gateway control plane — prevents gateway reconfiguration via HTTP
+  "gateway",
+  // Interactive setup — requires terminal QR scan, hangs on HTTP
+  "whatsapp_login",
+];
 
 type ToolsInvokeBody = {
   tool?: unknown;
@@ -102,7 +119,12 @@ function mergeActionIntoArgsIfSupported(params: {
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { auth: ResolvedGatewayAuth; maxBodyBytes?: number; trustedProxies?: string[] },
+  opts: {
+    auth: ResolvedGatewayAuth;
+    maxBodyBytes?: number;
+    trustedProxies?: string[];
+    rateLimiter?: AuthRateLimiter;
+  },
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (url.pathname !== "/tools/invoke") {
@@ -121,9 +143,10 @@ export async function handleToolsInvokeHttpRequest(
     connectAuth: token ? { token, password: token } : null,
     req,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    sendGatewayAuthFailure(res, authResult);
     return true;
   }
 
@@ -297,7 +320,15 @@ export async function handleToolsInvokeHttpRequest(
     ? filterToolsByPolicy(groupFiltered, subagentPolicyExpanded)
     : groupFiltered;
 
-  const tool = subagentFiltered.find((t) => t.name === toolName);
+  // Gateway HTTP-specific deny list — applies to ALL sessions via HTTP.
+  const gatewayToolsCfg = cfg.gateway?.tools;
+  const gatewayDenyNames = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+    (name) => !gatewayToolsCfg?.allow?.includes(name),
+  ).concat(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []);
+  const gatewayDenySet = new Set(gatewayDenyNames);
+  const gatewayFiltered = subagentFiltered.filter((t) => !gatewayDenySet.has(t.name));
+
+  const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {
     sendJson(res, 404, {
       ok: false,

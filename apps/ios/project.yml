@@ -81,8 +81,8 @@ targets:
       properties:
         CFBundleDisplayName: OpenClaw
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "2026.2.10"
-        CFBundleVersion: "20260202"
+        CFBundleShortVersionString: "2026.2.13"
+        CFBundleVersion: "20260213"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -130,5 +130,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawTests
-        CFBundleShortVersionString: "2026.2.10"
-        CFBundleVersion: "20260202"
+        CFBundleShortVersionString: "2026.2.13"
+        CFBundleVersion: "20260213"

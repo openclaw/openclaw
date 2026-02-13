@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
@@ -10,6 +10,7 @@ export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
   "Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed).",
+  "IMPORTANT: If the file already exists, APPEND new content only and do not overwrite existing entries.",
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 
@@ -75,12 +76,15 @@ export function resolveMemoryFlushContextWindowTokens(params: {
 }
 
 export function shouldRunMemoryFlush(params: {
-  entry?: Pick<SessionEntry, "totalTokens" | "compactionCount" | "memoryFlushCompactionCount">;
+  entry?: Pick<
+    SessionEntry,
+    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+  >;
   contextWindowTokens: number;
   reserveTokensFloor: number;
   softThresholdTokens: number;
 }): boolean {
-  const totalTokens = params.entry?.totalTokens;
+  const totalTokens = resolveFreshSessionTotalTokens(params.entry);
   if (!totalTokens || totalTokens <= 0) {
     return false;
   }

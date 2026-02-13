@@ -67,7 +67,7 @@ jq -r '.findings[] | select(.severity=="BLOCKER" or .severity=="IMPORTANT") | "-
 
 Fix all required findings. Keep scope tight.
 
-3. Update changelog/docs when required
+3. Update changelog/docs (changelog is mandatory in this workflow)
 
 ```sh
 jq -r '.changelog' .local/review.json

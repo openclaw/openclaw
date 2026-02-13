@@ -60,22 +60,47 @@ jobs:
               },
             ];
 
+            const triggerLabel = "trigger-response";
+            const target = context.payload.issue ?? context.payload.pull_request;
+            if (!target) {
+              return;
+            }
+
+            const labelSet = new Set(
+              (target.labels ?? [])
+                .map((label) => (typeof label === "string" ? label : label?.name))
+                .filter((name) => typeof name === "string"),
+            );
+
+            const hasTriggerLabel = labelSet.has(triggerLabel);
+            if (hasTriggerLabel) {
+              labelSet.delete(triggerLabel);
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: target.number,
+                  name: triggerLabel,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            if (!hasTriggerLabel) {
+              return;
+            }
+
             const issue = context.payload.issue;
             if (issue) {
               const title = issue.title ?? "";
               const body = issue.body ?? "";
               const haystack = `${title}\n${body}`.toLowerCase();
-              const hasMoltbookLabel = (issue.labels ?? []).some((label) =>
-                typeof label === "string" ? label === "r: moltbook" : label?.name === "r: moltbook",
-              );
-              const hasTestflightLabel = (issue.labels ?? []).some((label) =>
-                typeof label === "string"
-                  ? label === "r: testflight"
-                  : label?.name === "r: testflight",
-              );
-              const hasSecurityLabel = (issue.labels ?? []).some((label) =>
-                typeof label === "string" ? label === "security" : label?.name === "security",
-              );
+              const hasMoltbookLabel = labelSet.has("r: moltbook");
+              const hasTestflightLabel = labelSet.has("r: testflight");
+              const hasSecurityLabel = labelSet.has("security");
               if (title.toLowerCase().includes("security") && !hasSecurityLabel) {
                 await github.rest.issues.addLabels({
                   owner: context.repo.owner,
@@ -83,7 +108,7 @@ jobs:
                   issue_number: issue.number,
                   labels: ["security"],
                 });
-                return;
+                labelSet.add("security");
               }
               if (title.toLowerCase().includes("testflight") && !hasTestflightLabel) {
                 await github.rest.issues.addLabels({
@@ -92,7 +117,7 @@ jobs:
                   issue_number: issue.number,
                   labels: ["r: testflight"],
                 });
-                return;
+                labelSet.add("r: testflight");
               }
               if (haystack.includes("moltbook") && !hasMoltbookLabel) {
                 await github.rest.issues.addLabels({
@@ -101,24 +126,36 @@ jobs:
                   issue_number: issue.number,
                   labels: ["r: moltbook"],
                 });
+                labelSet.add("r: moltbook");
+              }
+            }
+
+            const pullRequest = context.payload.pull_request;
+            if (pullRequest) {
+              const labelCount = labelSet.size;
+              if (labelCount > 20) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  body: "Closing this PR because it has more than 20 labels, which usually means the branch is too noisy. Please recreate the PR from a clean branch.",
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  state: "closed",
+                });
                 return;
               }
             }
 
-            const labelName = context.payload.label?.name;
-            if (!labelName) {
-              return;
-            }
-
-            const rule = rules.find((item) => item.label === labelName);
+            const rule = rules.find((item) => labelSet.has(item.label));
             if (!rule) {
               return;
             }
 
-            const issueNumber = context.payload.issue?.number ?? context.payload.pull_request?.number;
-            if (!issueNumber) {
-              return;
-            }
+            const issueNumber = target.number;
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,

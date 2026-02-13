@@ -51,8 +51,8 @@ describe("web media loading", () => {
   it("compresses large local images under the provided cap", async () => {
     const buffer = await sharp({
       create: {
-        width: 1600,
-        height: 1600,
+        width: 1200,
+        height: 1200,
         channels: 3,
         background: "#ff0000",
       },
@@ -254,7 +254,7 @@ describe("web media loading", () => {
   });
 
   it("falls back to JPEG when PNG alpha cannot fit under cap", async () => {
-    const sizes = [512, 768, 1024];
+    const sizes = [320, 448, 640];
     let pngBuffer: Buffer | null = null;
     let smallestPng: Awaited<ReturnType<typeof optimizeImageToPng>> | null = null;
     let jpegOptimized: Awaited<ReturnType<typeof optimizeImageToJpeg>> | null = null;

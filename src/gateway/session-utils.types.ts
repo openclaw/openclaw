@@ -33,6 +33,7 @@ export type GatewaySessionRow = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  totalTokensFresh?: boolean;
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;

@@ -110,9 +110,9 @@ Before any substantive review or prep work, **always rebase the PR branch onto c
 - During `prepare-pr`, use this commit subject format: `fix: <summary> (openclaw#<PR>) thanks @<pr-author>`.
 - Group related changes; avoid bundling unrelated refactors.
 - Changelog workflow: keep the latest released version at the top (no `Unreleased`); after publishing, bump the version and start a new top section.
-- When working on a PR: add a changelog entry with the PR number and thank the contributor.
+- When working on a PR: add a changelog entry with the PR number and thank the contributor (mandatory in this workflow).
 - When working on an issue: reference the issue in the changelog entry.
-- Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
+- In this workflow, changelog is always required even for internal/test-only changes.
 
 ## Gate policy
 
@@ -233,7 +233,7 @@ Go or no-go checklist before merge:
 
 - All BLOCKER and IMPORTANT findings are resolved.
 - Verification is meaningful and regression risk is acceptably low.
-- Docs and changelog are updated when required.
+- Changelog is updated (mandatory) and docs are updated when required.
 - Required CI checks are green and the branch is not behind `main`.
 
 Expected output:

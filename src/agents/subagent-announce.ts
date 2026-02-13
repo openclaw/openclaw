@@ -6,6 +6,7 @@ import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
+  resolveSessionFilePath,
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
@@ -229,8 +230,16 @@ async function buildSubagentStatsLine(params: {
   });
 
   const sessionId = entry?.sessionId;
-  const transcriptPath =
-    sessionId && storePath ? path.join(path.dirname(storePath), `${sessionId}.jsonl`) : undefined;
+  let transcriptPath: string | undefined;
+  if (sessionId && storePath) {
+    try {
+      transcriptPath = resolveSessionFilePath(sessionId, entry, {
+        sessionsDir: path.dirname(storePath),
+      });
+    } catch {
+      transcriptPath = undefined;
+    }
+  }
 
   const input = entry?.inputTokens;
   const output = entry?.outputTokens;
