@@ -725,6 +725,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     // Do NOT apply runtime defaults when writing — user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const json = JSON.stringify(stampConfigVersion(outputConfig), null, 2).trimEnd().concat("\n");
+    const nextHash = hashConfigRaw(json);
+    const previousHash = resolveConfigSnapshotHash(snapshot);
+    const changedPathCount = changedPaths?.size;
+    const logConfigOverwrite = () => {
+      if (!snapshot.exists) {
+        return;
+      }
+      const changeSummary =
+        typeof changedPathCount === "number" ? `, changedPaths=${changedPathCount}` : "";
+      deps.logger.warn(
+        `Config overwrite: ${configPath} (sha256 ${previousHash ?? "unknown"} -> ${nextHash}, backup=${configPath}.bak${changeSummary})`,
+      );
+    };
 
     const tmp = path.join(
       dir,
@@ -756,6 +769,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         await deps.fs.promises.unlink(tmp).catch(() => {
           // best-effort
         });
+        logConfigOverwrite();
         return;
       }
       await deps.fs.promises.unlink(tmp).catch(() => {
@@ -763,6 +777,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       });
       throw err;
     }
+    logConfigOverwrite();
   }
 
   return {
