@@ -2,8 +2,10 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Message, TextContent, ToolCall } from "@mariozechner/pi-ai";
 import { log } from "../logger.js";
 
-const DEFAULT_TRIGGER_ROUNDS = 8;
+const DEFAULT_TRIGGER_ROUNDS = 4;
 const DEFAULT_KEEP_RECENT_ROUNDS = 2;
+const DEFAULT_SUMMARY_BATCH_ROUNDS = 4;
+const DEFAULT_SUMMARY_MAX_CALLS = 6;
 const DEFAULT_SUMMARY_INPUT_MAX_CHARS = 18_000;
 const DEFAULT_SUMMARY_MAX_TOKENS = 1_000;
 const TOOL_HISTORY_SUMMARY_HEADER = "Compressed tool execution history (system-generated):";
@@ -23,6 +25,8 @@ type WrappedOptions = NonNullable<Parameters<StreamFn>[2]>;
 type EphemeralToolContextWrapperConfig = {
   triggerRounds?: number;
   keepRecentRounds?: number;
+  summaryBatchRounds?: number;
+  summaryMaxCalls?: number;
   summaryInputMaxChars?: number;
   summaryMaxTokens?: number;
   runId?: string;
@@ -90,7 +94,7 @@ function serializeToolResult(message: Message): string {
         return "";
       }
       if (block.type === "text") {
-        return (block as TextContent).text ?? "";
+        return block.text ?? "";
       }
       if (block.type === "image") {
         return "[image]";
@@ -189,15 +193,16 @@ async function summarizeToolRounds(params: {
     previousSummary: params.previousSummary,
   });
 
-  const summaryOptions: WrappedOptions = {
-    ...(params.options ?? {}),
+  const summaryOptions = {
+    ...params.options,
     temperature: 0,
     maxTokens:
       typeof params.options?.maxTokens === "number"
         ? Math.min(params.options.maxTokens, params.summaryMaxTokens)
         : params.summaryMaxTokens,
     onPayload: undefined,
-  };
+    toolChoice: "none",
+  } as WrappedOptions & { toolChoice?: "none" };
 
   const stream = await Promise.resolve(
     params.streamFn(
@@ -211,6 +216,7 @@ async function summarizeToolRounds(params: {
             timestamp: Date.now(),
           },
         ],
+        tools: [],
       },
       summaryOptions,
     ),
@@ -271,6 +277,8 @@ export function createEphemeralToolContextWrapper(
 ): StreamFn {
   const triggerRounds = Math.max(2, config.triggerRounds ?? DEFAULT_TRIGGER_ROUNDS);
   const keepRecentRounds = Math.max(1, config.keepRecentRounds ?? DEFAULT_KEEP_RECENT_ROUNDS);
+  const summaryBatchRounds = Math.max(1, config.summaryBatchRounds ?? DEFAULT_SUMMARY_BATCH_ROUNDS);
+  const summaryMaxCalls = Math.max(1, config.summaryMaxCalls ?? DEFAULT_SUMMARY_MAX_CALLS);
   const summaryInputMaxChars = Math.max(
     1_000,
     config.summaryInputMaxChars ?? DEFAULT_SUMMARY_INPUT_MAX_CHARS,
@@ -279,6 +287,7 @@ export function createEphemeralToolContextWrapper(
 
   let summarizedRounds = 0;
   let compressedSummary: string | undefined;
+  let summaryCalls = 0;
 
   const wrapped: StreamFn = async (model, context, options) => {
     const messagesRaw = (context as { messages?: Message[] }).messages;
@@ -294,7 +303,13 @@ export function createEphemeralToolContextWrapper(
       return streamFn(model, context, options);
     }
 
-    if (compressibleRounds > summarizedRounds) {
+    const pendingRounds = Math.max(0, compressibleRounds - summarizedRounds);
+    const shouldAttemptSummary =
+      pendingRounds > 0 &&
+      summaryCalls < summaryMaxCalls &&
+      (!compressedSummary || pendingRounds >= summaryBatchRounds);
+
+    if (shouldAttemptSummary) {
       const newRounds = rounds.slice(summarizedRounds, compressibleRounds);
       try {
         compressedSummary = await summarizeToolRounds({
@@ -307,7 +322,9 @@ export function createEphemeralToolContextWrapper(
           summaryMaxTokens,
         });
         summarizedRounds = compressibleRounds;
+        summaryCalls += 1;
       } catch (error) {
+        summaryCalls += 1;
         log.warn(
           "ephemeral tool context: summary update failed; keeping unsummarized rounds in context " +
             `runId=${config.runId ?? "unknown"} sessionId=${config.sessionId ?? "unknown"} ` +

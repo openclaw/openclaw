@@ -115,9 +115,12 @@ describe("createEphemeralToolContextWrapper", () => {
   });
 
   it("summarizes and prunes older rounds once threshold is reached", async () => {
-    const calls: Array<{ context: Parameters<StreamFn>[1] }> = [];
-    const base = vi.fn(async (_model, context) => {
-      calls.push({ context });
+    const calls: Array<{
+      context: Parameters<StreamFn>[1];
+      options?: Parameters<StreamFn>[2];
+    }> = [];
+    const base = vi.fn(async (_model, context, options) => {
+      calls.push({ context, options });
       if (calls.length === 1) {
         return {
           result: async () => makeAssistantTextMessage("- summarized tool history"),
@@ -138,6 +141,14 @@ describe("createEphemeralToolContextWrapper", () => {
 
     // 1st call: summary sub-call, 2nd call: actual model call
     expect(calls).toHaveLength(2);
+    const summaryCallContext = calls[0].context as {
+      systemPrompt?: string;
+      messages?: AgentMessage[];
+      tools?: unknown[];
+    };
+    const summaryCallOptions = calls[0].options as { toolChoice?: string } | undefined;
+    expect(summaryCallContext.tools).toEqual([]);
+    expect(summaryCallOptions?.toolChoice).toBe("none");
     const mainCallContext = calls[1].context as {
       systemPrompt?: string;
       messages?: AgentMessage[];
@@ -178,5 +189,63 @@ describe("createEphemeralToolContextWrapper", () => {
     };
     expect(mainCallContext.systemPrompt).toBe("base system");
     expect(mainCallContext.messages).toHaveLength(9);
+  });
+
+  it("batches summary updates to avoid one extra LLM call per new round", async () => {
+    const calls: Array<{ context: Parameters<StreamFn>[1] }> = [];
+    const base = vi.fn(async (_model, context) => {
+      calls.push({ context });
+      if (calls.length === 1 || calls.length === 4) {
+        return {
+          result: async () => makeAssistantTextMessage("- summarized tool history"),
+        };
+      }
+      return {
+        result: async () => makeAssistantTextMessage("ok"),
+      };
+    }) as unknown as StreamFn;
+
+    const wrapped = createEphemeralToolContextWrapper(base, {
+      triggerRounds: 3,
+      keepRecentRounds: 1,
+      summaryBatchRounds: 3,
+    });
+
+    // First threshold crossing: summary + main
+    const stream1 = await Promise.resolve(wrapped(model, makeContext(4), {}));
+    await stream1.result();
+    expect(calls).toHaveLength(2);
+
+    // +1 round only (pending < batch): no summary, main only
+    const stream2 = await Promise.resolve(wrapped(model, makeContext(5), {}));
+    await stream2.result();
+    expect(calls).toHaveLength(3);
+
+    // Reach batch size pending again: summary + main
+    const stream3 = await Promise.resolve(wrapped(model, makeContext(7), {}));
+    await stream3.result();
+    expect(calls).toHaveLength(5);
+  });
+
+  it("uses default trigger threshold of 4 rounds", async () => {
+    const calls: Array<{ context: Parameters<StreamFn>[1] }> = [];
+    const base = vi.fn(async (_model, context) => {
+      calls.push({ context });
+      if (calls.length === 1) {
+        return {
+          result: async () => makeAssistantTextMessage("- summarized tool history"),
+        };
+      }
+      return {
+        result: async () => makeAssistantTextMessage("ok"),
+      };
+    }) as unknown as StreamFn;
+
+    const wrapped = createEphemeralToolContextWrapper(base);
+    const stream = await Promise.resolve(wrapped(model, makeContext(4), {}));
+    await stream.result();
+
+    // summary sub-call + main call once round count reaches default threshold
+    expect(calls).toHaveLength(2);
   });
 });
