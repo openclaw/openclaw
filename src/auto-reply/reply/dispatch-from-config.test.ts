@@ -23,6 +23,9 @@ const hookMocks = vi.hoisted(() => ({
     runMessageReceived: vi.fn(async () => {}),
   },
 }));
+const sessionStoreMock = vi.hoisted(() => ({
+  store: {} as Record<string, unknown>,
+}));
 
 vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
@@ -52,6 +55,11 @@ vi.mock("../../logging/diagnostic.js", () => ({
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
+}));
+
+vi.mock("../../config/sessions.js", () => ({
+  loadSessionStore: () => sessionStoreMock.store,
+  resolveStorePath: () => "/tmp/test-store",
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");

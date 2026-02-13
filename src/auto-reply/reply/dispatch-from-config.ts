@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ThreadBinding } from "../../config/thread-registry.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -211,6 +212,96 @@ export async function dispatchReplyFromConfig(params: {
     isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
 
+  // ---------------------------------------------------------------------------
+  // Thread binding: resolve delivery targets from session's threadBinding.
+  // When a session is bound to a thread, replies are routed according to the
+  // binding's `mode` (thread-only, thread+announcer, announcer-only).
+  // ---------------------------------------------------------------------------
+  let threadBinding: ThreadBinding | undefined;
+  if (ctx.SessionKey) {
+    try {
+      const agentId = resolveSessionAgentId({ sessionKey: ctx.SessionKey, config: cfg });
+      const storePath = resolveStorePath(cfg.session?.store, { agentId });
+      const store = loadSessionStore(storePath);
+      const entry = store[ctx.SessionKey.toLowerCase()] ?? store[ctx.SessionKey];
+      threadBinding = entry?.threadBinding;
+    } catch {
+      // Ignore errors — proceed without binding.
+    }
+  }
+
+  /**
+   * Route a payload to the bound thread.  Returns true if delivery succeeded.
+   */
+  const sendToThread = async (
+    payload: ReplyPayload,
+    abortSignal?: AbortSignal,
+    mirror?: boolean,
+  ): Promise<boolean> => {
+    if (!threadBinding) return false;
+    const threadChannel = threadBinding.channel;
+    const threadTo = threadBinding.to;
+    if (!threadChannel || !threadTo) return false;
+    if (!isRoutableChannel(threadChannel)) return false;
+    if (abortSignal?.aborted) return false;
+    const result = await routeReply({
+      payload,
+      channel: threadChannel,
+      to: threadTo,
+      sessionKey: ctx.SessionKey,
+      accountId: threadBinding.accountId,
+      threadId: threadBinding.threadId,
+      cfg,
+      abortSignal,
+      mirror,
+    });
+    if (!result.ok) {
+      logVerbose(
+        `dispatch-from-config: thread route-reply failed: ${result.error ?? "unknown error"}`,
+      );
+    }
+    return result.ok;
+  };
+
+  /**
+   * Route a payload to the announcer (originating channel / current surface).
+   */
+  const sendToAnnouncer = async (
+    payload: ReplyPayload,
+    abortSignal?: AbortSignal,
+    mirror?: boolean,
+  ): Promise<boolean> => {
+    if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+      if (abortSignal?.aborted) return false;
+      const result = await routeReply({
+        payload,
+        channel: originatingChannel,
+        to: originatingTo,
+        sessionKey: ctx.SessionKey,
+        accountId: ctx.AccountId,
+        threadId: ctx.MessageThreadId,
+        cfg,
+        abortSignal,
+        mirror,
+      });
+      if (!result.ok) {
+        logVerbose(
+          `dispatch-from-config: announcer route-reply failed: ${result.error ?? "unknown error"}`,
+        );
+      }
+      return result.ok;
+    }
+    // Fall through to dispatcher (same-provider delivery).
+    return false;
+  };
+
+  /** Whether delivery should be handled via thread binding instead of default flow. */
+  const useThreadRouting =
+    threadBinding != null &&
+    threadBinding.to != null &&
+    isRoutableChannel(threadBinding.channel) &&
+    threadBinding.mode !== "announcer-only";
+
   /**
    * Helper to send a payload via route-reply (async).
    * Only used when actually routing to a different provider.
@@ -222,6 +313,18 @@ export async function dispatchReplyFromConfig(params: {
     abortSignal?: AbortSignal,
     mirror?: boolean,
   ): Promise<void> => {
+    // When thread binding is active, route according to binding mode.
+    if (threadBinding && useThreadRouting) {
+      const threadOk = await sendToThread(payload, abortSignal, mirror);
+      if (threadBinding.mode === "thread+announcer") {
+        await sendToAnnouncer(payload, abortSignal, false);
+      }
+      if (!threadOk) {
+        // Fallback: if thread delivery failed, send to announcer.
+        await sendToAnnouncer(payload, abortSignal, mirror);
+      }
+      return;
+    }
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
     if (!originatingChannel || !originatingTo) {
@@ -256,7 +359,24 @@ export async function dispatchReplyFromConfig(params: {
       } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+      if (useThreadRouting && threadBinding) {
+        const threadOk = await sendToThread(payload);
+        if (threadBinding.mode === "thread+announcer") {
+          await sendToAnnouncer(payload, undefined, false);
+        }
+        if (!threadOk) {
+          const announcerOk = await sendToAnnouncer(payload);
+          if (!announcerOk) {
+            queuedFinal = dispatcher.sendFinalReply(payload);
+          } else {
+            routedFinalCount += 1;
+            queuedFinal = true;
+          }
+        } else {
+          queuedFinal = true;
+          routedFinalCount += 1;
+        }
+      } else if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         const result = await routeReply({
           payload,
           channel: originatingChannel,
@@ -309,7 +429,7 @@ export async function dispatchReplyFromConfig(params: {
                   inboundAudio,
                   ttsAuto: sessionTtsAuto,
                 });
-                if (shouldRouteToOriginating) {
+                if (useThreadRouting || shouldRouteToOriginating) {
                   await sendPayloadAsync(ttsPayload, undefined, false);
                 } else {
                   dispatcher.sendToolResult(ttsPayload);
@@ -336,7 +456,7 @@ export async function dispatchReplyFromConfig(params: {
               inboundAudio,
               ttsAuto: sessionTtsAuto,
             });
-            if (shouldRouteToOriginating) {
+            if (useThreadRouting || shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
               dispatcher.sendBlockReply(ttsPayload);
@@ -361,7 +481,25 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+      if (useThreadRouting && threadBinding) {
+        // Route final reply to bound thread (and optionally announcer).
+        const threadOk = await sendToThread(ttsReply);
+        if (threadBinding.mode === "thread+announcer") {
+          await sendToAnnouncer(ttsReply, undefined, false);
+        }
+        if (!threadOk) {
+          // Thread delivery failed — fall back to announcer or dispatcher.
+          const announcerOk = await sendToAnnouncer(ttsReply);
+          if (!announcerOk) {
+            queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
+          } else {
+            routedFinalCount += 1;
+          }
+        } else {
+          queuedFinal = true;
+          routedFinalCount += 1;
+        }
+      } else if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
         const result = await routeReply({
           payload: ttsReply,
@@ -412,7 +550,25 @@ export async function dispatchReplyFromConfig(params: {
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
-          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+          if (useThreadRouting && threadBinding) {
+            const threadOk = await sendToThread(ttsOnlyPayload);
+            if (threadBinding.mode === "thread+announcer") {
+              await sendToAnnouncer(ttsOnlyPayload, undefined, false);
+            }
+            if (threadOk) {
+              queuedFinal = true;
+              routedFinalCount += 1;
+            } else {
+              const announcerOk = await sendToAnnouncer(ttsOnlyPayload);
+              if (announcerOk) {
+                queuedFinal = true;
+                routedFinalCount += 1;
+              } else {
+                const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+                queuedFinal = didQueue || queuedFinal;
+              }
+            }
+          } else if (shouldRouteToOriginating && originatingChannel && originatingTo) {
             const result = await routeReply({
               payload: ttsOnlyPayload,
               channel: originatingChannel,

@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
 import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
+import { findSessionsByThread, parseThreadKey } from "../../config/thread-registry.js";
 import { callGateway } from "../../gateway/call.js";
 import {
   isSubagentSessionKey,
@@ -30,6 +31,12 @@ const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  threadKey: Type.Optional(
+    Type.String({
+      description:
+        "Thread key (format: channel:accountId:threadId). When provided, sends to all sessions bound to that thread.",
+    }),
+  ),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
@@ -48,6 +55,71 @@ export function createSessionsSendTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });
+      const threadKeyParam = readStringParam(params, "threadKey");
+
+      // --- Thread key fanout: send to all sessions bound to a thread ---
+      if (threadKeyParam) {
+        const parsed = parseThreadKey(threadKeyParam);
+        if (!parsed) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `Invalid threadKey format: ${threadKeyParam}. Expected channel:accountId:threadId`,
+          });
+        }
+        const boundSessions = findSessionsByThread(parsed);
+        if (boundSessions.length === 0) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `No sessions bound to thread: ${threadKeyParam}`,
+          });
+        }
+
+        // Parallel fanout to all bound sessions.
+        const results = await Promise.allSettled(
+          boundSessions.map(async (targetKey) => {
+            const response = await callGateway<{ runId: string }>({
+              method: "agent",
+              params: {
+                message,
+                sessionKey: targetKey,
+                idempotencyKey: crypto.randomUUID(),
+                deliver: false,
+                channel: INTERNAL_MESSAGE_CHANNEL,
+                lane: AGENT_LANE_NESTED,
+              },
+              timeoutMs: 10_000,
+            });
+            return {
+              sessionKey: targetKey,
+              runId: typeof response?.runId === "string" ? response.runId : undefined,
+            };
+          }),
+        );
+
+        const sent: Array<{ sessionKey: string; runId?: string }> = [];
+        const failed: Array<{ sessionKey: string; error: string }> = [];
+        for (const r of results) {
+          if (r.status === "fulfilled") {
+            sent.push(r.value);
+          } else {
+            failed.push({
+              sessionKey: "unknown",
+              error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+            });
+          }
+        }
+
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: failed.length === 0 ? "ok" : sent.length > 0 ? "partial" : "error",
+          threadKey: threadKeyParam,
+          sent,
+          failed: failed.length > 0 ? failed : undefined,
+        });
+      }
+
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const visibility = cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";

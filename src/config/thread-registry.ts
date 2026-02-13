@@ -21,6 +21,8 @@ export type ThreadBinding = {
   channel: string;
   /** Platform-specific account / workspace id. */
   accountId?: string;
+  /** Destination channel/group/DM identifier for delivery (e.g., Slack channel "C12345"). */
+  to?: string;
   /** Platform thread identifier. */
   threadId: string;
   /** Root message id that started the thread (for creation tracking). */
