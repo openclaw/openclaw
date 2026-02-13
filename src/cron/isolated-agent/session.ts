@@ -16,6 +16,8 @@ export function resolveCronSession(params: {
   const entry = store[params.sessionKey];
   const sessionId = crypto.randomUUID();
   const systemSent = false;
+  // Token counters (contextTokens, inputTokens, outputTokens, totalTokens) intentionally
+  // omitted to start fresh - they will be set during/after the run with actual usage.
   const sessionEntry: SessionEntry = {
     sessionId,
     updatedAt: params.nowMs,
@@ -25,7 +27,7 @@ export function resolveCronSession(params: {
     model: entry?.model,
     modelOverride: entry?.modelOverride,
     providerOverride: entry?.providerOverride,
-    contextTokens: entry?.contextTokens,
+    totalTokensFresh: false,
     sendPolicy: entry?.sendPolicy,
     lastChannel: entry?.lastChannel,
     lastTo: entry?.lastTo,
