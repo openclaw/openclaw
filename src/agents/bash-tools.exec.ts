@@ -969,6 +969,16 @@ export function createExecTool(
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
 
+      // Inject agent environment variables for subagent sessions
+      const agentEnvVars: Record<string, string> = {};
+      if (agentId) {
+        agentEnvVars.OPENCLAW_AGENT_ID = agentId;
+        agentEnvVars.CLAWDBOT_AGENT_ID = agentId;
+      }
+      if (defaults?.sessionKey) {
+        agentEnvVars.OPENCLAW_SESSION_KEY = defaults.sessionKey;
+      }
+
       const baseEnv = coerceEnv(process.env);
 
       // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
@@ -977,12 +987,16 @@ export function createExecTool(
         validateHostEnv(params.env);
       }
 
-      const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+      // Merge: process.env <- agentEnvVars <- params.env
+      const mergedEnv = params.env
+        ? { ...baseEnv, ...agentEnvVars, ...params.env }
+        : { ...baseEnv, ...agentEnvVars };
 
       const env = sandbox
         ? buildSandboxEnv({
             defaultPath: DEFAULT_PATH,
             paramsEnv: params.env,
+            agentEnvVars,
             sandboxEnv: sandbox.env,
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
@@ -1040,7 +1054,11 @@ export function createExecTool(
         }
         const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
 
-        const nodeEnv = params.env ? { ...params.env } : undefined;
+        const nodeEnv = params.env
+          ? { ...agentEnvVars, ...params.env }
+          : Object.keys(agentEnvVars).length > 0
+            ? { ...agentEnvVars }
+            : undefined;
 
         if (nodeEnv) {
           applyPathPrepend(nodeEnv, defaultPathPrepend, { requireExisting: true });
