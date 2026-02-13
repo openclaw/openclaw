@@ -102,7 +102,9 @@ export function resolveSessionTranscriptCandidates(
   return Array.from(new Set(candidates));
 }
 
-export function archiveFileOnDisk(filePath: string, reason: string): string {
+export type ArchiveFileReason = "bak" | "reset" | "deleted";
+
+export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
   const ts = new Date().toISOString().replaceAll(":", "-");
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
@@ -118,7 +120,7 @@ export function archiveSessionTranscripts(opts: {
   storePath: string | undefined;
   sessionFile?: string;
   agentId?: string;
-  reason: string;
+  reason: "reset" | "deleted";
 }): string[] {
   const archived: string[] = [];
   for (const candidate of resolveSessionTranscriptCandidates(

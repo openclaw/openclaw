@@ -562,9 +562,11 @@ describe("archiveSessionTranscripts", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-archive-test-"));
     storePath = path.join(tmpDir, "sessions.json");
+    vi.stubEnv("OPENCLAW_HOME", tmpDir);
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
