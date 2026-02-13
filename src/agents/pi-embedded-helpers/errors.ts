@@ -383,23 +383,31 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
   }
 
+  if (isRateLimitErrorMessage(trimmed)) {
+    return "The AI service is temporarily overloaded. Please try again in a moment.";
+  }
+
+  if (isAuthErrorMessage(trimmed)) {
+    return "The AI service requires authentication. Please try again later.";
+  }
+
+  if (isBillingErrorMessage(trimmed)) {
+    return "The AI service is unavailable due to billing limits. Please try again later.";
+  }
   const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
   if (httpMatch) {
     const rest = httpMatch[2].trim();
     if (!rest.startsWith("{")) {
-      return `HTTP ${httpMatch[1]}: ${rest}`;
+      return "The AI service returned an error. Please try again.";
     }
   }
 
   const info = parseApiErrorInfo(trimmed);
   if (info?.message) {
-    const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
-    const type = info.type ? ` ${info.type}` : "";
-    const requestId = info.requestId ? ` (request_id: ${info.requestId})` : "";
-    return `${prefix}${type}: ${info.message}${requestId}`;
+    return "The AI service returned an error. Please try again.";
   }
 
-  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+  return "The AI service returned an error. Please try again.";
 }
 
 export function formatAssistantErrorText(

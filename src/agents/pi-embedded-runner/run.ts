@@ -46,6 +46,7 @@ import {
 } from "../pi-embedded-helpers.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { maybeScheduleBackgroundOptimization } from "./background-optimization.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -871,6 +872,37 @@ export async function runEmbeddedPiAgent(
               agentDir: params.agentDir,
             });
           }
+
+          // Proactive background optimization — fire-and-forget
+          if (!aborted && !isProbeSession && attempt.messagesSnapshot.length > 0) {
+            maybeScheduleBackgroundOptimization({
+              sessionId: params.sessionId,
+              messages: attempt.messagesSnapshot,
+              cfg: params.config,
+              triggerCompaction: () =>
+                compactEmbeddedPiSessionDirect({
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
+                  messageChannel: params.messageChannel,
+                  messageProvider: params.messageProvider,
+                  agentAccountId: params.agentAccountId,
+                  authProfileId: lastProfileId,
+                  sessionFile: params.sessionFile,
+                  workspaceDir: params.workspaceDir,
+                  agentDir,
+                  config: params.config,
+                  skillsSnapshot: params.skillsSnapshot,
+                  provider,
+                  model: modelId,
+                  thinkLevel,
+                  reasoningLevel: params.reasoningLevel,
+                  bashElevated: params.bashElevated,
+                  extraSystemPrompt: params.extraSystemPrompt,
+                  ownerNumbers: params.ownerNumbers,
+                }),
+            });
+          }
+
           return {
             payloads: payloads.length ? payloads : undefined,
             meta: {
