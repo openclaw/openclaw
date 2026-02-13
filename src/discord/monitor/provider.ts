@@ -1,12 +1,9 @@
+import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { Client, ReadyListener, type BaseMessageInteractiveComponent } from "@buape/carbon";
-import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import { Routes } from "discord-api-types/v10";
-import { HttpsProxyAgent } from "https-proxy-agent";
 import { inspect } from "node:util";
-import WebSocket from "ws";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
-import type { DiscordAccountConfig } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
@@ -31,6 +28,7 @@ import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
+import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
 import {
   DiscordMessageListener,
@@ -56,44 +54,6 @@ export type MonitorDiscordOpts = {
   historyLimit?: number;
   replyToMode?: ReplyToMode;
 };
-
-function createDiscordGatewayPlugin(params: {
-  discordConfig: DiscordAccountConfig;
-  runtime: RuntimeEnv;
-}): GatewayPlugin {
-  const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
-  const proxy = params.discordConfig?.proxy?.trim();
-  const options = {
-    reconnect: { maxAttempts: 50 },
-    intents,
-    autoInteractions: true,
-  };
-
-  if (!proxy) {
-    return new GatewayPlugin(options);
-  }
-
-  try {
-    const agent = new HttpsProxyAgent<string>(proxy);
-
-    params.runtime.log?.("discord: gateway proxy enabled");
-
-    class ProxyGatewayPlugin extends GatewayPlugin {
-      constructor() {
-        super(options);
-      }
-
-      createWebSocket(url: string) {
-        return new WebSocket(url, { agent });
-      }
-    }
-
-    return new ProxyGatewayPlugin();
-  } catch (err) {
-    params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
-    return new GatewayPlugin(options);
-  }
-}
 
 function summarizeAllowList(list?: Array<string | number>) {
   if (!list || list.length === 0) {
@@ -162,25 +122,6 @@ function formatDiscordDeployErrorDetails(err: unknown): string {
     }
   }
   return details.length > 0 ? ` (${details.join(", ")})` : "";
-}
-
-function resolveDiscordGatewayIntents(
-  intentsConfig?: import("../../config/types.discord.js").DiscordIntentsConfig,
-): number {
-  let intents =
-    GatewayIntents.Guilds |
-    GatewayIntents.GuildMessages |
-    GatewayIntents.MessageContent |
-    GatewayIntents.DirectMessages |
-    GatewayIntents.GuildMessageReactions |
-    GatewayIntents.DirectMessageReactions;
-  if (intentsConfig?.presence) {
-    intents |= GatewayIntents.GuildPresences;
-  }
-  if (intentsConfig?.guildMembers) {
-    intents |= GatewayIntents.GuildMembers;
-  }
-  return intents;
 }
 
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {

@@ -387,10 +387,8 @@ describe("gateway multi-instance e2e", () => {
     "spins up two gateways and exercises WS + HTTP + node pairing",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
-      const gwA = await spawnGatewayInstance("a");
-      instances.push(gwA);
-      const gwB = await spawnGatewayInstance("b");
-      instances.push(gwB);
+      const [gwA, gwB] = await Promise.all([spawnGatewayInstance("a"), spawnGatewayInstance("b")]);
+      instances.push(gwA, gwB);
 
       const [hookResA, hookResB] = await Promise.all([
         postJson(
@@ -415,8 +413,10 @@ describe("gateway multi-instance e2e", () => {
       expect(hookResB.status).toBe(200);
       expect((hookResB.json as { ok?: boolean } | undefined)?.ok).toBe(true);
 
-      const nodeA = await connectNode(gwA, "node-a");
-      const nodeB = await connectNode(gwB, "node-b");
+      const [nodeA, nodeB] = await Promise.all([
+        connectNode(gwA, "node-a"),
+        connectNode(gwB, "node-b"),
+      ]);
       nodeClients.push(nodeA.client, nodeB.client);
 
       await Promise.all([

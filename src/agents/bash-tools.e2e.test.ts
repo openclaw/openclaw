@@ -146,7 +146,7 @@ describe("exec tool backgrounding", () => {
   });
 
   it("uses default timeout when timeout is omitted", async () => {
-    const customBash = createExecTool({ timeoutSec: 1, backgroundMs: 10 });
+    const customBash = createExecTool({ timeoutSec: 0.2, backgroundMs: 10 });
     const customProcess = createProcessTool();
 
     const result = await customBash.execute("call1", {
@@ -165,7 +165,7 @@ describe("exec tool backgrounding", () => {
       });
       status = (poll.details as { status: string }).status;
       if (status === "running") {
-        await sleep(50);
+        await sleep(20);
       }
     }
 
