@@ -67,6 +67,7 @@ describe("exec approval handlers", () => {
         cwd: "/tmp",
         host: "node",
         timeoutMs: 2000,
+        twoPhase: true,
       },
       respond,
       context: context as unknown as Parameters<
@@ -81,6 +82,13 @@ describe("exec approval handlers", () => {
     expect(requested).toBeTruthy();
     const id = (requested?.payload as { id?: string })?.id ?? "";
     expect(id).not.toBe("");
+
+    // First response should be "accepted" (registration confirmation)
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "accepted", id }),
+      undefined,
+    );
 
     const resolveRespond = vi.fn();
     await handlers["exec.approval.resolve"]({
@@ -97,6 +105,7 @@ describe("exec approval handlers", () => {
     await requestPromise;
 
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    // Second response should contain the decision
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ id, decision: "allow-once" }),
