@@ -309,7 +309,8 @@ export type PluginHookName =
   | "session_start"
   | "session_end"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "on_model_failover";
 
 // Agent context shared across agent hooks
 export type PluginHookAgentContext = {
@@ -471,6 +472,41 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// on_model_failover hook - triggered when model fallback occurs
+export type PluginHookModelFailoverContext = {
+  agentId?: string;
+  sessionKey?: string;
+  workspaceDir?: string;
+};
+
+export type PluginHookModelFailoverEvent = {
+  /** Model that failed */
+  fromProvider: string;
+  fromModel: string;
+  /** Model being switched to */
+  toProvider: string;
+  toModel: string;
+  /** Why the failover happened */
+  reason: "timeout" | "rate_limit" | "auth" | "billing" | "format" | "unknown";
+  /** Error message if available */
+  errorMessage?: string;
+  /** HTTP status code if available */
+  statusCode?: number;
+  /** Current attempt number */
+  attemptNumber: number;
+  /** Total candidates available */
+  totalCandidates: number;
+};
+
+export type PluginHookModelFailoverResult = {
+  /** Set to false to veto this failover (will throw error) */
+  allow?: boolean;
+  /** Reason for veto */
+  vetoReason?: string;
+  /** Override the target model (provider/model format) */
+  overrideTarget?: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_agent_start: (
@@ -526,6 +562,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  on_model_failover: (
+    event: PluginHookModelFailoverEvent,
+    ctx: PluginHookModelFailoverContext,
+  ) => Promise<PluginHookModelFailoverResult | void> | PluginHookModelFailoverResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

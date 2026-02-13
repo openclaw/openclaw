@@ -21,6 +21,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { triggerMessageSentHook, type MessageSentHookEvent } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
@@ -443,5 +444,32 @@ export async function deliverOutboundPayloads(params: {
       });
     }
   }
+
+  // Trigger message:sent hook for time-tunnel and other hooks
+  if (results.length > 0) {
+    const lastResult = results.at(-1);
+    const combinedText = normalizedPayloads.map((p) => p.text ?? "").join("\n");
+    const combinedMediaUrls = normalizedPayloads.flatMap((p) =>
+      p.mediaUrls?.length ? p.mediaUrls : p.mediaUrl ? [p.mediaUrl] : [],
+    );
+    void triggerMessageSentHook({
+      type: "message",
+      action: "sent",
+      sessionKey: params.mirror?.sessionKey ?? "",
+      timestamp: new Date(),
+      messages: [],
+      context: {
+        direction: "outbound",
+        channel,
+        chatId: to,
+        messageId: lastResult?.messageId,
+        content: combinedText,
+        mediaUrl: combinedMediaUrls[0],
+        sessionKey: params.mirror?.sessionKey,
+        agentId: params.mirror?.agentId,
+      },
+    } as MessageSentHookEvent);
+  }
+
   return results;
 }

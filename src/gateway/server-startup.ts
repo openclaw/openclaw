@@ -122,6 +122,14 @@ export async function startGatewaySidecars(params: {
       await params.startChannels();
     } catch (err) {
       params.logChannels.error(`channel startup failed: ${String(err)}`);
+      if (params.cfg.hooks?.internal?.enabled) {
+        const errEvent = createInternalHookEvent("gateway", "error", "gateway:error", {
+          error: String(err),
+          phase: "channel-startup",
+          workspaceDir: params.defaultWorkspaceDir,
+        });
+        void triggerInternalHook(errEvent);
+      }
     }
   } else {
     params.logChannels.info(

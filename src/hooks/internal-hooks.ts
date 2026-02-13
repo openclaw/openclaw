@@ -8,7 +8,13 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "model"
+  | "message";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -23,6 +29,152 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   type: "agent";
   action: "bootstrap";
   context: AgentBootstrapHookContext;
+};
+
+export type ModelSelectHookContext = {
+  /** Original requested provider */
+  requestedProvider: string;
+  /** Original requested model */
+  requestedModel: string;
+  /** Resolved candidates after applying strategy */
+  candidates: Array<{ provider: string; model: string }>;
+  /** Selection strategy being used */
+  strategy: string;
+  /** Session key for context */
+  sessionKey?: string;
+  /** Agent ID if available */
+  agentId?: string;
+  /** Workspace directory */
+  workspaceDir?: string;
+  /** Estimated context length (tokens) */
+  contextLength?: number;
+  /** Task hint from caller (e.g., "code", "chat", "summary") */
+  taskHint?: string;
+};
+
+export type ModelSelectHookEvent = InternalHookEvent & {
+  type: "model";
+  action: "select";
+  context: ModelSelectHookContext;
+};
+
+export type ModelSelectHookResult = {
+  /** Override the selected model */
+  overrideModel?: string;
+  /** Override the entire candidate list */
+  overrideCandidates?: Array<{ provider: string; model: string }>;
+  /** Add candidates to the front of the list */
+  prependCandidates?: Array<{ provider: string; model: string }>;
+};
+
+export type ModelFailoverHookContext = {
+  fromProvider: string;
+  fromModel: string;
+  toProvider: string;
+  toModel: string;
+  reason: string;
+  errorMessage?: string;
+  statusCode?: number;
+  attemptNumber: number;
+  totalCandidates: number;
+  agentId?: string;
+  workspaceDir?: string;
+};
+
+export type ModelFailoverHookEvent = InternalHookEvent & {
+  type: "model";
+  action: "failover";
+  context: ModelFailoverHookContext;
+};
+
+export type ModelFailoverHookResult = {
+  allow?: boolean;
+  vetoReason?: string;
+  overrideTarget?: string;
+};
+
+// =============================================================================
+// Message Hooks - Time Tunnel 時光隧道
+// =============================================================================
+
+export type MessageHookContext = {
+  /** Message direction */
+  direction: "inbound" | "outbound";
+  /** Channel (telegram, line, discord, etc.) */
+  channel: string;
+  /** Chat ID */
+  chatId: string;
+  /** Chat type (group, dm, channel) */
+  chatType?: string;
+  /** Chat name if available */
+  chatName?: string;
+  /** Sender ID */
+  senderId?: string;
+  /** Sender name */
+  senderName?: string;
+  /** Message ID */
+  messageId?: string;
+  /** Reply to message ID */
+  replyToId?: string;
+  /** Text content */
+  content?: string;
+  /** Media type if present */
+  mediaType?: string;
+  /** Media URL if present */
+  mediaUrl?: string;
+  /** Session key */
+  sessionKey?: string;
+  /** Agent ID */
+  agentId?: string;
+  /** Workspace directory */
+  workspaceDir?: string;
+  /** Raw event data (stringified, truncated) */
+  rawEvent?: string;
+};
+
+export type MessageReceivedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "received";
+  context: MessageHookContext;
+};
+
+export type MessageSentHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "sent";
+  context: MessageHookContext;
+};
+
+export type ModelCompleteHookContext = {
+  /** Provider that handled the request */
+  provider: string;
+  /** Model that handled the request */
+  model: string;
+  /** Input tokens used */
+  inputTokens?: number;
+  /** Output tokens generated */
+  outputTokens?: number;
+  /** Cache read tokens */
+  cacheReadTokens?: number;
+  /** Cache write tokens */
+  cacheWriteTokens?: number;
+  /** Total duration in milliseconds */
+  durationMs?: number;
+  /** Whether the request succeeded */
+  success: boolean;
+  /** Error message if failed */
+  errorMessage?: string;
+  /** Session key */
+  sessionKey?: string;
+  /** Agent ID */
+  agentId?: string;
+  /** Workspace directory */
+  workspaceDir?: string;
+};
+
+export type ModelCompleteHookEvent = InternalHookEvent & {
+  type: "model";
+  action: "complete";
+  context: ModelCompleteHookContext;
 };
 
 export interface InternalHookEvent {
@@ -40,7 +192,9 @@ export interface InternalHookEvent {
   messages: string[];
 }
 
-export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
+export type InternalHookHandler = (
+  event: InternalHookEvent,
+) => Promise<void | ModelFailoverHookResult> | void | ModelFailoverHookResult;
 
 /** Registry of hook handlers by event key */
 const handlers = new Map<string, InternalHookHandler[]>();
@@ -178,4 +332,216 @@ export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentB
     return false;
   }
   return Array.isArray(context.bootstrapFiles);
+}
+
+export function isModelFailoverEvent(event: InternalHookEvent): event is ModelFailoverHookEvent {
+  if (event.type !== "model" || event.action !== "failover") {
+    return false;
+  }
+  const context = event.context as Partial<ModelFailoverHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return (
+    typeof context.fromProvider === "string" &&
+    typeof context.fromModel === "string" &&
+    typeof context.toProvider === "string" &&
+    typeof context.toModel === "string"
+  );
+}
+
+export function isModelSelectEvent(event: InternalHookEvent): event is ModelSelectHookEvent {
+  if (event.type !== "model" || event.action !== "select") {
+    return false;
+  }
+  const context = event.context as Partial<ModelSelectHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return (
+    typeof context.requestedProvider === "string" &&
+    typeof context.requestedModel === "string" &&
+    Array.isArray(context.candidates)
+  );
+}
+
+export function isModelCompleteEvent(event: InternalHookEvent): event is ModelCompleteHookEvent {
+  if (event.type !== "model" || event.action !== "complete") {
+    return false;
+  }
+  const context = event.context as Partial<ModelCompleteHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.provider === "string" && typeof context.model === "string";
+}
+
+/**
+ * Trigger model select hook and collect results
+ *
+ * Called before model selection to allow smart routing decisions.
+ */
+export async function triggerModelSelectHook(
+  event: ModelSelectHookEvent,
+): Promise<ModelSelectHookResult | undefined> {
+  const typeHandlers = handlers.get(event.type) ?? [];
+  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
+
+  if (allHandlers.length === 0) {
+    return undefined;
+  }
+
+  let result: ModelSelectHookResult | undefined;
+
+  for (const handler of allHandlers) {
+    try {
+      const handlerResult = await handler(event);
+      if (handlerResult && typeof handlerResult === "object") {
+        const typed = handlerResult as ModelSelectHookResult;
+        result = {
+          overrideModel: typed.overrideModel ?? result?.overrideModel,
+          overrideCandidates: typed.overrideCandidates ?? result?.overrideCandidates,
+          prependCandidates: typed.prependCandidates ?? result?.prependCandidates,
+        };
+      }
+    } catch (err) {
+      console.error(
+        `Hook error [${event.type}:${event.action}]:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Trigger model failover hook and collect results
+ *
+ * Unlike other internal hooks, this one collects results from handlers
+ * to allow veto/override behavior.
+ */
+export async function triggerModelFailoverHook(
+  event: ModelFailoverHookEvent,
+): Promise<ModelFailoverHookResult | undefined> {
+  const typeHandlers = handlers.get(event.type) ?? [];
+  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
+
+  if (allHandlers.length === 0) {
+    return undefined;
+  }
+
+  let result: ModelFailoverHookResult | undefined;
+
+  for (const handler of allHandlers) {
+    try {
+      const handlerResult = await handler(event);
+      // Merge results if handler returns something
+      if (handlerResult && typeof handlerResult === "object") {
+        const typed = handlerResult;
+        result = {
+          allow: typed.allow ?? result?.allow,
+          vetoReason: typed.vetoReason ?? result?.vetoReason,
+          overrideTarget: typed.overrideTarget ?? result?.overrideTarget,
+        };
+      }
+    } catch (err) {
+      console.error(
+        `Hook error [${event.type}:${event.action}]:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Trigger model complete hook (fire-and-forget)
+ *
+ * Called after a model request completes (success or failure) for tracking/metrics.
+ */
+export async function triggerModelCompleteHook(event: ModelCompleteHookEvent): Promise<void> {
+  const typeHandlers = handlers.get(event.type) ?? [];
+  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
+
+  if (allHandlers.length === 0) {
+    return;
+  }
+
+  for (const handler of allHandlers) {
+    try {
+      await handler(event);
+    } catch (err) {
+      console.error(
+        `Hook error [${event.type}:${event.action}]:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+}
+
+/**
+ * Trigger message received hook (fire-and-forget)
+ *
+ * Called when a message is received from any channel.
+ */
+export async function triggerMessageReceivedHook(event: MessageReceivedHookEvent): Promise<void> {
+  const typeHandlers = handlers.get(event.type) ?? [];
+  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
+
+  if (allHandlers.length === 0) {
+    return;
+  }
+
+  for (const handler of allHandlers) {
+    try {
+      await handler(event);
+    } catch (err) {
+      console.error(
+        `Hook error [${event.type}:${event.action}]:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+}
+
+/**
+ * Trigger message sent hook (fire-and-forget)
+ *
+ * Called when a message is sent to any channel.
+ */
+export async function triggerMessageSentHook(event: MessageSentHookEvent): Promise<void> {
+  const typeHandlers = handlers.get(event.type) ?? [];
+  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
+
+  if (allHandlers.length === 0) {
+    return;
+  }
+
+  for (const handler of allHandlers) {
+    try {
+      await handler(event);
+    } catch (err) {
+      console.error(
+        `Hook error [${event.type}:${event.action}]:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+}
+
+export function isMessageReceivedEvent(
+  event: InternalHookEvent,
+): event is MessageReceivedHookEvent {
+  return event.type === "message" && event.action === "received";
+}
+
+export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
+  return event.type === "message" && event.action === "sent";
 }

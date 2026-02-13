@@ -4,6 +4,7 @@ import { normalizeChannelId } from "../channels/plugins/index.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
@@ -75,6 +76,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         ctx.deps,
       ).catch((err) => {
         ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+        const errEvent = createInternalHookEvent("agent", "error", sessionKey, {
+          error: formatForLog(err),
+          phase: "voice-transcript",
+          nodeId,
+        });
+        void triggerInternalHook(errEvent);
       });
       return;
     }
@@ -149,6 +156,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         ctx.deps,
       ).catch((err) => {
         ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+        const errEvent = createInternalHookEvent("agent", "error", sessionKey, {
+          error: formatForLog(err),
+          phase: "agent-request",
+          nodeId,
+        });
+        void triggerInternalHook(errEvent);
       });
       return;
     }

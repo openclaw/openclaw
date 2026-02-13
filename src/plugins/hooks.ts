@@ -24,6 +24,9 @@ import type {
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookModelFailoverContext,
+  PluginHookModelFailoverEvent,
+  PluginHookModelFailoverResult,
   PluginHookName,
   PluginHookRegistration,
   PluginHookSessionContext,
@@ -61,6 +64,9 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookModelFailoverContext,
+  PluginHookModelFailoverEvent,
+  PluginHookModelFailoverResult,
 };
 
 export type HookRunnerLogger = {
@@ -424,6 +430,31 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Model Failover Hooks
+  // =========================================================================
+
+  /**
+   * Run on_model_failover hook.
+   * Allows plugins to monitor, log, or veto model failovers.
+   * Runs sequentially to allow veto decisions.
+   */
+  async function runModelFailover(
+    event: PluginHookModelFailoverEvent,
+    ctx: PluginHookModelFailoverContext,
+  ): Promise<PluginHookModelFailoverResult | undefined> {
+    return runModifyingHook<"on_model_failover", PluginHookModelFailoverResult>(
+      "on_model_failover",
+      event,
+      ctx,
+      (acc, next) => ({
+        allow: next.allow ?? acc?.allow,
+        vetoReason: next.vetoReason ?? acc?.vetoReason,
+        overrideTarget: next.overrideTarget ?? acc?.overrideTarget,
+      }),
+    );
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -461,6 +492,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Model failover hooks
+    runModelFailover,
     // Utility
     hasHooks,
     getHookCount,
