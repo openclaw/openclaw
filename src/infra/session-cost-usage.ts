@@ -4,6 +4,26 @@ import readline from "node:readline";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type {
+  CostBreakdown,
+  CostUsageTotals,
+  CostUsageSummary,
+  DiscoveredSession,
+  ParsedTranscriptEntry,
+  ParsedUsageEntry,
+  SessionCostSummary,
+  SessionDailyLatency,
+  SessionDailyMessageCounts,
+  SessionDailyModelUsage,
+  SessionDailyUsage,
+  SessionLatencyStats,
+  SessionLogEntry,
+  SessionMessageCounts,
+  SessionModelUsage,
+  SessionToolUsage,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./session-cost-usage.types.js";
 import { normalizeUsage } from "../agents/usage.js";
 import {
   resolveSessionFilePath,
@@ -12,139 +32,24 @@ import {
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 
-type CostBreakdown = {
-  total?: number;
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-};
-
-type ParsedUsageEntry = {
-  usage: NormalizedUsage;
-  costTotal?: number;
-  costBreakdown?: CostBreakdown;
-  provider?: string;
-  model?: string;
-  timestamp?: Date;
-};
-
-type ParsedTranscriptEntry = {
-  message: Record<string, unknown>;
-  role?: "user" | "assistant";
-  timestamp?: Date;
-  durationMs?: number;
-  usage?: NormalizedUsage;
-  costTotal?: number;
-  costBreakdown?: CostBreakdown;
-  provider?: string;
-  model?: string;
-  stopReason?: string;
-  toolNames: string[];
-  toolResultCounts: { total: number; errors: number };
-};
-
-export type CostUsageTotals = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  totalCost: number;
-  // Cost breakdown by token type (from actual API data when available)
-  inputCost: number;
-  outputCost: number;
-  cacheReadCost: number;
-  cacheWriteCost: number;
-  missingCostEntries: number;
-};
-
-export type CostUsageDailyEntry = CostUsageTotals & {
-  date: string;
-};
-
-export type CostUsageSummary = {
-  updatedAt: number;
-  days: number;
-  daily: CostUsageDailyEntry[];
-  totals: CostUsageTotals;
-};
-
-export type SessionDailyUsage = {
-  date: string; // YYYY-MM-DD
-  tokens: number;
-  cost: number;
-};
-
-export type SessionDailyMessageCounts = {
-  date: string; // YYYY-MM-DD
-  total: number;
-  user: number;
-  assistant: number;
-  toolCalls: number;
-  toolResults: number;
-  errors: number;
-};
-
-export type SessionLatencyStats = {
-  count: number;
-  avgMs: number;
-  p95Ms: number;
-  minMs: number;
-  maxMs: number;
-};
-
-export type SessionDailyLatency = SessionLatencyStats & {
-  date: string; // YYYY-MM-DD
-};
-
-export type SessionDailyModelUsage = {
-  date: string; // YYYY-MM-DD
-  provider?: string;
-  model?: string;
-  tokens: number;
-  cost: number;
-  count: number;
-};
-
-export type SessionMessageCounts = {
-  total: number;
-  user: number;
-  assistant: number;
-  toolCalls: number;
-  toolResults: number;
-  errors: number;
-};
-
-export type SessionToolUsage = {
-  totalCalls: number;
-  uniqueTools: number;
-  tools: Array<{ name: string; count: number }>;
-};
-
-export type SessionModelUsage = {
-  provider?: string;
-  model?: string;
-  count: number;
-  totals: CostUsageTotals;
-};
-
-export type SessionCostSummary = CostUsageTotals & {
-  sessionId?: string;
-  sessionFile?: string;
-  firstActivity?: number;
-  lastActivity?: number;
-  durationMs?: number;
-  activityDates?: string[]; // YYYY-MM-DD dates when session had activity
-  dailyBreakdown?: SessionDailyUsage[]; // Per-day token/cost breakdown
-  dailyMessageCounts?: SessionDailyMessageCounts[];
-  dailyLatency?: SessionDailyLatency[];
-  dailyModelUsage?: SessionDailyModelUsage[];
-  messageCounts?: SessionMessageCounts;
-  toolUsage?: SessionToolUsage;
-  modelUsage?: SessionModelUsage[];
-  latency?: SessionLatencyStats;
-};
+export type {
+  CostUsageDailyEntry,
+  CostUsageSummary,
+  CostUsageTotals,
+  DiscoveredSession,
+  SessionCostSummary,
+  SessionDailyLatency,
+  SessionDailyMessageCounts,
+  SessionDailyModelUsage,
+  SessionDailyUsage,
+  SessionLatencyStats,
+  SessionLogEntry,
+  SessionMessageCounts,
+  SessionModelUsage,
+  SessionToolUsage,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./session-cost-usage.types.js";
 
 const emptyTotals = (): CostUsageTotals => ({
   input: 0,
@@ -457,13 +362,6 @@ export async function loadCostUsageSummary(params?: {
     totals,
   };
 }
-
-export type DiscoveredSession = {
-  sessionId: string;
-  sessionFile: string;
-  mtime: number;
-  firstUserMessage?: string;
-};
 
 /**
  * Scan all transcript files to discover sessions not in the session store.
@@ -834,23 +732,6 @@ export async function loadSessionCostSummary(params: {
   };
 }
 
-export type SessionUsageTimePoint = {
-  timestamp: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: number;
-  cumulativeTokens: number;
-  cumulativeCost: number;
-};
-
-export type SessionUsageTimeSeries = {
-  sessionId?: string;
-  points: SessionUsageTimePoint[];
-};
-
 export async function loadSessionUsageTimeSeries(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
@@ -927,14 +808,6 @@ export async function loadSessionUsageTimeSeries(params: {
 
   return { sessionId: params.sessionId, points: sortedPoints };
 }
-
-export type SessionLogEntry = {
-  timestamp: number;
-  role: "user" | "assistant" | "tool" | "toolResult";
-  content: string;
-  tokens?: number;
-  cost?: number;
-};
 
 export async function loadSessionLogs(params: {
   sessionId?: string;
