@@ -305,6 +305,7 @@ export type PluginHookName =
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
+  | "tool_result_received"
   | "tool_result_persist"
   | "session_start"
   | "session_end"
@@ -413,6 +414,21 @@ export type PluginHookAfterToolCallEvent = {
   durationMs?: number;
 };
 
+// tool_result_received hook
+export type PluginHookToolResultReceivedEvent = {
+  toolName: string;
+  /** Original tool params (may be non-object for some tools). */
+  params: unknown;
+  result: unknown;
+  durationMs?: number;
+};
+
+export type PluginHookToolResultReceivedResult = {
+  result?: unknown;
+  block?: boolean;
+  blockReason?: string;
+};
+
 // tool_result_persist hook
 export type PluginHookToolResultPersistContext = {
   agentId?: string;
@@ -506,6 +522,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ) => Promise<void> | void;
+  tool_result_received: (
+    event: PluginHookToolResultReceivedEvent,
+    ctx: PluginHookToolContext,
+  ) =>
+    | Promise<PluginHookToolResultReceivedResult | void>
+    | PluginHookToolResultReceivedResult
+    | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,

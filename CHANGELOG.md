@@ -260,6 +260,7 @@ Docs: https://docs.openclaw.ai
 - CLI: sort commands alphabetically in help output. (#8068) Thanks @deepsoumya617.
 - CI: optimize pipeline throughput (macOS consolidation, Windows perf, workflow concurrency). (#10784) Thanks @mcaxtr.
 - Agents: bump pi-mono to 0.52.7; add embedded forward-compat fallback for Opus 4.6 model ids.
+- Plugins: add `tool_result_received` hook for intercepting/modifying/blocking tool outputs before they reach the agent. (#10328) Thanks @ThomasLWang.
 
 ### Added
 

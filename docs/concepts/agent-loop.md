@@ -84,7 +84,11 @@ These run inside the agent loop or gateway pipeline:
 - **`before_agent_start`**: inject context or override system prompt before the run starts.
 - **`agent_end`**: inspect the final message list and run metadata after completion.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
-- **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
+- **`before_tool_call`**: intercept and modify tool parameters before execution, or block the call entirely.
+- **`after_tool_call`**: observe tool results after execution (fire-and-forget, runs in parallel).
+- **`tool_result_received`**: intercept and modify tool results before they reach the agent,
+  or block them entirely. Runs sequentially and supports async operations. Ideal for
+  security guardrails and content filtering on external data.
 - **`tool_result_persist`**: synchronously transform tool results before they are written to the session transcript.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
