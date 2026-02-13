@@ -35,6 +35,7 @@ import { isTimeoutError } from "../../failover-error.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
+import { wrapStreamFnWithSystemCacheControl } from "../../openrouter-system-cache.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -640,6 +641,13 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+
+      // Add cache_control breakpoint to system prompt on OpenRouter Anthropic
+      // requests. pi-ai already caches the last user message; this adds the
+      // system prompt breakpoint for ~80% input cost reduction on cached turns.
+      activeSession.agent.streamFn = wrapStreamFnWithSystemCacheControl(
+        activeSession.agent.streamFn,
+      );
 
       try {
         const prior = await sanitizeSessionHistory({
