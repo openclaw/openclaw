@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
-import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
-
-const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
-  name: DEFAULT_AGENTS_FILENAME,
-  path: "/tmp/AGENTS.md",
-  content: "",
-  missing: false,
-  ...overrides,
-});
 
 describe("isLikelyContextOverflowError", () => {
   it("matches context overflow hints", () => {
@@ -26,6 +17,21 @@ describe("isLikelyContextOverflowError", () => {
     const samples = [
       "Model context window too small (minimum is 128k tokens)",
       "Context window too small: minimum is 1000 tokens",
+    ];
+    for (const sample of samples) {
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
+
+  it("excludes rate limit errors that match the broad hint regex", () => {
+    const samples = [
+      "request reached organization TPD rate limit, current: 1506556, limit: 1500000",
+      "rate limit exceeded",
+      "too many requests",
+      "429 Too Many Requests",
+      "exceeded your current quota",
+      "This request would exceed your account's rate limit",
+      "429 Too Many Requests: request exceeds rate limit",
     ];
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(false);

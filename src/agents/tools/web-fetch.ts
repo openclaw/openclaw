@@ -4,6 +4,7 @@ import type { AnyAgentTool } from "./common.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
+import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
@@ -120,9 +121,9 @@ function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
 function resolveFirecrawlApiKey(firecrawl?: FirecrawlFetchConfig): string | undefined {
   const fromConfig =
     firecrawl && "apiKey" in firecrawl && typeof firecrawl.apiKey === "string"
-      ? firecrawl.apiKey.trim()
+      ? normalizeSecretInput(firecrawl.apiKey)
       : "";
-  const fromEnv = (process.env.FIRECRAWL_API_KEY ?? "").trim();
+  const fromEnv = normalizeSecretInput(process.env.FIRECRAWL_API_KEY);
   return fromConfig || fromEnv || undefined;
 }
 
@@ -443,6 +444,11 @@ async function runWebFetch(params: {
         title: wrappedTitle,
         extractMode: params.extractMode,
         extractor: "firecrawl",
+        externalContent: {
+          untrusted: true,
+          source: "web_fetch",
+          wrapped: true,
+        },
         truncated: wrapped.truncated,
         length: wrapped.wrappedLength,
         rawLength: wrapped.rawLength, // Actual content length, not wrapped
@@ -482,6 +488,11 @@ async function runWebFetch(params: {
           title: wrappedTitle,
           extractMode: params.extractMode,
           extractor: "firecrawl",
+          externalContent: {
+            untrusted: true,
+            source: "web_fetch",
+            wrapped: true,
+          },
           truncated: wrapped.truncated,
           length: wrapped.wrappedLength,
           rawLength: wrapped.rawLength, // Actual content length, not wrapped
@@ -559,6 +570,11 @@ async function runWebFetch(params: {
       title: wrappedTitle,
       extractMode: params.extractMode,
       extractor,
+      externalContent: {
+        untrusted: true,
+        source: "web_fetch",
+        wrapped: true,
+      },
       truncated: wrapped.truncated,
       length: wrapped.wrappedLength,
       rawLength: wrapped.rawLength, // Actual content length, not wrapped

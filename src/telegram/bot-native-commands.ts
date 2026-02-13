@@ -358,7 +358,7 @@ export const registerTelegramNativeCommands = ({
     existingCommands.add(normalized);
     pluginCommands.push({ command: normalized, description });
   }
-  const allCommands: Array<{ command: string; description: string }> = [
+  const allCommandsFull: Array<{ command: string; description: string }> = [
     ...nativeCommands.map((command) => ({
       command: command.name,
       description: command.description,
@@ -366,6 +366,15 @@ export const registerTelegramNativeCommands = ({
     ...pluginCommands,
     ...customCommands,
   ];
+  // Telegram Bot API limits commands to 100 per scope.
+  // Truncate with a warning rather than failing with BOT_COMMANDS_TOO_MUCH.
+  const TELEGRAM_MAX_COMMANDS = 100;
+  if (allCommandsFull.length > TELEGRAM_MAX_COMMANDS) {
+    runtime.log?.(
+      `telegram: truncating ${allCommandsFull.length} commands to ${TELEGRAM_MAX_COMMANDS} (Telegram Bot API limit)`,
+    );
+  }
+  const allCommands = allCommandsFull.slice(0, TELEGRAM_MAX_COMMANDS);
 
   // Clear stale commands before registering new ones to prevent
   // leftover commands from deleted skills persisting across restarts (#5717).
@@ -530,6 +539,7 @@ export const registerTelegramNativeCommands = ({
             : (buildSenderName(msg) ?? String(senderId || chatId));
           const ctxPayload = finalizeInboundContext({
             Body: prompt,
+            BodyForAgent: prompt,
             RawBody: prompt,
             CommandBody: prompt,
             CommandArgs: commandArgs,

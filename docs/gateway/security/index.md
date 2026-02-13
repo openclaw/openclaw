@@ -265,6 +265,9 @@ tool calls. Reduce the blast radius by:
 - Using a read-only or tool-disabled **reader agent** to summarize untrusted content,
   then pass the summary to your main agent.
 - Keeping `web_search` / `web_fetch` / `browser` off for tool-enabled agents unless needed.
+- For OpenResponses URL inputs (`input_file` / `input_image`), set tight
+  `gateway.http.endpoints.responses.files.urlAllowlist` and
+  `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 
@@ -797,21 +800,17 @@ Commit the updated `.secrets.baseline` once it reflects the intended state.
 
 ## The Trust Hierarchy
 
-```
-Owner (Peter)
-  │ Full trust
-  ▼
-AI (Clawd)
-  │ Trust but verify
-  ▼
-Friends in allowlist
-  │ Limited trust
-  ▼
-Strangers
-  │ No trust
-  ▼
-Mario asking for find ~
-  │ Definitely no trust 😏
+```mermaid
+flowchart TB
+    A["Owner (Peter)"] -- Full trust --> B["AI (Clawd)"]
+    B -- Trust but verify --> C["Friends in allowlist"]
+    C -- Limited trust --> D["Strangers"]
+    D -- No trust --> E["Mario asking for find ~"]
+    E -- Definitely no trust 😏 --> F[" "]
+
+     %% The transparent box is needed to show the bottom-most label correctly
+     F:::Class_transparent_box
+    classDef Class_transparent_box fill:transparent, stroke:transparent
 ```
 
 ## Reporting Security Issues

@@ -36,7 +36,7 @@ vi.mock("./utils/twitch.js", () => ({
 describe("outbound", () => {
   const mockAccount = {
     username: "testbot",
-    token: "oauth:test123",
+    accessToken: "oauth:test123",
     clientId: "test-client-id",
     channel: "#testchannel",
   };
@@ -108,15 +108,15 @@ describe("outbound", () => {
       expect(result.to).toBe("allowed");
     });
 
-    it("should fallback to first allowlist entry when target not in list", () => {
+    it("should error when target not in allowlist (implicit mode)", () => {
       const result = twitchOutbound.resolveTarget({
         to: "#notallowed",
         mode: "implicit",
         allowFrom: ["#primary", "#secondary"],
       });
 
-      expect(result.ok).toBe(true);
-      expect(result.to).toBe("primary");
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("Twitch");
     });
 
     it("should accept any target when allowlist is empty", () => {
@@ -130,15 +130,15 @@ describe("outbound", () => {
       expect(result.to).toBe("anychannel");
     });
 
-    it("should use first allowlist entry when no target provided", () => {
+    it("should error when no target provided with allowlist", () => {
       const result = twitchOutbound.resolveTarget({
         to: undefined,
         mode: "implicit",
         allowFrom: ["#fallback", "#other"],
       });
 
-      expect(result.ok).toBe(true);
-      expect(result.to).toBe("fallback");
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("Twitch");
     });
 
     it("should return error when no target and no allowlist", () => {
@@ -161,6 +161,17 @@ describe("outbound", () => {
 
       expect(result.ok).toBe(false);
       expect(result.error).toContain("Missing target");
+    });
+
+    it("should error when target normalizes to empty string", () => {
+      const result = twitchOutbound.resolveTarget({
+        to: "#",
+        mode: "explicit",
+        allowFrom: [],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("Twitch");
     });
 
     it("should filter wildcard from allowlist when checking membership", () => {
@@ -196,7 +207,14 @@ describe("outbound", () => {
 
       expect(result.channel).toBe("twitch");
       expect(result.messageId).toBe("twitch-msg-123");
-      expect(result.to).toBe("testchannel");
+      expect(sendMessageTwitchInternal).toHaveBeenCalledWith(
+        "testchannel",
+        "Hello Twitch!",
+        mockConfig,
+        "default",
+        true,
+        console,
+      );
       expect(result.timestamp).toBeGreaterThan(0);
     });
 

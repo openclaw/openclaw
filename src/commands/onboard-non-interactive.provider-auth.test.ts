@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
@@ -20,6 +21,7 @@ type EnvSnapshot = {
   skipCanvas: string | undefined;
   token: string | undefined;
   password: string | undefined;
+  customApiKey: string | undefined;
   disableConfigCache: string | undefined;
 };
 
@@ -27,6 +29,22 @@ type OnboardEnv = {
   configPath: string;
   runtime: RuntimeMock;
 };
+
+async function removeDirWithRetry(dir: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const isTransient = code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM";
+      if (!isTransient || attempt === 4) {
+        throw error;
+      }
+      await delay(25 * (attempt + 1));
+    }
+  }
+}
 
 function captureEnv(): EnvSnapshot {
   return {
@@ -39,6 +57,7 @@ function captureEnv(): EnvSnapshot {
     skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
     token: process.env.OPENCLAW_GATEWAY_TOKEN,
     password: process.env.OPENCLAW_GATEWAY_PASSWORD,
+    customApiKey: process.env.CUSTOM_API_KEY,
     disableConfigCache: process.env.OPENCLAW_DISABLE_CONFIG_CACHE,
   };
 }
@@ -61,6 +80,7 @@ function restoreEnv(prev: EnvSnapshot): void {
   restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", prev.skipCanvas);
   restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", prev.token);
   restoreEnvVar("OPENCLAW_GATEWAY_PASSWORD", prev.password);
+  restoreEnvVar("CUSTOM_API_KEY", prev.customApiKey);
   restoreEnvVar("OPENCLAW_DISABLE_CONFIG_CACHE", prev.disableConfigCache);
 }
 
@@ -77,6 +97,7 @@ async function withOnboardEnv(
   process.env.OPENCLAW_DISABLE_CONFIG_CACHE = "1";
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+  delete process.env.CUSTOM_API_KEY;
 
   const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const configPath = path.join(tempHome, "openclaw.json");
@@ -98,7 +119,7 @@ async function withOnboardEnv(
   try {
     await run({ configPath, runtime });
   } finally {
-    await fs.rm(tempHome, { recursive: true, force: true });
+    await removeDirWithRetry(tempHome);
     restoreEnv(prev);
   }
 }
@@ -135,13 +156,68 @@ async function expectApiKeyProfile(params: {
 }
 
 describe("onboard (non-interactive): provider auth", () => {
+  it("stores Z.AI API key and uses global baseUrl by default", async () => {
+    await withOnboardEnv("openclaw-onboard-zai-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          authChoice: "zai-api-key",
+          zaiApiKey: "zai-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+        models?: { providers?: Record<string, { baseUrl?: string }> };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
+      expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/paas/v4");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
+      await expectApiKeyProfile({ profileId: "zai:default", provider: "zai", key: "zai-test-key" });
+    });
+  }, 60_000);
+
+  it("supports Z.AI CN coding endpoint auth choice", async () => {
+    await withOnboardEnv("openclaw-onboard-zai-cn-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          authChoice: "zai-coding-cn",
+          zaiApiKey: "zai-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        models?: { providers?: Record<string, { baseUrl?: string }> };
+      }>(configPath);
+
+      expect(cfg.models?.providers?.zai?.baseUrl).toBe(
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+      );
+    });
+  }, 60_000);
+
   it("stores xAI API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-xai-", async ({ configPath, runtime }) => {
+      const rawKey = "xai-test-\r\nkey";
       await runNonInteractive(
         {
           nonInteractive: true,
           authChoice: "xai-api-key",
-          xaiApiKey: "xai-test-key",
+          xaiApiKey: rawKey,
           skipHealth: true,
           skipChannels: true,
           skipSkills: true,
@@ -197,7 +273,8 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("stores token auth profile", async () => {
     await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
-      const token = `sk-ant-oat01-${"a".repeat(80)}`;
+      const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
+      const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
       await runNonInteractive(
         {
@@ -226,7 +303,7 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(profile?.type).toBe("token");
       if (profile?.type === "token") {
         expect(profile.provider).toBe("anthropic");
-        expect(profile.token).toBe(token);
+        expect(profile.token).toBe(cleanToken);
       }
     });
   }, 60_000);
@@ -323,5 +400,241 @@ describe("onboard (non-interactive): provider auth", () => {
         metadata: { accountId: "cf-account-id", gatewayId: "cf-gateway-id" },
       });
     });
+  }, 60_000);
+
+  it("configures a custom provider from non-interactive flags", async () => {
+    await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          authChoice: "custom-api-key",
+          customBaseUrl: "https://llm.example.com/v1",
+          customApiKey: "custom-test-key",
+          customModelId: "foo-large",
+          customCompatibility: "anthropic",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        models?: {
+          providers?: Record<
+            string,
+            {
+              baseUrl?: string;
+              api?: string;
+              apiKey?: string;
+              models?: Array<{ id?: string }>;
+            }
+          >;
+        };
+        agents?: { defaults?: { model?: { primary?: string } } };
+      }>(configPath);
+
+      const provider = cfg.models?.providers?.["custom-llm-example-com"];
+      expect(provider?.baseUrl).toBe("https://llm.example.com/v1");
+      expect(provider?.api).toBe("anthropic-messages");
+      expect(provider?.apiKey).toBe("custom-test-key");
+      expect(provider?.models?.some((model) => model.id === "foo-large")).toBe(true);
+      expect(cfg.agents?.defaults?.model?.primary).toBe("custom-llm-example-com/foo-large");
+    });
+  }, 60_000);
+
+  it("infers custom provider auth choice from custom flags", async () => {
+    await withOnboardEnv(
+      "openclaw-onboard-custom-provider-infer-",
+      async ({ configPath, runtime }) => {
+        await runNonInteractive(
+          {
+            nonInteractive: true,
+            customBaseUrl: "https://models.custom.local/v1",
+            customModelId: "local-large",
+            customApiKey: "custom-test-key",
+            skipHealth: true,
+            skipChannels: true,
+            skipSkills: true,
+            json: true,
+          },
+          runtime,
+        );
+
+        const cfg = await readJsonFile<{
+          models?: {
+            providers?: Record<
+              string,
+              {
+                baseUrl?: string;
+                api?: string;
+              }
+            >;
+          };
+          agents?: { defaults?: { model?: { primary?: string } } };
+        }>(configPath);
+
+        expect(cfg.models?.providers?.["custom-models-custom-local"]?.baseUrl).toBe(
+          "https://models.custom.local/v1",
+        );
+        expect(cfg.models?.providers?.["custom-models-custom-local"]?.api).toBe(
+          "openai-completions",
+        );
+        expect(cfg.agents?.defaults?.model?.primary).toBe("custom-models-custom-local/local-large");
+      },
+    );
+  }, 60_000);
+
+  it("uses CUSTOM_API_KEY env fallback for non-interactive custom provider auth", async () => {
+    await withOnboardEnv(
+      "openclaw-onboard-custom-provider-env-fallback-",
+      async ({ configPath, runtime }) => {
+        process.env.CUSTOM_API_KEY = "custom-env-key";
+
+        await runNonInteractive(
+          {
+            nonInteractive: true,
+            authChoice: "custom-api-key",
+            customBaseUrl: "https://models.custom.local/v1",
+            customModelId: "local-large",
+            skipHealth: true,
+            skipChannels: true,
+            skipSkills: true,
+            json: true,
+          },
+          runtime,
+        );
+
+        const cfg = await readJsonFile<{
+          models?: {
+            providers?: Record<
+              string,
+              {
+                apiKey?: string;
+              }
+            >;
+          };
+        }>(configPath);
+
+        expect(cfg.models?.providers?.["custom-models-custom-local"]?.apiKey).toBe(
+          "custom-env-key",
+        );
+      },
+    );
+  }, 60_000);
+
+  it("uses matching profile fallback for non-interactive custom provider auth", async () => {
+    await withOnboardEnv(
+      "openclaw-onboard-custom-provider-profile-fallback-",
+      async ({ configPath, runtime }) => {
+        const { upsertAuthProfile } = await import("../agents/auth-profiles.js");
+        upsertAuthProfile({
+          profileId: "custom-models-custom-local:default",
+          credential: {
+            type: "api_key",
+            provider: "custom-models-custom-local",
+            key: "custom-profile-key",
+          },
+        });
+
+        await runNonInteractive(
+          {
+            nonInteractive: true,
+            authChoice: "custom-api-key",
+            customBaseUrl: "https://models.custom.local/v1",
+            customModelId: "local-large",
+            skipHealth: true,
+            skipChannels: true,
+            skipSkills: true,
+            json: true,
+          },
+          runtime,
+        );
+
+        const cfg = await readJsonFile<{
+          models?: {
+            providers?: Record<
+              string,
+              {
+                apiKey?: string;
+              }
+            >;
+          };
+        }>(configPath);
+
+        expect(cfg.models?.providers?.["custom-models-custom-local"]?.apiKey).toBe(
+          "custom-profile-key",
+        );
+      },
+    );
+  }, 60_000);
+
+  it("fails custom provider auth when compatibility is invalid", async () => {
+    await withOnboardEnv(
+      "openclaw-onboard-custom-provider-invalid-compat-",
+      async ({ runtime }) => {
+        await expect(
+          runNonInteractive(
+            {
+              nonInteractive: true,
+              authChoice: "custom-api-key",
+              customBaseUrl: "https://models.custom.local/v1",
+              customModelId: "local-large",
+              customCompatibility: "xmlrpc",
+              skipHealth: true,
+              skipChannels: true,
+              skipSkills: true,
+              json: true,
+            },
+            runtime,
+          ),
+        ).rejects.toThrow('Invalid --custom-compatibility (use "openai" or "anthropic").');
+      },
+    );
+  }, 60_000);
+
+  it("fails custom provider auth when explicit provider id is invalid", async () => {
+    await withOnboardEnv("openclaw-onboard-custom-provider-invalid-id-", async ({ runtime }) => {
+      await expect(
+        runNonInteractive(
+          {
+            nonInteractive: true,
+            authChoice: "custom-api-key",
+            customBaseUrl: "https://models.custom.local/v1",
+            customModelId: "local-large",
+            customProviderId: "!!!",
+            skipHealth: true,
+            skipChannels: true,
+            skipSkills: true,
+            json: true,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(
+        "Invalid custom provider config: Custom provider ID must include letters, numbers, or hyphens.",
+      );
+    });
+  }, 60_000);
+
+  it("fails inferred custom auth when required flags are incomplete", async () => {
+    await withOnboardEnv(
+      "openclaw-onboard-custom-provider-missing-required-",
+      async ({ runtime }) => {
+        await expect(
+          runNonInteractive(
+            {
+              nonInteractive: true,
+              customApiKey: "custom-test-key",
+              skipHealth: true,
+              skipChannels: true,
+              skipSkills: true,
+              json: true,
+            },
+            runtime,
+          ),
+        ).rejects.toThrow('Auth choice "custom-api-key" requires a base URL and model ID.');
+      },
+    );
   }, 60_000);
 });

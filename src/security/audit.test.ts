@@ -287,6 +287,52 @@ describe("security audit", () => {
     );
   });
 
+  it("flags browser control without auth when browser is enabled", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        controlUi: { enabled: false },
+        auth: {},
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "browser.control_no_auth", severity: "critical" }),
+      ]),
+    );
+  });
+
+  it("does not flag browser control auth when gateway token is configured", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        controlUi: { enabled: false },
+        auth: { token: "very-long-browser-token-0123456789" },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings.some((f) => f.checkId === "browser.control_no_auth")).toBe(false);
+  });
+
   it("warns when remote CDP uses HTTP", async () => {
     const cfg: OpenClawConfig = {
       browser: {
@@ -822,6 +868,106 @@ describe("security audit", () => {
         process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
       }
     }
+  });
+
+  it("warns when hooks.defaultSessionKey is unset", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "hooks.default_session_key_unset", severity: "warn" }),
+      ]),
+    );
+  });
+
+  it("flags hooks request sessionKey override when enabled", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+        defaultSessionKey: "hook:ingress",
+        allowRequestSessionKey: true,
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "hooks.request_session_key_enabled", severity: "warn" }),
+        expect.objectContaining({
+          checkId: "hooks.request_session_key_prefixes_missing",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
+
+  it("escalates hooks request sessionKey override when gateway is remotely exposed", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: { bind: "lan" },
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+        defaultSessionKey: "hook:ingress",
+        allowRequestSessionKey: true,
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "hooks.request_session_key_enabled",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("reports HTTP API session-key override surfaces when enabled", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        http: {
+          endpoints: {
+            chatCompletions: { enabled: true },
+            responses: { enabled: true },
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.http.session_key_override_enabled",
+          severity: "info",
+        }),
+      ]),
+    );
   });
 
   it("warns when state/config look like a synced folder", async () => {

@@ -56,11 +56,13 @@ import { formatDocsLink } from "../terminal/links.js";
 import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { pathExists } from "../utils.js";
 import { replaceCliName, resolveCliName } from "./cli-name.js";
 import { formatCliCommand } from "./command-format.js";
 import { installCompletion } from "./completion-cli.js";
 import { runDaemonRestart } from "./daemon-cli.js";
 import { formatHelpExamples } from "./help-format.js";
+import { suppressDeprecations } from "./update-cli/suppress-deprecations.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -201,15 +203,6 @@ async function readPackageName(root: string): Promise<string | null> {
 async function isCorePackage(root: string): Promise<boolean> {
   const name = await readPackageName(root);
   return Boolean(name && CORE_PACKAGE_NAMES.has(name));
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.stat(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
@@ -680,8 +673,7 @@ function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
 }
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
-  process.noDeprecation = true;
-  process.env.NODE_NO_WARNINGS = "1";
+  suppressDeprecations();
   const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
   const shouldRestart = opts.restart !== false;
 

@@ -25,11 +25,11 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   }
 
   // Bundled install (built)
-  const mod = await import("../../../agents/pi-embedded-runner.js");
+  const mod = await import("../../../src/agents/pi-embedded-runner.js");
   if (typeof mod.runEmbeddedPiAgent !== "function") {
     throw new Error("Internal error: runEmbeddedPiAgent not available");
   }
-  return mod.runEmbeddedPiAgent;
+  return mod.runEmbeddedPiAgent as RunEmbeddedPiAgentFn;
 }
 
 function stripCodeFences(s: string): string {
@@ -69,6 +69,7 @@ type PluginCfg = {
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
     name: "llm-task",
+    label: "LLM Task",
     description:
       "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
     parameters: Type.Object({
@@ -214,14 +215,17 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         // oxlint-disable-next-line typescript/no-explicit-any
         const schema = (params as any).schema as unknown;
         if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-          const ajv = new Ajv({ allErrors: true, strict: false });
+          const ajv = new Ajv.default({ allErrors: true, strict: false });
           // oxlint-disable-next-line typescript/no-explicit-any
           const validate = ajv.compile(schema as any);
           const ok = validate(parsed);
           if (!ok) {
             const msg =
               validate.errors
-                ?.map((e) => `${e.instancePath || "<root>"} ${e.message || "invalid"}`)
+                ?.map(
+                  (e: { instancePath?: string; message?: string }) =>
+                    `${e.instancePath || "<root>"} ${e.message || "invalid"}`,
+                )
                 .join("; ") ?? "invalid";
             throw new Error(`LLM JSON did not match schema: ${msg}`);
           }

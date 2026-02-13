@@ -37,7 +37,7 @@ export function stripDowngradedToolCallText(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/\[Tool (?:Call|Result)/i.test(text)) {
+  if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
     return text;
   }
 
@@ -186,6 +186,9 @@ export function stripDowngradedToolCallText(text: string): string {
   // Remove [Tool Result for ID ...] blocks and their content.
   cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
 
+  // Remove [Historical context: ...] markers (self-contained within brackets).
+  cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
+
   return cleaned.trim();
 }
 
@@ -218,7 +221,10 @@ export function extractAssistantText(msg: AssistantMessage): string {
         .filter(Boolean)
     : [];
   const extracted = blocks.join("\n").trim();
-  return sanitizeUserFacingText(extracted);
+  // Only apply keyword-based error rewrites when the assistant message is actually an error.
+  // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
+  const errorContext = msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());
+  return sanitizeUserFacingText(extracted, { errorContext });
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {
