@@ -361,6 +361,8 @@ describe("gateway server sessions", () => {
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+    const filesAfterReset = await fs.readdir(dir);
+    expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 
     const badThinking = await rpcReq(ws, "sessions.patch", {
       key: "agent:main:main",
