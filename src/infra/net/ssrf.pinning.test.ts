@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPinnedLookup, resolvePinnedHostname } from "./ssrf.js";
+import {
+  createPinnedLookup,
+  resolvePinnedHostname,
+  resolvePinnedHostnameWithPolicy,
+} from "./ssrf.js";
 
 describe("ssrf pinning", () => {
   it("pins resolved addresses for the target hostname", async () => {
@@ -67,5 +71,35 @@ describe("ssrf pinning", () => {
 
     expect(fallback).toHaveBeenCalledTimes(1);
     expect(result.address).toBe("1.2.3.4");
+  });
+
+  it("enforces hostname allowlist when configured", async () => {
+    const lookup = vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]);
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("api.example.com", {
+        lookupFn: lookup,
+        policy: { hostnameAllowlist: ["cdn.example.com", "*.trusted.example"] },
+      }),
+    ).rejects.toThrow(/allowlist/i);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("supports wildcard hostname allowlist patterns", async () => {
+    const lookup = vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]);
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("assets.example.com", {
+        lookupFn: lookup,
+        policy: { hostnameAllowlist: ["*.example.com"] },
+      }),
+    ).resolves.toMatchObject({ hostname: "assets.example.com" });
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: lookup,
+        policy: { hostnameAllowlist: ["*.example.com"] },
+      }),
+    ).rejects.toThrow(/allowlist/i);
   });
 });

@@ -1934,6 +1934,10 @@ See [Plugins](/tools/plugin).
 
 - Chat Completions: disabled by default. Enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Responses API: `gateway.http.endpoints.responses.enabled`.
+- Responses URL-input hardening:
+  - `gateway.http.endpoints.responses.maxUrlParts`
+  - `gateway.http.endpoints.responses.files.urlAllowlist`
+  - `gateway.http.endpoints.responses.images.urlAllowlist`
 
 ### Multi-instance isolation
 
