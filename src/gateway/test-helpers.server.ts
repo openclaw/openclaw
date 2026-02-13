@@ -33,9 +33,14 @@ import {
   testTailnetIPv4,
 } from "./test-helpers.mocks.js";
 
-// Preload the gateway server module once per worker.
-// Important: `test-helpers.mocks` must run before importing the server so vi.mock hooks apply.
-const serverModulePromise = import("./server.js");
+// Import lazily after test env/home setup so config/session paths resolve to test dirs.
+// Keep one cached module per worker for speed.
+let serverModulePromise: Promise<typeof import("./server.js")> | undefined;
+
+async function getServerModule() {
+  serverModulePromise ??= import("./server.js");
+  return await serverModulePromise;
+}
 
 let previousHome: string | undefined;
 let previousUserProfile: string | undefined;
@@ -109,9 +114,13 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
   }
   applyGatewaySkipEnv();
-  tempConfigRoot = options.uniqueConfigRoot
-    ? await fs.mkdtemp(path.join(tempHome, "openclaw-test-"))
-    : path.join(tempHome, ".openclaw-test");
+  if (options.uniqueConfigRoot) {
+    tempConfigRoot = await fs.mkdtemp(path.join(tempHome, "openclaw-test-"));
+  } else {
+    tempConfigRoot = path.join(tempHome, ".openclaw-test");
+    await fs.rm(tempConfigRoot, { recursive: true, force: true });
+    await fs.mkdir(tempConfigRoot, { recursive: true });
+  }
   setTestConfigRoot(tempConfigRoot);
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
@@ -143,7 +152,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.waitResults.clear();
   drainSystemEvents(resolveMainSessionKeyFromConfig());
   resetAgentRunContextForTest();
-  const mod = await serverModulePromise;
+  const mod = await getServerModule();
   mod.__resetModelCatalogCacheForTest();
   piSdkMock.enabled = false;
   piSdkMock.discoverCalls = 0;
@@ -212,10 +221,10 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   if (scope === "suite") {
     beforeAll(async () => {
       await setupGatewayTestHome();
-      await resetGatewayTestState({ uniqueConfigRoot: true });
+      await resetGatewayTestState({ uniqueConfigRoot: false });
     });
     beforeEach(async () => {
-      await resetGatewayTestState({ uniqueConfigRoot: true });
+      await resetGatewayTestState({ uniqueConfigRoot: false });
     }, 60_000);
     afterEach(async () => {
       await cleanupGatewayTestHome({ restoreEnv: false });
@@ -284,7 +293,7 @@ export function onceMessage<T = unknown>(
 }
 
 export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
-  const mod = await serverModulePromise;
+  const mod = await getServerModule();
   const resolvedOpts =
     opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
   return await mod.startGatewayServer(port, resolvedOpts);

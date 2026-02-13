@@ -144,6 +144,19 @@ type PtySpawn = (
     env?: Record<string, string>;
   },
 ) => PtyHandle;
+type PtyModule = {
+  spawn?: PtySpawn;
+  default?: { spawn?: PtySpawn };
+};
+type PtyModuleLoader = () => Promise<PtyModule>;
+
+const loadPtyModuleDefault: PtyModuleLoader = async () =>
+  (await import("@lydell/node-pty")) as unknown as PtyModule;
+let loadPtyModule: PtyModuleLoader = loadPtyModuleDefault;
+
+export function setPtyModuleLoaderForTests(loader?: PtyModuleLoader): void {
+  loadPtyModule = loader ?? loadPtyModuleDefault;
+}
 
 type ExecProcessOutcome = {
   status: "completed" | "failed";
@@ -477,10 +490,7 @@ async function runExecProcess(opts: {
   } else if (opts.usePty) {
     const { shell, args: shellArgs } = getShellConfig();
     try {
-      const ptyModule = (await import("@lydell/node-pty")) as unknown as {
-        spawn?: PtySpawn;
-        default?: { spawn?: PtySpawn };
-      };
+      const ptyModule = await loadPtyModule();
       const spawnPty = ptyModule.spawn ?? ptyModule.default?.spawn;
       if (!spawnPty) {
         throw new Error("PTY support is unavailable (node-pty spawn not found).");

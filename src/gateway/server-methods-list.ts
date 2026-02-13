@@ -29,6 +29,7 @@ const BASE_METHODS = [
   "wizard.next",
   "wizard.cancel",
   "wizard.status",
+  "talk.config",
   "talk.mode",
   "models.list",
   "agents.list",
