@@ -3249,3 +3249,285 @@ async def start_telegram_webhook(
 
 ---
 
+
+## openclaw_py.agents.auth_profiles.types
+路径: openclaw_py/agents/auth_profiles/types.py
+
+```python
+from openclaw_py.agents.auth_profiles.types import (
+    ApiKeyCredential,
+    TokenCredential,
+    OAuthCredential,
+    AuthProfileCredential,
+    AuthProfileFailureReason,
+    ProfileUsageStats,
+    AuthProfileStore,
+)
+
+class ApiKeyCredential(BaseModel):
+    type: Literal["api_key"]
+    provider: str
+    key: str | None
+    email: str | None
+    metadata: dict[str, str] | None
+
+class TokenCredential(BaseModel):
+    type: Literal["token"]
+    provider: str
+    token: str
+    expires: int | None  # ms since epoch
+    email: str | None
+
+class OAuthCredential(BaseModel):
+    type: Literal["oauth"]
+    provider: str
+    access: str
+    refresh: str | None
+    expires: int | None
+    client_id: str | None
+    client_secret: str | None
+    enterprise_url: str | None
+
+AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential
+
+AuthProfileFailureReason = Literal[
+    "auth_error",
+    "rate_limit",
+    "billing",
+    "overloaded",
+    "network_error",
+]
+
+class ProfileUsageStats(BaseModel):
+    last_used: int | None  # ms since epoch
+    cooldown_until: int | None
+    disabled_until: int | None
+    disabled_reason: AuthProfileFailureReason | None
+    error_count: int
+    failure_counts: dict[AuthProfileFailureReason, int] | None
+    last_failure_at: int | None
+
+class AuthProfileStore(BaseModel):
+    version: int
+    profiles: dict[str, AuthProfileCredential]
+    order: dict[str, list[str]] | None
+    last_good: dict[str, str] | None
+    usage_stats: dict[str, ProfileUsageStats] | None
+```
+
+---
+
+## openclaw_py.agents.auth_profiles.store
+路径: openclaw_py/agents/auth_profiles/store.py
+
+```python
+from openclaw_py.agents.auth_profiles.store import (
+    load_auth_profile_store,
+    ensure_auth_profile_store,
+    save_auth_profile_store,
+    update_auth_profile_store_with_lock,
+)
+
+def load_auth_profile_store(agent_dir: str | None = None) -> AuthProfileStore | None: ...
+
+def ensure_auth_profile_store(agent_dir: str | None = None) -> AuthProfileStore: ...
+
+def save_auth_profile_store(
+    store: AuthProfileStore,
+    agent_dir: str | None = None,
+) -> None: ...
+
+async def update_auth_profile_store_with_lock(
+    params: dict,  # Keys: agent_dir, updater: Callable[[AuthProfileStore], bool]
+) -> AuthProfileStore | None: ...
+```
+
+---
+
+## openclaw_py.agents.auth_profiles.profiles
+路径: openclaw_py.agents.auth_profiles/profiles.py
+
+```python
+from openclaw_py.agents.auth_profiles.profiles import (
+    upsert_auth_profile,
+    list_profiles_for_provider,
+    mark_auth_profile_good,
+    set_auth_profile_order,
+    normalize_secret_input,
+)
+
+def normalize_secret_input(secret: str) -> str: ...
+
+def upsert_auth_profile(
+    profile_id: str,
+    credential: AuthProfileCredential,
+    agent_dir: str | None = None,
+) -> None: ...
+
+def list_profiles_for_provider(
+    store: AuthProfileStore,
+    provider: str,
+) -> list[str]: ...
+
+async def mark_auth_profile_good(
+    profile_id: str,
+    cfg: OpenClawConfig | None = None,
+    agent_dir: str | None = None,
+) -> None: ...
+
+def set_auth_profile_order(
+    provider: str,
+    order: list[str],
+    agent_dir: str | None = None,
+) -> None: ...
+```
+
+---
+
+## openclaw_py.agents.auth_profiles.order
+路径: openclaw_py/agents/auth_profiles/order.py
+
+```python
+from openclaw_py.agents.auth_profiles.order import (
+    resolve_auth_profile_order,
+    sort_profiles_by_cooldown,
+)
+
+def resolve_auth_profile_order(
+    cfg: OpenClawConfig | None,
+    store: AuthProfileStore,
+    provider: str,
+    preferred_profile: str | None = None,
+) -> list[str]: ...
+
+def sort_profiles_by_cooldown(
+    profile_ids: list[str],
+    store: AuthProfileStore,
+) -> list[str]: ...
+```
+
+---
+
+## openclaw_py.agents.auth_profiles.usage
+路径: openclaw_py/agents/auth_profiles/usage.py
+
+```python
+from openclaw_py.agents.auth_profiles.usage import (
+    calculate_auth_profile_cooldown_ms,
+    is_profile_in_cooldown,
+    mark_auth_profile_used,
+    mark_auth_profile_failure,
+)
+
+def calculate_auth_profile_cooldown_ms(error_count: int) -> int: ...
+
+def is_profile_in_cooldown(
+    store: AuthProfileStore,
+    profile_id: str,
+) -> bool: ...
+
+async def mark_auth_profile_used(
+    store: AuthProfileStore,
+    profile_id: str,
+    agent_dir: str | None = None,
+) -> None: ...
+
+async def mark_auth_profile_failure(
+    store: AuthProfileStore,
+    profile_id: str,
+    reason: AuthProfileFailureReason,
+    cfg: OpenClawConfig | None = None,
+    agent_dir: str | None = None,
+) -> None: ...
+```
+
+---
+
+## openclaw_py.agents.auth_profiles.paths
+路径: openclaw_py/agents/auth_profiles/paths.py
+
+```python
+from openclaw_py.agents.auth_profiles.paths import (
+    resolve_auth_store_path,
+    resolve_legacy_auth_store_path,
+    ensure_auth_store_file,
+)
+
+def resolve_auth_store_path(agent_dir: str | None = None) -> Path: ...
+
+def resolve_legacy_auth_store_path(agent_dir: str | None = None) -> Path: ...
+
+def ensure_auth_store_file(auth_path: Path) -> None: ...
+```
+
+---
+
+## openclaw_py.agents.auth_profiles.oauth
+路径: openclaw_py/agents/auth_profiles/oauth.py
+
+```python
+from openclaw_py.agents.auth_profiles.oauth import (
+    is_oauth_token_near_expiry,
+    should_refresh_oauth_token,
+)
+
+def is_oauth_token_near_expiry(
+    credential: OAuthCredential,
+    threshold_ms: int = 300000,  # 5 minutes
+) -> bool: ...
+
+def should_refresh_oauth_token(credential: OAuthCredential) -> bool: ...
+```
+
+---
+
+## openclaw_py.agents.auth_profiles.external_cli_sync
+路径: openclaw_py/agents/auth_profiles/external_cli_sync.py
+
+```python
+from openclaw_py.agents.auth_profiles.external_cli_sync import (
+    sync_external_cli_credentials,
+)
+
+def sync_external_cli_credentials(store: AuthProfileStore) -> bool: ...
+```
+
+---
+
+## openclaw_py.agents.auth_profiles.doctor
+路径: openclaw_py/agents/auth_profiles/doctor.py
+
+```python
+from openclaw_py.agents.auth_profiles.doctor import (
+    check_profile_valid,
+    check_profile_expired,
+    list_invalid_profiles,
+    list_expired_profiles,
+)
+
+def check_profile_valid(credential: AuthProfileCredential) -> bool: ...
+
+def check_profile_expired(credential: AuthProfileCredential) -> bool: ...
+
+def list_invalid_profiles(store: AuthProfileStore) -> list[str]: ...
+
+def list_expired_profiles(store: AuthProfileStore) -> list[str]: ...
+```
+
+---
+
+## openclaw_py.agents.auth_profiles.repair
+路径: openclaw_py/agents/auth_profiles/repair.py
+
+```python
+from openclaw_py.agents.auth_profiles.repair import (
+    repair_profile_id,
+    migrate_profile_store,
+)
+
+def repair_profile_id(old_id: str) -> str: ...
+
+def migrate_profile_store(store: AuthProfileStore) -> AuthProfileStore: ...
+```
+
+---

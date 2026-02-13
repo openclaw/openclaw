@@ -1,7 +1,7 @@
 # 迁移状态
 
 ## 当前批次
-batch: 12
+batch: 13
 status: not_started
 
 ## 批次进度
@@ -18,12 +18,23 @@ status: not_started
 | 9 | Agent 工具 + Skills | ✅ | 2026-02-13 | cd1ca40 |
 | 10 | Telegram 核心 Bot | ✅ | 2026-02-13 | b2026c1 |
 | 11 | Telegram 媒体/Webhook/群组 | ✅ | 2026-02-13 | afb5899 |
-| 12 | 用户管理 + 权限 | ⬜ | - | - |
+| 12 | 用户管理 + 权限 | ✅ | 2026-02-13 | pending |
 | 13 | 消息路由（全链路） | ⬜ | - | - |
 | 14 | CLI 命令行 | ⬜ | - | - |
 | 15 | 集成测试 + 联调 | ⬜ | - | - |
 
 ## 已生成的 Python 文件
+- openclaw_py/agents/auth_profiles/constants.py
+- openclaw_py/agents/auth_profiles/doctor.py
+- openclaw_py/agents/auth_profiles/external_cli_sync.py
+- openclaw_py/agents/auth_profiles/oauth.py
+- openclaw_py/agents/auth_profiles/order.py
+- openclaw_py/agents/auth_profiles/paths.py
+- openclaw_py/agents/auth_profiles/profiles.py
+- openclaw_py/agents/auth_profiles/repair.py
+- openclaw_py/agents/auth_profiles/store.py
+- openclaw_py/agents/auth_profiles/types.py
+- openclaw_py/agents/auth_profiles/usage.py
 - openclaw_py/agents/compaction.py
 - openclaw_py/agents/context_window.py
 - openclaw_py/agents/defaults.py

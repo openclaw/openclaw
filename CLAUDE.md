@@ -5,7 +5,7 @@ OpenClaw 个人 AI 助手。后端从 TypeScript 转 Python，前端 UI 保留�
 只保留 Telegram 频道，其他频道删除。全功能保留。
 
 ## 当前进度
-**批次 11 / 15：Telegram 媒体/Webhook/群组** ✅ 已完成
+**批次 12 / 15：Auth Profiles（AI 认证管理）** ✅ 已完成
 
 ## 已完成的 Python 文件
 - openclaw_py/types/base.py - 核心基础类型（14 个 Literal 类型 + normalize_chat_type 函数）
@@ -18,6 +18,7 @@ OpenClaw 个人 AI 助手。后端从 TypeScript 转 Python，前端 UI 保留�
 - openclaw_py/agents/providers/*.py - AI 提供商（base, anthropic_provider, openai_provider, litellm_provider）
 - openclaw_py/agents/tools/*.py - Agent 工具系统（types, common, policy, bash_exec, bash_shared, web_fetch, web_search, create_tools）
 - openclaw_py/agents/skills/*.py - Skills 系统（types, workspace）
+- openclaw_py/agents/auth_profiles/*.py - Auth Profiles（types, constants, paths, store, profiles, order, usage, oauth, external_cli_sync, doctor, repair）
 - openclaw_py/channels/telegram/*.py - Telegram Bot（types, helpers, token, accounts, access, api_logging, updates, message_context, bot, monitor, caption, format, download, media, draft_chunking, draft_stream, group_migration, send, webhook）
 
 ## 环境
@@ -90,7 +91,7 @@ extensions/、Swabble/、apps/
 9.  ✅ Agent 工具 + Skills 🎯 v0.2-engine
 10. ✅ Telegram - 核心 Bot
 11. ✅ Telegram - 媒体/Webhook/群组
-12. ⬜ 用户管理 + 权限
+12. ✅ Auth Profiles（AI 认证管理）
 13. ⬜ 消息路由（全链路） 🎯 v0.3-connected
 14. ⬜ CLI 命令行
 15. ⬜ 集成测试 + 前后端联调 🎯 v1.0-python

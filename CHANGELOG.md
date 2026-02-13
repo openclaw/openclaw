@@ -553,3 +553,66 @@
 - 无
 
 **测试结果**：92 passed（批次 11 新增测试）
+---
+
+## 批次 12：Auth Profiles（AI 提供商认证管理）（2026-02-13）
+
+**新增文件**：
+- openclaw_py/agents/auth_profiles/__init__.py - Auth Profiles 模块导出
+- openclaw_py/agents/auth_profiles/types.py - 认证凭据数据模型（ApiKeyCredential, TokenCredential, OAuthCredential, ProfileUsageStats, AuthProfileStore）
+- openclaw_py/agents/auth_profiles/constants.py - Auth Profiles 常量定义
+- openclaw_py/agents/auth_profiles/paths.py - 认证文件路径解析（auth-profiles.json, legacy auth.json）
+- openclaw_py/agents/auth_profiles/store.py - 认证存储（JSON 持久化，文件锁，外部 CLI 同步，legacy 迁移）
+- openclaw_py/agents/auth_profiles/profiles.py - Profile CRUD 操作（upsert, list, mark_good, set_order）
+- openclaw_py/agents/auth_profiles/order.py - Profile 排序逻辑（round-robin, cooldown 排序）
+- openclaw_py/agents/auth_profiles/usage.py - 用量追踪和冷却管理（指数退避，billing 错误特殊处理）
+- openclaw_py/agents/auth_profiles/oauth.py - OAuth token 刷新检测
+- openclaw_py/agents/auth_profiles/external_cli_sync.py - 外部 CLI 凭据同步（~/.anthropic/config.json, ~/.openai/config.json）
+- openclaw_py/agents/auth_profiles/doctor.py - Profile 健康检查（有效性、过期检测）
+- openclaw_py/agents/auth_profiles/repair.py - Profile ID 修复和迁移
+- openclaw_py/agents/__init__.py - 更新（导出 auth_profiles 相关模块）
+- openclaw_py/utils/common.py - 修复（ensure_dir 改为同步函数）
+- tests/agents/auth_profiles/__init__.py - 测试模块初始化
+- tests/agents/auth_profiles/test_types.py - 认证类型测试（10 个测试）
+- tests/agents/auth_profiles/test_profiles.py - Profile 操作测试（7 个测试）
+- tests/agents/auth_profiles/test_usage.py - 用量追踪测试（15 个测试）
+
+**核心变更**：
+- 实现了完整的 AI 提供商认证管理系统（Auth Profiles）：
+  - 多凭据管理（支持多个 API key/OAuth/token）
+  - 三种认证类型：
+    - API Key: provider, key, email, metadata
+    - Token: provider, token, expires, email
+    - OAuth: provider, access, refresh, expires, client_id, enterprise_url
+  - Profile 轮换（round-robin，基于 lastUsed 时间戳）
+  - 冷却系统（指数退避）：
+    - 常规错误：1min → 5min (5^1) → 25min (5^2) → 最大 1hr
+    - Billing 错误：5hr → 10hr (2^1 × 5hr) → 24hr max
+  - 文件锁保护（使用 filelock 库，防止并发写入）
+  - 外部 CLI 同步（自动从 Anthropic CLI/OpenAI CLI 同步凭据，TTL 15 分钟）
+  - Legacy 迁移（自动从旧 auth.json 格式迁移）
+  - Subagent 继承（子 agent 自动继承父 agent 的 auth profiles）
+  - Profile 排序逻辑：
+    - Type 优先级：oauth > token > api_key
+    - 同类型内按 lastUsed 排序（oldest first，实现 round-robin）
+    - Cooldown profile 排在后面，按过期时间排序
+  - Profile 健康检查和修复工具
+  - 失败计数和原因追踪（auth_error, rate_limit, billing, overloaded, network_error）
+  - OAuth token 刷新检测（距离过期 5 分钟内触发刷新）
+- 新增依赖：filelock >= 3.13.0
+- 修复 ensure_dir 为同步函数（移除不必要的 async）
+- 所有模块使用 Pydantic v2 数据模型，类型安全
+- 所有 API 调用均为 async/await 异步模式（除路径解析等同步操作）
+- 完整的单元测试覆盖（32 个测试，100% 通过）
+
+**依赖的已有模块**：
+- openclaw_py.config.types - OpenClawConfig 配置模型
+- openclaw_py.config.paths - resolve_state_dir 状态目录解析
+- openclaw_py.logging - log_info, log_warn, log_error 日志函数
+- openclaw_py.utils.common - ensure_dir 文件系统工具
+
+**已知问题**：
+- 无
+
+**测试结果**：182 passed（批次 12 agents 模块全量测试，32 new auth_profiles + 150 from previous agent batches）
+

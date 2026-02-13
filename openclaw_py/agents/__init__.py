@@ -4,6 +4,36 @@ This module provides AI agent functionality including model selection,
 provider implementations, message creation, tools, and skills.
 """
 
+# Auth profiles
+from .auth_profiles import (
+    AUTH_PROFILE_FILENAME,
+    AUTH_STORE_VERSION,
+    ApiKeyCredential,
+    AuthProfileCredential,
+    AuthProfileFailureReason,
+    AuthProfileStore,
+    CLAUDE_CLI_PROFILE_ID,
+    CODEX_CLI_PROFILE_ID,
+    LEGACY_AUTH_FILENAME,
+    OAuthCredential,
+    ProfileUsageStats,
+    TokenCredential,
+    clear_auth_profile_cooldown,
+    ensure_auth_profile_store,
+    is_profile_in_cooldown,
+    list_profiles_for_provider,
+    load_auth_profile_store,
+    mark_auth_profile_cooldown,
+    mark_auth_profile_failure,
+    mark_auth_profile_good,
+    mark_auth_profile_used,
+    resolve_auth_profile_order,
+    save_auth_profile_store,
+    set_auth_profile_order,
+    update_auth_profile_store_with_lock,
+    upsert_auth_profile,
+)
+
 # Tools and Skills
 from .skills import (
     Skill,
@@ -79,6 +109,33 @@ from .types import (
 from .usage import derive_prompt_tokens, derive_session_total_tokens, has_nonzero_usage, merge_usage, normalize_usage
 
 __all__ = [
+    # Auth profiles
+    "ApiKeyCredential",
+    "TokenCredential",
+    "OAuthCredential",
+    "AuthProfileCredential",
+    "AuthProfileFailureReason",
+    "ProfileUsageStats",
+    "AuthProfileStore",
+    "AUTH_STORE_VERSION",
+    "AUTH_PROFILE_FILENAME",
+    "LEGACY_AUTH_FILENAME",
+    "CLAUDE_CLI_PROFILE_ID",
+    "CODEX_CLI_PROFILE_ID",
+    "load_auth_profile_store",
+    "ensure_auth_profile_store",
+    "save_auth_profile_store",
+    "update_auth_profile_store_with_lock",
+    "upsert_auth_profile",
+    "list_profiles_for_provider",
+    "mark_auth_profile_good",
+    "set_auth_profile_order",
+    "resolve_auth_profile_order",
+    "mark_auth_profile_used",
+    "mark_auth_profile_failure",
+    "mark_auth_profile_cooldown",
+    "clear_auth_profile_cooldown",
+    "is_profile_in_cooldown",
     # Tools
     "AnyAgentTool",
     "ToolContext",

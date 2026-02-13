@@ -41,6 +41,7 @@ typer = {extras = ["all"], version = ">=0.14.0"}
 pyee = ">=12.0.0"
 pyyaml = ">=6.0.0"
 pathlib2 = ">=2.3.0"
+filelock = ">=3.13.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.3.0"

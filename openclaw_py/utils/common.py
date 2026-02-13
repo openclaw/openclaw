@@ -9,14 +9,11 @@ from pathlib import Path
 from typing import Any
 
 
-async def ensure_dir(dir_path: str | Path) -> None:
+def ensure_dir(dir_path: str | Path) -> None:
     """Ensure directory exists (create if missing).
 
     Args:
         dir_path: Directory path to ensure exists
-
-    This function is async to match the TypeScript version,
-    though Path.mkdir is not truly async in Python.
     """
     path = Path(dir_path)
     path.mkdir(parents=True, exist_ok=True)
