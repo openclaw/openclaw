@@ -10,6 +10,7 @@ import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import { DEEPSEEK_BASE_URL, DEEPSEEK_MODEL_CATALOG } from "./deepseek-models.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import {
   buildSyntheticModelDefinition,
@@ -481,6 +482,14 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
+export function buildDeepseekProvider(): ProviderConfig {
+  return {
+    baseUrl: DEEPSEEK_BASE_URL,
+    api: "openai-completions",
+    models: DEEPSEEK_MODEL_CATALOG,
+  };
+}
+
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -614,6 +623,16 @@ export async function resolveImplicitProviders(params: {
     providers.together = {
       ...buildTogetherProvider(),
       apiKey: togetherKey,
+    };
+  }
+
+  const deepseekKey =
+    resolveEnvApiKeyVarName("deepseek") ??
+    resolveApiKeyFromProfiles({ provider: "deepseek", store: authStore });
+  if (deepseekKey) {
+    providers.deepseek = {
+      ...buildDeepseekProvider(),
+      apiKey: deepseekKey,
     };
   }
 

@@ -25,6 +25,7 @@ export type AuthChoiceGroupId =
   | "venice"
   | "qwen"
   | "together"
+  | "deepseek"
   | "qianfan"
   | "xai"
   | "custom";
@@ -139,6 +140,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["together-api-key"],
   },
   {
+    value: "deepseek",
+    label: "DeepSeek",
+    hint: "API key",
+    choices: ["deepseek-api-key"],
+  },
+  {
     value: "venice",
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",
@@ -216,6 +223,7 @@ export function buildAuthChoiceOptions(params: {
     label: "Kimi Code API key (subscription)",
   });
   options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
+  options.push({ value: "deepseek-api-key", label: "DeepSeek API key" });
   options.push({
     value: "venice-api-key",
     label: "Venice AI API key",

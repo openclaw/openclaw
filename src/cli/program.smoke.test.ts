@@ -185,6 +185,12 @@ describe("cli program (smoke)", () => {
         field: "togetherApiKey",
       },
       {
+        authChoice: "deepseek-api-key",
+        flag: "--deepseek-api-key",
+        key: "sk-deepseek-test",
+        field: "deepseekApiKey",
+      },
+      {
         authChoice: "moonshot-api-key-cn",
         flag: "--moonshot-api-key",
         key: "sk-moonshot-cn-test",
