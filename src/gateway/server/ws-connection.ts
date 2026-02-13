@@ -36,7 +36,6 @@ function replaceControlChars(value: string): string {
   }
   return cleaned;
 }
-
 const sanitizeLogValue = (value: string | undefined): string | undefined => {
   if (!value) {
     return undefined;
