@@ -232,19 +232,7 @@ function linearToMulaw(sample: number): number {
  * Convert 8-bit mu-law to 16-bit linear PCM.
  * Useful for decoding incoming audio.
  */
-export function mulawToLinear(mulaw: number): number {
-  // mu-law is transmitted inverted
-  mulaw = ~mulaw & 0xff;
-
-  const sign = mulaw & 0x80;
-  const exponent = (mulaw >> 4) & 0x07;
-  const mantissa = mulaw & 0x0f;
-
-  let sample = ((mantissa << 3) + 132) << exponent;
-  sample -= 132;
-
-  return sign ? -sample : sample;
-}
+export { mulawToLinear } from "../audio/g711.js";
 
 /**
  * Chunk audio buffer into 20ms frames for streaming.

@@ -27,6 +27,12 @@ export interface VoiceCallProvider {
   readonly name: ProviderName;
 
   /**
+   * Optional lifecycle hook invoked by the runtime during shutdown.
+   * Providers that open long-lived connections (e.g. websockets) should release them here.
+   */
+  destroy?: () => Promise<void> | void;
+
+  /**
    * Verify webhook signature/HMAC before processing.
    * Must be called before parseWebhookEvent.
    */

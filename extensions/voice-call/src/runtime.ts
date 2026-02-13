@@ -4,6 +4,7 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import { CallManager } from "./manager.js";
+import { AsteriskAriProvider } from "./providers/asterisk-ari.js";
 import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
@@ -40,11 +41,15 @@ function isLoopbackBind(bind: string | undefined): boolean {
   return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
 }
 
-function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
+function resolveProvider(
+  config: VoiceCallConfig,
+  manager: CallManager,
+  coreConfig?: CoreConfig,
+): VoiceCallProvider {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
     isLoopbackBind(config.serve?.bind) &&
-    (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
+    (config.tunnel?.allowNgrokFreeTierLoopbackBypass || config.tunnel?.allowNgrokFreeTier || false);
 
   switch (config.provider) {
     case "telnyx":
@@ -55,6 +60,8 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           publicKey: config.telnyx?.publicKey,
         },
         {
+          // Preserve upstream behavior: allow unsigned webhooks only when inbound is effectively off.
+          // (Inbound allowlist/pairing requires telnyx.publicKey; see validateProviderConfig.)
           allowUnsignedWebhooks:
             config.inboundPolicy === "open" || config.inboundPolicy === "disabled",
         },
@@ -88,6 +95,8 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
       );
     case "mock":
       return new MockProvider();
+    case "asterisk-ari":
+      return new AsteriskAriProvider({ config, manager, coreConfig });
     default:
       throw new Error(`Unsupported voice-call provider: ${String(config.provider)}`);
   }
@@ -118,8 +127,8 @@ export async function createVoiceCallRuntime(params: {
     throw new Error(`Invalid voice-call config: ${validation.errors.join("; ")}`);
   }
 
-  const provider = resolveProvider(config);
   const manager = new CallManager(config);
+  const provider = resolveProvider(config, manager, coreConfig);
   const webhookServer = new VoiceCallWebhookServer(config, manager, provider, coreConfig);
 
   const localUrl = await webhookServer.start();
@@ -155,6 +164,29 @@ export async function createVoiceCallRuntime(params: {
     (provider as TwilioProvider).setPublicUrl(publicUrl);
   }
 
+  if (provider.name === "asterisk-ari") {
+    const ariProvider = provider as AsteriskAriProvider;
+    if (ttsRuntime?.textToSpeechTelephony) {
+      try {
+        const ttsProvider = createTelephonyTtsProvider({
+          coreConfig,
+          ttsOverride: config.tts,
+          runtime: ttsRuntime,
+        });
+        ariProvider.setTTSProvider(ttsProvider);
+        log.info("[voice-call] Telephony TTS provider configured for asterisk-ari");
+      } catch (err) {
+        log.warn(
+          `[voice-call] Failed to initialize telephony TTS for asterisk-ari: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    } else {
+      log.warn("[voice-call] Telephony TTS unavailable; asterisk-ari playback disabled");
+    }
+  }
+
   if (provider.name === "twilio" && config.streaming?.enabled) {
     const twilioProvider = provider as TwilioProvider;
     if (ttsRuntime?.textToSpeechTelephony) {
@@ -186,7 +218,28 @@ export async function createVoiceCallRuntime(params: {
 
   manager.initialize(provider, webhookUrl);
 
+  if (provider.name === "asterisk-ari") {
+    const ariProvider = provider as AsteriskAriProvider;
+    ariProvider.reconcileLingeringCalls().catch((err) => {
+      log.warn(
+        `[voice-call] Failed to reconcile lingering ARI calls: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
+  }
+
   const stop = async () => {
+    try {
+      if (typeof provider.destroy === "function") {
+        await provider.destroy();
+      }
+    } catch (err) {
+      log.warn(
+        `[voice-call] Provider shutdown failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     if (tunnelResult) {
       await tunnelResult.stop();
     }

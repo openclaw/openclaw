@@ -221,4 +221,41 @@ describe("CallManager", () => {
 
     expect(manager.getCallByProviderCallId("provider-exact")).toBeDefined();
   });
+
+  it("does not auto-create a duplicate inbound call when providerCallId matches an existing call", () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+      inboundPolicy: "open",
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const manager = new CallManager(config, storePath);
+    manager.initialize(new FakeProvider(), "https://example.com/voice/webhook");
+
+    const existing = manager.ensureInboundCall({
+      providerCallId: "provider-1",
+      from: "+15550001234",
+      to: "+15550000000",
+    });
+    expect(existing).toBeDefined();
+
+    // Simulate a provider emitting an event with a temporary/foreign callId,
+    // but a stable providerCallId that already exists.
+    manager.processEvent({
+      id: "evt-dup-1",
+      type: "call.initiated",
+      callId: "foreign-call-id",
+      providerCallId: "provider-1",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550000000",
+    });
+
+    expect(manager.getActiveCalls()).toHaveLength(1);
+    expect(manager.getCallByProviderCallId("provider-1")?.callId).toBe(existing?.callId);
+    expect(manager.getCall("foreign-call-id")).toBeUndefined();
+  });
 });

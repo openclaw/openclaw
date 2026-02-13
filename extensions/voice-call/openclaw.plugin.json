@@ -157,6 +157,10 @@
     "responseTimeoutMs": {
       "label": "Response Timeout (ms)",
       "advanced": true
+    },
+    "autoResponse": {
+      "label": "Auto Response",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -168,7 +172,7 @@
       },
       "provider": {
         "type": "string",
-        "enum": ["telnyx", "twilio", "plivo", "mock"]
+        "enum": ["telnyx", "twilio", "plivo", "mock", "asterisk-ari"]
       },
       "telnyx": {
         "type": "object",
@@ -206,6 +210,39 @@
           },
           "authToken": {
             "type": "string"
+          }
+        }
+      },
+      "asteriskAri": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "app": {
+            "type": "string"
+          },
+          "trunk": {
+            "type": "string"
+          },
+          "rtpHost": {
+            "type": "string"
+          },
+          "rtpPort": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 65535
+          },
+          "codec": {
+            "type": "string",
+            "enum": ["ulaw", "alaw"]
           }
         }
       },
@@ -553,6 +590,9 @@
       "responseTimeoutMs": {
         "type": "integer",
         "minimum": 1
+      },
+      "autoResponse": {
+        "type": "boolean"
       }
     }
   }

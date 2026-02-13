@@ -116,15 +116,6 @@ export class VoiceCallWebhookServer {
           isFinal: true,
         };
         this.manager.processEvent(event);
-
-        // Auto-respond in conversation mode (inbound always, outbound if mode is conversation)
-        const callMode = call.metadata?.mode as string | undefined;
-        const shouldRespond = call.direction === "inbound" || callMode === "conversation";
-        if (shouldRespond) {
-          this.handleInboundResponse(call.callId, transcript).catch((err) => {
-            console.warn(`[voice-call] Failed to auto-respond:`, err);
-          });
-        }
       },
       onSpeechStart: (providerCallId) => {
         if (this.provider.name === "twilio") {
@@ -314,51 +305,6 @@ export class VoiceCallWebhookServer {
     timeoutMs = 30_000,
   ): Promise<string> {
     return readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
-  }
-
-  /**
-   * Handle auto-response for inbound calls using the agent system.
-   * Supports tool calling for richer voice interactions.
-   */
-  private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
-    console.log(`[voice-call] Auto-responding to inbound call ${callId}: "${userMessage}"`);
-
-    // Get call context for conversation history
-    const call = this.manager.getCall(callId);
-    if (!call) {
-      console.warn(`[voice-call] Call ${callId} not found for auto-response`);
-      return;
-    }
-
-    if (!this.coreConfig) {
-      console.warn("[voice-call] Core config missing; skipping auto-response");
-      return;
-    }
-
-    try {
-      const { generateVoiceResponse } = await import("./response-generator.js");
-
-      const result = await generateVoiceResponse({
-        voiceConfig: this.config,
-        coreConfig: this.coreConfig,
-        callId,
-        from: call.from,
-        transcript: call.transcript,
-        userMessage,
-      });
-
-      if (result.error) {
-        console.error(`[voice-call] Response generation error: ${result.error}`);
-        return;
-      }
-
-      if (result.text) {
-        console.log(`[voice-call] AI response: "${result.text}"`);
-        await this.manager.speak(callId, result.text);
-      }
-    } catch (err) {
-      console.error(`[voice-call] Auto-response error:`, err);
-    }
   }
 }
 

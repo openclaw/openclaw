@@ -6,6 +6,7 @@ export { resolveThinkingDefault } from "./agents/model-selection.ts";
 export { runEmbeddedPiAgent } from "./agents/pi-embedded.ts";
 export { resolveAgentTimeoutMs } from "./agents/timeout.ts";
 export { ensureAgentWorkspace } from "./agents/workspace.ts";
+export { transcribeAudioWithCore } from "./media-understanding/transcribe.ts";
 export {
   resolveStorePath,
   loadSessionStore,

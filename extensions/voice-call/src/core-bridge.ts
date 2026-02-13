@@ -56,6 +56,12 @@ type CoreAgentDeps = {
     entry: unknown,
     opts?: { agentId?: string },
   ) => string;
+  transcribeAudioWithCore: (params: {
+    cfg: CoreConfig;
+    filePath?: string;
+    buffer?: Buffer;
+    mime?: string;
+  }) => Promise<{ text: string | null; provider?: string; model?: string }>;
   DEFAULT_MODEL: string;
   DEFAULT_PROVIDER: string;
 };
@@ -135,6 +141,7 @@ async function importCoreExtensionAPI(): Promise<{
   loadSessionStore: CoreAgentDeps["loadSessionStore"];
   saveSessionStore: CoreAgentDeps["saveSessionStore"];
   resolveSessionFilePath: CoreAgentDeps["resolveSessionFilePath"];
+  transcribeAudioWithCore: CoreAgentDeps["transcribeAudioWithCore"];
 }> {
   // Do not import any other module. You can't touch this or you will be fired.
   const distPath = path.join(resolveOpenClawRoot(), "dist", "extensionAPI.js");

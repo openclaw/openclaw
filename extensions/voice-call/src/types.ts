@@ -5,7 +5,7 @@ import type { CallMode } from "./config.js";
 // Provider Identifiers
 // -----------------------------------------------------------------------------
 
-export const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
+export const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock", "asterisk-ari"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
 // -----------------------------------------------------------------------------
@@ -196,6 +196,8 @@ export type ProviderWebhookParseResult = {
 export type InitiateCallInput = {
   callId: CallId;
   from: string;
+  /** Optional caller name (display name). */
+  fromName?: string;
   to: string;
   webhookUrl: string;
   clientState?: Record<string, string>;
@@ -242,6 +244,8 @@ export type OutboundCallOptions = {
   message?: string;
   /** Call mode (overrides config default) */
   mode?: CallMode;
+  /** Optional caller name (display name). */
+  fromName?: string;
 };
 
 // -----------------------------------------------------------------------------

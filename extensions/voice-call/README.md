@@ -7,6 +7,7 @@ Providers:
 - **Twilio** (Programmable Voice + Media Streams)
 - **Telnyx** (Call Control v2)
 - **Plivo** (Voice API + XML transfer + GetInput speech)
+- **Asterisk ARI** (on‑prem SIP/PBX/GSM via Stasis + RTP)
 - **Mock** (dev/no network)
 
 Docs: `https://docs.openclaw.ai/plugins/voice-call`
@@ -36,7 +37,7 @@ Put under `plugins.entries.voice-call.config`:
 
 ```json5
 {
-  provider: "twilio", // or "telnyx" | "plivo" | "mock"
+  provider: "twilio", // or "telnyx" | "plivo" | "asterisk-ari" | "mock"
   fromNumber: "+15550001234",
   toNumber: "+15550005678",
 
@@ -48,6 +49,17 @@ Put under `plugins.entries.voice-call.config`:
   plivo: {
     authId: "MAxxxxxxxxxxxxxxxxxxxx",
     authToken: "your_token",
+  },
+
+  asteriskAri: {
+    baseUrl: "http://127.0.0.1:8088",
+    username: "ari",
+    password: "secret",
+    app: "openclaw",
+    rtpHost: "127.0.0.1",
+    rtpPort: 12000,
+    codec: "ulaw", // or "alaw"
+    // trunk: "gsmtrunk", // optional
   },
 
   // Webhook server
@@ -75,6 +87,7 @@ Put under `plugins.entries.voice-call.config`:
 Notes:
 
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
+- Asterisk ARI does **not** require public webhooks (runs via ARI + RTP on your Asterisk host).
 - `mock` is a local dev provider (no network calls).
 - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
 
@@ -98,7 +111,7 @@ same shape — overrides deep-merge with `messages.tts`.
 Notes:
 
 - Edge TTS is ignored for voice calls (telephony audio needs PCM; Edge output is unreliable).
-- Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+- Core TTS is used for **Asterisk ARI** and for **Twilio media streaming**. Provider‑native voices are used otherwise (if supported by the provider).
 
 ## CLI
 
