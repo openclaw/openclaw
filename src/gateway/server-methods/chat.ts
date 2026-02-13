@@ -9,6 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -206,6 +207,44 @@ function broadcastChatError(params: {
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
 }
 
+function broadcastPetActivity(params: {
+  context: Pick<GatewayRequestContext, "broadcast" | "chatAbortControllers">;
+  state: "working" | "idle";
+  runId?: string;
+  sessionKey?: string;
+  reason: string;
+}) {
+  params.context.broadcast("pet.activity", {
+    state: params.state,
+    reason: params.reason,
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    activeChatRuns: params.context.chatAbortControllers.size,
+    ts: Date.now(),
+  });
+  try {
+    const outPath = path.join(resolveStateDir(), "pet-activity.json");
+    fs.writeFileSync(
+      outPath,
+      JSON.stringify(
+        {
+          state: params.state,
+          reason: params.reason,
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          activeChatRuns: params.context.chatAbortControllers.size,
+          ts: Date.now(),
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+  } catch {
+    // Best-effort side channel for desktop pet status; ignore file IO errors.
+  }
+}
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
@@ -293,6 +332,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey,
         stopReason: "rpc",
       });
+      if (context.chatAbortControllers.size === 0) {
+        broadcastPetActivity({
+          context,
+          state: "idle",
+          sessionKey,
+          reason: "chat.abort.all",
+        });
+      }
       respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
       return;
     }
@@ -316,6 +363,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       stopReason: "rpc",
     });
+    if (context.chatAbortControllers.size === 0) {
+      broadcastPetActivity({
+        context,
+        state: "idle",
+        runId,
+        sessionKey,
+        reason: "chat.abort.one",
+      });
+    }
     respond(true, {
       ok: true,
       aborted: res.aborted,
@@ -430,6 +486,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
         { sessionKey: rawSessionKey, stopReason: "stop" },
       );
+      if (context.chatAbortControllers.size === 0) {
+        broadcastPetActivity({
+          context,
+          state: "idle",
+          sessionKey: rawSessionKey,
+          reason: "chat.stop",
+        });
+      }
       respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
       return;
     }
@@ -459,6 +523,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey: rawSessionKey,
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
+      });
+      broadcastPetActivity({
+        context,
+        state: "working",
+        runId: clientRunId,
+        sessionKey: rawSessionKey,
+        reason: "chat.send.start",
       });
       const ackPayload = {
         runId: clientRunId,
@@ -626,6 +697,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         })
         .finally(() => {
           context.chatAbortControllers.delete(clientRunId);
+          broadcastPetActivity({
+            context,
+            state: context.chatAbortControllers.size > 0 ? "working" : "idle",
+            runId: clientRunId,
+            sessionKey: rawSessionKey,
+            reason: "chat.send.finish",
+          });
         });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
