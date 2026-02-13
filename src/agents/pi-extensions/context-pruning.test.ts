@@ -68,7 +68,14 @@ function makeAssistant(text: string): AgentMessage {
     api: "openai-responses",
     provider: "openai",
     model: "fake",
-    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
     stopReason: "stop",
     timestamp: Date.now(),
   };
@@ -521,5 +528,129 @@ describe("context-pruning", () => {
     expect(text).toContain("abcdef");
     expect(text).toContain("efghij");
     expect(text).toContain("[Tool result trimmed:");
+  });
+
+  it("calls onPruned with estimated token count when pruning occurs", async () => {
+    const sessionManager = {};
+    let prunedTokens: number | undefined;
+
+    setContextPruningRuntime(sessionManager, {
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 0,
+        softTrimRatio: 0,
+        hardClearRatio: 0,
+        minPrunableToolChars: 0,
+        hardClear: { enabled: true, placeholder: "[cleared]" },
+        softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
+      },
+      contextWindowTokens: 1000,
+      isToolPrunable: () => true,
+      lastCacheTouchAt: Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000,
+      onPruned: (estimatedTokens) => {
+        prunedTokens = estimatedTokens;
+      },
+    });
+
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistant("a1"),
+      makeToolResult({
+        toolCallId: "t1",
+        toolName: "exec",
+        text: "x".repeat(20_000),
+      }),
+      makeAssistant("a2"),
+    ];
+
+    let handler:
+      | ((
+          event: { messages: AgentMessage[] },
+          ctx: ExtensionContext,
+        ) => { messages: AgentMessage[] } | undefined)
+      | undefined;
+
+    const api = {
+      on: (name: string, fn: unknown) => {
+        if (name === "context") {
+          handler = fn as typeof handler;
+        }
+      },
+      appendEntry: (_type: string, _data?: unknown) => {},
+    } as unknown as ExtensionAPI;
+
+    contextPruningExtension(api);
+
+    if (!handler) {
+      throw new Error("missing context handler");
+    }
+
+    const result = handler({ messages }, {
+      model: undefined,
+      sessionManager,
+    } as unknown as ExtensionContext);
+
+    expect(result).toBeTruthy();
+    expect(prunedTokens).toBeDefined();
+    expect(prunedTokens).toBeGreaterThan(0);
+    // The pruned result should have fewer estimated tokens than the original large tool result
+    // (20,000 chars / 4 chars-per-token = 5,000 tokens pre-pruning)
+    expect(prunedTokens!).toBeLessThan(5000);
+  });
+
+  it("does not call onPruned when no pruning occurs", async () => {
+    const sessionManager = {};
+    let prunedTokens: number | undefined;
+
+    setContextPruningRuntime(sessionManager, {
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 0,
+        softTrimRatio: 0,
+        hardClearRatio: 0,
+        minPrunableToolChars: 0,
+        hardClear: { enabled: true, placeholder: "[cleared]" },
+        softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
+      },
+      contextWindowTokens: 1_000_000, // Very large window — nothing should be pruned
+      isToolPrunable: () => true,
+      lastCacheTouchAt: Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000,
+      onPruned: (estimatedTokens) => {
+        prunedTokens = estimatedTokens;
+      },
+    });
+
+    const messages: AgentMessage[] = [makeUser("hello"), makeAssistant("hi")];
+
+    let handler:
+      | ((
+          event: { messages: AgentMessage[] },
+          ctx: ExtensionContext,
+        ) => { messages: AgentMessage[] } | undefined)
+      | undefined;
+
+    const api = {
+      on: (name: string, fn: unknown) => {
+        if (name === "context") {
+          handler = fn as typeof handler;
+        }
+      },
+      appendEntry: (_type: string, _data?: unknown) => {},
+    } as unknown as ExtensionAPI;
+
+    contextPruningExtension(api);
+
+    if (!handler) {
+      throw new Error("missing context handler");
+    }
+
+    const result = handler({ messages }, {
+      model: undefined,
+      sessionManager,
+    } as unknown as ExtensionContext);
+
+    // When no pruning occurs, handler returns undefined and onPruned should NOT be called
+    expect(result).toBeUndefined();
+    expect(prunedTokens).toBeUndefined();
   });
 });

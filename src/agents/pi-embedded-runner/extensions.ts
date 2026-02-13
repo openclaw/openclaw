@@ -3,6 +3,8 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveDefaultSessionStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -41,6 +43,7 @@ function buildContextPruningExtension(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  sessionKey?: string;
 }): { additionalExtensionPaths?: string[] } {
   const raw = params.cfg?.agents?.defaults?.contextPruning;
   if (raw?.mode !== "cache-ttl") {
@@ -55,11 +58,31 @@ function buildContextPruningExtension(params: {
     return {};
   }
 
+  // Build an onPruned callback that persists updated token counts to the session store.
+  // This ensures sessions.json reflects pruned context immediately, not just after the next reply.
+  const onPruned = params.sessionKey
+    ? (estimatedTokens: number) => {
+        const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+        const storePath = resolveDefaultSessionStorePath(agentId);
+        updateSessionStoreEntry({
+          storePath,
+          sessionKey: params.sessionKey!,
+          update: async () => ({
+            contextTokens: estimatedTokens,
+            updatedAt: Date.now(),
+          }),
+        }).catch(() => {
+          /* best-effort: don't fail the agent run if store update fails */
+        });
+      }
+    : undefined;
+
   setContextPruningRuntime(params.sessionManager, {
     settings,
     contextWindowTokens: resolveContextWindowTokens(params),
     isToolPrunable: makeToolPrunablePredicate(settings.tools),
     lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager),
+    onPruned,
   });
 
   return {
@@ -77,6 +100,7 @@ export function buildEmbeddedExtensionPaths(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  sessionKey?: string;
 }): string[] {
   const paths: string[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
