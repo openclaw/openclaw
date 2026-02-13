@@ -409,7 +409,7 @@ async function runWebFetch(params: {
       timeoutMs: params.timeoutSeconds * 1000,
       init: {
         headers: {
-          Accept: "*/*",
+          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
           "User-Agent": params.userAgent,
           "Accept-Language": "en-US,en;q=0.9",
         },
@@ -418,6 +418,12 @@ async function runWebFetch(params: {
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
+
+    // Cloudflare Markdown for Agents — log token budget hint when present
+    const markdownTokens = res.headers.get("x-markdown-tokens");
+    if (markdownTokens) {
+      console.log(`[web-fetch] x-markdown-tokens: ${markdownTokens} (${finalUrl})`);
+    }
   } catch (error) {
     if (error instanceof SsrFBlockedError) {
       throw error;
@@ -522,7 +528,13 @@ async function runWebFetch(params: {
     let title: string | undefined;
     let extractor = "raw";
     let text = body;
-    if (contentType.includes("text/html")) {
+    if (contentType.includes("text/markdown")) {
+      // Cloudflare Markdown for Agents: server returned pre-rendered markdown
+      extractor = "cf-markdown";
+      if (params.extractMode === "text") {
+        text = markdownToText(body);
+      }
+    } else if (contentType.includes("text/html")) {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,
