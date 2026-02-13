@@ -454,5 +454,9 @@ export async function dispatchReplyFromConfig(params: {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
     throw err;
+  } finally {
+    // Always clear the dispatcher reservation so a leaked pending count
+    // can never permanently block gateway restarts.
+    dispatcher.markComplete();
   }
 }

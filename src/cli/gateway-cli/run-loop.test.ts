@@ -5,6 +5,7 @@ const acquireGatewayLock = vi.fn(async () => ({
 }));
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
+const markGatewaySigusr1RestartHandled = vi.fn();
 const getActiveTaskCount = vi.fn(() => 0);
 const waitForActiveTasks = vi.fn(async () => ({ drained: true }));
 const resetAllLanes = vi.fn();
@@ -22,6 +23,7 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 vi.mock("../../infra/restart.js", () => ({
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
+  markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
@@ -100,6 +102,7 @@ describe("runGatewayLoop", () => {
         reason: "gateway restarting",
         restartExpectedMs: 1500,
       });
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
 
       process.emit("SIGUSR1");
@@ -109,6 +112,7 @@ describe("runGatewayLoop", () => {
         reason: "gateway restarting",
         restartExpectedMs: 1500,
       });
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
     } finally {
       removeNewSignalListeners("SIGTERM", beforeSigterm);

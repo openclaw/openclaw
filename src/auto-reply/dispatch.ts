@@ -14,6 +14,24 @@ import {
 
 export type DispatchInboundResult = DispatchFromConfigResult;
 
+export async function withReplyDispatcher<T>(params: {
+  dispatcher: ReplyDispatcher;
+  run: () => Promise<T>;
+  onSettled?: () => void | Promise<void>;
+}): Promise<T> {
+  try {
+    return await params.run();
+  } finally {
+    // Ensure dispatcher reservations are always released on every exit path.
+    params.dispatcher.markComplete();
+    try {
+      await params.dispatcher.waitForIdle();
+    } finally {
+      await params.onSettled?.();
+    }
+  }
+}
+
 export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -41,20 +59,23 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping(
     params.dispatcherOptions,
   );
-
-  const result = await dispatchInboundMessage({
-    ctx: params.ctx,
-    cfg: params.cfg,
+  return await withReplyDispatcher({
     dispatcher,
-    replyResolver: params.replyResolver,
-    replyOptions: {
-      ...params.replyOptions,
-      ...replyOptions,
+    run: async () =>
+      dispatchInboundMessage({
+        ctx: params.ctx,
+        cfg: params.cfg,
+        dispatcher,
+        replyResolver: params.replyResolver,
+        replyOptions: {
+          ...params.replyOptions,
+          ...replyOptions,
+        },
+      }),
+    onSettled: () => {
+      markDispatchIdle();
     },
   });
-
-  markDispatchIdle();
-  return result;
 }
 
 export async function dispatchInboundMessageWithDispatcher(params: {
@@ -65,13 +86,15 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const dispatcher = createReplyDispatcher(params.dispatcherOptions);
-  const result = await dispatchInboundMessage({
-    ctx: params.ctx,
-    cfg: params.cfg,
+  return await withReplyDispatcher({
     dispatcher,
-    replyResolver: params.replyResolver,
-    replyOptions: params.replyOptions,
+    run: async () =>
+      dispatchInboundMessage({
+        ctx: params.ctx,
+        cfg: params.cfg,
+        dispatcher,
+        replyResolver: params.replyResolver,
+        replyOptions: params.replyOptions,
+      }),
   });
-  await dispatcher.waitForIdle();
-  return result;
 }
