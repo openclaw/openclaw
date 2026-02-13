@@ -8,10 +8,11 @@ import { writeBase64ToFile } from "../nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../nodes-canvas.js";
 import { parseTimeoutMs } from "../nodes-run.js";
 import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
+import { nodesCallOpts } from "./call-opts.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 
 async function invokeCanvas(opts: NodesRpcOpts, command: string, params?: Record<string, unknown>) {
+  const { callGatewayCli, resolveNodeId } = await import("./rpc.js");
   const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
   const invokeParams: Record<string, unknown> = {
     nodeId,
@@ -42,6 +43,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("canvas snapshot", async () => {
+          const { callGatewayCli, resolveNodeId } = await import("./rpc.js");
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const formatOpt = String(opts.format ?? "jpg")
             .trim()

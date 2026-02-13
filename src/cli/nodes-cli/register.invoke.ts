@@ -15,9 +15,9 @@ import {
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
+import { nodesCallOpts } from "./call-opts.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parseNodeList } from "./format.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId, unauthorizedHintForMessage } from "./rpc.js";
 
 type NodesRunOpts = NodesRpcOpts & {
   node?: string;
@@ -122,6 +122,7 @@ function resolveExecDefaults(
 
 async function resolveNodePlatform(opts: NodesRpcOpts, nodeId: string): Promise<string | null> {
   try {
+    const { callGatewayCli } = await import("./rpc.js");
     const res = await callGatewayCli("node.list", opts, {});
     const nodes = parseNodeList(res);
     const match = nodes.find((node) => node.nodeId === nodeId);
@@ -143,6 +144,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .option("--idempotency-key <key>", "Idempotency key (optional)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("invoke", async () => {
+          const { callGatewayCli, resolveNodeId } = await import("./rpc.js");
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const command = String(opts.command ?? "").trim();
           if (!nodeId || !command) {
@@ -194,6 +196,8 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .argument("[command...]", "Command and args")
       .action(async (command: string[], opts: NodesRunOpts) => {
         await runNodesCommand("run", async () => {
+          const { callGatewayCli, resolveNodeId, unauthorizedHintForMessage } =
+            await import("./rpc.js");
           const cfg = loadConfig();
           const agentId = opts.agent?.trim() || resolveDefaultAgentId(cfg);
           const execDefaults = resolveExecDefaults(cfg, agentId);

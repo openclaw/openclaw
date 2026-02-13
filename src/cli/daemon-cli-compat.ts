@@ -49,42 +49,46 @@ function findRegisterContainerSymbol(bundleSource: string): string | null {
 export function resolveLegacyDaemonCliAccessors(
   bundleSource: string,
 ): Record<LegacyDaemonCliExport, string> | null {
+  const partial = resolvePartialDaemonCliAccessors(bundleSource);
+  if (!partial) {
+    return null;
+  }
+  for (const name of LEGACY_DAEMON_CLI_EXPORTS) {
+    if (!partial[name]) {
+      return null;
+    }
+  }
+  return partial as Record<LegacyDaemonCliExport, string>;
+}
+
+export function resolvePartialDaemonCliAccessors(
+  bundleSource: string,
+): Partial<Record<LegacyDaemonCliExport, string>> | null {
   const aliases = parseExportAliases(bundleSource);
   if (!aliases) {
     return null;
   }
 
+  const result: Partial<Record<LegacyDaemonCliExport, string>> = {};
+
   const registerContainer = findRegisterContainerSymbol(bundleSource);
   const registerContainerAlias = registerContainer ? aliases.get(registerContainer) : undefined;
   const registerDirectAlias = aliases.get("registerDaemonCli");
-
-  const runDaemonInstall = aliases.get("runDaemonInstall");
-  const runDaemonRestart = aliases.get("runDaemonRestart");
-  const runDaemonStart = aliases.get("runDaemonStart");
-  const runDaemonStatus = aliases.get("runDaemonStatus");
-  const runDaemonStop = aliases.get("runDaemonStop");
-  const runDaemonUninstall = aliases.get("runDaemonUninstall");
-  if (
-    !(registerContainerAlias || registerDirectAlias) ||
-    !runDaemonInstall ||
-    !runDaemonRestart ||
-    !runDaemonStart ||
-    !runDaemonStatus ||
-    !runDaemonStop ||
-    !runDaemonUninstall
-  ) {
-    return null;
+  if (registerContainerAlias) {
+    result.registerDaemonCli = `${registerContainerAlias}.registerDaemonCli`;
+  } else if (registerDirectAlias) {
+    result.registerDaemonCli = registerDirectAlias;
   }
 
-  return {
-    registerDaemonCli: registerContainerAlias
-      ? `${registerContainerAlias}.registerDaemonCli`
-      : registerDirectAlias!,
-    runDaemonInstall,
-    runDaemonRestart,
-    runDaemonStart,
-    runDaemonStatus,
-    runDaemonStop,
-    runDaemonUninstall,
-  };
+  for (const name of LEGACY_DAEMON_CLI_EXPORTS) {
+    if (name === "registerDaemonCli") {
+      continue;
+    }
+    const alias = aliases.get(name);
+    if (alias) {
+      result[name] = alias;
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
 }

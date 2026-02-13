@@ -5,9 +5,9 @@ import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
 import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
+import { nodesCallOpts } from "./call-opts.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -105,6 +105,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("status", async () => {
+          const { callGatewayCli } = await import("./rpc.js");
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
           const result = await callGatewayCli("node.list", opts, {});
@@ -217,6 +218,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("describe", async () => {
+          const { callGatewayCli, resolveNodeId } = await import("./rpc.js");
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const result = await callGatewayCli("node.describe", opts, {
             nodeId,
@@ -301,6 +303,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("list", async () => {
+          const { callGatewayCli } = await import("./rpc.js");
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
           const result = await callGatewayCli("node.pair.list", opts, {});

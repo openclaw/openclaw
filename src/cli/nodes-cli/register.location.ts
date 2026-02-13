@@ -2,8 +2,8 @@ import type { Command } from "commander";
 import type { NodesRpcOpts } from "./types.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
+import { nodesCallOpts } from "./call-opts.js";
 import { runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 
 export function registerNodesLocationCommands(nodes: Command) {
   const location = nodes.command("location").description("Fetch location from a paired node");
@@ -22,6 +22,7 @@ export function registerNodesLocationCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("location get", async () => {
+          const { callGatewayCli, resolveNodeId } = await import("./rpc.js");
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const maxAgeMs = opts.maxAge ? Number.parseInt(String(opts.maxAge), 10) : undefined;
           const desiredAccuracyRaw =
