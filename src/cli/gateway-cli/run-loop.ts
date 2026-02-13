@@ -1,6 +1,7 @@
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { defaultRuntime } from "../../runtime.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { waitForInFlightCompletion, getInFlightCount } from "../../infra/in-flight-tracker.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
@@ -49,8 +50,19 @@ export async function runGatewayLoop(params: {
 
     void (async () => {
       try {
-        // On restart, wait for in-flight agent turns to finish before
-        // tearing down the server so buffered messages are delivered.
+        // Wait for in-flight requests to complete before shutdown.
+        const pendingCount = getInFlightCount();
+        if (pendingCount > 0) {
+          gatewayLog.info(`waiting for ${pendingCount} in-flight request(s) before shutdown...`);
+          const result = await waitForInFlightCompletion(30000);
+          if (result.timedOut) {
+            gatewayLog.warn(`in-flight wait timed out with ${result.remaining} request(s) pending`);
+          } else {
+            gatewayLog.info("all in-flight requests completed");
+          }
+        }
+
+        // On restart, also drain active task queue so buffered messages are delivered.
         if (isRestart) {
           const activeTasks = getActiveTaskCount();
           if (activeTasks > 0) {
