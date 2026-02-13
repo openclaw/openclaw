@@ -70,4 +70,31 @@ describe("promptGatewayConfig", () => {
     const result = await promptGatewayConfig({}, runtime);
     expect(result.token).toBe("generated-token");
   });
+  it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
+    vi.clearAllMocks();
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    // Flow: loopback bind → password auth → tailscale off
+    const selectQueue = ["loopback", "password", "off"];
+    mocks.select.mockImplementation(async () => selectQueue.shift());
+    // Port prompt → OK, then password prompt → returns undefined (simulating prompter edge case)
+    const textQueue = ["18789", undefined];
+    mocks.text.mockImplementation(async () => textQueue.shift());
+    mocks.randomToken.mockReturnValue("unused");
+    mocks.buildGatewayAuthConfig.mockImplementation(({ mode, token, password }) => ({
+      mode,
+      token,
+      password,
+    }));
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await promptGatewayConfig({}, runtime);
+    const call = mocks.buildGatewayAuthConfig.mock.calls[0]?.[0];
+    expect(call?.password).not.toBe("undefined");
+    expect(call?.password).toBe("");
+  });
 });
