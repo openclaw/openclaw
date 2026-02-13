@@ -735,12 +735,13 @@ actor VoiceWakeRuntime {
     }
 
     private static func trimmedAfterTrigger(_ text: String, triggers: [String]) -> String {
-        let lower = text.lowercased()
         for trigger in triggers {
-            let token = trigger.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !token.isEmpty, let range = lower.range(of: token) else { continue }
-            let after = range.upperBound
-            let trimmed = text[after...].trimmingCharacters(in: .whitespacesAndNewlines)
+            let token = trigger.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty else { continue }
+            guard let range = text.range(
+                of: token,
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]) else { continue }
+            let trimmed = text[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
             return String(trimmed)
         }
         return text
