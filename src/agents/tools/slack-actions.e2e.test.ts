@@ -432,4 +432,26 @@ describe("handleSlackAction", () => {
     const [, , opts] = sendSlackMessage.mock.calls[0] ?? [];
     expect(opts?.token).toBe("xoxp-1");
   });
+
+  it("returns all emojis when no limit is provided", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const emojiMap = { wave: "url1", smile: "url2", heart: "url3" };
+    listSlackEmojis.mockResolvedValueOnce({ ok: true, emoji: emojiMap });
+    const result = await handleSlackAction({ action: "emojiList" }, cfg);
+    const payload = result.details as { ok: boolean; emojis: { emoji: Record<string, string> } };
+    expect(payload.ok).toBe(true);
+    expect(Object.keys(payload.emojis.emoji)).toHaveLength(3);
+  });
+
+  it("applies limit to emoji-list results", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const emojiMap = { wave: "url1", smile: "url2", heart: "url3", fire: "url4", star: "url5" };
+    listSlackEmojis.mockResolvedValueOnce({ ok: true, emoji: emojiMap });
+    const result = await handleSlackAction({ action: "emojiList", limit: 2 }, cfg);
+    const payload = result.details as { ok: boolean; emojis: { emoji: Record<string, string> } };
+    expect(payload.ok).toBe(true);
+    const emojiKeys = Object.keys(payload.emojis.emoji);
+    expect(emojiKeys).toHaveLength(2);
+    expect(emojiKeys.every((k) => k in emojiMap)).toBe(true);
+  });
 });
