@@ -280,7 +280,7 @@ describe("memory index", () => {
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
   });
 
-  it("hybrid weights can favor vector-only matches over keyword-only matches", async () => {
+  it("hybrid weights shift ranking between vector and keyword matches", async () => {
     const manyAlpha = Array.from({ length: 50 }, () => "Alpha").join(" ");
     await fs.writeFile(
       path.join(workspaceDir, "memory", "vector-only.md"),
@@ -291,7 +291,7 @@ describe("memory index", () => {
       `${manyAlpha} beta id123.`,
     );
 
-    const cfg = {
+    const vectorWeightedCfg = {
       agents: {
         defaults: {
           workspace: workspaceDir,
@@ -315,12 +315,15 @@ describe("memory index", () => {
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
+    const vectorWeighted = await getMemorySearchManager({
+      cfg: vectorWeightedCfg,
+      agentId: "main",
+    });
+    expect(vectorWeighted.manager).not.toBeNull();
+    if (!vectorWeighted.manager) {
       throw new Error("manager missing");
     }
-    manager = result.manager;
+    manager = vectorWeighted.manager;
 
     const status = manager.status();
     if (!status.fts?.available) {
@@ -328,28 +331,19 @@ describe("memory index", () => {
     }
 
     await manager.sync({ force: true });
-    const results = await manager.search("alpha beta id123");
-    expect(results.length).toBeGreaterThan(0);
-    const paths = results.map((r) => r.path);
-    expect(paths).toContain("memory/vector-only.md");
-    expect(paths).toContain("memory/keyword-only.md");
-    const vectorOnly = results.find((r) => r.path === "memory/vector-only.md");
-    const keywordOnly = results.find((r) => r.path === "memory/keyword-only.md");
+    const vectorResults = await manager.search("alpha beta id123");
+    expect(vectorResults.length).toBeGreaterThan(0);
+    const vectorPaths = vectorResults.map((r) => r.path);
+    expect(vectorPaths).toContain("memory/vector-only.md");
+    expect(vectorPaths).toContain("memory/keyword-only.md");
+    const vectorOnly = vectorResults.find((r) => r.path === "memory/vector-only.md");
+    const keywordOnly = vectorResults.find((r) => r.path === "memory/keyword-only.md");
     expect((vectorOnly?.score ?? 0) > (keywordOnly?.score ?? 0)).toBe(true);
-  });
 
-  it("hybrid weights can favor keyword matches when text weight dominates", async () => {
-    const manyAlpha = Array.from({ length: 50 }, () => "Alpha").join(" ");
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "vector-only.md"),
-      "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
-    );
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "keyword-only.md"),
-      `${manyAlpha} beta id123.`,
-    );
+    await manager.close();
+    manager = null;
 
-    const cfg = {
+    const textWeightedCfg = {
       agents: {
         defaults: {
           workspace: workspaceDir,
@@ -357,7 +351,7 @@ describe("memory index", () => {
             provider: "openai",
             model: "mock-embed",
             store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
             query: {
               minScore: 0,
               maxResults: 200,
@@ -373,27 +367,21 @@ describe("memory index", () => {
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
+
+    const textWeighted = await getMemorySearchManager({ cfg: textWeightedCfg, agentId: "main" });
+    expect(textWeighted.manager).not.toBeNull();
+    if (!textWeighted.manager) {
       throw new Error("manager missing");
     }
-    manager = result.manager;
-
-    const status = manager.status();
-    if (!status.fts?.available) {
-      return;
-    }
-
-    await manager.sync({ force: true });
-    const results = await manager.search("alpha beta id123");
-    expect(results.length).toBeGreaterThan(0);
-    const paths = results.map((r) => r.path);
-    expect(paths).toContain("memory/vector-only.md");
-    expect(paths).toContain("memory/keyword-only.md");
-    const vectorOnly = results.find((r) => r.path === "memory/vector-only.md");
-    const keywordOnly = results.find((r) => r.path === "memory/keyword-only.md");
-    expect((keywordOnly?.score ?? 0) > (vectorOnly?.score ?? 0)).toBe(true);
+    manager = textWeighted.manager;
+    const keywordResults = await manager.search("alpha beta id123");
+    expect(keywordResults.length).toBeGreaterThan(0);
+    const keywordPaths = keywordResults.map((r) => r.path);
+    expect(keywordPaths).toContain("memory/vector-only.md");
+    expect(keywordPaths).toContain("memory/keyword-only.md");
+    const vectorOnlyAfter = keywordResults.find((r) => r.path === "memory/vector-only.md");
+    const keywordOnlyAfter = keywordResults.find((r) => r.path === "memory/keyword-only.md");
+    expect((keywordOnlyAfter?.score ?? 0) > (vectorOnlyAfter?.score ?? 0)).toBe(true);
   });
 
   it("reports vector availability after probe", async () => {

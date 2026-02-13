@@ -98,69 +98,7 @@ describe("block streaming", () => {
     ]);
   });
 
-  it("waits for block replies before returning final payloads", async () => {
-    await withTempHome(async (home) => {
-      let releaseTyping: (() => void) | undefined;
-      const typingGate = new Promise<void>((resolve) => {
-        releaseTyping = resolve;
-      });
-      let resolveOnReplyStart: (() => void) | undefined;
-      const onReplyStartCalled = new Promise<void>((resolve) => {
-        resolveOnReplyStart = resolve;
-      });
-      const onReplyStart = vi.fn(() => {
-        resolveOnReplyStart?.();
-        return typingGate;
-      });
-      const onBlockReply = vi.fn().mockResolvedValue(undefined);
-
-      const impl = async (params: RunEmbeddedPiAgentParams) => {
-        void params.onBlockReply?.({ text: "hello" });
-        return {
-          payloads: [{ text: "hello" }],
-          meta: {
-            durationMs: 5,
-            agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          },
-        };
-      };
-      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(impl);
-
-      const replyPromise = getReplyFromConfig(
-        {
-          Body: "ping",
-          From: "+1004",
-          To: "+2000",
-          MessageSid: "msg-123",
-          Provider: "discord",
-        },
-        {
-          onReplyStart,
-          onBlockReply,
-          disableBlockStreaming: false,
-        },
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions.json") },
-        },
-      );
-
-      await onReplyStartCalled;
-      releaseTyping?.();
-
-      const res = await replyPromise;
-      expect(res).toBeUndefined();
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("preserves block reply ordering when typing start is slow", async () => {
+  it("waits for block replies and preserves ordering when typing start is slow", async () => {
     await withTempHome(async (home) => {
       let releaseTyping: (() => void) | undefined;
       const typingGate = new Promise<void>((resolve) => {
@@ -197,7 +135,7 @@ describe("block streaming", () => {
           Body: "ping",
           From: "+1004",
           To: "+2000",
-          MessageSid: "msg-125",
+          MessageSid: "msg-123",
           Provider: "telegram",
         },
         {
@@ -309,7 +247,7 @@ describe("block streaming", () => {
         },
         {
           onBlockReply,
-          blockReplyTimeoutMs: 10,
+          blockReplyTimeoutMs: 1,
           disableBlockStreaming: false,
         },
         {

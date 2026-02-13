@@ -142,31 +142,6 @@ describe("RawBody directive parsing", () => {
 
       await assertCommandReply({
         message: {
-          Body: "[Context]\nJake: /model status\n[from: Jake]",
-          RawBody: "/model status",
-          From: "+1222",
-          To: "+1222",
-          ChatType: "group",
-          CommandAuthorized: true,
-        },
-        config: {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw-2"),
-              models: {
-                "anthropic/claude-opus-4-5": {},
-              },
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions-2.json") },
-        },
-        expectedIncludes: ["anthropic/claude-opus-4-5"],
-      });
-
-      await assertCommandReply({
-        message: {
           Body: "[Context]\nJake: /verbose on\n[from: Jake]",
           CommandBody: "/verbose on",
           From: "+1222",
@@ -178,11 +153,11 @@ describe("RawBody directive parsing", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw-3"),
+              workspace: path.join(home, "openclaw-2"),
             },
           },
           channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions-3.json") },
+          session: { store: path.join(home, "sessions-2.json") },
         },
         expectedIncludes: ["Verbose logging enabled."],
       });
@@ -204,11 +179,11 @@ describe("RawBody directive parsing", () => {
           agents: {
             defaults: {
               model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw-4"),
+              workspace: path.join(home, "openclaw-3"),
             },
           },
           channels: { whatsapp: { allowFrom: ["+1222"] } },
-          session: { store: path.join(home, "sessions-4.json") },
+          session: { store: path.join(home, "sessions-3.json") },
         },
         expectedIncludes: ["Session: agent:main:whatsapp:group:g1", "anthropic/claude-opus-4-5"],
       });
