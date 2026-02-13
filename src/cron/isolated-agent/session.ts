@@ -14,7 +14,10 @@ export function resolveCronSession(params: {
   });
   const store = loadSessionStore(storePath);
   const entry = store[params.sessionKey];
-  const sessionId = crypto.randomUUID();
+  const isCronKey = params.sessionKey.startsWith("cron:");
+  const sessionId =
+    !isCronKey && entry?.sessionId ? entry.sessionId : crypto.randomUUID();
+  const isNewSession = sessionId !== entry?.sessionId;
   const systemSent = false;
   const sessionEntry: SessionEntry = {
     sessionId,
@@ -34,5 +37,5 @@ export function resolveCronSession(params: {
     displayName: entry?.displayName,
     skillsSnapshot: entry?.skillsSnapshot,
   };
-  return { storePath, store, sessionEntry, systemSent, isNewSession: true };
+  return { storePath, store, sessionEntry, systemSent, isNewSession };
 }
