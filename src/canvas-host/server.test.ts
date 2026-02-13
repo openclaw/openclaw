@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { defaultRuntime } from "../runtime.js";
-import { CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
+import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
 import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 
 describe("canvas host", () => {
@@ -240,6 +240,83 @@ describe("canvas host", () => {
       expect(js).toContain("openclawA2UI");
     } finally {
       await server.close();
+      if (createdBundle) {
+        await fs.rm(bundlePath, { force: true });
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects traversal-style A2UI asset requests", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
+    const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");
+    const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
+    let createdBundle = false;
+
+    try {
+      await fs.stat(bundlePath);
+    } catch {
+      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
+      createdBundle = true;
+    }
+
+    const server = await startCanvasHost({
+      runtime: defaultRuntime,
+      rootDir: dir,
+      port: 0,
+      listenHost: "127.0.0.1",
+      allowInTests: true,
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}${A2UI_PATH}/%2e%2e%2fpackage.json`);
+      expect(res.status).toBe(404);
+      expect(await res.text()).toBe("not found");
+    } finally {
+      await server.close();
+      if (createdBundle) {
+        await fs.rm(bundlePath, { force: true });
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects A2UI symlink escapes", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
+    const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");
+    const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
+    const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
+    const linkPath = path.join(a2uiRoot, linkName);
+    let createdBundle = false;
+    let createdLink = false;
+
+    try {
+      await fs.stat(bundlePath);
+    } catch {
+      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
+      createdBundle = true;
+    }
+
+    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+    createdLink = true;
+
+    const server = await startCanvasHost({
+      runtime: defaultRuntime,
+      rootDir: dir,
+      port: 0,
+      listenHost: "127.0.0.1",
+      allowInTests: true,
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}${A2UI_PATH}/${linkName}`);
+      expect(res.status).toBe(404);
+      expect(await res.text()).toBe("not found");
+    } finally {
+      await server.close();
+      if (createdLink) {
+        await fs.rm(linkPath, { force: true });
+      }
       if (createdBundle) {
         await fs.rm(bundlePath, { force: true });
       }

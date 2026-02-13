@@ -379,7 +379,6 @@ export async function runOnboardingWizard(
       includeSkip: true,
     }));
 
-  let customPreferredProvider: string | undefined;
   if (authChoice === "custom-api-key") {
     const customResult = await promptCustomApiConfig({
       prompter,
@@ -387,7 +386,6 @@ export async function runOnboardingWizard(
       config: nextConfig,
     });
     nextConfig = customResult.config;
-    customPreferredProvider = customResult.providerId;
   } else {
     const authResult = await applyAuthChoice({
       authChoice,
@@ -409,9 +407,12 @@ export async function runOnboardingWizard(
       prompter,
       allowKeep: true,
       ignoreAllowlist: true,
-      preferredProvider:
-        customPreferredProvider ?? resolvePreferredProviderForAuthChoice(authChoice),
+      includeVllm: true,
+      preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
     });
+    if (modelSelection.config) {
+      nextConfig = modelSelection.config;
+    }
     if (modelSelection.model) {
       nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
     }

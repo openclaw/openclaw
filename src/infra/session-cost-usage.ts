@@ -561,12 +561,17 @@ export async function loadSessionCostSummary(params: {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
+  agentId?: string;
   startMs?: number;
   endMs?: number;
 }): Promise<SessionCostSummary | null> {
   const sessionFile =
     params.sessionFile ??
-    (params.sessionId ? resolveSessionFilePath(params.sessionId, params.sessionEntry) : undefined);
+    (params.sessionId
+      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
+          agentId: params.agentId,
+        })
+      : undefined);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -851,11 +856,16 @@ export async function loadSessionUsageTimeSeries(params: {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
+  agentId?: string;
   maxPoints?: number;
 }): Promise<SessionUsageTimeSeries | null> {
   const sessionFile =
     params.sessionFile ??
-    (params.sessionId ? resolveSessionFilePath(params.sessionId, params.sessionEntry) : undefined);
+    (params.sessionId
+      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
+          agentId: params.agentId,
+        })
+      : undefined);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -931,11 +941,16 @@ export async function loadSessionLogs(params: {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
+  agentId?: string;
   limit?: number;
 }): Promise<SessionLogEntry[] | null> {
   const sessionFile =
     params.sessionFile ??
-    (params.sessionId ? resolveSessionFilePath(params.sessionId, params.sessionEntry) : undefined);
+    (params.sessionId
+      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
+          agentId: params.agentId,
+        })
+      : undefined);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }

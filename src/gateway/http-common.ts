@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { GatewayAuthResult } from "./auth.js";
 import { readJsonBody } from "./hooks.js";
 
 export function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -22,6 +23,26 @@ export function sendUnauthorized(res: ServerResponse) {
   sendJson(res, 401, {
     error: { message: "Unauthorized", type: "unauthorized" },
   });
+}
+
+export function sendRateLimited(res: ServerResponse, retryAfterMs?: number) {
+  if (retryAfterMs && retryAfterMs > 0) {
+    res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
+  }
+  sendJson(res, 429, {
+    error: {
+      message: "Too many failed authentication attempts. Please try again later.",
+      type: "rate_limited",
+    },
+  });
+}
+
+export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayAuthResult) {
+  if (authResult.rateLimited) {
+    sendRateLimited(res, authResult.retryAfterMs);
+    return;
+  }
+  sendUnauthorized(res);
 }
 
 export function sendInvalidRequest(res: ServerResponse, message: string) {

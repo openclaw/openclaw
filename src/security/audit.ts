@@ -18,8 +18,11 @@ import {
   collectHooksHardeningFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
+  collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,
+  collectNodeDenyCommandPatternFindings,
   collectSmallModelRiskFindings,
+  collectSandboxDockerNoopFindings,
   collectPluginsTrustFindings,
   collectSecretsInConfigFindings,
   collectPluginsCodeSafetyFindings,
@@ -380,6 +383,19 @@ function collectGatewayConfigFindings(
         "Any authenticated caller can route requests into arbitrary sessions.",
       remediation:
         "Treat HTTP API credentials as full-trust, disable unused endpoints, and avoid sharing tokens across tenants.",
+    });
+  }
+
+  if (bind !== "loopback" && !cfg.gateway?.auth?.rateLimit) {
+    findings.push({
+      checkId: "gateway.auth_no_rate_limit",
+      severity: "warn",
+      title: "No auth rate limiting configured",
+      detail:
+        "gateway.bind is not loopback but no gateway.auth.rateLimit is configured. " +
+        "Without rate limiting, brute-force auth attacks are not mitigated.",
+      remediation:
+        "Set gateway.auth.rateLimit (e.g. { maxAttempts: 10, windowMs: 60000, lockoutMs: 300000 }).",
     });
   }
 
@@ -967,6 +983,9 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectHooksHardeningFindings(cfg));
+  findings.push(...collectSandboxDockerNoopFindings(cfg));
+  findings.push(...collectNodeDenyCommandPatternFindings(cfg));
+  findings.push(...collectMinimalProfileOverrideFindings(cfg));
   findings.push(...collectSecretsInConfigFindings(cfg));
   findings.push(...collectModelHygieneFindings(cfg));
   findings.push(...collectSmallModelRiskFindings({ cfg, env }));
