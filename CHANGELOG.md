@@ -253,7 +253,6 @@ Docs: https://docs.openclaw.ai
 - CLI: sort commands alphabetically in help output. (#8068) Thanks @deepsoumya617.
 - CI: optimize pipeline throughput (macOS consolidation, Windows perf, workflow concurrency). (#10784) Thanks @mcaxtr.
 - Agents: bump pi-mono to 0.52.7; add embedded forward-compat fallback for Opus 4.6 model ids.
-- Discord: add configurable presence status/activity/type/url (custom status defaults to activity text). (#10855) Thanks @h0tp-ftw.
 
 ### Added
 

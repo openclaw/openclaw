@@ -40,7 +40,6 @@ import {
   registerDiscordListener,
 } from "./listeners.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
-import { resolveDiscordPresenceUpdate } from "./presence.js";
 import {
   createDiscordCommandArgFallbackButton,
   createDiscordNativeCommand,
