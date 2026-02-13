@@ -177,11 +177,11 @@ export type DiscordAccountConfig = {
   responsePrefix?: string;
   /** Bot activity status text (e.g. "Watching X"). */
   activity?: string;
-  /** Bot status (online|dnd|idle|invisible). Default: online. */
+  /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
   status?: "online" | "dnd" | "idle" | "invisible";
-  /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 5=Competing). Default: 3 (Watching). */
-  activityType?: 0 | 1 | 2 | 3 | 5;
-  /** Streaming URL (Twitch/YouTube). Required if activityType=1. */
+  /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
+  activityType?: 0 | 1 | 2 | 3 | 4 | 5;
+  /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
 };
 
