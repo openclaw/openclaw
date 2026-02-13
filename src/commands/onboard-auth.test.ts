@@ -193,6 +193,20 @@ describe("applyMinimaxApiConfig", () => {
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(false);
   });
 
+  it("sets reasoning for M2.5 models", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.5");
+    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
+  });
+
+  it("sets multimodal input for M2.5-Omni model", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.5-Omni");
+    const omniModel = cfg.models?.providers?.minimax?.models.find(
+      (m) => m.id === "MiniMax-M2.5-Omni",
+    );
+    expect(omniModel?.reasoning).toBe(true);
+    expect(omniModel?.input).toContain("image");
+  });
+
   it("preserves existing model fallbacks", () => {
     const cfg = applyMinimaxApiConfig({
       agents: {

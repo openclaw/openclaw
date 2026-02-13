@@ -71,6 +71,16 @@ export function resolveProviderVisionModelFromConfig(params: {
     | { models?: Array<{ id?: string; input?: string[] }> }
     | undefined;
   const models = providerCfg?.models ?? [];
+  // For MiniMax, prefer M2.5-Omni (multimodal with reasoning) over VL-01
+  const preferMinimaxOmni =
+    params.provider === "minimax"
+      ? models.find(
+          (m) =>
+            (m?.id ?? "").trim() === "MiniMax-M2.5-Omni" &&
+            Array.isArray(m?.input) &&
+            m.input.includes("image"),
+        )
+      : null;
   const preferMinimaxVl =
     params.provider === "minimax"
       ? models.find(
@@ -81,6 +91,7 @@ export function resolveProviderVisionModelFromConfig(params: {
         )
       : null;
   const picked =
+    preferMinimaxOmni ??
     preferMinimaxVl ??
     models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
   const id = (picked?.id ?? "").trim();
