@@ -45,7 +45,8 @@ async function loadThinkingHelpers(): Promise<ThinkingHelpers> {
   }
 
   // Bundled install (built)
-  const mod = await import("../../../auto-reply/thinking.js");
+  const builtThinkingPath = "../../../auto-reply/thinking.js";
+  const mod = await import(builtThinkingPath);
   if (
     typeof mod.formatThinkingLevels !== "function" ||
     typeof mod.formatXHighModelHint !== "function" ||
@@ -76,7 +77,8 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   }
 
   // Bundled install (built)
-  const mod = await import("../../../agents/pi-embedded-runner.js");
+  const builtRunnerPath = "../../../agents/pi-embedded-runner.js";
+  const mod = await import(builtRunnerPath);
   if (typeof mod.runEmbeddedPiAgent !== "function") {
     throw new Error("Internal error: runEmbeddedPiAgent not available");
   }
