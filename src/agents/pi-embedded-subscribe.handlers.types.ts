@@ -66,6 +66,20 @@ export type EmbeddedPiSubscribeState = {
   compactionRetryResolve?: () => void;
   compactionRetryReject?: (reason?: unknown) => void;
   compactionRetryPromise: Promise<void> | null;
+
+  /** Reference count of tools currently executing (supports concurrent tools) */
+  toolExecutionCount: number;
+  /** Legacy flag kept for compatibility - derived from toolExecutionCount > 0 */
+  toolExecutionInFlight: boolean;
+  /** Most recent tool name (for concurrent tools, only the last one is tracked for snapshots) */
+  activeToolName?: string;
+  /** Most recent tool call ID (for concurrent tools, only the last one is tracked for snapshots) */
+  activeToolCallId?: string;
+  /** Most recent tool start time (for concurrent tools, only the last one is tracked for snapshots) */
+  activeToolStartTime?: number;
+  /** Track tool execution start times and args for after_tool_call hook */
+  toolStartData: Map<string, { startTime: number; args: unknown }>;
+
   unsubscribed: boolean;
 
   messagingToolSentTexts: string[];
