@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { logDebug } from "../../logger.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
@@ -212,6 +213,15 @@ function formatWebFetchErrorDetail(params: {
   return truncated.text;
 }
 
+function redactUrlForDebugLog(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.pathname && parsed.pathname !== "/" ? `${parsed.origin}/...` : parsed.origin;
+  } catch {
+    return "[invalid-url]";
+  }
+}
+
 const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
 const WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD = wrapExternalContent("", {
   source: "web_fetch",
@@ -409,7 +419,7 @@ async function runWebFetch(params: {
       timeoutMs: params.timeoutSeconds * 1000,
       init: {
         headers: {
-          Accept: "*/*",
+          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
           "User-Agent": params.userAgent,
           "Accept-Language": "en-US,en;q=0.9",
         },
@@ -418,6 +428,14 @@ async function runWebFetch(params: {
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
+
+    // Cloudflare Markdown for Agents — log token budget hint when present
+    const markdownTokens = res.headers.get("x-markdown-tokens");
+    if (markdownTokens) {
+      logDebug(
+        `[web-fetch] x-markdown-tokens: ${markdownTokens} (${redactUrlForDebugLog(finalUrl)})`,
+      );
+    }
   } catch (error) {
     if (error instanceof SsrFBlockedError) {
       throw error;
@@ -522,7 +540,13 @@ async function runWebFetch(params: {
     let title: string | undefined;
     let extractor = "raw";
     let text = body;
-    if (contentType.includes("text/html")) {
+    if (contentType.includes("text/markdown")) {
+      // Cloudflare Markdown for Agents: server returned pre-rendered markdown
+      extractor = "cf-markdown";
+      if (params.extractMode === "text") {
+        text = markdownToText(body);
+      }
+    } else if (contentType.includes("text/html")) {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,

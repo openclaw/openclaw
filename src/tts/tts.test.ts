@@ -97,6 +97,14 @@ describe("tts", () => {
       }
     });
 
+    it("includes newer OpenAI voices (ballad, cedar, juniper, marin, verse) (#2393)", () => {
+      expect(isValidOpenAIVoice("ballad")).toBe(true);
+      expect(isValidOpenAIVoice("cedar")).toBe(true);
+      expect(isValidOpenAIVoice("juniper")).toBe(true);
+      expect(isValidOpenAIVoice("marin")).toBe(true);
+      expect(isValidOpenAIVoice("verse")).toBe(true);
+    });
+
     it("rejects invalid voice names", () => {
       expect(isValidOpenAIVoice("invalid")).toBe(false);
       expect(isValidOpenAIVoice("")).toBe(false);

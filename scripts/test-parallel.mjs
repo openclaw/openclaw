@@ -32,9 +32,12 @@ const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isMacOS = process.platform === "darwin" || process.env.RUNNER_OS === "macOS";
 const isWindows = process.platform === "win32" || process.env.RUNNER_OS === "Windows";
 const isWindowsCi = isCI && isWindows;
+const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
+const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor < 24 : true;
 const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows);
+  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks);
+const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const runs = [
   ...(useVmForks
     ? [
@@ -46,6 +49,7 @@ const runs = [
             "--config",
             "vitest.unit.config.ts",
             "--pool=vmForks",
+            ...(disableIsolation ? ["--isolate=false"] : []),
             ...unitIsolatedFiles.flatMap((file) => ["--exclude", file]),
           ],
         },
@@ -144,6 +148,7 @@ const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=ExperimentalWarning",
   "--disable-warning=DEP0040",
   "--disable-warning=DEP0060",
+  "--disable-warning=MaxListenersExceededWarning",
 ];
 
 function resolveReportDir() {

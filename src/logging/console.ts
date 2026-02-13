@@ -16,6 +16,22 @@ type ConsoleSettings = {
 export type ConsoleLoggerSettings = ConsoleSettings;
 
 const requireConfig = createRequire(import.meta.url);
+type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
+const loadConfigFallbackDefault: ConsoleConfigLoader = () => {
+  try {
+    const loaded = requireConfig("../config/config.js") as {
+      loadConfig?: () => OpenClawConfig;
+    };
+    return loaded.loadConfig?.().logging;
+  } catch {
+    return undefined;
+  }
+};
+let loadConfigFallback: ConsoleConfigLoader = loadConfigFallbackDefault;
+
+export function setConsoleConfigLoaderForTests(loader?: ConsoleConfigLoader): void {
+  loadConfigFallback = loader ?? loadConfigFallbackDefault;
+}
 
 function normalizeConsoleLevel(level?: string): LogLevel {
   if (isVerbose()) {
@@ -43,12 +59,7 @@ function resolveConsoleSettings(): ConsoleSettings {
     } else {
       loggingState.resolvingConsoleSettings = true;
       try {
-        const loaded = requireConfig("../config/config.js") as {
-          loadConfig?: () => OpenClawConfig;
-        };
-        cfg = loaded.loadConfig?.().logging;
-      } catch {
-        cfg = undefined;
+        cfg = loadConfigFallback();
       } finally {
         loggingState.resolvingConsoleSettings = false;
       }
