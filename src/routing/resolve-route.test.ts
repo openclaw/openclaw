@@ -507,7 +507,29 @@ describe("role-based agent routing", () => {
     expect(route.matchedBy).toBe("binding.peer");
   });
 
-  test("no memberRoleIds → guild+roles doesn't match", () => {
+  test("parent peer binding still beats guild+roles", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "parent-agent",
+          match: { channel: "discord", peer: { kind: "channel", id: "parent-1" } },
+        },
+        { agentId: "roles-agent", match: { channel: "discord", guildId: "g1", roles: ["r1"] } },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      guildId: "g1",
+      memberRoleIds: ["r1"],
+      peer: { kind: "channel", id: "thread-1" },
+      parentPeer: { kind: "channel", id: "parent-1" },
+    });
+    expect(route.agentId).toBe("parent-agent");
+    expect(route.matchedBy).toBe("binding.peer.parent");
+  });
+
+  test("no memberRoleIds means guild+roles doesn't match", () => {
     const cfg: OpenClawConfig = {
       bindings: [{ agentId: "opus", match: { channel: "discord", guildId: "g1", roles: ["r1"] } }],
     };
@@ -554,7 +576,7 @@ describe("role-based agent routing", () => {
     expect(route.matchedBy).toBe("binding.guild");
   });
 
-  test("CRITICAL: guild+roles binding NOT matched as guild-only when roles don't match", () => {
+  test("guild+roles binding does not match as guild-only when roles do not match", () => {
     const cfg: OpenClawConfig = {
       bindings: [
         { agentId: "opus", match: { channel: "discord", guildId: "g1", roles: ["admin"] } },
