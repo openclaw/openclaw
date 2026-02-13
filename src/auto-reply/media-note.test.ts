@@ -127,6 +127,25 @@ describe("buildInboundMediaNote", () => {
     );
   });
 
+  it("only strips audio attachments that were transcribed", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/voice-1.ogg", "/tmp/voice-2.ogg"],
+      MediaUrls: ["https://example.com/voice-1.ogg", "https://example.com/voice-2.ogg"],
+      MediaTypes: ["audio/ogg", "audio/ogg"],
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "First transcript",
+          provider: "whisper",
+        },
+      ],
+    });
+    expect(note).toBe(
+      "[media attached: /tmp/voice-2.ogg (audio/ogg) | https://example.com/voice-2.ogg]",
+    );
+  });
+
   it("strips audio attachments when Transcript is present (issue #4197)", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/voice.opus"],
@@ -137,10 +156,32 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBeUndefined();
   });
 
+  it("does not strip multiple audio attachments using transcript-only fallback", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/voice-1.ogg", "/tmp/voice-2.ogg"],
+      MediaTypes: ["audio/ogg", "audio/ogg"],
+      Transcript: "Transcript text without per-attachment mapping",
+    });
+    expect(note).toBe(
+      [
+        "[media attached: 2 files]",
+        "[media attached 1/2: /tmp/voice-1.ogg (audio/ogg)]",
+        "[media attached 2/2: /tmp/voice-2.ogg (audio/ogg)]",
+      ].join("\n"),
+    );
+  });
+
   it("strips audio by extension even without mime type (issue #4197)", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/voice_message.ogg", "/tmp/document.pdf"],
-      Transcript: "Transcribed audio content",
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "Transcribed audio content",
+          provider: "whisper",
+        },
+      ],
     });
     // Only PDF should remain, audio stripped by extension
     expect(note).toBe("[media attached: /tmp/document.pdf]");

@@ -47,18 +47,15 @@ function isAudioPath(path: string | undefined): boolean {
 }
 
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
-  // Check if audio transcription succeeded - if so, we can strip the raw audio attachment
-  // to save context tokens (the transcript is already in ctx.Transcript or [Audio] block)
-  const hasAudioTranscription =
-    (Array.isArray(ctx.MediaUnderstanding) &&
-      ctx.MediaUnderstanding.some((o) => o.kind === "audio.transcription")) ||
-    Boolean(ctx.Transcript?.trim());
-
   // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
   const suppressed = new Set<number>();
+  const transcribedAudioIndices = new Set<number>();
   if (Array.isArray(ctx.MediaUnderstanding)) {
     for (const output of ctx.MediaUnderstanding) {
       suppressed.add(output.attachmentIndex);
+      if (output.kind === "audio.transcription") {
+        transcribedAudioIndices.add(output.attachmentIndex);
+      }
     }
   }
   if (Array.isArray(ctx.MediaUnderstandingDecisions)) {
@@ -69,6 +66,9 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       for (const attachment of decision.attachments) {
         if (attachment.chosen?.outcome === "success") {
           suppressed.add(attachment.attachmentIndex);
+          if (decision.capability === "audio") {
+            transcribedAudioIndices.add(attachment.attachmentIndex);
+          }
         }
       }
     }
@@ -92,6 +92,10 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
     Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length === paths.length
       ? ctx.MediaTypes
       : undefined;
+  const hasTranscript = Boolean(ctx.Transcript?.trim());
+  // Transcript alone does not identify an attachment index; only use it as a fallback
+  // when there is a single attachment to avoid stripping unrelated audio files.
+  const canStripSingleAttachmentByTranscript = hasTranscript && paths.length === 1;
 
   const entries = paths
     .map((entry, index) => ({
@@ -110,7 +114,14 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       // which could misclassify non-audio attachments (greptile review feedback)
       const hasPerEntryType = types !== undefined;
       const isAudioByMime = hasPerEntryType && entry.type?.toLowerCase().startsWith("audio/");
-      if (hasAudioTranscription && (isAudioPath(entry.path) || isAudioByMime)) {
+      const isAudioEntry = isAudioPath(entry.path) || isAudioByMime;
+      if (!isAudioEntry) {
+        return true;
+      }
+      if (
+        transcribedAudioIndices.has(entry.index) ||
+        (canStripSingleAttachmentByTranscript && entry.index === 0)
+      ) {
         return false;
       }
       return true;
