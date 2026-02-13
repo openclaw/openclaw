@@ -70,6 +70,12 @@ def _blob_to_vec(blob: Optional[bytes]) -> Optional[np.ndarray]:
     return np.frombuffer(blob, dtype=np.float32)
 
 
+class _SafeDict(dict):
+    """Dict that returns {key} for missing keys in format_map — graceful template fill."""
+    def __missing__(self, key):
+        return f"{{{key}}}"
+
+
 def _cosine(a: Optional[np.ndarray], b: Optional[np.ndarray]) -> float:
     if a is None or b is None:
         return 0.0
@@ -264,6 +270,36 @@ class UnifiedBrain:
             )
         """)
 
+        # -- TODOS --
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS todos (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                status TEXT DEFAULT 'open',
+                priority TEXT DEFAULT 'medium',
+                assigned_to TEXT,
+                tags TEXT DEFAULT '[]',
+                due_at TEXT,
+                template_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                completed_at TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS todo_templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                title_pattern TEXT NOT NULL,
+                description_pattern TEXT,
+                default_priority TEXT DEFAULT 'medium',
+                default_tags TEXT DEFAULT '[]',
+                example TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+
         # -- WORKING MEMORY (pins always in context) --
         c.execute("""
             CREATE TABLE IF NOT EXISTS working_memory (
@@ -298,9 +334,15 @@ class UnifiedBrain:
         c.execute("CREATE INDEX IF NOT EXISTS idx_atoms_source ON atoms(source_message_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_type, source_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_wm_position ON working_memory(position)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status, priority)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_todos_assigned ON todos(assigned_to)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_todos_due ON todos(due_at)")
 
         conn.commit()
         conn.close()
+
+        # Seed default templates (idempotent)
+        self._seed_todo_templates()
 
     # ===================================================================
     # SYNAPSE: Communication
@@ -1906,6 +1948,291 @@ class UnifiedBrain:
     # ===================================================================
     # EXPORT (backward compat)
     # ===================================================================
+
+    # ===================================================================
+    # TODOS: Task Management
+    # ===================================================================
+
+    def _seed_todo_templates(self):
+        """Seed built-in templates (idempotent — skips if name exists)."""
+        templates = [
+            {
+                "name": "bug-fix",
+                "title_pattern": "Fix: {summary}",
+                "description_pattern": "**What's broken:** {problem}\n**Repro steps:** {steps}\n**Expected:** {expected}",
+                "default_priority": "high",
+                "default_tags": '["bug"]',
+                "example": 'brain todo from-template bug-fix summary="AUGUR exit timing" problem="Positions held past lookahead window" steps="1. Trigger RARI LONG 2. Watch exit timer" expected="Exit at pattern lookahead seconds"',
+            },
+            {
+                "name": "feature",
+                "title_pattern": "Feature: {summary}",
+                "description_pattern": "**Goal:** {goal}\n**Acceptance criteria:** {criteria}\n**Notes:** {notes}",
+                "default_priority": "medium",
+                "default_tags": '["feature"]',
+                "example": 'brain todo from-template feature summary="Maker-only orders" goal="Avoid taker fees on entry" criteria="All entries use limit orders, fallback to cancel after 5s" notes="0.20% RT taker fees destroy edge"',
+            },
+            {
+                "name": "research",
+                "title_pattern": "Research: {topic}",
+                "description_pattern": "**Question:** {question}\n**Hypothesis:** {hypothesis}\n**Method:** {method}",
+                "default_priority": "medium",
+                "default_tags": '["research"]',
+                "example": 'brain todo from-template research topic="GHST signal clustering" question="Do GHST signals cluster in time or distribute evenly?" hypothesis="Clusters around volatility spikes" method="Plot signal timestamps against 1h volatility"',
+            },
+            {
+                "name": "deploy",
+                "title_pattern": "Deploy: {service}",
+                "description_pattern": "**What:** {what}\n**Pre-checks:** {checks}\n**Rollback:** {rollback}",
+                "default_priority": "high",
+                "default_tags": '["deploy", "ops"]',
+                "example": 'brain todo from-template deploy service="AUGUR v4 paper trader" what="Replace paper_augur.py with v4 multi-timeframe engine" checks="1. All tests pass 2. DB backup 3. Collector running" rollback="systemctl --user restart paper-augur with v3 binary"',
+            },
+            {
+                "name": "spike",
+                "title_pattern": "Spike: {topic} ({timebox})",
+                "description_pattern": "**Explore:** {explore}\n**Timebox:** {timebox}\n**Deliverable:** {deliverable}",
+                "default_priority": "low",
+                "default_tags": '["spike"]',
+                "example": 'brain todo from-template spike topic="n8n webhooks" timebox="2h" explore="Can n8n replace custom webhook handlers?" deliverable="Written recommendation with pros/cons"',
+            },
+        ]
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        now = _now()
+        for t in templates:
+            c.execute(
+                "INSERT OR IGNORE INTO todo_templates (id, name, title_pattern, description_pattern, default_priority, default_tags, example, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _gen_id("tmpl"),
+                    t["name"],
+                    t["title_pattern"],
+                    t["description_pattern"],
+                    t["default_priority"],
+                    t["default_tags"],
+                    t["example"],
+                    now,
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+    def todo_add(
+        self,
+        title: str,
+        description: str = "",
+        priority: str = "medium",
+        assigned_to: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        due_at: Optional[str] = None,
+        template_id: Optional[str] = None,
+    ) -> dict:
+        """Create a new todo item."""
+        todo_id = _gen_id("todo")
+        now = _now()
+        tags_json = json.dumps(tags or [])
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        c.execute(
+            """INSERT INTO todos (id, title, description, status, priority, assigned_to, tags, due_at, template_id, created_at, updated_at)
+               VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)""",
+            (todo_id, title, description, priority, assigned_to, tags_json, due_at, template_id, now, now),
+        )
+        conn.commit()
+        conn.close()
+        return {
+            "id": todo_id,
+            "title": title,
+            "description": description,
+            "status": "open",
+            "priority": priority,
+            "assigned_to": assigned_to,
+            "tags": tags or [],
+            "due_at": due_at,
+            "template_id": template_id,
+            "created_at": now,
+        }
+
+    def todo_list(
+        self,
+        status: Optional[str] = None,
+        assigned_to: Optional[str] = None,
+        tag: Optional[str] = None,
+        include_done: bool = False,
+    ) -> List[dict]:
+        """List todos with optional filters."""
+        conn = self._conn()
+        c = conn.cursor()
+        sql = "SELECT * FROM todos WHERE 1=1"
+        params: list = []
+
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        elif not include_done:
+            sql += " AND status != 'done'"
+
+        if assigned_to:
+            sql += " AND assigned_to = ?"
+            params.append(assigned_to)
+
+        if tag:
+            sql += " AND tags LIKE ?"
+            params.append(f'%"{tag}"%')
+
+        # Priority sort: critical > high > medium > low
+        sql += " ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, created_at DESC"
+
+        c.execute(sql, params)
+        rows = c.fetchall()
+        conn.close()
+        return [self._todo_row_to_dict(r) for r in rows]
+
+    def todo_update(self, todo_id: str, **kwargs) -> bool:
+        """Update a todo item. Supports: title, description, priority, assigned_to, tags, due_at, status."""
+        allowed = {"title", "description", "priority", "assigned_to", "tags", "due_at", "status"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+
+        if "tags" in updates and isinstance(updates["tags"], list):
+            updates["tags"] = json.dumps(updates["tags"])
+
+        now = _now()
+        updates["updated_at"] = now
+
+        # If marking done, set completed_at
+        if updates.get("status") == "done":
+            updates["completed_at"] = now
+
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        params = list(updates.values()) + [todo_id]
+        c.execute(f"UPDATE todos SET {set_clause} WHERE id = ?", params)
+        ok = c.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+
+    def todo_done(self, todo_id: str, result: Optional[str] = None) -> bool:
+        """Mark a todo as done. Optionally store a result note in description."""
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        now = _now()
+        if result:
+            c.execute(
+                "UPDATE todos SET status = 'done', completed_at = ?, updated_at = ?, description = description || '\n\n**Result:** ' || ? WHERE id = ?",
+                (now, now, result, todo_id),
+            )
+        else:
+            c.execute(
+                "UPDATE todos SET status = 'done', completed_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, todo_id),
+            )
+        ok = c.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+
+    def todo_delete(self, todo_id: str) -> bool:
+        """Delete a todo item."""
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        c.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
+        ok = c.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+
+    def todo_from_template(self, template_name: str, fields: dict, **overrides) -> dict:
+        """Create a todo from a named template, filling in {field} placeholders."""
+        conn = self._conn()
+        c = conn.cursor()
+        c.execute("SELECT * FROM todo_templates WHERE name = ?", (template_name,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            raise ValueError(f"Template '{template_name}' not found")
+
+        tmpl = dict(row)
+        title = tmpl["title_pattern"].format_map(_SafeDict(fields))
+        desc = (tmpl["description_pattern"] or "").format_map(_SafeDict(fields))
+        priority = overrides.get("priority", tmpl["default_priority"])
+        tags = overrides.get("tags") or json.loads(tmpl["default_tags"] or "[]")
+        assigned_to = overrides.get("assigned_to")
+        due_at = overrides.get("due_at")
+
+        return self.todo_add(
+            title=title,
+            description=desc,
+            priority=priority,
+            assigned_to=assigned_to,
+            tags=tags,
+            due_at=due_at,
+            template_id=tmpl["id"],
+        )
+
+    def todo_templates(self) -> List[dict]:
+        """List all available todo templates."""
+        conn = self._conn()
+        c = conn.cursor()
+        c.execute("SELECT * FROM todo_templates ORDER BY name")
+        rows = c.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def todo_add_template(
+        self,
+        name: str,
+        title_pattern: str,
+        description_pattern: str = "",
+        default_priority: str = "medium",
+        default_tags: Optional[List[str]] = None,
+        example: str = "",
+    ) -> dict:
+        """Create a custom todo template."""
+        tmpl_id = _gen_id("tmpl")
+        now = _now()
+        tags_json = json.dumps(default_tags or [])
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO todo_templates (id, name, title_pattern, description_pattern, default_priority, default_tags, example, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (tmpl_id, name, title_pattern, description_pattern, default_priority, tags_json, example, now),
+        )
+        conn.commit()
+        conn.close()
+        return {"id": tmpl_id, "name": name}
+
+    def todo_stats(self) -> dict:
+        """Get todo statistics."""
+        conn = self._conn()
+        c = conn.cursor()
+        c.execute("SELECT status, COUNT(*) as cnt FROM todos GROUP BY status")
+        status_counts = {r["status"]: r["cnt"] for r in c.fetchall()}
+        c.execute("SELECT COUNT(*) as cnt FROM todos WHERE due_at IS NOT NULL AND due_at < ? AND status != 'done'", (_now(),))
+        overdue = c.fetchone()["cnt"]
+        c.execute("SELECT COUNT(*) as cnt FROM todo_templates")
+        templates = c.fetchone()["cnt"]
+        conn.close()
+        return {
+            "total": sum(status_counts.values()),
+            "by_status": status_counts,
+            "overdue": overdue,
+            "templates": templates,
+        }
+
+    def _todo_row_to_dict(self, row: sqlite3.Row) -> dict:
+        d = dict(row)
+        if d.get("tags"):
+            try:
+                d["tags"] = json.loads(d["tags"])
+            except (json.JSONDecodeError, TypeError):
+                d["tags"] = []
+        else:
+            d["tags"] = []
+        return d
 
     def export_synapse_json(self) -> dict:
         """Export messages in the old synapse.json format for cat inspection."""
