@@ -196,6 +196,7 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        structuredStateFile: z.string().optional(),
         truncateAfterCompaction: z.boolean().optional(),
         maxActiveTranscriptBytes: NonNegativeByteSizeSchema.optional(),
         notifyUser: z.boolean().optional(),
