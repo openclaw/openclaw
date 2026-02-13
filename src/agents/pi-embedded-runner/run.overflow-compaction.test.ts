@@ -478,7 +478,7 @@ describe("overflow compaction in run loop", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {
+  it("uses accumulated attempt usage totals for agent meta", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         attemptUsage: {
@@ -502,6 +502,6 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedPiAgent(baseParams);
 
     expect(result.meta.agentMeta?.usage?.input).toBe(4_000);
-    expect(result.meta.agentMeta?.promptTokens).toBe(2_000);
+    expect(result.meta.agentMeta?.usage?.total).toBe(124_000);
   });
 });
