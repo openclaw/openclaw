@@ -32,7 +32,7 @@ export async function runSessionsSendA2AFlow(params: {
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
       const waitMs = Math.min(params.announceTimeoutMs, 60_000);
-      const wait = await callGateway<{ status: string }>({
+      const wait = await callGateway<{ status: string; finalAssistantText?: string }>({
         method: "agent.wait",
         params: {
           runId: params.waitRunId,
@@ -41,9 +41,12 @@ export async function runSessionsSendA2AFlow(params: {
         timeoutMs: waitMs + 2000,
       });
       if (wait?.status === "ok") {
-        primaryReply = await readLatestAssistantReply({
-          sessionKey: params.targetSessionKey,
-        });
+        primaryReply =
+          typeof wait?.finalAssistantText === "string" && wait.finalAssistantText.trim()
+            ? wait.finalAssistantText
+            : await readLatestAssistantReply({
+                sessionKey: params.targetSessionKey,
+              });
         latestReply = primaryReply;
       }
     }

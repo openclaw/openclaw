@@ -522,6 +522,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
+      finalAssistantText: snapshot.finalAssistantText,
     });
   },
 };
