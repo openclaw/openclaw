@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { loggingState } from "../logging/state.js";
 import { pathExists } from "../utils.js";
 import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis.js";
 
@@ -236,6 +237,9 @@ export function registerCompletionCli(program: Command) {
     .option("-y, --yes", "Skip confirmation (non-interactive)", false)
     .action(async (options) => {
       const shell = options.shell ?? "zsh";
+      // Force all logs to stderr so completion script goes to stdout only
+      loggingState.forceConsoleToStderr = true;
+
       // Eagerly register all subcommands to build the full tree
       const entries = getSubCliEntries();
       for (const entry of entries) {
