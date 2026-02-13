@@ -49,6 +49,21 @@ describe("archive utils", () => {
     expect(content).toBe("hi");
   });
 
+  it("rejects zip entries that escape destination", async () => {
+    const workDir = await makeTempDir();
+    const archivePath = path.join(workDir, "bundle.zip");
+    const extractDir = path.join(workDir, "extract");
+
+    const zip = new JSZip();
+    zip.file("../extract-evil/owned.txt", "owned");
+    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+    await fs.mkdir(extractDir, { recursive: true });
+    await expect(
+      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+    ).rejects.toThrow(/escapes destination/i);
+  });
+
   it("extracts tar archives", async () => {
     const workDir = await makeTempDir();
     const archivePath = path.join(workDir, "bundle.tar");
@@ -64,5 +79,21 @@ describe("archive utils", () => {
     const rootDir = await resolvePackedRootDir(extractDir);
     const content = await fs.readFile(path.join(rootDir, "hello.txt"), "utf-8");
     expect(content).toBe("yo");
+  });
+
+  it("rejects tar entries that escape destination", async () => {
+    const workDir = await makeTempDir();
+    const archivePath = path.join(workDir, "bundle-bad.tar");
+    const extractDir = path.join(workDir, "extract");
+    const packageDir = path.join(workDir, "package");
+
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "hello.txt"), "yo");
+    await tar.c({ cwd: workDir, file: archivePath, prefix: "../escape" }, ["package"]);
+
+    await fs.mkdir(extractDir, { recursive: true });
+    await expect(
+      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+    ).rejects.toThrow(/escapes destination/i);
   });
 });

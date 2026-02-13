@@ -3,6 +3,7 @@ import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { afterEach, describe, expect, it } from "vitest";
+import { canListenOnLoopback } from "../test-helpers/network.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
 
 function waitForLine(stream: NodeJS.ReadableStream, timeoutMs = 10_000): Promise<string> {
@@ -75,6 +76,9 @@ describe("attachChildProcessBridge", () => {
   });
 
   it("forwards SIGTERM to the wrapped child", async () => {
+    if (!(await canListenOnLoopback())) {
+      return;
+    }
     const childPath = path.resolve(process.cwd(), "test/fixtures/child-process-bridge/child.js");
 
     const beforeSigterm = new Set(process.listeners("SIGTERM"));

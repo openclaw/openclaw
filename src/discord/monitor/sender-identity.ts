@@ -21,6 +21,10 @@ type DiscordWebhookMessageLike = {
   webhook_id?: string | null;
 };
 
+type DiscordMemberLike = {
+  nickname?: string | null;
+};
+
 export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): string | null {
   const candidate = message.webhookId ?? message.webhook_id;
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
@@ -28,8 +32,7 @@ export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): str
 
 export function resolveDiscordSenderIdentity(params: {
   author: User;
-  // oxlint-disable-next-line typescript/no-explicit-any
-  member?: any;
+  member?: DiscordMemberLike;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): DiscordSenderIdentity {
   const pkInfo = params.pluralkitInfo ?? null;
@@ -74,8 +77,7 @@ export function resolveDiscordSenderIdentity(params: {
 
 export function resolveDiscordSenderLabel(params: {
   author: User;
-  // oxlint-disable-next-line typescript/no-explicit-any
-  member?: any;
+  member?: DiscordMemberLike;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): string {
   return resolveDiscordSenderIdentity(params).label;

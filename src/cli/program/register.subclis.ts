@@ -41,6 +41,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "start",
+    description: "Start gateway + channels + TUI",
+    register: async (program) => {
+      const mod = await import("../start-cli.js");
+      mod.registerStartCli(program);
+    },
+  },
+  {
     name: "gateway",
     description: "Gateway control",
     register: async (program) => {

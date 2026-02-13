@@ -19,6 +19,7 @@ const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
 const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
+const LEGACY_CHANNEL_IDS = ["signal"] as const;
 
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
@@ -266,7 +267,7 @@ function validateConfigObjectWithPluginsBase(
     });
   }
 
-  const allowedChannels = new Set<string>(["defaults", ...CHANNEL_IDS]);
+  const allowedChannels = new Set<string>(["defaults", ...CHANNEL_IDS, ...LEGACY_CHANNEL_IDS]);
   for (const record of registry.plugins) {
     for (const channelId of record.channels) {
       allowedChannels.add(channelId);

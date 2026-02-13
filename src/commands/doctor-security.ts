@@ -24,9 +24,12 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const bindMode = bindModes.includes(gatewayBind as GatewayBindMode)
     ? (gatewayBind as GatewayBindMode)
     : undefined;
-  const resolvedBindHost = bindMode
-    ? await resolveGatewayBindHost(bindMode, customBindHost)
-    : "0.0.0.0";
+  const resolvedBindHost =
+    bindMode === "loopback"
+      ? "127.0.0.1"
+      : bindMode
+        ? await resolveGatewayBindHost(bindMode, customBindHost)
+        : "0.0.0.0";
   const isExposed = !isLoopbackHost(resolvedBindHost);
 
   const resolvedAuth = resolveGatewayAuth({

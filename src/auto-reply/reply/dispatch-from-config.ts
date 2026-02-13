@@ -16,7 +16,7 @@ import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "
 import { getReplyFromConfig } from "../reply.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
-import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { routeReply, shouldImplicitBoundedOriginRoute } from "./route-reply.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
@@ -198,17 +198,20 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.
-  // Only route when the originating channel is DIFFERENT from the current surface.
-  // This handles cross-provider routing (e.g., message from Telegram being processed
-  // by a shared session that's currently on Slack) while preserving normal dispatcher
-  // flow when the provider handles its own messages.
+  // Implicit origin routing is intentionally bounded to Telegram/WhatsApp and
+  // only when the origin differs from the current processing surface.
+  // This keeps cross-provider return paths explicit and prevents unintended
+  // jumps for other integrations.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
   const originatingChannel = ctx.OriginatingChannel;
   const originatingTo = ctx.OriginatingTo;
   const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();
-  const shouldRouteToOriginating =
-    isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface;
+  const shouldRouteToOriginating = shouldImplicitBoundedOriginRoute({
+    channel: originatingChannel,
+    to: originatingTo,
+    currentSurface,
+  });
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
 
   /**

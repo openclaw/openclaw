@@ -11,7 +11,6 @@ export const CHAT_CHANNEL_ORDER = [
   "irc",
   "googlechat",
   "slack",
-  "signal",
   "imessage",
 ] as const;
 
@@ -88,16 +87,6 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "slack",
     blurb: "supported (Socket Mode).",
     systemImage: "number",
-  },
-  signal: {
-    id: "signal",
-    label: "Signal",
-    selectionLabel: "Signal (signal-cli)",
-    detailLabel: "Signal REST",
-    docsPath: "/channels/signal",
-    docsLabel: "signal",
-    blurb: 'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
-    systemImage: "antenna.radiowaves.left.and.right",
   },
   imessage: {
     id: "imessage",
@@ -181,11 +170,13 @@ export function formatChannelSelectionLine(
   meta: ChatChannelMeta,
   docsLink: (path: string, label?: string) => string,
 ): string {
+  const docsPath =
+    typeof meta.docsPath === "string" && meta.docsPath.trim().length > 0
+      ? meta.docsPath
+      : "/channels";
   const docsPrefix = meta.selectionDocsPrefix ?? "Docs:";
   const docsLabel = meta.docsLabel ?? meta.id;
-  const docs = meta.selectionDocsOmitLabel
-    ? docsLink(meta.docsPath)
-    : docsLink(meta.docsPath, docsLabel);
+  const docs = meta.selectionDocsOmitLabel ? docsLink(docsPath) : docsLink(docsPath, docsLabel);
   const extras = (meta.selectionExtras ?? []).filter(Boolean).join(" ");
   return `${meta.label} — ${meta.blurb} ${docsPrefix ? `${docsPrefix} ` : ""}${docs}${extras ? ` ${extras}` : ""}`;
 }

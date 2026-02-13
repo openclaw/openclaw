@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { canListenOnLoopback } from "../test-helpers/network.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 const handlerSpy = vi.fn(
@@ -25,7 +26,16 @@ vi.mock("./bot.js", () => ({
 }));
 
 describe("startTelegramWebhook", () => {
+  let loopbackAvailable = false;
+
+  beforeAll(async () => {
+    loopbackAvailable = await canListenOnLoopback();
+  });
+
   it("starts server, registers webhook, and serves health", async () => {
+    if (!loopbackAvailable) {
+      return;
+    }
     createTelegramBotSpy.mockClear();
     const abort = new AbortController();
     const cfg = { bindings: [] };
@@ -56,6 +66,9 @@ describe("startTelegramWebhook", () => {
   });
 
   it("invokes webhook handler on matching path", async () => {
+    if (!loopbackAvailable) {
+      return;
+    }
     handlerSpy.mockClear();
     createTelegramBotSpy.mockClear();
     const abort = new AbortController();

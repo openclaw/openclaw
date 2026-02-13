@@ -16,6 +16,8 @@ import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 
+const IMPLICIT_BOUNDED_ORIGIN_CHANNELS = new Set(["telegram", "whatsapp"]);
+
 export type RouteReplyParams = {
   /** The reply payload to send. */
   payload: ReplyPayload;
@@ -45,6 +47,32 @@ export type RouteReplyResult = {
   /** Error message if the send failed. */
   error?: string;
 };
+
+export function shouldImplicitBoundedOriginRoute(params: {
+  channel?: OriginatingChannelType;
+  to?: string | null;
+  currentSurface?: string | null;
+}): boolean {
+  const to = params.to?.trim();
+  if (!to) {
+    return false;
+  }
+  const normalizedChannel = normalizeMessageChannel(params.channel);
+  if (!normalizedChannel) {
+    return false;
+  }
+  if (!IMPLICIT_BOUNDED_ORIGIN_CHANNELS.has(normalizedChannel)) {
+    return false;
+  }
+  if (!isRoutableChannel(params.channel)) {
+    return false;
+  }
+  const normalizedSurface = normalizeMessageChannel(params.currentSurface);
+  if (normalizedSurface && normalizedChannel === normalizedSurface) {
+    return false;
+  }
+  return true;
+}
 
 /**
  * Routes a reply payload to the specified channel.

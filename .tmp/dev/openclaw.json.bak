@@ -1,0 +1,10 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback"
+  },
+  "agents": {
+    "defaults": { "workspace": "/Users/jarvis/.openclaw/workspace-dev", "skipBootstrap": true },
+    "list": [{ "id": "dev", "default": true, "workspace": "/Users/jarvis/.openclaw/workspace-dev" }]
+  }
+}

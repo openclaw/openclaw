@@ -1,6 +1,8 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveWorkspaceTemplateDir } from "../../agents/workspace-templates.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
@@ -87,6 +89,34 @@ async function ensureDevWorkspace(dir: string) {
   await writeFileIfMissing(path.join(resolvedDir, "USER.md"), user);
 }
 
+function generateDevGatewayToken(): string {
+  return crypto.randomBytes(24).toString("base64url");
+}
+
+function hasConfiguredGatewaySecret(cfg: OpenClawConfig): boolean {
+  const token = cfg.gateway?.auth?.token?.trim();
+  if (token) {
+    return true;
+  }
+  const password = cfg.gateway?.auth?.password?.trim();
+  return Boolean(password);
+}
+
+function withDevGatewayAuth(cfg: OpenClawConfig): OpenClawConfig {
+  const gateway = cfg.gateway ?? {};
+  return {
+    ...cfg,
+    gateway: {
+      ...gateway,
+      auth: {
+        ...gateway.auth,
+        mode: gateway.auth?.mode ?? "token",
+        token: gateway.auth?.token?.trim() || generateDevGatewayToken(),
+      },
+    },
+  };
+}
+
 export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
   const workspace = resolveDevWorkspaceDir();
   if (opts.reset) {
@@ -97,6 +127,11 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
   const configPath = io.configPath;
   const configExists = fs.existsSync(configPath);
   if (!opts.reset && configExists) {
+    const current = io.loadConfig();
+    if (!hasConfiguredGatewaySecret(current)) {
+      await io.writeConfigFile(withDevGatewayAuth(current));
+      defaultRuntime.log(`Dev gateway auth token generated in ${shortenHomePath(configPath)}.`);
+    }
     return;
   }
 
@@ -104,6 +139,10 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
     gateway: {
       mode: "local",
       bind: "loopback",
+      auth: {
+        mode: "token",
+        token: generateDevGatewayToken(),
+      },
     },
     agents: {
       defaults: {

@@ -149,4 +149,59 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("demo-plugin-dir");
   });
+
+  it("skips bundled signal extension by default", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const signalDir = path.join(bundledDir, "signal");
+    const telegramDir = path.join(bundledDir, "telegram");
+
+    fs.mkdirSync(signalDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(signalDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/signal",
+        openclaw: { extensions: ["./index.ts"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(signalDir, "index.ts"), "export default function () {}", "utf-8");
+
+    fs.mkdirSync(telegramDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(telegramDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/telegram",
+        openclaw: { extensions: ["./index.ts"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(telegramDir, "index.ts"), "export default function () {}", "utf-8");
+
+    const prevState = process.env.OPENCLAW_STATE_DIR;
+    const prevBundled = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    vi.resetModules();
+
+    try {
+      const { discoverOpenClawPlugins } = await import("./discovery.js");
+      const { candidates } = discoverOpenClawPlugins({});
+      const ids = candidates.map((c) => c.idHint);
+      expect(ids).toContain("telegram");
+      expect(ids).not.toContain("signal");
+    } finally {
+      if (prevState === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevState;
+      }
+      if (prevBundled === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundled;
+      }
+      vi.resetModules();
+    }
+  });
 });

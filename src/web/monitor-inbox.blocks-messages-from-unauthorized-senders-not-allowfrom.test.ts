@@ -149,7 +149,10 @@ describe("web monitor inbox", () => {
       text: expect.stringContaining("Your WhatsApp phone number: +999"),
     });
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Pairing code: PAIRCODE"),
+      text: expect.stringContaining("Pairing request recorded."),
+    });
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: expect.not.stringContaining("Pairing code:"),
     });
 
     // Reset mock for other tests

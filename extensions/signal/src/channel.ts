@@ -4,7 +4,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
-  getChatChannelMeta,
   listSignalAccountIds,
   looksLikeSignalTargetId,
   migrateBaseNameToDefaultAccount,
@@ -37,7 +36,16 @@ const signalMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
-const meta = getChatChannelMeta("signal");
+const meta = {
+  id: "signal",
+  label: "Signal",
+  selectionLabel: "Signal (signal-cli)",
+  detailLabel: "Signal",
+  docsPath: "/channels/signal",
+  docsLabel: "signal",
+  blurb: "deprecated channel integration; disabled by default.",
+  systemImage: "message",
+};
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   id: "signal",

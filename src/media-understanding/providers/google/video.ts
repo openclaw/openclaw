@@ -23,6 +23,7 @@ export async function describeGeminiVideo(
   params: VideoDescriptionRequest,
 ): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
+  const pinDns = params.fetchFn ? false : undefined;
   const baseUrl = normalizeBaseUrl(params.baseUrl, DEFAULT_GOOGLE_VIDEO_BASE_URL);
   const allowPrivate = Boolean(params.baseUrl?.trim());
   const model = resolveModel(params.model);
@@ -62,7 +63,7 @@ export async function describeGeminiVideo(
     },
     params.timeoutMs,
     fetchFn,
-    allowPrivate ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+    allowPrivate ? { ssrfPolicy: { allowPrivateNetwork: true }, pinDns } : { pinDns },
   );
 
   try {

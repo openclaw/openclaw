@@ -1,9 +1,14 @@
 import type { Command } from "commander";
+import crypto from "node:crypto";
 import fs from "node:fs";
-import type { GatewayAuthMode } from "../../config/config.js";
+import type { GatewayAuthMode, OpenClawConfig } from "../../config/config.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
+import { resolveConfiguredModelRef } from "../../agents/model-selection.js";
 import {
   CONFIG_PATH,
+  createConfigIO,
   loadConfig,
   readConfigFileSnapshot,
   resolveGatewayPort,
@@ -19,6 +24,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { forceFreePortAndWait } from "../ports.js";
+import { promptYesNo } from "../prompt.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
@@ -50,6 +56,84 @@ type GatewayRunOpts = {
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
+
+function generateGatewaySecret(): string {
+  return crypto.randomBytes(24).toString("base64url");
+}
+
+function isMissingProviderCredentialError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  return /No API key found|No credentials found/i.test(message);
+}
+
+async function maybeLogMissingProviderAuth(cfg: OpenClawConfig): Promise<void> {
+  const resolvedModel = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  try {
+    await resolveApiKeyForProvider({
+      provider: resolvedModel.provider,
+      cfg,
+    });
+  } catch (err) {
+    if (!isMissingProviderCredentialError(err)) {
+      return;
+    }
+    const provider = resolvedModel.provider;
+    const model = resolvedModel.model;
+    const authCommand =
+      provider === "anthropic"
+        ? formatCliCommand("openclaw models auth setup-token --provider anthropic")
+        : formatCliCommand(`openclaw models auth login --provider ${provider}`);
+    defaultRuntime.log(
+      [
+        `Model auth missing for ${provider}/${model}.`,
+        "OpenClaw requires two credentials to fully work:",
+        "1) Gateway auth token/password (connect to the gateway)",
+        "2) Provider auth (API key/OAuth/token) for model replies",
+        `Configure provider auth: ${authCommand}`,
+        `Verify readiness: ${formatCliCommand("openclaw models status --check")}`,
+      ].join("\n"),
+    );
+  }
+}
+
+async function maybeBootstrapMissingGatewayAuth(params: {
+  mode: GatewayAuthMode;
+  allowedByTailscale: boolean;
+  hasSecret: boolean;
+}): Promise<string | null> {
+  if (params.hasSecret || params.allowedByTailscale || !process.stdin.isTTY) {
+    return null;
+  }
+  const secretLabel = params.mode === "password" ? "password" : "token";
+  const ok = await promptYesNo(
+    `Gateway auth ${secretLabel} is missing. Generate and save one now?`,
+    true,
+  );
+  if (!ok) {
+    return null;
+  }
+  const io = createConfigIO();
+  const cfg = io.loadConfig();
+  const secret = generateGatewaySecret();
+  const next = {
+    ...cfg,
+    gateway: {
+      ...cfg.gateway,
+      auth: {
+        ...cfg.gateway?.auth,
+        mode: params.mode,
+        ...(params.mode === "token" ? { token: secret } : { password: secret }),
+      },
+    },
+  };
+  await io.writeConfigFile(next);
+  defaultRuntime.log(`Generated gateway ${secretLabel} and saved to ${io.configPath}.`);
+  return secret;
+}
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
   const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
@@ -155,8 +239,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  const passwordRaw = toOptionString(opts.password);
-  const tokenRaw = toOptionString(opts.token);
+  let passwordRaw = toOptionString(opts.password);
+  let tokenRaw = toOptionString(opts.token);
 
   const snapshot = await readConfigFileSnapshot().catch(() => null);
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
@@ -196,17 +280,17 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     ...(passwordRaw ? { password: passwordRaw } : {}),
     ...(tokenRaw ? { token: tokenRaw } : {}),
   };
-  const resolvedAuth = resolveGatewayAuth({
+  let resolvedAuth = resolveGatewayAuth({
     authConfig,
     env: process.env,
     tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
   });
-  const resolvedAuthMode = resolvedAuth.mode;
-  const tokenValue = resolvedAuth.token;
-  const passwordValue = resolvedAuth.password;
-  const hasToken = typeof tokenValue === "string" && tokenValue.trim().length > 0;
-  const hasPassword = typeof passwordValue === "string" && passwordValue.trim().length > 0;
-  const hasSharedSecret =
+  let resolvedAuthMode = resolvedAuth.mode;
+  let tokenValue = resolvedAuth.token;
+  let passwordValue = resolvedAuth.password;
+  let hasToken = typeof tokenValue === "string" && tokenValue.trim().length > 0;
+  let hasPassword = typeof passwordValue === "string" && passwordValue.trim().length > 0;
+  let hasSharedSecret =
     (resolvedAuthMode === "token" && hasToken) || (resolvedAuthMode === "password" && hasPassword);
   const authHints: string[] = [];
   if (miskeys.hasGatewayToken) {
@@ -217,6 +301,46 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
     );
   }
+  if (resolvedAuthMode === "token" && !hasToken) {
+    const generated = await maybeBootstrapMissingGatewayAuth({
+      mode: "token",
+      allowedByTailscale: Boolean(resolvedAuth.allowTailscale),
+      hasSecret: hasToken,
+    });
+    if (generated) {
+      tokenRaw = generated;
+      process.env.OPENCLAW_GATEWAY_TOKEN = generated;
+    }
+  } else if (resolvedAuthMode === "password" && !hasPassword) {
+    const generated = await maybeBootstrapMissingGatewayAuth({
+      mode: "password",
+      allowedByTailscale: false,
+      hasSecret: hasPassword,
+    });
+    if (generated) {
+      passwordRaw = generated;
+      process.env.OPENCLAW_GATEWAY_PASSWORD = generated;
+    }
+  }
+
+  resolvedAuth = resolveGatewayAuth({
+    authConfig: {
+      ...cfg.gateway?.auth,
+      ...(authMode ? { mode: authMode } : {}),
+      ...(passwordRaw ? { password: passwordRaw } : {}),
+      ...(tokenRaw ? { token: tokenRaw } : {}),
+    },
+    env: process.env,
+    tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
+  });
+  resolvedAuthMode = resolvedAuth.mode;
+  tokenValue = resolvedAuth.token;
+  passwordValue = resolvedAuth.password;
+  hasToken = typeof tokenValue === "string" && tokenValue.trim().length > 0;
+  hasPassword = typeof passwordValue === "string" && passwordValue.trim().length > 0;
+  hasSharedSecret =
+    (resolvedAuthMode === "token" && hasToken) || (resolvedAuthMode === "password" && hasPassword);
+
   if (resolvedAuthMode === "token" && !hasToken && !resolvedAuth.allowTailscale) {
     defaultRuntime.error(
       [
@@ -256,6 +380,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
+
+  await maybeLogMissingProviderAuth(cfg);
 
   try {
     await runGatewayLoop({

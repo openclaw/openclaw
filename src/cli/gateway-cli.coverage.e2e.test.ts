@@ -14,6 +14,15 @@ const forceFreePortAndWait = vi.fn(async () => ({
 const serviceIsLoaded = vi.fn().mockResolvedValue(true);
 const discoverGatewayBeacons = vi.fn(async () => []);
 const gatewayStatusCommand = vi.fn(async () => {});
+const resolveConfiguredModelRef = vi.fn(() => ({
+  provider: "anthropic",
+  model: "claude-opus-4-6",
+}));
+const resolveApiKeyForProvider = vi.fn(async () => ({
+  apiKey: "test-key",
+  source: "env: ANTHROPIC_API_KEY",
+  mode: "api-key",
+}));
 
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
@@ -104,6 +113,14 @@ vi.mock("../infra/bonjour-discovery.js", () => ({
 
 vi.mock("../commands/gateway-status.js", () => ({
   gatewayStatusCommand: (opts: unknown) => gatewayStatusCommand(opts),
+}));
+
+vi.mock("../agents/model-selection.js", () => ({
+  resolveConfiguredModelRef: (params: unknown) => resolveConfiguredModelRef(params),
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  resolveApiKeyForProvider: (params: unknown) => resolveApiKeyForProvider(params),
 }));
 
 describe("gateway-cli coverage", () => {
@@ -348,5 +365,28 @@ describe("gateway-cli coverage", () => {
 
       expect(startGatewayServer).toHaveBeenCalledWith(19001, expect.anything());
     });
+  });
+
+  it("prints two-token guidance when provider auth is missing", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    resolveApiKeyForProvider.mockRejectedValueOnce(
+      new Error('No API key found for provider "anthropic".'),
+    );
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerGatewayCli(program);
+
+    startGatewayServer.mockRejectedValueOnce(new Error("nope"));
+    await expect(
+      program.parseAsync(["gateway", "--token", "test-token", "--allow-unconfigured"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeLogs.join("\n")).toContain("OpenClaw requires two credentials to fully work");
+    expect(runtimeLogs.join("\n")).toContain("Configure provider auth:");
   });
 });

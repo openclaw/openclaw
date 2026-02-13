@@ -1,5 +1,6 @@
 import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
+import { canListenOnLoopback } from "../test-helpers/network.js";
 import {
   buildPortHints,
   classifyPortListener,
@@ -11,6 +12,9 @@ import {
 
 describe("ports helpers", () => {
   it("ensurePortAvailable rejects when port busy", async () => {
+    if (!(await canListenOnLoopback())) {
+      return;
+    }
     const server = net.createServer();
     await new Promise((resolve) => server.listen(0, resolve));
     const port = (server.address() as net.AddressInfo).port;

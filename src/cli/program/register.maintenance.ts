@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { dashboardCommand } from "../../commands/dashboard.js";
 import { doctorCommand } from "../../commands/doctor.js";
+import { portBotCommand } from "../../commands/port-bot.js";
 import { resetCommand } from "../../commands/reset.js";
 import { uninstallCommand } from "../../commands/uninstall.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -35,6 +36,20 @@ export function registerMaintenanceCommands(program: Command) {
           nonInteractive: Boolean(opts.nonInteractive),
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
+        });
+      });
+    });
+
+  program
+    .command("port-bot")
+    .description("Port sessions/auth state from older Clawdbot/OpenClaw layouts")
+    .option("--yes", "Apply migration without confirmation prompt", false)
+    .option("--dry-run", "Preview migration plan without writing changes", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await portBotCommand(defaultRuntime, {
+          yes: Boolean(opts.yes),
+          dryRun: Boolean(opts.dryRun),
         });
       });
     });

@@ -1,6 +1,5 @@
 import { loadConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -16,6 +15,39 @@ export type InboundAccessControlResult = {
 };
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
+const PAIRING_REQUEST_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const PAIRING_REQUEST_RATE_LIMIT_MAX = 5;
+const pairingRequestRateBuckets = new Map<string, number[]>();
+
+function hitPairingRequestRateLimit(key: string, nowMs: number): boolean {
+  const prev = pairingRequestRateBuckets.get(key) ?? [];
+  const active = prev.filter((ts) => nowMs - ts < PAIRING_REQUEST_RATE_LIMIT_WINDOW_MS);
+  if (active.length >= PAIRING_REQUEST_RATE_LIMIT_MAX) {
+    pairingRequestRateBuckets.set(key, active);
+    return true;
+  }
+  active.push(nowMs);
+  pairingRequestRateBuckets.set(key, active);
+  return false;
+}
+
+export function resetPairingRequestRateLimitForTests(): void {
+  if (!process.env.VITEST) {
+    return;
+  }
+  pairingRequestRateBuckets.clear();
+}
+
+function buildPairingPendingReply(params: { idLine: string }): string {
+  return [
+    "OpenClaw: access not configured.",
+    "",
+    params.idLine,
+    "",
+    "Pairing request recorded.",
+    "Ask the bot owner to approve your access request.",
+  ].join("\n");
+}
 
 export async function checkInboundAccessControl(params: {
   accountId: string;
@@ -38,7 +70,7 @@ export async function checkInboundAccessControl(params: {
     cfg,
     accountId: params.accountId,
   });
-  const dmPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
+  const dmPolicy = account.dmPolicy ?? "pairing";
   const configuredAllowFrom = account.allowFrom;
   const storeAllowFrom = await readChannelAllowFromStore("whatsapp").catch(() => []);
   // Without user config, default to self-only DM access so the owner can talk to themselves.
@@ -99,9 +131,13 @@ export async function checkInboundAccessControl(params: {
         resolvedAccountId: account.accountId,
       };
     }
+    const normalizedGroupSender =
+      params.senderE164 ??
+      (params.from ? normalizeE164(params.from) : null) ??
+      (params.group && params.remoteJid ? normalizeE164(params.remoteJid) : null);
     const senderAllowed =
       groupHasWildcard ||
-      (params.senderE164 != null && normalizedGroupAllowFrom.includes(params.senderE164));
+      (normalizedGroupSender != null && normalizedGroupAllowFrom.includes(normalizedGroupSender));
     if (!senderAllowed) {
       logVerbose(
         `Blocked group message from ${params.senderE164 ?? "unknown sender"} (groupPolicy: allowlist)`,
@@ -145,7 +181,20 @@ export async function checkInboundAccessControl(params: {
           if (suppressPairingReply) {
             logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
           } else {
-            const { code, created } = await upsertChannelPairingRequest({
+            const nowMs = Date.now();
+            const pairingRateKey = `whatsapp:${account.accountId}`;
+            if (hitPairingRequestRateLimit(pairingRateKey, nowMs)) {
+              logVerbose(
+                `whatsapp pairing rate-limited for account=${account.accountId} sender=${candidate}`,
+              );
+              return {
+                allowed: false,
+                shouldMarkRead: false,
+                isSelfChat,
+                resolvedAccountId: account.accountId,
+              };
+            }
+            const { created } = await upsertChannelPairingRequest({
               channel: "whatsapp",
               id: candidate,
               meta: { name: (params.pushName ?? "").trim() || undefined },
@@ -156,10 +205,8 @@ export async function checkInboundAccessControl(params: {
               );
               try {
                 await params.sock.sendMessage(params.remoteJid, {
-                  text: buildPairingReply({
-                    channel: "whatsapp",
+                  text: buildPairingPendingReply({
                     idLine: `Your WhatsApp phone number: ${candidate}`,
-                    code,
                   }),
                 });
               } catch (err) {

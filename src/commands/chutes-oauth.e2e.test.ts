@@ -1,23 +1,7 @@
-import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
+import { canListenOnLoopback, getFreeLoopbackPort } from "../test-helpers/network.js";
 import { loginChutes } from "./chutes-oauth.js";
-
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("No TCP address")));
-        return;
-      }
-      const port = address.port;
-      server.close((err) => (err ? reject(err) : resolve(port)));
-    });
-  });
-}
 
 const urlToString = (url: Request | URL | string): string => {
   if (typeof url === "string") {
@@ -28,7 +12,10 @@ const urlToString = (url: Request | URL | string): string => {
 
 describe("loginChutes", () => {
   it("captures local redirect and exchanges code for tokens", async () => {
-    const port = await getFreePort();
+    if (!(await canListenOnLoopback())) {
+      return;
+    }
+    const port = await getFreeLoopbackPort();
     const redirectUri = `http://127.0.0.1:${port}/oauth-callback`;
 
     const fetchFn: typeof fetch = async (input, init) => {

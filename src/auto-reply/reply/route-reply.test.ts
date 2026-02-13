@@ -62,7 +62,7 @@ const actualDeliver = await vi.importActual<typeof import("../../infra/outbound/
   "../../infra/outbound/deliver.js",
 );
 
-const { routeReply } = await import("./route-reply.js");
+const { routeReply, shouldImplicitBoundedOriginRoute } = await import("./route-reply.js");
 
 const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
   plugins: [],
@@ -395,6 +395,32 @@ describe("routeReply", () => {
         mirror: undefined,
       }),
     );
+  });
+});
+
+describe("shouldImplicitBoundedOriginRoute", () => {
+  it("allows telegram and whatsapp when destination exists", () => {
+    expect(shouldImplicitBoundedOriginRoute({ channel: "telegram", to: "telegram:123" })).toBe(
+      true,
+    );
+    expect(shouldImplicitBoundedOriginRoute({ channel: "whatsapp", to: "+15551234567" })).toBe(
+      true,
+    );
+  });
+
+  it("blocks non-bounded channels and missing destinations", () => {
+    expect(shouldImplicitBoundedOriginRoute({ channel: "slack", to: "channel:C123" })).toBe(false);
+    expect(shouldImplicitBoundedOriginRoute({ channel: "telegram", to: "" })).toBe(false);
+  });
+
+  it("blocks when current surface matches originating channel", () => {
+    expect(
+      shouldImplicitBoundedOriginRoute({
+        channel: "telegram",
+        to: "telegram:123",
+        currentSurface: "telegram",
+      }),
+    ).toBe(false);
   });
 });
 

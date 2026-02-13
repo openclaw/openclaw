@@ -1,4 +1,6 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { PluginHookToolResultPersistEvent } from "../plugins/types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
@@ -29,9 +31,12 @@ export function guardSessionManager(
   }
 
   const hookRunner = getGlobalHookRunner();
+  type ToolResultPersistMeta = Pick<
+    PluginHookToolResultPersistEvent,
+    "toolCallId" | "toolName" | "isSynthetic"
+  >;
   const transform = hookRunner?.hasHooks("tool_result_persist")
-    ? // oxlint-disable-next-line typescript/no-explicit-any
-      (message: any, meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean }) => {
+    ? (message: AgentMessage, meta: ToolResultPersistMeta): AgentMessage => {
         const out = hookRunner.runToolResultPersist(
           {
             toolName: meta.toolName,

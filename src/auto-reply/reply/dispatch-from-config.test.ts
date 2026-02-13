@@ -30,6 +30,28 @@ vi.mock("./route-reply.js", () => ({
       channel &&
       ["telegram", "slack", "discord", "signal", "imessage", "whatsapp"].includes(channel),
     ),
+  shouldImplicitBoundedOriginRoute: ({
+    channel,
+    to,
+    currentSurface,
+  }: {
+    channel?: string;
+    to?: string | null;
+    currentSurface?: string | null;
+  }) => {
+    const normalized = channel?.trim().toLowerCase();
+    const surface = currentSurface?.trim().toLowerCase();
+    if (!to?.trim()) {
+      return false;
+    }
+    if (!normalized) {
+      return false;
+    }
+    if (surface && normalized === surface) {
+      return false;
+    }
+    return normalized === "telegram" || normalized === "whatsapp";
+  },
   routeReply: mocks.routeReply,
 }));
 
@@ -135,6 +157,28 @@ describe("dispatchReplyFromConfig", () => {
         threadId: 123,
       }),
     );
+  });
+
+  it("does not implicitly route for non-bounded channels", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    mocks.routeReply.mockClear();
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "slack",
+      OriginatingTo: "channel:C123",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
   it("provides onToolResult in DM sessions", async () => {

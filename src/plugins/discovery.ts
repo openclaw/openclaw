@@ -116,6 +116,7 @@ function discoverInDirectory(params: {
   dir: string;
   origin: PluginOrigin;
   workspaceDir?: string;
+  skipDirNames?: Set<string>;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
@@ -136,6 +137,9 @@ function discoverInDirectory(params: {
   }
 
   for (const entry of entries) {
+    if (entry.isDirectory() && params.skipDirNames?.has(entry.name)) {
+      continue;
+    }
     const fullPath = path.join(params.dir, entry.name);
     if (entry.isFile()) {
       if (!isExtensionFile(fullPath)) {
@@ -351,9 +355,11 @@ export function discoverOpenClawPlugins(params: {
 
   const bundledDir = resolveBundledPluginsDir();
   if (bundledDir) {
+    // Local fork default: keep Signal integration disabled unless explicitly installed externally.
     discoverInDirectory({
       dir: bundledDir,
       origin: "bundled",
+      skipDirNames: new Set(["signal"]),
       candidates,
       diagnostics,
       seen,

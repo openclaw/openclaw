@@ -7,6 +7,7 @@ import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../con
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+const routeReplyMock = vi.fn(async () => ({ ok: true, messageId: "mock-route" }));
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: async ({
@@ -26,6 +27,17 @@ vi.mock("../../agents/model-fallback.js", () => ({
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+}));
+
+vi.mock("./route-reply.js", () => ({
+  shouldImplicitBoundedOriginRoute: ({ channel, to }: { channel?: string; to?: string | null }) => {
+    const normalized = channel?.trim().toLowerCase();
+    if (!to?.trim()) {
+      return false;
+    }
+    return normalized === "telegram" || normalized === "whatsapp";
+  },
+  routeReply: (...args: unknown[]) => routeReplyMock(...args),
 }));
 
 import { createFollowupRunner } from "./followup-runner.js";
@@ -196,7 +208,63 @@ describe("createFollowupRunner compaction", () => {
 });
 
 describe("createFollowupRunner messaging tool dedupe", () => {
+  it("routes queued replies back to Telegram implicitly", async () => {
+    routeReplyMock.mockClear();
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello back" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner({
+      ...baseQueuedRun("telegram"),
+      originatingChannel: "telegram",
+      originatingTo: "telegram:999",
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not implicitly route non-bounded channels", async () => {
+    routeReplyMock.mockClear();
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello slack" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner({
+      ...baseQueuedRun("slack"),
+      originatingChannel: "slack",
+      originatingTo: "channel:C1",
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
   it("drops payloads already sent via messaging tool", async () => {
+    routeReplyMock.mockClear();
     const onBlockReply = vi.fn(async () => {});
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
@@ -217,6 +285,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   });
 
   it("delivers payloads when not duplicates", async () => {
+    routeReplyMock.mockClear();
     const onBlockReply = vi.fn(async () => {});
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
@@ -237,6 +306,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   });
 
   it("suppresses replies when a messaging tool sent via the same provider + target", async () => {
+    routeReplyMock.mockClear();
     const onBlockReply = vi.fn(async () => {});
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
@@ -258,6 +328,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   });
 
   it("persists usage even when replies are suppressed", async () => {
+    routeReplyMock.mockClear();
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-usage-")),
       "sessions.json",

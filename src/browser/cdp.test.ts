@@ -1,12 +1,18 @@
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
+import { canListenOnLoopback } from "../test-helpers/network.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 
 describe("cdp", () => {
   let httpServer: ReturnType<typeof createServer> | null = null;
   let wsServer: WebSocketServer | null = null;
+  let loopbackAvailable = false;
+
+  beforeAll(async () => {
+    loopbackAvailable = await canListenOnLoopback();
+  });
 
   afterEach(async () => {
     await new Promise<void>((resolve) => {
@@ -26,6 +32,9 @@ describe("cdp", () => {
   });
 
   it("creates a target via the browser websocket", async () => {
+    if (!loopbackAvailable) {
+      return;
+    }
     wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
     const wsPort = (wsServer.address() as { port: number }).port;
@@ -75,6 +84,9 @@ describe("cdp", () => {
   });
 
   it("evaluates javascript via CDP", async () => {
+    if (!loopbackAvailable) {
+      return;
+    }
     wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
     const wsPort = (wsServer.address() as { port: number }).port;
@@ -112,6 +124,9 @@ describe("cdp", () => {
   });
 
   it("captures an aria snapshot via CDP", async () => {
+    if (!loopbackAvailable) {
+      return;
+    }
     wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
     const wsPort = (wsServer.address() as { port: number }).port;
