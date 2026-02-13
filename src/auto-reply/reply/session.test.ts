@@ -195,6 +195,44 @@ describe("initSessionState RawBody", () => {
 
     expect(result.triggerBodyNormalized).toBe("/status");
   });
+
+  it("Preserves session overrides (verboseLevel, modelOverride) across /new or /reset", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-preserve-"));
+    const storePath = path.join(root, "sessions.json");
+
+    const sessionKey = "agent:main:whatsapp:dm:s1";
+    const existingSessionId = "old-session";
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        verboseLevel: "on",
+        modelOverride: "gpt-4o",
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/new",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.verboseLevel).toBe("on");
+    expect(result.sessionEntry.modelOverride).toBe("gpt-4o");
+  });
 });
 
 describe("initSessionState reset policy", () => {
