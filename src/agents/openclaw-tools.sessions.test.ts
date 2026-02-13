@@ -475,6 +475,7 @@ describe("sessions tools", () => {
       expect(call.params).toMatchObject({
         lane: "nested",
         channel: "webchat",
+        inputProvenance: { kind: "inter_session" },
       });
     }
     expect(
@@ -652,6 +653,7 @@ describe("sessions tools", () => {
       expect(call.params).toMatchObject({
         lane: "nested",
         channel: "webchat",
+        inputProvenance: { kind: "inter_session" },
       });
     }
 
