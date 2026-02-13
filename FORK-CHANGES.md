@@ -106,6 +106,14 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
 - **Foundry-side config writes (external repo)**
   - When updating the OpenClaw-Foundry extension, ensure its `foundry_write_extension` (or equivalent) performs a pre-flight check before committing any `models.providers` or provider entries into `openclaw.json`: for each new provider, verify the corresponding API key/token environment variables are present, and abort with a clear error if they are not. This keeps the gateway from booting into an invalid provider config.
 
+### Discord typing and message hooks
+
+- **Typing on message receive** — The Discord monitor now sends a typing indicator as soon as a non-empty message is accepted for processing (in addition to the existing typing on reply start). Implemented in `src/discord/monitor/message-handler.process.ts` via `sendTyping({ client, channelId: message.channelId })` right after the empty-text check.
+- **Internal hook events `message:received` and `message:sent`** — New event type `"message"` added to the internal hook system (`src/hooks/internal-hooks.ts`) with:
+  - **`message:received`**: fired at the start of Discord message processing with context `channel`, `senderId`, `channelId`, `messageText`.
+  - **`message:sent`**: fired after each Discord reply is delivered with context `channel`, `sessionId`, `replyText`.
+  - Handlers can register for `"message"`, `"message:received"`, or `"message:sent"` as with other hook types. Telegram can be wired similarly in `src/telegram/bot-message-dispatch.ts` and delivery if needed.
+
 - _(Add further customizations, fixes, or config here as you make them.)_
 
 ## Workflow / tooling

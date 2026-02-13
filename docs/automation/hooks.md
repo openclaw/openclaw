@@ -246,6 +246,13 @@ These hooks are not event-stream listeners; they let plugins synchronously adjus
 
 - **`tool_result_persist`**: transform tool results before they are written to the session transcript. Must be synchronous; return the updated tool result payload or `undefined` to keep it as-is. See [Agent Loop](/concepts/agent-loop).
 
+### Message events (internal hooks)
+
+- **`message:received`**: Fired when a message is accepted for processing. Implemented for Discord at the start of message handling; context includes `channel`, `senderId`, `channelId`, `messageText`.
+- **`message:sent`**: Fired after a reply is delivered. Implemented for Discord after each `deliverDiscordReply`; context includes `channel`, `sessionId`, `replyText`.
+
+Register with `registerInternalHook("message", handler)` or `registerInternalHook("message:received", handler)` / `registerInternalHook("message:sent", handler)`.
+
 ### Future Events
 
 Planned event types:
@@ -253,8 +260,6 @@ Planned event types:
 - **`session:start`**: When a new session begins
 - **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
-- **`message:sent`**: When a message is sent
-- **`message:received`**: When a message is received
 
 ## Creating Custom Hooks
 
