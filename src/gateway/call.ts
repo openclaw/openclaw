@@ -232,70 +232,101 @@ export async function callGateway<T = Record<string, unknown>>(
   };
   const formatTimeoutError = () =>
     `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
-  return await new Promise<T>((resolve, reject) => {
-    let settled = false;
-    let ignoreClose = false;
-    const stop = (err?: Error, value?: T) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(value as T);
-      }
-    };
 
-    const client = new GatewayClient({
-      url,
-      token,
-      password,
-      tlsFingerprint,
-      instanceId: opts.instanceId ?? randomUUID(),
-      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: opts.clientDisplayName,
-      clientVersion: opts.clientVersion ?? "dev",
-      platform: opts.platform,
-      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
-      role: "operator",
-      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
-      deviceIdentity: loadOrCreateDeviceIdentity(),
-      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
-      maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
-      onHelloOk: async () => {
-        try {
-          const result = await client.request<T>(opts.method, opts.params, {
-            expectFinal: opts.expectFinal,
-          });
-          ignoreClose = true;
-          stop(undefined, result);
-          client.stop();
-        } catch (err) {
-          ignoreClose = true;
-          client.stop();
-          stop(err as Error);
-        }
-      },
-      onClose: (code, reason) => {
-        if (settled || ignoreClose) {
+  const isRetryableError = (err: Error): boolean => {
+    const msg = err.message.toLowerCase();
+    return (
+      msg.includes("gateway timeout") || msg.includes("abnormal closure") || msg.includes("1006")
+    );
+  };
+
+  const executeCall = async (): Promise<T> => {
+    return await new Promise<T>((resolve, reject) => {
+      let settled = false;
+      let ignoreClose = false;
+      const stop = (err?: Error, value?: T) => {
+        if (settled) {
           return;
         }
+        settled = true;
+        clearTimeout(timer);
+        if (err) {
+          reject(err);
+        } else {
+          resolve(value as T);
+        }
+      };
+
+      const client = new GatewayClient({
+        url,
+        token,
+        password,
+        tlsFingerprint,
+        instanceId: opts.instanceId ?? randomUUID(),
+        clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+        clientDisplayName: opts.clientDisplayName,
+        clientVersion: opts.clientVersion ?? "dev",
+        platform: opts.platform,
+        mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+        role: "operator",
+        scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+        deviceIdentity: loadOrCreateDeviceIdentity(),
+        minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
+        maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
+        onHelloOk: async () => {
+          try {
+            const result = await client.request<T>(opts.method, opts.params, {
+              expectFinal: opts.expectFinal,
+            });
+            ignoreClose = true;
+            stop(undefined, result);
+            client.stop();
+          } catch (err) {
+            ignoreClose = true;
+            client.stop();
+            stop(err as Error);
+          }
+        },
+        onClose: (code, reason) => {
+          if (settled || ignoreClose) {
+            return;
+          }
+          ignoreClose = true;
+          client.stop();
+          stop(new Error(formatCloseError(code, reason)));
+        },
+      });
+
+      const timer = setTimeout(() => {
         ignoreClose = true;
         client.stop();
-        stop(new Error(formatCloseError(code, reason)));
-      },
+        stop(new Error(formatTimeoutError()));
+      }, timeoutMs);
+
+      client.start();
     });
+  };
 
-    const timer = setTimeout(() => {
-      ignoreClose = true;
-      client.stop();
-      stop(new Error(formatTimeoutError()));
-    }, timeoutMs);
+  // Retry with exponential backoff for transient errors
+  const maxAttempts = 3;
+  const backoffDelays = [100, 200, 400];
+  let lastError: Error | undefined;
 
-    client.start();
-  });
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await executeCall();
+    } catch (err) {
+      lastError = err as Error;
+      const isLastAttempt = attempt === maxAttempts - 1;
+      if (isLastAttempt || !isRetryableError(lastError)) {
+        throw lastError;
+      }
+      // Wait before retry
+      await new Promise((r) => setTimeout(r, backoffDelays[attempt]));
+    }
+  }
+
+  throw lastError!;
 }
 
 export function randomIdempotencyKey() {

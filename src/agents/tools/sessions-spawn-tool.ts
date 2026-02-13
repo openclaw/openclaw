@@ -429,8 +429,6 @@ export function createSessionsSpawnTool(opts?: {
       // This ensures the session entry already exists so mergeSessionEntry preserves
       // the threadBinding field (writing before callGateway would be overwritten).
       if (resolvedThreadBinding) {
-        // Small delay to let the agent handler create its session entry first
-        await new Promise((r) => setTimeout(r, 500));
         try {
           const storePath = resolveStorePath(undefined, { agentId: targetAgentId });
           await bindSessionToThread({

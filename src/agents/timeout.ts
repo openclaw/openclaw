@@ -19,9 +19,9 @@ export function resolveAgentTimeoutMs(opts: {
 }): number {
   const minMs = Math.max(normalizeNumber(opts.minMs) ?? 1, 1);
   const defaultMs = resolveAgentTimeoutSeconds(opts.cfg) * 1000;
-  // Use a very large timeout value (30 days) to represent "no timeout"
+  // Use a very large timeout value (24 days) to represent "no timeout"
   // when explicitly set to 0. This avoids setTimeout issues with Infinity.
-  const NO_TIMEOUT_MS = 30 * 24 * 60 * 60 * 1000;
+  const NO_TIMEOUT_MS = 24 * 24 * 60 * 60 * 1000; // 2,073,600,000 ms (~24 days, safely under 32-bit limit)
   const overrideMs = normalizeNumber(opts.overrideMs);
   if (overrideMs !== undefined) {
     if (overrideMs === 0) {

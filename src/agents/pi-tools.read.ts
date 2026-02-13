@@ -178,11 +178,12 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
       properties[alias] = properties[original];
       changed = true;
     }
-    const idx = required.indexOf(original);
-    if (idx !== -1) {
-      required.splice(idx, 1);
-      changed = true;
-    }
+    // Keep original in required array; normalizeToolParams handles file_path → path conversion
+    // const idx = required.indexOf(original);
+    // if (idx !== -1) {
+    //   required.splice(idx, 1);
+    //   changed = true;
+    // }
   }
 
   if (!changed) {

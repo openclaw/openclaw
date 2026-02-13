@@ -45,7 +45,7 @@ type PollStoreData = {
 
 const STORE_FILENAME = "msteams-polls.json";
 const MAX_POLLS = 1000;
-const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const POLL_TTL_MS = 24 * 24 * 60 * 60 * 1000; // ~24 days, safely under 32-bit limit
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
