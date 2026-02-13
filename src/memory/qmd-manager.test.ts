@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logWarnMock: vi.fn(),
@@ -44,6 +44,18 @@ function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }
   return child;
 }
 
+function emitAndClose(
+  child: MockChild,
+  stream: "stdout" | "stderr",
+  data: string,
+  code: number = 0,
+) {
+  queueMicrotask(() => {
+    child[stream].emit("data", data);
+    child.closeWith(code);
+  });
+}
+
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
     const logger = {
@@ -66,11 +78,21 @@ import { QmdMemoryManager } from "./qmd-manager.js";
 const spawnMock = mockedSpawn as unknown as vi.Mock;
 
 describe("QmdMemoryManager", () => {
+  let fixtureRoot: string;
+  let fixtureCount = 0;
   let tmpRoot: string;
   let workspaceDir: string;
   let stateDir: string;
   let cfg: OpenClawConfig;
   const agentId = "main";
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qmd-manager-test-fixtures-"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
 
   beforeEach(async () => {
     spawnMock.mockReset();
@@ -78,7 +100,8 @@ describe("QmdMemoryManager", () => {
     logWarnMock.mockReset();
     logDebugMock.mockReset();
     logInfoMock.mockReset();
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qmd-manager-test-"));
+    tmpRoot = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    await fs.mkdir(tmpRoot, { recursive: true });
     workspaceDir = path.join(tmpRoot, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
     stateDir = path.join(tmpRoot, "state");
@@ -102,7 +125,6 @@ describe("QmdMemoryManager", () => {
   afterEach(async () => {
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
-    await fs.rm(tmpRoot, { recursive: true, force: true });
   });
 
   it("debounces back-to-back sync calls", async () => {
@@ -158,14 +180,11 @@ describe("QmdMemoryManager", () => {
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
     const race = await Promise.race([
       createPromise.then(() => "created" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 80)),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 40)),
     ]);
     expect(race).toBe("created");
-
-    if (!releaseUpdate) {
-      throw new Error("update child missing");
-    }
-    releaseUpdate();
+    await waitForCondition(() => releaseUpdate !== null, 200);
+    releaseUpdate?.();
     const manager = await createPromise;
     await manager?.close();
   });
@@ -202,14 +221,11 @@ describe("QmdMemoryManager", () => {
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
     const race = await Promise.race([
       createPromise.then(() => "created" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 80)),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 40)),
     ]);
     expect(race).toBe("timeout");
-
-    if (!releaseUpdate) {
-      throw new Error("update child missing");
-    }
-    releaseUpdate();
+    await waitForCondition(() => releaseUpdate !== null, 200);
+    releaseUpdate?.();
     const manager = await createPromise;
     await manager?.close();
   });
@@ -301,10 +317,7 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
-        setTimeout(() => {
-          child.stdout.emit("data", "[]");
-          child.closeWith(0);
-        }, 0);
+        emitAndClose(child, "stdout", "[]");
         return child;
       }
       return createMockChild();
@@ -348,18 +361,12 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
-        setTimeout(() => {
-          child.stderr.emit("data", "unknown flag: --json");
-          child.closeWith(2);
-        }, 0);
+        emitAndClose(child, "stderr", "unknown flag: --json", 2);
         return child;
       }
       if (args[0] === "query") {
         const child = createMockChild({ autoClose: false });
-        setTimeout(() => {
-          child.stdout.emit("data", "[]");
-          child.closeWith(0);
-        }, 0);
+        emitAndClose(child, "stdout", "[]");
         return child;
       }
       return createMockChild();
@@ -435,7 +442,7 @@ describe("QmdMemoryManager", () => {
     const inFlight = manager.sync({ reason: "interval" });
     const forced = manager.sync({ reason: "manual", force: true });
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => updateCalls >= 1, 80);
     expect(updateCalls).toBe(1);
     if (!releaseFirstUpdate) {
       throw new Error("first update release missing");
@@ -496,14 +503,14 @@ describe("QmdMemoryManager", () => {
     const inFlight = manager.sync({ reason: "interval" });
     const forcedOne = manager.sync({ reason: "manual", force: true });
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => updateCalls >= 1, 80);
     expect(updateCalls).toBe(1);
     if (!releaseFirstUpdate) {
       throw new Error("first update release missing");
     }
     releaseFirstUpdate();
 
-    await waitForCondition(() => updateCalls >= 2, 200);
+    await waitForCondition(() => updateCalls >= 2, 120);
     const forcedTwo = manager.sync({ reason: "manual-again", force: true });
 
     if (!releaseSecondUpdate) {
@@ -535,10 +542,7 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
         const child = createMockChild({ autoClose: false });
-        setTimeout(() => {
-          child.stdout.emit("data", "[]");
-          child.closeWith(0);
-        }, 0);
+        emitAndClose(child, "stdout", "[]");
         return child;
       }
       return createMockChild();
@@ -805,13 +809,11 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
         const child = createMockChild({ autoClose: false });
-        setTimeout(() => {
-          child.stdout.emit(
-            "data",
-            JSON.stringify([{ docid: "abc123", score: 1, snippet: "@@ -1,1\nremember this" }]),
-          );
-          child.closeWith(0);
-        }, 0);
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([{ docid: "abc123", score: 1, snippet: "@@ -1,1\nremember this" }]),
+        );
         return child;
       }
       return createMockChild();
@@ -844,10 +846,7 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
         const child = createMockChild({ autoClose: false });
-        setTimeout(() => {
-          child.stdout.emit("data", "No results found.");
-          child.closeWith(0);
-        }, 0);
+        emitAndClose(child, "stdout", "No results found.");
         return child;
       }
       return createMockChild();
@@ -870,10 +869,7 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
         const child = createMockChild({ autoClose: false });
-        setTimeout(() => {
-          child.stdout.emit("data", "No results found\n\n");
-          child.closeWith(0);
-        }, 0);
+        emitAndClose(child, "stdout", "No results found\n\n");
         return child;
       }
       return createMockChild();
@@ -896,10 +892,7 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
         const child = createMockChild({ autoClose: false });
-        setTimeout(() => {
-          child.stderr.emit("data", "No results found.\n");
-          child.closeWith(0);
-        }, 0);
+        emitAndClose(child, "stderr", "No results found.\n");
         return child;
       }
       return createMockChild();
@@ -922,11 +915,11 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
         const child = createMockChild({ autoClose: false });
-        setTimeout(() => {
+        queueMicrotask(() => {
           child.stdout.emit("data", "   \n");
           child.stderr.emit("data", "unexpected parser error");
           child.closeWith(0);
-        }, 0);
+        });
         return child;
       }
       return createMockChild();
@@ -1034,7 +1027,7 @@ async function waitForCondition(check: () => boolean, timeoutMs: number): Promis
     if (check()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 2));
   }
   throw new Error("condition was not met in time");
 }

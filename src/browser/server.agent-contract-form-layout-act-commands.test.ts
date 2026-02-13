@@ -156,6 +156,9 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
+const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
+  await import("./server.js");
+
 async function getFreePort(): Promise<number> {
   while (true) {
     const port = await new Promise<number>((resolve, reject) => {
@@ -274,12 +277,10 @@ describe("browser control server", () => {
     } else {
       process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
     }
-    const { stopBrowserControlServer } = await import("./server.js");
     await stopBrowserControlServer();
   });
 
   const startServerAndBase = async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();
     const base = `http://127.0.0.1:${testPort}`;
     await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
