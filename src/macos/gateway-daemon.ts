@@ -49,7 +49,11 @@ async function main() {
     { setGatewayWsLogStyle },
     { setVerbose },
     { acquireGatewayLock, GatewayLockError },
-    { consumeGatewaySigusr1RestartAuthorization, isGatewaySigusr1RestartExternallyAllowed },
+    {
+      consumeGatewaySigusr1RestartAuthorization,
+      isGatewaySigusr1RestartExternallyAllowed,
+      markGatewaySigusr1RestartHandled,
+    },
     { defaultRuntime },
     { enableConsoleCapture, setConsoleTimestampPrefix },
     commandQueueMod,
@@ -201,6 +205,7 @@ async function main() {
       );
       return;
     }
+    markGatewaySigusr1RestartHandled();
     request("restart", "SIGUSR1");
   };
 

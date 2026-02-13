@@ -6,7 +6,9 @@ import { ensureBinary } from "./binaries.js";
 import {
   __testing,
   consumeGatewaySigusr1RestartAuthorization,
+  emitGatewayRestart,
   isGatewaySigusr1RestartExternallyAllowed,
+  markGatewaySigusr1RestartHandled,
   scheduleGatewaySigusr1Restart,
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
@@ -99,6 +101,25 @@ describe("infra runtime", () => {
       expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(false);
       setGatewaySigusr1RestartPolicy({ allowExternal: true });
       expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(true);
+    });
+
+    it("suppresses duplicate emit until the restart cycle is marked handled", () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        expect(emitGatewayRestart()).toBe(true);
+        expect(emitGatewayRestart()).toBe(false);
+        expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
+
+        markGatewaySigusr1RestartHandled();
+
+        expect(emitGatewayRestart()).toBe(true);
+        const sigusr1Emits = emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1");
+        expect(sigusr1Emits.length).toBe(2);
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
     });
   });
 

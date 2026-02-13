@@ -3,7 +3,7 @@ import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { dispatchInboundMessage, withReplyDispatcher } from "../../auto-reply/dispatch.js";
 import {
   formatInboundEnvelope,
   formatInboundFromLabel,
@@ -647,17 +647,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-    const { queuedFinal } = await dispatchInboundMessage({
-      ctx: ctxPayload,
-      cfg,
+    const { queuedFinal } = await withReplyDispatcher({
       dispatcher,
-      replyOptions: {
-        disableBlockStreaming:
-          typeof accountInfo.config.blockStreaming === "boolean"
-            ? !accountInfo.config.blockStreaming
-            : undefined,
-        onModelSelected,
-      },
+      run: () =>
+        dispatchInboundMessage({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            disableBlockStreaming:
+              typeof accountInfo.config.blockStreaming === "boolean"
+                ? !accountInfo.config.blockStreaming
+                : undefined,
+            onModelSelected,
+          },
+        }),
     });
 
     if (!queuedFinal) {

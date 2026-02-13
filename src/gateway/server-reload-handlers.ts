@@ -8,7 +8,11 @@ import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../conf
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
-import { emitGatewayRestart, setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
+import {
+  deferGatewayRestartUntilIdle,
+  emitGatewayRestart,
+  setGatewaySigusr1RestartPolicy,
+} from "../infra/restart.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { resolveHooksConfig } from "./hooks.js";
@@ -155,13 +159,33 @@ export function createGatewayReloadHandlers(params: {
       return;
     }
 
-    // Check if there are active operations (commands in queue, pending replies, or embedded runs)
-    const queueSize = getTotalQueueSize();
-    const pendingReplies = getTotalPendingReplies();
-    const embeddedRuns = getActiveEmbeddedRunCount();
-    const totalActive = queueSize + pendingReplies + embeddedRuns;
+    const getActiveCounts = () => {
+      const queueSize = getTotalQueueSize();
+      const pendingReplies = getTotalPendingReplies();
+      const embeddedRuns = getActiveEmbeddedRunCount();
+      return {
+        queueSize,
+        pendingReplies,
+        embeddedRuns,
+        totalActive: queueSize + pendingReplies + embeddedRuns,
+      };
+    };
+    const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
+      const details = [];
+      if (counts.queueSize > 0) {
+        details.push(`${counts.queueSize} operation(s)`);
+      }
+      if (counts.pendingReplies > 0) {
+        details.push(`${counts.pendingReplies} reply(ies)`);
+      }
+      if (counts.embeddedRuns > 0) {
+        details.push(`${counts.embeddedRuns} embedded run(s)`);
+      }
+      return details;
+    };
+    const active = getActiveCounts();
 
-    if (totalActive > 0) {
+    if (active.totalActive > 0) {
       // Avoid spinning up duplicate polling loops from repeated config changes.
       if (restartPending) {
         params.logReload.info(
@@ -170,63 +194,40 @@ export function createGatewayReloadHandlers(params: {
         return;
       }
       restartPending = true;
-      const details = [];
-      if (queueSize > 0) {
-        details.push(`${queueSize} queued operation(s)`);
-      }
-      if (pendingReplies > 0) {
-        details.push(`${pendingReplies} pending reply(ies)`);
-      }
-      if (embeddedRuns > 0) {
-        details.push(`${embeddedRuns} embedded run(s)`);
-      }
+      const initialDetails = formatActiveDetails(active);
       params.logReload.warn(
-        `config change requires gateway restart (${reasons}) — deferring until ${details.join(", ")} complete`,
+        `config change requires gateway restart (${reasons}) — deferring until ${initialDetails.join(", ")} complete`,
       );
 
-      // Wait for all operations and replies to complete before restarting (max 30 seconds)
-      const maxWaitMs = 30_000;
-      const checkIntervalMs = 500;
-      const startTime = Date.now();
-
-      const checkAndRestart = () => {
-        const currentQueueSize = getTotalQueueSize();
-        const currentPendingReplies = getTotalPendingReplies();
-        const currentEmbeddedRuns = getActiveEmbeddedRunCount();
-        const currentTotalActive = currentQueueSize + currentPendingReplies + currentEmbeddedRuns;
-        const elapsed = Date.now() - startTime;
-
-        if (currentTotalActive === 0) {
-          restartPending = false;
-          params.logReload.info("all operations and replies completed; restarting gateway now");
-          emitGatewayRestart();
-        } else if (elapsed >= maxWaitMs) {
-          const remainingDetails = [];
-          if (currentQueueSize > 0) {
-            remainingDetails.push(`${currentQueueSize} operation(s)`);
-          }
-          if (currentPendingReplies > 0) {
-            remainingDetails.push(`${currentPendingReplies} reply(ies)`);
-          }
-          if (currentEmbeddedRuns > 0) {
-            remainingDetails.push(`${currentEmbeddedRuns} embedded run(s)`);
-          }
-          restartPending = false;
-          params.logReload.warn(
-            `restart timeout after ${elapsed}ms with ${remainingDetails.join(", ")} still active; restarting anyway`,
-          );
-          emitGatewayRestart();
-        } else {
-          // Check again soon
-          setTimeout(checkAndRestart, checkIntervalMs);
-        }
-      };
-
-      setTimeout(checkAndRestart, checkIntervalMs);
+      deferGatewayRestartUntilIdle({
+        getPendingCount: () => getActiveCounts().totalActive,
+        hooks: {
+          onReady: () => {
+            restartPending = false;
+            params.logReload.info("all operations and replies completed; restarting gateway now");
+          },
+          onTimeout: (_pending, elapsedMs) => {
+            const remaining = formatActiveDetails(getActiveCounts());
+            restartPending = false;
+            params.logReload.warn(
+              `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active; restarting anyway`,
+            );
+          },
+          onCheckError: (err) => {
+            restartPending = false;
+            params.logReload.warn(
+              `restart deferral check failed (${String(err)}); restarting gateway now`,
+            );
+          },
+        },
+      });
     } else {
       // No active operations or pending replies, restart immediately
       params.logReload.warn(`config change requires gateway restart (${reasons})`);
-      emitGatewayRestart();
+      const emitted = emitGatewayRestart();
+      if (!emitted) {
+        params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
+      }
     }
   };
 
