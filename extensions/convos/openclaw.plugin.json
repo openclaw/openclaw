@@ -1,6 +1,7 @@
 {
   "id": "convos",
   "channels": ["convos"],
+  "skills": ["./skills", "./node_modules/@convos/cli/skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -3,6 +3,9 @@
   "version": "2026.2.2",
   "description": "OpenClaw Convos channel plugin (E2E encrypted messaging via XMTP)",
   "type": "module",
+  "scripts": {
+    "postinstall": "printf '#!/bin/sh\\nexec \"$(dirname \"$0\")/../../extensions/convos/node_modules/.bin/convos\" \"$@\"\\n' > ../../node_modules/.bin/convos && chmod +x ../../node_modules/.bin/convos 2>/dev/null || true"
+  },
   "dependencies": {
     "@convos/cli": "github:xmtplabs/convos-cli",
     "zod": "^4.3.6"
