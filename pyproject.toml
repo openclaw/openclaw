@@ -50,7 +50,7 @@ pytest-cov = ">=6.0.0"
 httpx = ">=0.27.0"
 
 [tool.poetry.scripts]
-openclaw = "openclaw_py.cli.main:app"
+openclaw = "openclaw_py.cli.main:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

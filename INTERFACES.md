@@ -3689,3 +3689,201 @@ class AgentBindingMatch(BaseModel):
 class AgentBinding(BaseModel):
     agent_id: str
     match: AgentBindingMatch
+
+---
+
+## 批次 14：CLI 命令行（2026-02-13）
+
+### openclaw_py.__version__
+路径: openclaw_py/__version__.py
+
+```python
+from openclaw_py.__version__ import __version__, __version_info__, CLI_NAME
+
+__version__ = "2026.2.10"
+__version_info__ = (2026, 2, 10)
+CLI_NAME = "openclaw"
+```
+
+### openclaw_py.cli.banner
+路径: openclaw_py/cli/banner.py
+
+```python
+from openclaw_py.cli.banner import (
+    format_cli_banner_line,
+    format_cli_banner_art,
+    emit_cli_banner,
+    has_emitted_cli_banner,
+)
+
+def format_cli_banner_line(
+    version: str = __version__,
+    commit: str | None = None,
+    tagline: str | None = None,
+    columns: int | None = None,
+    rich: bool | None = None,
+) -> str:
+    """Format a single-line CLI banner."""
+
+def format_cli_banner_art(rich: bool | None = None) -> str:
+    """Format CLI banner ASCII art."""
+
+def emit_cli_banner(
+    version: str = __version__,
+    argv: list[str] | None = None,
+    force: bool = False,
+) -> None:
+    """Emit CLI banner to stdout."""
+
+def has_emitted_cli_banner() -> bool:
+    """Check if banner has been emitted."""
+```
+
+### openclaw_py.cli.tagline
+路径: openclaw_py/cli/tagline.py
+
+```python
+from openclaw_py.cli.tagline import (
+    DEFAULT_TAGLINE,
+    TAGLINES,
+    HOLIDAY_TAGLINES,
+    active_taglines,
+    pick_tagline,
+)
+
+DEFAULT_TAGLINE: str
+TAGLINES: list[str]  # 100+ taglines
+HOLIDAY_TAGLINES: dict[str, str]
+
+def active_taglines(today: date | None = None) -> list[str]:
+    """Get all taglines that are active on the given date."""
+
+def pick_tagline(today: date | None = None, rng: random.Random | None = None) -> str:
+    """Pick a random tagline from active taglines."""
+```
+
+### openclaw_py.cli.utils
+路径: openclaw_py/cli/utils.py
+
+```python
+from openclaw_py.cli.utils import (
+    print_json,
+    print_table,
+    error_exit,
+    success,
+    info,
+    warn,
+    confirm,
+    prompt,
+)
+
+def print_json(data: Any, pretty: bool = True) -> None:
+    """Print data as JSON."""
+
+def print_table(
+    data: list[dict[str, Any]],
+    headers: list[str] | None = None,
+    title: str | None = None,
+) -> None:
+    """Print data as a Rich table."""
+
+def error_exit(message: str, code: int = 1) -> None:
+    """Print error message and exit."""
+
+def success(message: str) -> None:
+    """Print success message."""
+
+def info(message: str) -> None:
+    """Print info message."""
+
+def warn(message: str) -> None:
+    """Print warning message."""
+
+def confirm(message: str, default: bool = False) -> bool:
+    """Prompt user for confirmation."""
+
+def prompt(message: str, default: str | None = None, password: bool = False) -> str:
+    """Prompt user for input."""
+```
+
+### openclaw_py.cli.app
+路径: openclaw_py/cli/app.py
+
+```python
+from openclaw_py.cli.app import create_app
+
+def create_app() -> typer.Typer:
+    """Create and configure the Typer CLI application."""
+```
+
+### openclaw_py.cli.main
+路径: openclaw_py/cli/main.py
+
+```python
+from openclaw_py.cli.main import main
+
+def main() -> None:
+    """Main entry point for the CLI."""
+```
+
+### CLI 命令（11个主命令）
+
+#### 1. openclaw setup
+- 初始化向导，引导配置 Telegram bot token、API keys等
+
+#### 2. openclaw configure
+- 配置向导，显示当前配置摘要
+
+#### 3. openclaw config
+- `config show` - 显示当前配置
+- `config path` - 显示配置文件路径
+- `config edit` - 在编辑器中打开配置文件
+
+#### 4. openclaw status
+- 显示系统状态（agents, channels, gateway）
+- `--json` - JSON 输出
+- `--verbose` - 详细输出
+
+#### 5. openclaw health
+- 运行健康检查（5项：配置文件、配置加载、Agent配置、Channel配置、API keys）
+- `--json` - JSON 输出
+
+#### 6. openclaw sessions
+- 列出活跃会话
+- `--json` - JSON 输出
+- `--limit N` - 限制显示数量
+
+#### 7. openclaw agent
+- `agent run` - 运行 agent（支持 --interactive）
+- `agent test` - 测试 agent 配置
+
+#### 8. openclaw agents
+- `agents list` - 列出所有 agents
+- `agents default` - 显示默认 agent
+- `--json` - JSON 输出
+- `--bindings` - 显示路由绑定
+
+#### 9. openclaw gateway
+- `gateway start` - 启动 Gateway 服务器
+- `gateway stop` - 停止 Gateway 服务器
+- `gateway status` - 检查 Gateway 状态
+
+#### 10. openclaw telegram
+- `telegram start` - 启动 Telegram bot
+- `telegram stop` - 停止 Telegram bot
+- `telegram status` - 检查 Telegram 配置
+- `telegram test` - 测试 Telegram 连接
+
+#### 11. openclaw memory
+- `memory status` - 显示内存/会话统计
+- `memory clear` - 清除会话内存
+- `memory export` - 导出会话到文件
+
+### 配置入口点
+
+pyproject.toml:
+```toml
+[tool.poetry.scripts]
+openclaw = "openclaw_py.cli.main:main"
+```
+

@@ -1,7 +1,7 @@
 # 迁移状态
 
 ## 当前批次
-batch: 14
+batch: 15
 status: not_started
 
 ## 批次进度
@@ -20,10 +20,11 @@ status: not_started
 | 11 | Telegram 媒体/Webhook/群组 | ✅ | 2026-02-13 | afb5899 |
 | 12 | 用户管理 + 权限 | ✅ | 2026-02-13 | 48f247c |
 | 13 | 消息路由（全链路） | ✅ | 2026-02-13 | ce25f27 |
-| 14 | CLI 命令行 | ⬜ | - | - |
+| 14 | CLI 命令行 | ✅ | 2026-02-13 | pending |
 | 15 | 集成测试 + 联调 | ⬜ | - | - |
 
 ## 已生成的 Python 文件
+- openclaw_py/__version__.py
 - openclaw_py/routing/agent_scope.py
 - openclaw_py/routing/bindings.py
 - openclaw_py/routing/resolve_route.py
@@ -109,6 +110,22 @@ status: not_started
 - openclaw_py/sessions/types.py
 - openclaw_py/types/base.py
 - openclaw_py/utils/common.py
+- openclaw_py/cli/app.py
+- openclaw_py/cli/banner.py
+- openclaw_py/cli/commands/agent.py
+- openclaw_py/cli/commands/agents.py
+- openclaw_py/cli/commands/config_cmd.py
+- openclaw_py/cli/commands/configure.py
+- openclaw_py/cli/commands/gateway.py
+- openclaw_py/cli/commands/health.py
+- openclaw_py/cli/commands/memory.py
+- openclaw_py/cli/commands/sessions.py
+- openclaw_py/cli/commands/setup.py
+- openclaw_py/cli/commands/status.py
+- openclaw_py/cli/commands/telegram.py
+- openclaw_py/cli/main.py
+- openclaw_py/cli/tagline.py
+- openclaw_py/cli/utils.py
 
 ## 已知问题
 - 批次 13：9 个路由绑定匹配测试失败（resolve_agent_route 函数的特定绑定匹配逻辑需要深入调试），不影响核心路由功能使用，测试通过率 89% (74/83)

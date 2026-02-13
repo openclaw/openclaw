@@ -690,3 +690,98 @@
 
 **测试结果**：182 passed（批次 12 agents 模块全量测试，32 new auth_profiles + 150 from previous agent batches）
 
+
+## 批次 14：CLI 命令行（2026-02-13）
+
+**新增文件**：
+- openclaw_py/__version__.py - 版本管理
+- openclaw_py/cli/banner.py - CLI 横幅显示
+- openclaw_py/cli/tagline.py - 幽默标语系统（100+ 条标语，节日支持）
+- openclaw_py/cli/utils.py - CLI 工具函数（table, json, prompts）
+- openclaw_py/cli/app.py - Typer 应用构建器
+- openclaw_py/cli/main.py - 主入口点
+- openclaw_py/cli/commands/setup.py - 初始化向导
+- openclaw_py/cli/commands/configure.py - 配置向导
+- openclaw_py/cli/commands/config_cmd.py - 配置管理（show/path/edit）
+- openclaw_py/cli/commands/status.py - 系统状态
+- openclaw_py/cli/commands/health.py - 健康检查（5项检查）
+- openclaw_py/cli/commands/sessions.py - 会话列表
+- openclaw_py/cli/commands/agent.py - Agent 运行（run/test）
+- openclaw_py/cli/commands/agents.py - Agents 管理（list/default）
+- openclaw_py/cli/commands/gateway.py - Gateway 管理（start/stop/status）
+- openclaw_py/cli/commands/telegram.py - Telegram 管理（start/stop/status/test）
+- openclaw_py/cli/commands/memory.py - 内存管理（status/clear/export）
+- tests/cli/test_banner.py - Banner 测试
+- tests/cli/test_tagline.py - Tagline 测试
+- tests/cli/test_cli.py - CLI 应用测试
+
+**核心变更**：
+- 实现完整的 CLI 框架（基于 Typer + Rich）
+- 11 个主命令 + 20+ 子命令
+- 初始化向导（setup）支持交互式配置 Telegram、API keys
+- 健康检查系统（5项：配置文件、加载、agents、channels、API keys）
+- 系统状态显示（agents、channels、gateway）
+- Gateway 和 Telegram 服务管理
+- 配置管理（show、edit、path）
+- 会话和内存管理（占位实现，待批次 15 完善）
+- ASCII 艺术 Logo + 幽默标语系统
+- 完善的 --help 和 --json 支持
+- Shell 自动补全支持
+
+**依赖的已有模块**：
+- openclaw_py.config (load_config_sync, resolve_config_path)
+- openclaw_py.sessions (session store types)
+- openclaw_py.gateway (server types)
+- openclaw_py.channels.telegram (bot types)
+- openclaw_py.agents (agent configuration)
+
+**已知问题**：
+- sessions 和 memory 命令的实际实现为占位（显示提示信息，将在批次 15 完善）
+- gateway start 和 telegram start 的完整启动逻辑需要异步支持完善
+- agent run 的完整实现需要集成 agent runtime
+
+**测试结果**：
+- 批次 14 新增测试：6 passed (100%)
+- CLI 测试：6/6 passed
+- 总测试套件：786 tests
+- 批次 13 遗留问题：9 failed (routing tests，已记录)
+
+**入口点配置**：
+```toml
+[tool.poetry.scripts]
+openclaw = "openclaw_py.cli.main:main"
+```
+
+**CLI 使用示例**：
+```bash
+# 查看帮助
+$ openclaw --help
+
+# 查看版本
+$ openclaw --version
+
+# 初始化配置
+$ openclaw setup
+
+# 查看系统状态
+$ openclaw status
+$ openclaw status --json
+
+# 运行健康检查
+$ openclaw health
+
+# 管理 agents
+$ openclaw agents list
+$ openclaw agents list --bindings
+$ openclaw agent run --interactive
+
+# 管理服务
+$ openclaw gateway start
+$ openclaw telegram start
+$ openclaw telegram test
+
+# 配置管理
+$ openclaw config show
+$ openclaw config edit
+```
+
