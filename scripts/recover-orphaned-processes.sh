@@ -33,6 +33,8 @@ node <<'NODE'
 const { execSync } = require("node:child_process");
 const fs = require("node:fs");
 
+const username = process.env.USER || process.env.LOGNAME || "";
+
 function run(cmd) {
   try {
     return execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
@@ -60,8 +62,12 @@ function resolveCwd(pid) {
 }
 
 // Pre-filter candidate PIDs using pgrep to avoid scanning all processes.
-// Falls back to full ps scan if pgrep is unavailable.
-const candidatePids = run("pgrep -f 'codex|claude' 2>/dev/null || true")
+// Falls back to a user-scoped ps scan if pgrep is unavailable.
+const candidatePids = run(
+  username.length > 0
+    ? `pgrep -u ${username} -f 'codex|claude' 2>/dev/null || true`
+    : "pgrep -f 'codex|claude' 2>/dev/null || true",
+)
   .split("\n")
   .map((s) => s.trim())
   .filter((s) => s.length > 0 && /^\d+$/.test(s));
@@ -71,8 +77,12 @@ if (candidatePids.length > 0) {
   // Fetch command info only for candidate PIDs.
   lines = run(`ps -o pid=,command= -p ${candidatePids.join(",")}`).split("\n");
 } else {
-  lines = [];
+  const scopedPs =
+    username.length > 0 ? `ps -U ${username} -o pid=,command=` : "ps -axo pid=,command=";
+  lines = run(scopedPs).split("\n");
 }
+
+const includePattern = /codex|claude/i;
 
 const excludePatterns = [
   /openclaw-gateway/i,
@@ -96,6 +106,9 @@ for (const rawLine of lines) {
   const pid = Number(match[1]);
   const cmd = match[2];
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
+    continue;
+  }
+  if (!includePattern.test(cmd)) {
     continue;
   }
   if (excludePatterns.some((pattern) => pattern.test(cmd))) {

@@ -193,7 +193,7 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
 /**
  * Reset all lane runtime state to idle. Used after SIGUSR1 in-process
  * restarts where interrupted tasks' finally blocks may not run, leaving
- * stale `active` counts that permanently block new work from draining.
+ * stale active task IDs that permanently block new work from draining.
  *
  * Bumps lane generation and clears execution counters so stale completions
  * from old in-flight tasks are ignored. Queued entries are intentionally
