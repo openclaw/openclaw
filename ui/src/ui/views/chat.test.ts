@@ -147,8 +147,8 @@ describe("chat view", () => {
       (btn) => btn.textContent?.trim() === "New session",
     );
     const stopButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Stop",
-    ) as HTMLButtonElement | undefined;
+      (btn): btn is HTMLButtonElement => btn.textContent?.trim() === "Stop",
+    );
 
     expect(newSessionButton).toBeUndefined();
     expect(stopButton).not.toBeUndefined();
