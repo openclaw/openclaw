@@ -44,27 +44,9 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
     targetConnIds?: ReadonlySet<string>,
   ) => {
     const isTargeted = Boolean(targetConnIds);
-    const eventSeq = isTargeted ? undefined : ++seq;
-    const frame = JSON.stringify({
-      type: "event",
-      event,
-      payload,
-      seq: eventSeq,
-      stateVersion: opts?.stateVersion,
-    });
-    const logMeta: Record<string, unknown> = {
-      event,
-      seq: eventSeq ?? "targeted",
-      clients: params.clients.size,
-      targets: targetConnIds ? targetConnIds.size : undefined,
-      dropIfSlow: opts?.dropIfSlow,
-      presenceVersion: opts?.stateVersion?.presence,
-      healthVersion: opts?.stateVersion?.health,
-    };
-    if (event === "agent") {
-      Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
-    }
-    logWs("out", "event", logMeta);
+
+    // Pass 1: collect eligible recipients, closing slow consumers along the way.
+    const recipients: GatewayWsClient[] = [];
     for (const c of params.clients) {
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
@@ -84,10 +66,39 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         }
         continue;
       }
-      try {
-        c.socket.send(frame);
-      } catch {
-        /* ignore */
+      recipients.push(c);
+    }
+
+    // Pass 2: only allocate seq when at least one client will receive the frame.
+    const eventSeq = !isTargeted && recipients.length > 0 ? ++seq : undefined;
+    const logMeta: Record<string, unknown> = {
+      event,
+      seq: eventSeq ?? (isTargeted ? "targeted" : "dropped"),
+      clients: params.clients.size,
+      targets: targetConnIds ? targetConnIds.size : undefined,
+      dropIfSlow: opts?.dropIfSlow,
+      presenceVersion: opts?.stateVersion?.presence,
+      healthVersion: opts?.stateVersion?.health,
+    };
+    if (event === "agent") {
+      Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
+    }
+    logWs("out", "event", logMeta);
+
+    if (recipients.length > 0) {
+      const frame = JSON.stringify({
+        type: "event",
+        event,
+        payload,
+        seq: eventSeq,
+        stateVersion: opts?.stateVersion,
+      });
+      for (const c of recipients) {
+        try {
+          c.socket.send(frame);
+        } catch {
+          /* ignore */
+        }
       }
     }
   };
