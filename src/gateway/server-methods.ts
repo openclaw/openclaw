@@ -72,6 +72,9 @@ const READ_METHODS = new Set([
   "node.list",
   "node.describe",
   "chat.history",
+  "sessions.usage",
+  "sessions.usage.timeseries",
+  "sessions.usage.logs",
 ]);
 const WRITE_METHODS = new Set([
   "send",
