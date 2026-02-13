@@ -29,7 +29,19 @@ const ANTHROPIC_IMAGE_FALLBACK = "anthropic/claude-opus-4-5";
 export const __testing = {
   decodeDataUrl,
   coerceImageAssistantText,
+  resolveImageToolMaxTokens,
 } as const;
+
+function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
+  if (
+    typeof modelMaxTokens !== "number" ||
+    !Number.isFinite(modelMaxTokens) ||
+    modelMaxTokens <= 0
+  ) {
+    return requestedMaxTokens;
+  }
+  return Math.min(requestedMaxTokens, modelMaxTokens);
+}
 
 function resolveDefaultModelRef(cfg?: OpenClawConfig): {
   provider: string;
@@ -287,7 +299,7 @@ async function runImagePrompt(params: {
       const context = buildImageContext(params.prompt, params.base64, params.mimeType);
       const message = await complete(model, context, {
         apiKey,
-        maxTokens: 512,
+        maxTokens: resolveImageToolMaxTokens(model.maxTokens),
       });
       const text = coerceImageAssistantText({
         message,
