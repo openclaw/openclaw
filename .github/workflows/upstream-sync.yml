@@ -24,6 +24,19 @@ jobs:
           git config user.name "openclaw-sync-bot"
           git config user.email "openclaw-sync-bot@users.noreply.github.com"
 
+      - name: Configure auth token for push and PR
+        env:
+          SYNC_PAT: ${{ secrets.OPENCLAW_SYNC_PAT }}
+          FALLBACK_GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TOKEN="${SYNC_PAT}"
+          if [[ -z "${TOKEN}" ]]; then
+            TOKEN="${FALLBACK_GH_TOKEN}"
+          fi
+          echo "SYNC_TOKEN=${TOKEN}" >> "$GITHUB_ENV"
+          git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
       - name: Add upstream and fetch
         env:
           OPENCLAW_UPSTREAM_URL: ${{ vars.OPENCLAW_UPSTREAM_URL }}
@@ -69,14 +82,9 @@ jobs:
       - name: Open PR
         if: steps.check.outputs.needs_sync == 'true' && env.SYNC_CREATED == 'true'
         env:
-          GH_TOKEN: ${{ secrets.OPENCLAW_SYNC_PAT }}
-          FALLBACK_GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ env.SYNC_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -z "${GH_TOKEN}" ]]; then
-            GH_TOKEN="${FALLBACK_GH_TOKEN}"
-          fi
-          export GH_TOKEN
           gh pr create \
             --head "${SYNC_BRANCH}" \
             --base main \
