@@ -40,6 +40,7 @@ type Pending = {
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
+  connectDelayMs?: number;
   token?: string;
   password?: string;
   instanceId?: string;
@@ -338,12 +339,17 @@ export class GatewayClient {
   private queueConnect() {
     this.connectNonce = null;
     this.connectSent = false;
+    const rawConnectDelayMs = this.opts.connectDelayMs;
+    const connectDelayMs =
+      typeof rawConnectDelayMs === "number" && Number.isFinite(rawConnectDelayMs)
+        ? Math.max(0, Math.min(5_000, rawConnectDelayMs))
+        : 750;
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);
     }
     this.connectTimer = setTimeout(() => {
       this.sendConnect();
-    }, 750);
+    }, connectDelayMs);
   }
 
   private scheduleReconnect() {

@@ -253,6 +253,7 @@ const connectNode = async (
 
   const client = new GatewayClient({
     url: `ws://127.0.0.1:${inst.port}`,
+    connectDelayMs: 0,
     token: inst.gatewayToken,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: label,
@@ -327,6 +328,7 @@ const connectStatusClient = async (
 
     const client = new GatewayClient({
       url: `ws://127.0.0.1:${inst.port}`,
+      connectDelayMs: 0,
       token: inst.gatewayToken,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: `status-${inst.name}`,

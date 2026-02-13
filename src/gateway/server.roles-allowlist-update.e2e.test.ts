@@ -66,6 +66,7 @@ const connectNodeClient = async (params: {
   });
   const client = new GatewayClient({
     url: `ws://127.0.0.1:${params.port}`,
+    connectDelayMs: 0,
     token,
     role: "node",
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
