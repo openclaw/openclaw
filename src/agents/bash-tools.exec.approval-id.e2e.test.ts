@@ -44,23 +44,14 @@ describe("exec approvals", () => {
   it("reuses approval id as the node runId", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     let invokeParams: unknown;
-    let resolveInvoke: (() => void) | undefined;
-    const invokeSeen = new Promise<void>((resolve) => {
-      resolveInvoke = resolve;
-    });
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "exec.approval.request") {
-        // Return registration confirmation (status: "accepted")
-        return { status: "accepted", id: (params as { id?: string })?.id };
-      }
-      if (method === "exec.approval.waitDecision") {
-        // Return the decision when waitDecision is called
+        // Approval request now carries the decision directly.
         return { decision: "allow-once" };
       }
       if (method === "node.invoke") {
         invokeParams = params;
-        resolveInvoke?.();
         return { ok: true };
       }
       return { ok: true };
@@ -77,10 +68,12 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
     const approvalId = (result.details as { approvalId: string }).approvalId;
 
-    await invokeSeen;
-
-    const runId = (invokeParams as { params?: { runId?: string } } | undefined)?.params?.runId;
-    expect(runId).toBe(approvalId);
+    await expect
+      .poll(() => (invokeParams as { params?: { runId?: string } } | undefined)?.params?.runId, {
+        timeout: 2000,
+        interval: 20,
+      })
+      .toBe(approvalId);
   });
 
   it("skips approval when node allowlist is satisfied", async () => {

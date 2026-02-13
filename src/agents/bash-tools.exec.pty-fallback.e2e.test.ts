@@ -1,22 +1,21 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { resetProcessRegistryForTests } from "./bash-process-registry";
-import { createExecTool, setPtyModuleLoaderForTests } from "./bash-tools.exec";
+import { createExecTool } from "./bash-tools.exec";
+
+vi.mock("@lydell/node-pty", () => ({
+  spawn: () => {
+    const err = new Error("spawn EBADF");
+    (err as NodeJS.ErrnoException).code = "EBADF";
+    throw err;
+  },
+}));
 
 afterEach(() => {
   resetProcessRegistryForTests();
-  setPtyModuleLoaderForTests();
   vi.clearAllMocks();
 });
 
 test("exec falls back when PTY spawn fails", async () => {
-  setPtyModuleLoaderForTests(async () => ({
-    spawn: () => {
-      const err = new Error("spawn EBADF");
-      (err as NodeJS.ErrnoException).code = "EBADF";
-      throw err;
-    },
-  }));
-
   const tool = createExecTool({ allowBackground: false });
   const result = await tool.execute("toolcall", {
     command: "printf ok",
