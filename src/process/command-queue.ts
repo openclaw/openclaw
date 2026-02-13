@@ -29,7 +29,6 @@ type QueueEntry = {
 type LaneState = {
   lane: string;
   queue: QueueEntry[];
-  active: number;
   activeTaskIds: Set<number>;
   maxConcurrent: number;
   draining: boolean;
@@ -47,7 +46,6 @@ function getLaneState(lane: string): LaneState {
   const created: LaneState = {
     lane,
     queue: [],
-    active: 0,
     activeTaskIds: new Set(),
     maxConcurrent: 1,
     draining: false,
@@ -61,7 +59,6 @@ function completeTask(state: LaneState, taskId: number, taskGeneration: number):
   if (taskGeneration !== state.generation) {
     return false;
   }
-  state.active -= 1;
   state.activeTaskIds.delete(taskId);
   return true;
 }
@@ -74,7 +71,7 @@ function drainLane(lane: string) {
   state.draining = true;
 
   const pump = () => {
-    while (state.active < state.maxConcurrent && state.queue.length > 0) {
+    while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
       const entry = state.queue.shift() as QueueEntry;
       const waitedMs = Date.now() - entry.enqueuedAt;
       if (waitedMs >= entry.warnAfterMs) {
@@ -86,7 +83,6 @@ function drainLane(lane: string) {
       logLaneDequeue(lane, waitedMs, state.queue.length);
       const taskId = nextTaskId++;
       const taskGeneration = state.generation;
-      state.active += 1;
       state.activeTaskIds.add(taskId);
       void (async () => {
         const startTime = Date.now();
@@ -95,7 +91,7 @@ function drainLane(lane: string) {
           const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
           if (completedCurrentGeneration) {
             diag.debug(
-              `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.active} queued=${state.queue.length}`,
+              `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
             );
             pump();
           }
@@ -148,7 +144,7 @@ export function enqueueCommandInLane<T>(
       warnAfterMs,
       onWait: opts?.onWait,
     });
-    logLaneEnqueue(cleaned, state.queue.length + state.active);
+    logLaneEnqueue(cleaned, state.queue.length + state.activeTaskIds.size);
     drainLane(cleaned);
   });
 }
@@ -169,13 +165,13 @@ export function getQueueSize(lane: string = CommandLane.Main) {
   if (!state) {
     return 0;
   }
-  return state.queue.length + state.active;
+  return state.queue.length + state.activeTaskIds.size;
 }
 
 export function getTotalQueueSize() {
   let total = 0;
   for (const s of lanes.values()) {
-    total += s.queue.length + s.active;
+    total += s.queue.length + s.activeTaskIds.size;
   }
   return total;
 }
@@ -210,7 +206,6 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
 export function resetAllLanes(): void {
   for (const state of lanes.values()) {
     state.generation += 1;
-    state.active = 0;
     state.activeTaskIds.clear();
     state.draining = false;
   }
@@ -223,7 +218,7 @@ export function resetAllLanes(): void {
 export function getActiveTaskCount(): number {
   let total = 0;
   for (const s of lanes.values()) {
-    total += s.active;
+    total += s.activeTaskIds.size;
   }
   return total;
 }

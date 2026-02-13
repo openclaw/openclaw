@@ -59,8 +59,21 @@ function resolveCwd(pid) {
   return match ? match[1] : "unknown";
 }
 
-const lines = run("ps -axo pid=,command=").split("\n");
-const includePatterns = [/\bcodex\b/i, /\bclaude\b/i, /claude\s+code/i];
+// Pre-filter candidate PIDs using pgrep to avoid scanning all processes.
+// Falls back to full ps scan if pgrep is unavailable.
+const candidatePids = run("pgrep -f 'codex|claude' 2>/dev/null || true")
+  .split("\n")
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0 && /^\d+$/.test(s));
+
+let lines;
+if (candidatePids.length > 0) {
+  // Fetch command info only for candidate PIDs.
+  lines = run(`ps -o pid=,command= -p ${candidatePids.join(",")}`).split("\n");
+} else {
+  lines = [];
+}
+
 const excludePatterns = [
   /openclaw-gateway/i,
   /signal-cli/i,
@@ -83,9 +96,6 @@ for (const rawLine of lines) {
   const pid = Number(match[1]);
   const cmd = match[2];
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
-    continue;
-  }
-  if (!includePatterns.some((pattern) => pattern.test(cmd))) {
     continue;
   }
   if (excludePatterns.some((pattern) => pattern.test(cmd))) {
