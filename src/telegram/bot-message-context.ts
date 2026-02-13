@@ -1,4 +1,5 @@
 import type { Bot } from "grammy";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
@@ -25,11 +26,11 @@ import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -203,6 +204,21 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
+  // Compute requireMention early for preflight transcription gating
+  const activationOverride = resolveGroupActivation({
+    chatId,
+    messageThreadId: resolvedThreadId,
+    sessionKey: sessionKey,
+    agentId: route.agentId,
+  });
+  const baseRequireMention = resolveGroupRequireMention(chatId);
+  const requireMention = firstDefined(
+    activationOverride,
+    topicConfig?.requireMention,
+    groupConfig?.requireMention,
+    baseRequireMention,
+  );
+
   const sendTyping = async () => {
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
@@ -281,16 +297,11 @@ export const buildTelegramMessageContext = async ({
                 fn: () =>
                   bot.api.sendMessage(
                     chatId,
-                    [
-                      "OpenClaw: access not configured.",
-                      "",
-                      `Your Telegram user id: ${telegramUserId}`,
-                      "",
-                      `Pairing code: ${code}`,
-                      "",
-                      "Ask the bot owner to approve with:",
-                      formatCliCommand("openclaw pairing approve telegram <code>"),
-                    ].join("\n"),
+                    buildPairingReply({
+                      channel: "telegram",
+                      idLine: `Your Telegram user id: ${telegramUserId}`,
+                      code,
+                    }),
                   ),
               });
             }
@@ -375,6 +386,7 @@ export const buildTelegramMessageContext = async ({
   const locationText = locationData ? formatLocationText(locationData) : undefined;
   const rawTextSource = msg.text ?? msg.caption ?? "";
   const rawText = expandTextLinks(rawTextSource, msg.entities ?? msg.caption_entities).trim();
+  const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
     rawBody = placeholder;
@@ -391,6 +403,35 @@ export const buildTelegramMessageContext = async ({
     (ent) => ent.type === "mention",
   );
   const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+
+  // Preflight audio transcription for mention detection in groups
+  // This allows voice notes to be checked for mentions before being dropped
+  let preflightTranscript: string | undefined;
+  const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
+  const needsPreflightTranscription =
+    isGroup && requireMention && hasAudio && !hasUserText && mentionRegexes.length > 0;
+
+  if (needsPreflightTranscription) {
+    try {
+      const { transcribeFirstAudio } = await import("../media-understanding/audio-preflight.js");
+      // Build a minimal context for transcription
+      const tempCtx: MsgContext = {
+        MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
+        MediaTypes:
+          allMedia.length > 0
+            ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
+            : undefined,
+      };
+      preflightTranscript = await transcribeFirstAudio({
+        ctx: tempCtx,
+        cfg,
+        agentDir: undefined,
+      });
+    } catch (err) {
+      logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
+    }
+  }
+
   const computedWasMentioned = matchesMentionWithExplicit({
     text: msg.text ?? msg.caption ?? "",
     mentionRegexes,
@@ -399,6 +440,7 @@ export const buildTelegramMessageContext = async ({
       isExplicitlyMentioned: explicitlyMentioned,
       canResolveExplicit: Boolean(botUsername),
     },
+    transcript: preflightTranscript,
   });
   const wasMentioned = options?.forceWasMentioned === true ? true : computedWasMentioned;
   if (isGroup && commandGate.shouldBlock) {
@@ -410,19 +452,6 @@ export const buildTelegramMessageContext = async ({
     });
     return null;
   }
-  const activationOverride = resolveGroupActivation({
-    chatId,
-    messageThreadId: resolvedThreadId,
-    sessionKey: sessionKey,
-    agentId: route.agentId,
-  });
-  const baseRequireMention = resolveGroupRequireMention(chatId);
-  const requireMention = firstDefined(
-    activationOverride,
-    topicConfig?.requireMention,
-    groupConfig?.requireMention,
-    baseRequireMention,
-  );
   // Reply-chain detection: replying to a bot message acts like an implicit mention.
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
@@ -571,8 +600,19 @@ export const buildTelegramMessageContext = async ({
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
+  const inboundHistory =
+    isGroup && historyKey && historyLimit > 0
+      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
+          sender: entry.sender,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }))
+      : undefined;
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
+    // Agent prompt should be the raw user text only; metadata/context is provided via system prompt.
+    BodyForAgent: bodyText,
+    InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: commandBody,
     From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,

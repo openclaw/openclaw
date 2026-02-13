@@ -1,4 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { loadConfig } from "../config/config.js";
+import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
@@ -7,6 +9,42 @@ import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
 
 function isAbsoluteHttp(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
+}
+
+function isLoopbackHttpUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.trim().toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function withLoopbackBrowserAuth(
+  url: string,
+  init: (RequestInit & { timeoutMs?: number }) | undefined,
+): RequestInit & { timeoutMs?: number } {
+  const headers = new Headers(init?.headers ?? {});
+  if (headers.has("authorization") || headers.has("x-openclaw-password")) {
+    return { ...init, headers };
+  }
+  if (!isLoopbackHttpUrl(url)) {
+    return { ...init, headers };
+  }
+
+  try {
+    const cfg = loadConfig();
+    const auth = resolveBrowserControlAuth(cfg);
+    if (auth.token) {
+      headers.set("Authorization", `Bearer ${auth.token}`);
+    } else if (auth.password) {
+      headers.set("x-openclaw-password", auth.password);
+    }
+  } catch {
+    // ignore config/auth lookup failures and continue without auth headers
+  }
+
+  return { ...init, headers };
 }
 
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
@@ -35,7 +73,18 @@ async function fetchHttpJson<T>(
 ): Promise<T> {
   const timeoutMs = init.timeoutMs ?? 5000;
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const upstreamSignal = init.signal;
+  let upstreamAbortListener: (() => void) | undefined;
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) {
+      ctrl.abort(upstreamSignal.reason);
+    } else {
+      upstreamAbortListener = () => ctrl.abort(upstreamSignal.reason);
+      upstreamSignal.addEventListener("abort", upstreamAbortListener, { once: true });
+    }
+  }
+
+  const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
   try {
     const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
@@ -45,6 +94,9 @@ async function fetchHttpJson<T>(
     return (await res.json()) as T;
   } finally {
     clearTimeout(t);
+    if (upstreamSignal && upstreamAbortListener) {
+      upstreamSignal.removeEventListener("abort", upstreamAbortListener);
+    }
   }
 }
 
@@ -55,7 +107,8 @@ export async function fetchBrowserJson<T>(
   const timeoutMs = init?.timeoutMs ?? 5000;
   try {
     if (isAbsoluteHttp(url)) {
-      return await fetchHttpJson<T>(url, { ...init, timeoutMs });
+      const httpInit = withLoopbackBrowserAuth(url, init);
+      return await fetchHttpJson<T>(url, { ...httpInit, timeoutMs });
     }
     const started = await startBrowserControlServiceFromConfig();
     if (!started) {
@@ -75,6 +128,32 @@ export async function fetchBrowserJson<T>(
         // keep as string
       }
     }
+
+    const abortCtrl = new AbortController();
+    const upstreamSignal = init?.signal;
+    let upstreamAbortListener: (() => void) | undefined;
+    if (upstreamSignal) {
+      if (upstreamSignal.aborted) {
+        abortCtrl.abort(upstreamSignal.reason);
+      } else {
+        upstreamAbortListener = () => abortCtrl.abort(upstreamSignal.reason);
+        upstreamSignal.addEventListener("abort", upstreamAbortListener, { once: true });
+      }
+    }
+
+    let abortListener: (() => void) | undefined;
+    const abortPromise: Promise<never> = abortCtrl.signal.aborted
+      ? Promise.reject(abortCtrl.signal.reason ?? new Error("aborted"))
+      : new Promise((_, reject) => {
+          abortListener = () => reject(abortCtrl.signal.reason ?? new Error("aborted"));
+          abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
+        });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (timeoutMs) {
+      timer = setTimeout(() => abortCtrl.abort(new Error("timed out")), timeoutMs);
+    }
+
     const dispatchPromise = dispatcher.dispatch({
       method:
         init?.method?.toUpperCase() === "DELETE"
@@ -85,16 +164,20 @@ export async function fetchBrowserJson<T>(
       path: parsed.pathname,
       query,
       body,
+      signal: abortCtrl.signal,
     });
 
-    const result = await (timeoutMs
-      ? Promise.race([
-          dispatchPromise,
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("timed out")), timeoutMs),
-          ),
-        ])
-      : dispatchPromise);
+    const result = await Promise.race([dispatchPromise, abortPromise]).finally(() => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (abortListener) {
+        abortCtrl.signal.removeEventListener("abort", abortListener);
+      }
+      if (upstreamSignal && upstreamAbortListener) {
+        upstreamSignal.removeEventListener("abort", upstreamAbortListener);
+      }
+    });
 
     if (result.status >= 400) {
       const message =

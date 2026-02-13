@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -25,7 +26,47 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  /** Allowed root directories for local path reads. "any" skips the check (caller already validated). */
+  localRoots?: string[] | "any";
 };
+
+function getDefaultLocalRoots(): string[] {
+  const home = os.homedir();
+  return [
+    os.tmpdir(),
+    path.join(home, ".openclaw", "media"),
+    path.join(home, ".openclaw", "agents"),
+  ];
+}
+
+async function assertLocalMediaAllowed(
+  mediaPath: string,
+  localRoots: string[] | "any" | undefined,
+): Promise<void> {
+  if (localRoots === "any") {
+    return;
+  }
+  const roots = localRoots ?? getDefaultLocalRoots();
+  // Resolve symlinks so a symlink under /tmp pointing to /etc/passwd is caught.
+  let resolved: string;
+  try {
+    resolved = await fs.realpath(mediaPath);
+  } catch {
+    resolved = path.resolve(mediaPath);
+  }
+  for (const root of roots) {
+    let resolvedRoot: string;
+    try {
+      resolvedRoot = await fs.realpath(root);
+    } catch {
+      resolvedRoot = path.resolve(root);
+    }
+    if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
+      return;
+    }
+  }
+  throw new Error(`Local media path is not under an allowed directory: ${mediaPath}`);
+}
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
@@ -124,7 +165,7 @@ async function loadWebMediaInternal(
   mediaUrl: string,
   options: WebMediaOptions = {},
 ): Promise<WebMediaResult> {
-  const { maxBytes, optimizeImages = true, ssrfPolicy } = options;
+  const { maxBytes, optimizeImages = true, ssrfPolicy, localRoots } = options;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
@@ -222,6 +263,9 @@ async function loadWebMediaInternal(
     mediaUrl = resolveUserPath(mediaUrl);
   }
 
+  // Guard local reads against allowed directory roots to prevent file exfiltration.
+  await assertLocalMediaAllowed(mediaUrl, localRoots);
+
   // Local path
   const data = await fs.readFile(mediaUrl);
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
@@ -244,24 +288,26 @@ async function loadWebMediaInternal(
 export async function loadWebMedia(
   mediaUrl: string,
   maxBytes?: number,
-  options?: { ssrfPolicy?: SsrFPolicy },
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: string[] | "any" },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(mediaUrl, {
     maxBytes,
     optimizeImages: true,
     ssrfPolicy: options?.ssrfPolicy,
+    localRoots: options?.localRoots,
   });
 }
 
 export async function loadWebMediaRaw(
   mediaUrl: string,
   maxBytes?: number,
-  options?: { ssrfPolicy?: SsrFPolicy },
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: string[] | "any" },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(mediaUrl, {
     maxBytes,
     optimizeImages: false,
     ssrfPolicy: options?.ssrfPolicy,
+    localRoots: options?.localRoots,
   });
 }
 

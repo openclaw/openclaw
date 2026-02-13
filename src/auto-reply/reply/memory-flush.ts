@@ -10,6 +10,7 @@ export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
   "Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed).",
+  "IMPORTANT: If the file already exists, APPEND new content only and do not overwrite existing entries.",
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 

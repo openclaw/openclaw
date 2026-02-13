@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyAuthProfileConfig,
+  applyLitellmProviderConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
   applyOpencodeZenConfig,
@@ -17,12 +18,16 @@ import {
   applyXaiProviderConfig,
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
+  applyZaiConfig,
+  applyZaiProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
   setMinimaxApiKey,
   writeOAuthCredentials,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
 
 const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
@@ -302,6 +307,48 @@ describe("applyMinimaxApiProviderConfig", () => {
   });
 });
 
+describe("applyZaiConfig", () => {
+  it("adds zai provider with correct settings", () => {
+    const cfg = applyZaiConfig({});
+    expect(cfg.models?.providers?.zai).toMatchObject({
+      // Default: general (non-coding) endpoint. Coding Plan endpoint is detected during onboarding.
+      baseUrl: ZAI_GLOBAL_BASE_URL,
+      api: "openai-completions",
+    });
+    const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
+    expect(ids).toContain("glm-5");
+    expect(ids).toContain("glm-4.7");
+    expect(ids).toContain("glm-4.7-flash");
+    expect(ids).toContain("glm-4.7-flashx");
+  });
+
+  it("sets correct primary model", () => {
+    const cfg = applyZaiConfig({}, { modelId: "glm-5" });
+    expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
+  });
+
+  it("supports CN endpoint", () => {
+    const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flash" });
+    expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
+    expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7-flash");
+  });
+
+  it("supports CN endpoint with glm-4.7-flashx", () => {
+    const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flashx" });
+    expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
+    expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7-flashx");
+  });
+});
+
+describe("applyZaiProviderConfig", () => {
+  it("does not overwrite existing primary model", () => {
+    const cfg = applyZaiProviderConfig({
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    });
+    expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+  });
+});
+
 describe("applySyntheticConfig", () => {
   it("adds synthetic provider with correct settings", () => {
     const cfg = applySyntheticConfig({});
@@ -508,6 +555,41 @@ describe("applyOpenrouterProviderConfig", () => {
       },
     });
     expect(cfg.agents?.defaults?.models?.[OPENROUTER_DEFAULT_MODEL_REF]?.alias).toBe("Router");
+  });
+});
+
+describe("applyLitellmProviderConfig", () => {
+  it("preserves existing baseUrl and api key while adding the default model", () => {
+    const cfg = applyLitellmProviderConfig({
+      models: {
+        providers: {
+          litellm: {
+            baseUrl: "https://litellm.example/v1",
+            apiKey: "  old-key  ",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000,
+                maxTokens: 100,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(cfg.models?.providers?.litellm?.baseUrl).toBe("https://litellm.example/v1");
+    expect(cfg.models?.providers?.litellm?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.litellm?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.litellm?.models.map((m) => m.id)).toEqual([
+      "custom-model",
+      "claude-opus-4-6",
+    ]);
   });
 });
 

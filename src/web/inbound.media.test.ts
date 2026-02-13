@@ -88,6 +88,11 @@ vi.mock("./session.js", () => {
 
 import { monitorWebInbox, resetWebInboundDedupe } from "./inbound.js";
 
+async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
+  await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1));
+  return onMessage.mock.calls[0][0];
+}
+
 describe("web inbound media saves with extension", () => {
   beforeEach(() => {
     saveMediaBufferSpy.mockClear();
@@ -125,16 +130,7 @@ describe("web inbound media saves with extension", () => {
 
     realSock.ev.emit("messages.upsert", upsert);
 
-    // Allow a brief window for the async handler to fire on slower hosts.
-    for (let i = 0; i < 50; i++) {
-      if (onMessage.mock.calls.length > 0) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    const msg = onMessage.mock.calls[0][0];
+    const msg = await waitForMessage(onMessage);
     const mediaPath = msg.mediaPath;
     expect(mediaPath).toBeDefined();
     expect(path.extname(mediaPath as string)).toBe(".jpg");
@@ -179,15 +175,7 @@ describe("web inbound media saves with extension", () => {
 
     realSock.ev.emit("messages.upsert", upsert);
 
-    for (let i = 0; i < 50; i++) {
-      if (onMessage.mock.calls.length > 0) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    const msg = onMessage.mock.calls[0][0];
+    const msg = await waitForMessage(onMessage);
     expect(msg.chatType).toBe("group");
     expect(msg.mentionedJids).toEqual(["999@s.whatsapp.net"]);
 
@@ -221,17 +209,43 @@ describe("web inbound media saves with extension", () => {
 
     realSock.ev.emit("messages.upsert", upsert);
 
-    for (let i = 0; i < 50; i++) {
-      if (onMessage.mock.calls.length > 0) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
+    await waitForMessage(onMessage);
     expect(saveMediaBufferSpy).toHaveBeenCalled();
     const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
     expect(lastCall?.[3]).toBe(1 * 1024 * 1024);
+
+    await listener.close();
+  });
+
+  it("passes document filenames to saveMediaBuffer", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const { createWaSocket } = await import("./session.js");
+    const realSock = await (
+      createWaSocket as unknown as () => Promise<{
+        ev: import("node:events").EventEmitter;
+      }>
+    )();
+
+    const fileName = "invoice.pdf";
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "doc1", fromMe: false, remoteJid: "333@s.whatsapp.net" },
+          message: { documentMessage: { mimetype: "application/pdf", fileName } },
+          messageTimestamp: 1_700_000_004,
+        },
+      ],
+    };
+
+    realSock.ev.emit("messages.upsert", upsert);
+
+    const msg = await waitForMessage(onMessage);
+    expect(msg.mediaFileName).toBe(fileName);
+    expect(saveMediaBufferSpy).toHaveBeenCalled();
+    const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
+    expect(lastCall?.[4]).toBe(fileName);
 
     await listener.close();
   });

@@ -99,6 +99,23 @@ export type SessionConfig = {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
   };
+  /** Automatic session store maintenance (pruning, capping, file rotation). */
+  maintenance?: SessionMaintenanceConfig;
+};
+
+export type SessionMaintenanceMode = "enforce" | "warn";
+
+export type SessionMaintenanceConfig = {
+  /** Whether to enforce maintenance or warn only. Default: "warn". */
+  mode?: SessionMaintenanceMode;
+  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
+  pruneAfter?: string | number;
+  /** Deprecated. Use pruneAfter instead. */
+  pruneDays?: number;
+  /** Maximum number of session entries to keep. Default: 500. */
+  maxEntries?: number;
+  /** Rotate sessions.json when it exceeds this size (e.g. "10mb"). Default: 10mb. */
+  rotateBytes?: number | string;
 };
 
 export type LoggingConfig = {

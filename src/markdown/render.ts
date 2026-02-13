@@ -21,6 +21,7 @@ export type RenderOptions = {
 };
 
 const STYLE_ORDER: MarkdownStyle[] = [
+  "blockquote",
   "code_block",
   "code",
   "bold",

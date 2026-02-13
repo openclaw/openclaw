@@ -2,6 +2,7 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecFn } from "./windows-acl.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
+import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -274,6 +275,8 @@ function collectGatewayConfigFindings(
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const remotelyExposed =
+    bind !== "loopback" || tailscaleMode === "serve" || tailscaleMode === "funnel";
 
   if (bind !== "loopback" && !hasSharedSecret) {
     findings.push({
@@ -361,10 +364,32 @@ function collectGatewayConfigFindings(
     });
   }
 
+  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
+  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  if (chatCompletionsEnabled || responsesEnabled) {
+    const enabledEndpoints = [
+      chatCompletionsEnabled ? "/v1/chat/completions" : null,
+      responsesEnabled ? "/v1/responses" : null,
+    ].filter((value): value is string => Boolean(value));
+    findings.push({
+      checkId: "gateway.http.session_key_override_enabled",
+      severity: remotelyExposed ? "warn" : "info",
+      title: "HTTP APIs accept explicit session key override headers",
+      detail:
+        `${enabledEndpoints.join(", ")} support x-openclaw-session-key. ` +
+        "Any authenticated caller can route requests into arbitrary sessions.",
+      remediation:
+        "Treat HTTP API credentials as full-trust, disable unused endpoints, and avoid sharing tokens across tenants.",
+    });
+  }
+
   return findings;
 }
 
-function collectBrowserControlFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectBrowserControlFindings(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
 
   let resolved: ReturnType<typeof resolveBrowserConfig>;
@@ -383,6 +408,20 @@ function collectBrowserControlFindings(cfg: OpenClawConfig): SecurityAuditFindin
 
   if (!resolved.enabled) {
     return findings;
+  }
+
+  const browserAuth = resolveBrowserControlAuth(cfg, env);
+  if (!browserAuth.token && !browserAuth.password) {
+    findings.push({
+      checkId: "browser.control_no_auth",
+      severity: "critical",
+      title: "Browser control has no auth",
+      detail:
+        "Browser control HTTP routes are enabled but no gateway.auth token/password is configured. " +
+        "Any local process (or SSRF to loopback) can call browser control endpoints.",
+      remediation:
+        "Set gateway.auth.token (recommended) or gateway.auth.password so browser control HTTP routes require authentication. Restarting the gateway will auto-generate gateway.auth.token when browser control is enabled.",
+    });
   }
 
   for (const name of Object.keys(resolved.profiles)) {
@@ -924,7 +963,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(...collectGatewayConfigFindings(cfg, env));
-  findings.push(...collectBrowserControlFindings(cfg));
+  findings.push(...collectBrowserControlFindings(cfg, env));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectHooksHardeningFindings(cfg));

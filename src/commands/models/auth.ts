@@ -79,7 +79,7 @@ export async function modelsAuthSetupTokenCommand(
     message: "Paste Anthropic setup-token",
     validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
   });
-  const token = String(tokenInput).trim();
+  const token = String(tokenInput ?? "").trim();
   const profileId = resolveDefaultTokenProfileId(provider);
 
   await saveTokenProfile({
@@ -111,11 +111,11 @@ export async function modelsAuthPasteTokenCommand(
     message: `Paste token for ${provider}`,
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
-  const token = String(tokenInput).trim();
+  const token = String(tokenInput ?? "").trim();
 
   const expiresAt =
     opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
-      ? Date.now() + parseDurationMs(String(opts.expiresIn).trim(), { defaultUnit: "d" })
+      ? Date.now() + parseDurationMs(String(opts.expiresIn ?? "").trim(), { defaultUnit: "d" })
       : undefined;
 
   await saveTokenProfile({

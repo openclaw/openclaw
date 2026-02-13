@@ -36,6 +36,10 @@ const MarkdownConfigSchema = z
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
+// Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
+// for incremental text display with a "Thinking..." placeholder
+const StreamingModeSchema = z.boolean().optional();
+
 const BlockStreamingCoalesceSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -49,6 +53,20 @@ const ChannelHeartbeatVisibilitySchema = z
   .object({
     visibility: z.enum(["visible", "hidden"]).optional(),
     intervalMs: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
+/**
+ * Dynamic agent creation configuration.
+ * When enabled, a new agent is created for each unique DM user.
+ */
+const DynamicAgentCreationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    workspaceTemplate: z.string().optional(),
+    agentDirTemplate: z.string().optional(),
+    maxAgents: z.number().int().positive().optional(),
   })
   .strict()
   .optional();
@@ -72,6 +90,16 @@ const FeishuToolsConfigSchema = z
   .strict()
   .optional();
 
+/**
+ * Topic session isolation mode for group chats.
+ * - "disabled" (default): All messages in a group share one session
+ * - "enabled": Messages in different topics get separate sessions
+ *
+ * When enabled, the session key becomes `chat:{chatId}:topic:{rootId}`
+ * for messages within a topic thread, allowing isolated conversations.
+ */
+const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -80,6 +108,7 @@ export const FeishuGroupSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    topicSessionMode: TopicSessionModeSchema,
   })
   .strict();
 
@@ -117,6 +146,7 @@ export const FeishuAccountConfigSchema = z
     mediaMaxMb: z.number().positive().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     renderMode: RenderModeSchema,
+    streaming: StreamingModeSchema, // Enable streaming card mode (default: true)
     tools: FeishuToolsConfigSchema,
   })
   .strict();
@@ -142,6 +172,7 @@ export const FeishuConfigSchema = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     requireMention: z.boolean().optional().default(true),
     groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
+    topicSessionMode: TopicSessionModeSchema,
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema).optional(),
@@ -151,7 +182,10 @@ export const FeishuConfigSchema = z
     mediaMaxMb: z.number().positive().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     renderMode: RenderModeSchema, // raw = plain text (default), card = interactive card with markdown
+    streaming: StreamingModeSchema, // Enable streaming card mode (default: true)
     tools: FeishuToolsConfigSchema,
+    // Dynamic agent creation for DM users
+    dynamicAgentCreation: DynamicAgentCreationSchema,
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveStateDir } from "./paths.js";
 import { withEnvOverride, withTempHome } from "./test-helpers.js";
 
 describe("config env vars", () => {
@@ -73,6 +74,52 @@ describe("config env vars", () => {
         loadConfig();
         expect(process.env.GROQ_API_KEY).toBe("gsk-config");
       });
+    });
+  });
+
+  it("loads ${VAR} substitutions from ~/.openclaw/.env on repeated runtime loads", async () => {
+    await withTempHome(async (home) => {
+      await withEnvOverride(
+        {
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+          CLAWDBOT_STATE_DIR: undefined,
+          OPENCLAW_HOME: undefined,
+          CLAWDBOT_HOME: undefined,
+          BRAVE_API_KEY: undefined,
+          OPENCLAW_DISABLE_CONFIG_CACHE: "1",
+        },
+        async () => {
+          const configDir = resolveStateDir(process.env, () => home);
+          await fs.mkdir(configDir, { recursive: true });
+          await fs.writeFile(
+            path.join(configDir, "openclaw.json"),
+            JSON.stringify(
+              {
+                tools: {
+                  web: {
+                    search: {
+                      apiKey: "${BRAVE_API_KEY}",
+                    },
+                  },
+                },
+              },
+              null,
+              2,
+            ),
+            "utf-8",
+          );
+          await fs.writeFile(path.join(configDir, ".env"), "BRAVE_API_KEY=from-dotenv\n", "utf-8");
+
+          const { loadConfig } = await import("./config.js");
+
+          const first = loadConfig();
+          expect(first.tools?.web?.search?.apiKey).toBe("from-dotenv");
+
+          delete process.env.BRAVE_API_KEY;
+          const second = loadConfig();
+          expect(second.tools?.web?.search?.apiKey).toBe("from-dotenv");
+        },
+      );
     });
   });
 });
