@@ -1,4 +1,5 @@
 import { HEARTBEAT_TOKEN } from "./tokens.js";
+import { escapeRegExp } from "../utils.js";
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
@@ -86,7 +87,7 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
     // (e.g. ".", "!!!", "---"), but only when the token is the entire remaining text
     // (^ anchor). This prevents mangling sentences like "I should not respond HEARTBEAT_OK."
     // where the punctuation belongs to the surrounding text.
-    if (next.endsWith(token) || new RegExp(`^${token}[^\\w]{0,4}$`).test(next)) {
+    if (next.endsWith(token) || new RegExp(`^${escapeRegExp(token)}[^\\w]{0,4}$`).test(next)) {
       const idx = next.lastIndexOf(token);
       text = next.slice(0, idx).trimEnd();
       didStrip = true;
