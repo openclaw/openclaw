@@ -22,4 +22,23 @@ describe("isFailoverErrorMessage", () => {
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
   });
+
+  it("matches not_found messages", () => {
+    const samples = [
+      "Requested entity was not found.",
+      "Cloud Code Assist API error (404): Requested entity was not found.",
+      "model not found",
+      "resource not found",
+    ];
+    for (const sample of samples) {
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("does not match false-positive not found messages", () => {
+    const falsePositives = ["file not found: /etc/config.json", "module not found: @some/package"];
+    for (const sample of falsePositives) {
+      expect(isFailoverErrorMessage(sample)).toBe(false);
+    }
+  });
 });

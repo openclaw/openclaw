@@ -48,6 +48,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 401;
     case "timeout":
       return 408;
+    case "not_found":
+      return 404;
     case "format":
       return 400;
     default:
@@ -156,6 +158,9 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
   if (status === 401 || status === 403) {
     return "auth";
+  }
+  if (status === 404) {
+    return "not_found";
   }
   if (status === 408) {
     return "timeout";
