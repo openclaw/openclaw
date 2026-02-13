@@ -45,7 +45,7 @@ describe("memory search async sync", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("does not await sync when searching", async () => {
+  it("awaits sync when searching to prevent database closure race", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -73,10 +73,11 @@ describe("memory search async sync", () => {
     const pending = new Promise<void>(() => {});
     (manager as unknown as { sync: () => Promise<void> }).sync = vi.fn(async () => pending);
 
+    // Search should now wait for sync to complete to prevent database being closed mid-search
     const resolved = await Promise.race([
       manager.search("hello").then(() => true),
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1000)),
     ]);
-    expect(resolved).toBe(true);
+    expect(resolved).toBe(false);
   });
 });
