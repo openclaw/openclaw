@@ -1,6 +1,6 @@
-"""OpenClaw Gateway HTTP server module.
+"""OpenClaw Gateway server module.
 
-This module provides the HTTP API server for OpenClaw.
+This module provides the HTTP API and WebSocket server for OpenClaw.
 """
 
 from .app import create_app
@@ -19,6 +19,16 @@ from .types import (
     GatewayAuth,
     HealthCheckResponse,
     SessionListResponse,
+)
+from .ws_connection import WebSocketConnectionManager
+from .ws_server import broadcast_to_all, get_connection_manager
+from .ws_types import (
+    ConnectParams,
+    WebSocketClient,
+    WebSocketEvent,
+    WebSocketFrame,
+    WebSocketRequest,
+    WebSocketResponse,
 )
 
 __all__ = [
@@ -39,9 +49,20 @@ __all__ = [
     "send_invalid_request",
     "send_not_found",
     "send_method_not_allowed",
-    # Types
+    # HTTP Types
     "GatewayAuth",
     "HealthCheckResponse",
     "SessionListResponse",
     "ConfigSnapshotResponse",
+    # WebSocket
+    "WebSocketConnectionManager",
+    "get_connection_manager",
+    "broadcast_to_all",
+    # WebSocket Types
+    "WebSocketClient",
+    "WebSocketFrame",
+    "WebSocketRequest",
+    "WebSocketResponse",
+    "WebSocketEvent",
+    "ConnectParams",
 ]

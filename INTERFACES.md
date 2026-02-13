@@ -936,3 +936,429 @@ async def stop_server(server: GatewayServer) -> None:
 优先级：local > token > password
 
 ---
+
+## 批次 6：Gateway WebSocket Server (2026-02-13)
+
+---
+
+## openclaw_py.gateway.ws_types
+路径: openclaw_py/gateway/ws_types.py
+
+```python
+from openclaw_py.gateway.ws_types import (
+    ConnectParams,
+    WebSocketClient,
+    WebSocketFrame,
+    WebSocketRequest,
+    WebSocketResponse,
+    WebSocketEvent,
+    WebSocketError,
+    ConnectionState,
+)
+```
+
+### 数据模型
+
+**ConnectParams** (Pydantic):
+```python
+class ConnectParams(BaseModel):
+    """WebSocket 连接参数（connect 帧中发送）"""
+    client_id: str | None = None
+    client_version: str | None = None
+    protocol_version: str = "1.0"
+    device_id: str | None = None
+    platform: str | None = None
+```
+
+**WebSocketClient** (Pydantic):
+```python
+class WebSocketClient(BaseModel):
+    """WebSocket 客户端信息"""
+    conn_id: str  # 唯一连接 ID
+    client_id: str | None = None  # 客户端提供的 ID
+    client_version: str | None = None
+    protocol_version: str = "1.0"
+    device_id: str | None = None
+    platform: str | None = None
+    client_ip: str | None = None
+    authenticated: bool = False
+    auth_source: str | None = None  # "token" | "password" | "local-direct"
+    connected_at: int  # 毫秒时间戳
+```
+
+**WebSocketFrame** (Pydantic):
+```python
+class WebSocketFrame(BaseModel):
+    """WebSocket 消息帧（JSON-RPC 风格）"""
+    type: str  # "request" | "response" | "event"
+    id: str | None = None  # 请求/响应匹配 ID
+    method: str | None = None  # 请求方法名
+    params: dict[str, Any] | None = None  # 请求/事件参数
+    result: Any = None  # 成功响应结果
+    error: dict[str, Any] | None = None  # 失败响应错误
+    event: str | None = None  # 事件名称
+```
+
+**WebSocketRequest** (Pydantic):
+```python
+class WebSocketRequest(BaseModel):
+    """WebSocket 请求帧"""
+    type: str = "request"
+    id: str
+    method: str
+    params: dict[str, Any] = Field(default_factory=dict)
+```
+
+**WebSocketResponse** (Pydantic):
+```python
+class WebSocketResponse(BaseModel):
+    """WebSocket 响应帧"""
+    type: str = "response"
+    id: str
+    result: Any = None
+    error: dict[str, Any] | None = None
+```
+
+**WebSocketEvent** (Pydantic):
+```python
+class WebSocketEvent(BaseModel):
+    """WebSocket 事件帧（服务端 -> 客户端广播）"""
+    type: str = "event"
+    event: str
+    params: dict[str, Any] = Field(default_factory=dict)
+```
+
+**WebSocketError** (Pydantic):
+```python
+class WebSocketError(BaseModel):
+    """WebSocket 错误信息"""
+    code: str
+    message: str
+    details: dict[str, Any] | None = None
+```
+
+**ConnectionState** (非 Pydantic 类):
+```python
+class ConnectionState:
+    """WebSocket 连接状态跟踪"""
+    def __init__(self, websocket: WebSocket, client: WebSocketClient):
+        self.websocket = websocket
+        self.client = client
+        self.is_alive = True
+        self.last_pong_at: int | None = None
+```
+
+---
+
+## openclaw_py.gateway.ws_protocol
+路径: openclaw_py/gateway/ws_protocol.py
+
+```python
+from openclaw_py.gateway.ws_protocol import (
+    parse_frame,
+    create_response,
+    create_error_response,
+    create_event,
+    validate_request,
+    serialize_frame,
+)
+```
+
+### 协议解析和创建函数
+
+```python
+def parse_frame(raw_message: str) -> WebSocketFrame | None:
+    """解析原始 WebSocket 消息为帧
+
+    Args:
+        raw_message: 原始 JSON 字符串
+
+    Returns:
+        WebSocketFrame 如果有效，否则 None
+    """
+
+def create_response(
+    request_id: str,
+    result: Any = None,
+    error: WebSocketError | None = None,
+) -> str:
+    """创建响应帧 JSON 字符串
+
+    Args:
+        request_id: 响应的请求 ID
+        result: 成功结果数据
+        error: 错误信息（如果失败）
+
+    Returns:
+        响应帧的 JSON 字符串
+    """
+
+def create_error_response(
+    request_id: str,
+    code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> str:
+    """创建错误响应帧
+
+    Args:
+        request_id: 失败请求的 ID
+        code: 错误代码（如 "invalid_method", "unauthorized"）
+        message: 人类可读的错误消息
+        details: 额外错误详情
+
+    Returns:
+        错误响应的 JSON 字符串
+    """
+
+def create_event(event_name: str, params: dict[str, Any] | None = None) -> str:
+    """创建事件帧 JSON 字符串
+
+    Args:
+        event_name: 事件名称
+        params: 事件参数/载荷
+
+    Returns:
+        事件帧的 JSON 字符串
+    """
+
+def validate_request(frame: WebSocketFrame) -> WebSocketRequest | None:
+    """验证并转换帧为请求
+
+    Args:
+        frame: 已解析的 WebSocket 帧
+
+    Returns:
+        WebSocketRequest 如果有效，否则 None
+    """
+
+def serialize_frame(
+    frame: WebSocketFrame | WebSocketRequest | WebSocketResponse | WebSocketEvent
+) -> str:
+    """序列化帧为 JSON 字符串
+
+    Args:
+        frame: 要序列化的帧对象
+
+    Returns:
+        JSON 字符串
+    """
+```
+
+---
+
+## openclaw_py.gateway.ws_broadcast
+路径: openclaw_py/gateway/ws_broadcast.py
+
+```python
+from openclaw_py.gateway.ws_broadcast import (
+    broadcast_event,
+    send_to_client,
+    send_response_to_client,
+)
+```
+
+### 广播和发送函数
+
+```python
+async def broadcast_event(
+    event_name: str,
+    params: dict[str, Any] | None = None,
+    connections: set[ConnectionState] | None = None,
+    drop_if_slow: bool = False,
+) -> int:
+    """广播事件到所有已连接客户端
+
+    Args:
+        event_name: 要广播的事件名称
+        params: 事件参数/载荷
+        connections: 活动连接集合（如果为 None，不广播）
+        drop_if_slow: 如果为 True，跳过接收慢的客户端
+
+    Returns:
+        收到事件的客户端数量
+    """
+
+async def send_to_client(
+    websocket: WebSocket,
+    message: str,
+    conn_id: str | None = None,
+) -> bool:
+    """发送消息到特定客户端
+
+    Args:
+        websocket: WebSocket 连接
+        message: 要发送的 JSON 消息
+        conn_id: 连接 ID（用于日志）
+
+    Returns:
+        如果成功发送返回 True，否则 False
+    """
+
+async def send_response_to_client(
+    websocket: WebSocket,
+    response_json: str,
+    conn_id: str | None = None,
+) -> bool:
+    """发送响应帧到客户端
+
+    这是 send_to_client 的便捷包装器，用于响应。
+
+    Args:
+        websocket: WebSocket 连接
+        response_json: JSON 响应字符串
+        conn_id: 连接 ID（用于日志）
+
+    Returns:
+        如果成功发送返回 True，否则 False
+    """
+```
+
+---
+
+## openclaw_py.gateway.ws_connection
+路径: openclaw_py/gateway/ws_connection.py
+
+```python
+from openclaw_py.gateway.ws_connection import (
+    WebSocketConnectionManager,
+    handle_websocket_connection,
+    authenticate_connection,
+)
+```
+
+### 连接管理器
+
+**WebSocketConnectionManager** (类):
+```python
+class WebSocketConnectionManager:
+    """管理 WebSocket 连接和路由"""
+
+    def __init__(self):
+        """初始化连接管理器"""
+        self.connections: set[ConnectionState] = set()
+        self.clients_by_id: dict[str, ConnectionState] = {}
+
+    def add_connection(self, conn_state: ConnectionState) -> None:
+        """添加新连接"""
+
+    def remove_connection(self, conn_state: ConnectionState) -> None:
+        """移除连接"""
+
+    def get_connection_count(self) -> int:
+        """获取活动连接数量"""
+
+    def get_client_by_id(self, client_id: str) -> ConnectionState | None:
+        """通过客户端 ID 获取连接"""
+```
+
+### 连接处理函数
+
+```python
+async def handle_websocket_connection(
+    websocket: WebSocket,
+    config: GatewayConfig,
+    manager: WebSocketConnectionManager,
+    client_ip: str | None = None,
+) -> None:
+    """处理 WebSocket 连接生命周期
+
+    Args:
+        websocket: FastAPI WebSocket 连接
+        config: Gateway 配置
+        manager: 连接管理器
+        client_ip: 客户端 IP 地址（用于认证）
+    """
+
+def authenticate_connection(
+    client_ip: str | None,
+    config: GatewayConfig,
+) -> tuple[bool, str | None]:
+    """认证 WebSocket 连接
+
+    Args:
+        client_ip: 客户端 IP 地址
+        config: Gateway 配置
+
+    Returns:
+        元组 (authenticated, auth_source)
+        - authenticated: 是否认证成功
+        - auth_source: 认证来源（"local-direct" | "token" | "password" | None）
+
+    支持的认证方式：
+    - 本地 IP (127.0.0.1, ::1) 自动允许
+    - TestClient (IP 为 None 或 "testclient") 允许用于测试
+    - 远程连接暂不支持（将来会添加 token/password 认证）
+    """
+```
+
+---
+
+## openclaw_py.gateway.ws_server
+路径: openclaw_py/gateway/ws_server.py
+
+```python
+from openclaw_py.gateway.ws_server import (
+    get_connection_manager,
+    create_websocket_router,
+    broadcast_to_all,
+)
+```
+
+### WebSocket 服务器函数
+
+```python
+def get_connection_manager() -> WebSocketConnectionManager:
+    """获取全局 WebSocket 连接管理器（单例）
+
+    Returns:
+        WebSocket 连接管理器实例
+    """
+
+def create_websocket_router(config: GatewayConfig) -> APIRouter:
+    """创建 WebSocket 路由器和端点
+
+    Args:
+        config: Gateway 配置
+
+    Returns:
+        包含 WebSocket 路由的 FastAPI APIRouter
+
+    提供的端点：
+    - WebSocket /ws: 主 WebSocket 端点（客户端连接）
+    - GET /ws-test: 交互式 HTML 测试页面
+    """
+
+async def broadcast_to_all(event_name: str, params: dict | None = None) -> int:
+    """广播事件到所有已连接客户端
+
+    这是使用全局连接管理器的便捷函数。
+
+    Args:
+        event_name: 事件名称
+        params: 事件参数
+
+    Returns:
+        收到事件的客户端数量
+    """
+```
+
+### WebSocket 端点
+
+**WebSocket 端点** (`/ws`):
+- 主 WebSocket 端点供客户端连接
+- 协议：JSON-RPC 风格消息帧
+- 首帧必须是 `connect` 请求
+- 认证：本地直连、token、password（将来）
+- 内置方法：
+  - `connect`: 建立连接
+  - `ping`: 心跳检测
+  - `get_status`: 获取连接状态
+
+**测试页面** (`/ws-test`):
+- 交互式 HTML WebSocket 测试客户端
+- 提供连接/断开/Ping/获取状态按钮
+- 支持发送自定义请求
+- 实时显示发送/接收的消息
+
+---

@@ -199,3 +199,64 @@
 
 ---
 
+## 批次 6：Gateway WebSocket Server（2026-02-13）
+
+**新增文件**：
+- openclaw_py/gateway/ws_types.py - WebSocket 数据模型（ConnectParams, WebSocketClient, WebSocketFrame, WebSocketRequest, WebSocketResponse, WebSocketEvent, WebSocketError, ConnectionState）
+- openclaw_py/gateway/ws_protocol.py - WebSocket 协议工具（parse_frame, create_response, create_error_response, create_event, validate_request, serialize_frame）
+- openclaw_py/gateway/ws_broadcast.py - WebSocket 广播功能（broadcast_event, send_to_client, send_response_to_client）
+- openclaw_py/gateway/ws_connection.py - WebSocket 连接管理（WebSocketConnectionManager, handle_websocket_connection, authenticate_connection）
+- openclaw_py/gateway/ws_server.py - WebSocket 服务器集成（create_websocket_router, get_connection_manager, broadcast_to_all, /ws 端点, /ws-test 测试页面）
+- openclaw_py/gateway/app.py - 更新（集成 WebSocket 路由）
+- openclaw_py/gateway/__init__.py - 更新（导出 WebSocket 相关模块）
+- tests/gateway/test_ws_types.py - WebSocket 类型测试（16 个测试）
+- tests/gateway/test_ws_protocol.py - WebSocket 协议测试（19 个测试）
+- tests/gateway/test_ws_broadcast.py - WebSocket 广播测试（10 个测试）
+- tests/gateway/test_ws_connection.py - WebSocket 连接测试（13 个测试）
+- tests/gateway/test_ws_server.py - WebSocket 服务器测试（9 个测试）
+- tests/gateway/test_ws_integration.py - WebSocket 集成测试（7 个测试）
+
+**核心变更**：
+- 使用 FastAPI WebSocket 替代 Node.js ws 库实现 WebSocket 服务器
+- 实现 JSON-RPC 风格消息协议：
+  - Request 帧：客户端请求（type, id, method, params）
+  - Response 帧：服务端响应（type, id, result, error）
+  - Event 帧：服务端广播（type, event, params）
+- 实现全局 WebSocketConnectionManager 单例：
+  - connections 集合：跟踪所有活动连接
+  - clients_by_id 索引：按客户端 ID 快速查找
+  - 连接数统计、添加/移除连接
+- 实现三种认证方式（与 HTTP 一致）：
+  - Local Direct: 127.0.0.1, ::1 直接访问（无需认证）
+  - TestClient: None IP 或 "testclient" IP（用于测试）
+  - Token/Password: 远程认证（将来实现）
+- 实现内置 WebSocket 方法：
+  - connect: 建立连接（首帧必须为 connect）
+  - ping: 心跳检测（返回 pong）
+  - get_status: 获取连接状态
+- 实现广播系统：
+  - broadcast_event: 广播事件到所有连接
+  - 自动移除失败/断开连接
+  - 支持 drop_if_slow 参数（跳过慢客户端）
+- 提供交互式测试页面 /ws-test：
+  - 浏览器 WebSocket 客户端
+  - 支持连接/断开/Ping/获取状态
+  - 实时显示消息收发
+- 连接生命周期管理：
+  - 接受连接 -> 等待 connect 帧 -> 认证 -> 注册连接 -> 消息循环
+  - 优雅处理 WebSocketDisconnect 异常
+  - 自动清理断开的连接
+- 保持与原 TypeScript 版本的协议兼容性（确保前端无需修改）
+
+**依赖的已有模块**：
+- openclaw_py.config.types - GatewayConfig 配置模型
+- openclaw_py.logging - log_info, log_warn, log_error 日志函数
+- openclaw_py.gateway.auth - get_client_ip, is_local_request 认证工具
+
+**已知问题**：
+- 无
+
+**测试结果**：376 passed（74 new WebSocket + 60 HTTP + 242 from previous batches）
+
+---
+

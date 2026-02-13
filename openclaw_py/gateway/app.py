@@ -11,6 +11,7 @@ from openclaw_py.config import OpenClawConfig
 from .routes import config as config_routes
 from .routes import health as health_routes
 from .routes import sessions as sessions_routes
+from .ws_server import create_websocket_router
 
 
 def create_app(config: OpenClawConfig) -> FastAPI:
@@ -46,10 +47,14 @@ def create_app(config: OpenClawConfig) -> FastAPI:
     app.state.config = config
     app.state.gateway_config = config.gateway
 
-    # Register routes
+    # Register HTTP routes
     app.include_router(health_routes.router, tags=["health"])
     app.include_router(sessions_routes.router, tags=["sessions"])
     app.include_router(config_routes.router, tags=["config"])
+
+    # Register WebSocket routes
+    ws_router = create_websocket_router(config.gateway)
+    app.include_router(ws_router, tags=["websocket"])
 
     # Root endpoint
     @app.get("/")

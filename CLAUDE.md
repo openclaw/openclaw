@@ -5,7 +5,7 @@ OpenClaw 个人 AI 助手。后端从 TypeScript 转 Python，前端 UI 保留�
 只保留 Telegram 频道，其他频道删除。全功能保留。
 
 ## 当前进度
-**批次 5 / 15：Gateway HTTP Server** ✅ 已完成
+**批次 6 / 15：Gateway WebSocket Server** ✅ 已完成
 
 ## 已完成的 Python 文件
 - openclaw_py/types/base.py - 核心基础类型（14 个 Literal 类型 + normalize_chat_type 函数）
@@ -13,7 +13,7 @@ OpenClaw 个人 AI 助手。后端从 TypeScript 转 Python，前端 UI 保留�
 - openclaw_py/logging/logger.py - 日志系统（loguru，7 种日志级别）
 - openclaw_py/utils/common.py - 通用工具函数（文件系统、数字、字符串、JSON、类型守卫）
 - openclaw_py/sessions/*.py - 会话管理（types, key_utils, label, store, memory_store）
-- openclaw_py/gateway/*.py - Gateway HTTP 服务器（types, http_common, auth, app, server, routes/*）
+- openclaw_py/gateway/*.py - Gateway HTTP + WebSocket 服务器（types, http_common, auth, app, server, routes/*, ws_types, ws_protocol, ws_broadcast, ws_connection, ws_server）
 
 ## 环境
 - Python 3.13（Conda 环境：marui）
@@ -79,7 +79,7 @@ extensions/、Swabble/、apps/
 3.  ✅ 日志 + 工具函数
 4.  ✅ 会话管理 + 持久化 🎯 v0.1-foundation
 5.  ✅ Gateway 服务器 - HTTP
-6.  ⬜ Gateway 服务器 - WebSocket
+6.  ✅ Gateway 服务器 - WebSocket
 7.  ⬜ Agent 运行时 - 模型调用
 8.  ⬜ Agent 上下文 + 用量
 9.  ⬜ Agent 工具 + Skills

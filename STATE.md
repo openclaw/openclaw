@@ -1,7 +1,7 @@
 # 迁移状态
 
 ## 当前批次
-batch: 6
+batch: 7
 status: not_started
 
 ## 批次进度
@@ -12,7 +12,7 @@ status: not_started
 | 3 | 日志 + 工具函数 | ✅ | 2026-02-13 | 2210cf5 |
 | 4 | 会话管理 + 持久化 | ✅ | 2026-02-13 | 3dfebb5 |
 | 5 | Gateway HTTP | ✅ | 2026-02-13 | 2d8d42d |
-| 6 | Gateway WebSocket | ⬜ | - | - |
+| 6 | Gateway WebSocket | ✅ | 2026-02-13 | pending |
 | 7 | Agent 模型调用 | ⬜ | - | - |
 | 8 | Agent 上下文 + 用量 | ⬜ | - | - |
 | 9 | Agent 工具 + Skills | ⬜ | - | - |
@@ -37,6 +37,11 @@ status: not_started
 - openclaw_py/gateway/routes/sessions.py
 - openclaw_py/gateway/server.py
 - openclaw_py/gateway/types.py
+- openclaw_py/gateway/ws_broadcast.py
+- openclaw_py/gateway/ws_connection.py
+- openclaw_py/gateway/ws_protocol.py
+- openclaw_py/gateway/ws_server.py
+- openclaw_py/gateway/ws_types.py
 - openclaw_py/logging/logger.py
 - openclaw_py/sessions/key_utils.py
 - openclaw_py/sessions/label.py
