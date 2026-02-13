@@ -7,13 +7,6 @@ import {
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 
-async function loadWakeModule() {
-  return {
-    requestHeartbeatNow,
-    setHeartbeatWakeHandler,
-  };
-}
-
 describe("heartbeat-wake", () => {
   beforeEach(() => {
     resetHeartbeatWakeStateForTests();
@@ -182,7 +175,6 @@ describe("heartbeat-wake", () => {
 
   it("resets running/scheduled flags when new handler is registered", async () => {
     vi.useFakeTimers();
-    const wake = await loadWakeModule();
 
     // Simulate a handler that's mid-execution when SIGUSR1 fires.
     // We do this by having the handler hang forever (never resolve).
@@ -193,20 +185,20 @@ describe("heartbeat-wake", () => {
     const handlerA = vi
       .fn()
       .mockReturnValue(hangPromise.then(() => ({ status: "ran" as const, durationMs: 1 })));
-    wake.setHeartbeatWakeHandler(handlerA);
+    setHeartbeatWakeHandler(handlerA);
 
     // Trigger the handler — it starts running but never finishes
-    wake.requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerA).toHaveBeenCalledTimes(1);
 
     // Now simulate SIGUSR1: register a new handler while handlerA is still running.
     // Without the fix, `running` would stay true and handlerB would never fire.
     const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    wake.setHeartbeatWakeHandler(handlerB);
+    setHeartbeatWakeHandler(handlerB);
 
     // handlerB should be able to fire (running was reset)
-    wake.requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerB).toHaveBeenCalledTimes(1);
 
@@ -217,19 +209,18 @@ describe("heartbeat-wake", () => {
 
   it("clears stale retry cooldown when a new handler is registered", async () => {
     vi.useFakeTimers();
-    const wake = await loadWakeModule();
     const handlerA = vi.fn().mockResolvedValue({ status: "skipped", reason: "requests-in-flight" });
-    wake.setHeartbeatWakeHandler(handlerA);
+    setHeartbeatWakeHandler(handlerA);
 
-    wake.requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerA).toHaveBeenCalledTimes(1);
 
     // Simulate SIGUSR1 startup with a fresh wake handler.
     const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    wake.setHeartbeatWakeHandler(handlerB);
+    setHeartbeatWakeHandler(handlerB);
 
-    wake.requestHeartbeatNow({ reason: "manual", coalesceMs: 0 });
+    requestHeartbeatNow({ reason: "manual", coalesceMs: 0 });
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerB).toHaveBeenCalledTimes(1);
     expect(handlerB).toHaveBeenCalledWith({ reason: "manual" });
