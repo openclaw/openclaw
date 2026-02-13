@@ -24,6 +24,14 @@
     "dark": "#FF5A36",
     "light": "#FF8A6B"
   },
+  "styling": {
+    "codeblocks": {
+      "theme": {
+        "dark": "min-dark",
+        "light": "min-light"
+      }
+    }
+  },
   "navbar": {
     "links": [
       {
@@ -802,7 +810,12 @@
               },
               {
                 "group": "First steps",
-                "pages": ["start/getting-started", "start/wizard", "start/onboarding"]
+                "pages": [
+                  "start/getting-started",
+                  "start/onboarding-overview",
+                  "start/wizard",
+                  "start/onboarding"
+                ]
               },
               {
                 "group": "Guides",
@@ -856,8 +869,8 @@
                 "pages": [
                   "channels/whatsapp",
                   "channels/telegram",
-                  "channels/grammy",
                   "channels/discord",
+                  "channels/irc",
                   "channels/slack",
                   "channels/feishu",
                   "channels/googlechat",
@@ -991,10 +1004,6 @@
                 ]
               },
               {
-                "group": "Hooks",
-                "pages": ["hooks/soul-evil"]
-              },
-              {
                 "group": "Media and devices",
                 "pages": [
                   "nodes/index",
@@ -1030,6 +1039,7 @@
                   "providers/anthropic",
                   "providers/openai",
                   "providers/openrouter",
+                  "providers/litellm",
                   "providers/bedrock",
                   "providers/vercel-ai-gateway",
                   "providers/moonshot",
@@ -1093,6 +1103,7 @@
                     "group": "Configuration and operations",
                     "pages": [
                       "gateway/configuration",
+                      "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
                       "gateway/health",
@@ -1213,7 +1224,7 @@
               },
               {
                 "group": "Technical reference",
-                "pages": ["reference/wizard", "reference/token-use"]
+                "pages": ["reference/wizard", "reference/token-use", "channels/grammy"]
               },
               {
                 "group": "Concept internals",
@@ -1371,7 +1382,6 @@
                 "pages": [
                   "zh-CN/channels/whatsapp",
                   "zh-CN/channels/telegram",
-                  "zh-CN/channels/grammy",
                   "zh-CN/channels/discord",
                   "zh-CN/channels/slack",
                   "zh-CN/channels/feishu",
@@ -1508,10 +1518,6 @@
                   "zh-CN/automation/poll",
                   "zh-CN/automation/auth-monitoring"
                 ]
-              },
-              {
-                "group": "Hooks",
-                "pages": ["zh-CN/hooks/soul-evil"]
               },
               {
                 "group": "媒体与设备",

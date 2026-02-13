@@ -443,7 +443,8 @@ async function hydrateSetGroupIconParams(params: {
       channel: params.channel,
       accountId: params.accountId,
     });
-    const media = await loadWebMedia(mediaSource, maxBytes);
+    // localRoots: "any" — media paths are already validated by normalizeSandboxMediaList above.
+    const media = await loadWebMedia(mediaSource, maxBytes, { localRoots: "any" });
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;
@@ -507,7 +508,8 @@ async function hydrateSendAttachmentParams(params: {
       channel: params.channel,
       accountId: params.accountId,
     });
-    const media = await loadWebMedia(mediaSource, maxBytes);
+    // localRoots: "any" — media paths are already validated by normalizeSandboxMediaList above.
+    const media = await loadWebMedia(mediaSource, maxBytes, { localRoots: "any" });
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;
@@ -743,6 +745,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     readStringParam(params, "path", { trim: false }) ??
     readStringParam(params, "filePath", { trim: false });
   const hasCard = params.card != null && typeof params.card === "object";
+  const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(params, "message", {
       required: !mediaHint && !hasCard,
@@ -750,6 +753,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     }) ?? "";
   if (message.includes("\\n")) {
     message = message.replaceAll("\\n", "\n");
+  }
+  if (!message.trim() && caption.trim()) {
+    message = caption;
   }
 
   const parsed = parseReplyDirectives(message);
@@ -802,6 +808,16 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
 
   const mediaUrl = readStringParam(params, "media", { trim: false });
+  if (channel === "whatsapp") {
+    message = message.replace(/^(?:[ \t]*\r?\n)+/, "");
+    if (!message.trim()) {
+      message = "";
+    }
+  }
+  if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0 && !hasCard) {
+    throw new Error("send requires text or media");
+  }
+  params.message = message;
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
   const bestEffort = readBooleanParam(params, "bestEffort");
 
@@ -875,6 +891,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
     gifPlayback,
     bestEffort: bestEffort ?? undefined,
+    replyToId: replyToId ?? undefined,
+    threadId: resolvedThreadId ?? undefined,
   });
 
   return {

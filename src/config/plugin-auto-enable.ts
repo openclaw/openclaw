@@ -105,6 +105,23 @@ function isDiscordConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boole
   return recordHasKeys(entry);
 }
 
+function isIrcConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (hasNonEmptyString(env.IRC_HOST) && hasNonEmptyString(env.IRC_NICK)) {
+    return true;
+  }
+  const entry = resolveChannelConfig(cfg, "irc");
+  if (!entry) {
+    return false;
+  }
+  if (hasNonEmptyString(entry.host) || hasNonEmptyString(entry.nick)) {
+    return true;
+  }
+  if (accountsHaveKeys(entry.accounts, ["host", "nick"])) {
+    return true;
+  }
+  return recordHasKeys(entry);
+}
+
 function isSlackConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (
     hasNonEmptyString(env.SLACK_BOT_TOKEN) ||
@@ -189,6 +206,8 @@ export function isChannelConfigured(
       return isTelegramConfigured(cfg, env);
     case "discord":
       return isDiscordConfigured(cfg, env);
+    case "irc":
+      return isIrcConfigured(cfg, env);
     case "slack":
       return isSlackConfigured(cfg, env);
     case "signal":

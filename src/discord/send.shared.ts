@@ -361,13 +361,17 @@ async function sendDiscordMedia(
   const media = await loadWebMedia(mediaUrl);
   const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
   const caption = chunks[0] ?? "";
+  const hasCaption = caption.trim().length > 0;
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const res = (await request(
     () =>
       rest.post(Routes.channelMessages(channelId), {
         body: {
-          content: caption || undefined,
-          message_reference: messageReference,
+          // Only include content when there is actual text; Discord rejects
+          // media-only messages that carry an empty or undefined content field
+          // when sent as multipart/form-data. Preserve whitespace in captions.
+          ...(hasCaption ? { content: caption } : {}),
+          ...(messageReference ? { message_reference: messageReference } : {}),
           ...(embeds?.length ? { embeds } : {}),
           files: [
             {

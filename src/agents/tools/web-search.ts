@@ -111,6 +111,12 @@ type GrokSearchResponse = {
     content?: Array<{
       type?: string;
       text?: string;
+      annotations?: Array<{
+        type?: string;
+        url?: string;
+        start_index?: number;
+        end_index?: number;
+      }>;
     }>;
   }>;
   output_text?: string; // deprecated field - kept for backwards compatibility
@@ -148,14 +154,30 @@ type BaiduSearchResponse = {
   references?: BaiduSearchResult[];
 };
 
-function extractGrokContent(data: GrokSearchResponse): string | undefined {
-  // xAI Responses API format: output[0].content[0].text
-  const fromResponses = data.output?.[0]?.content?.[0]?.text;
-  if (typeof fromResponses === "string" && fromResponses) {
-    return fromResponses;
+function extractGrokContent(data: GrokSearchResponse): {
+  text: string | undefined;
+  annotationCitations: string[];
+} {
+  // xAI Responses API format: find the message output with text content
+  for (const output of data.output ?? []) {
+    if (output.type !== "message") {
+      continue;
+    }
+    for (const block of output.content ?? []) {
+      if (block.type === "output_text" && typeof block.text === "string" && block.text) {
+        // Extract url_citation annotations from this content block
+        const urls = (block.annotations ?? [])
+          .filter((a) => a.type === "url_citation" && typeof a.url === "string")
+          .map((a) => a.url as string);
+        return { text: block.text, annotationCitations: [...new Set(urls)] };
+      }
+    }
   }
-  return typeof data.output_text === "string" ? data.output_text : undefined;
+  // Fallback: deprecated output_text field
+  const text = typeof data.output_text === "string" ? data.output_text : undefined;
+  return { text, annotationCitations: [] };
 }
+
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
@@ -521,9 +543,10 @@ async function runGrokSearch(params: {
     tools: [{ type: "web_search" }],
   };
 
-  if (params.inlineCitations) {
-    body.include = ["inline_citations"];
-  }
+  // Note: xAI's /v1/responses endpoint does not support the `include`
+  // parameter (returns 400 "Argument not supported: include"). Inline
+  // citations are returned automatically when available — we just parse
+  // them from the response without requesting them explicitly (#12910).
 
   const res = await fetch(XAI_API_ENDPOINT, {
     method: "POST",
@@ -541,8 +564,10 @@ async function runGrokSearch(params: {
   }
 
   const data = (await res.json()) as GrokSearchResponse;
-  const content = extractGrokContent(data) ?? "No response";
-  const citations = data.citations ?? [];
+  const { text: extractedText, annotationCitations } = extractGrokContent(data);
+  const content = extractedText ?? "No response";
+  // Prefer top-level citations; fall back to annotation-derived ones
+  const citations = (data.citations ?? []).length > 0 ? data.citations! : annotationCitations;
   const inlineCitations = data.inline_citations;
 
   return { content, citations, inlineCitations };
@@ -640,6 +665,12 @@ async function runWebSearch(params: {
       provider: params.provider,
       model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
       tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
       content: wrapWebContent(content),
       citations,
     };
@@ -660,6 +691,12 @@ async function runWebSearch(params: {
       provider: params.provider,
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
       content: wrapWebContent(content),
       citations,
       inlineCitations,
@@ -739,6 +776,12 @@ async function runWebSearch(params: {
     provider: params.provider,
     count: mapped.length,
     tookMs: Date.now() - start,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: params.provider,
+      wrapped: true,
+    },
     results: mapped,
   };
   writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);

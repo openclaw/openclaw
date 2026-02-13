@@ -62,6 +62,7 @@ import { formatCliCommand } from "./command-format.js";
 import { installCompletion } from "./completion-cli.js";
 import { runDaemonRestart } from "./daemon-cli.js";
 import { formatHelpExamples } from "./help-format.js";
+import { suppressDeprecations } from "./update-cli/suppress-deprecations.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -672,8 +673,7 @@ function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
 }
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
-  process.noDeprecation = true;
-  process.env.NODE_NO_WARNINGS = "1";
+  suppressDeprecations();
   const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
   const shouldRestart = opts.restart !== false;
 

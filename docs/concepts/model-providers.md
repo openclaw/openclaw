@@ -259,6 +259,32 @@ ollama pull llama3.3
 
 Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
 
+### vLLM
+
+vLLM is a local (or self-hosted) OpenAI-compatible server:
+
+- Provider: `vllm`
+- Auth: Optional (depends on your server)
+- Default base URL: `http://127.0.0.1:8000/v1`
+
+To opt in to auto-discovery locally (any value works if your server doesn’t enforce auth):
+
+```bash
+export VLLM_API_KEY="vllm-local"
+```
+
+Then set a model (replace with one of the IDs returned by `/v1/models`):
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "vllm/your-model-id" } },
+  },
+}
+```
+
+See [/providers/vllm](/providers/vllm) for details.
+
 ### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
 
 Example (OpenAI‑compatible):
