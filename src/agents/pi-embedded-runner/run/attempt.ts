@@ -2,8 +2,12 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import { needsProactiveCompaction } from "./proactive-compaction.js";
+import { lookupContextTokens } from "../../context.js";
 import fs from "node:fs/promises";
 import os from "node:os";
+import type { CompactEmbeddedPiSessionParams } from "../compact.js";
+import { compactEmbeddedPiSession } from "../compact.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
@@ -824,6 +828,44 @@ export async function runEmbeddedAttempt(
             messages: activeSession.messages,
             note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
           });
+
+          // PROACTIVE COMPACTION CHECK
+          // Prevent sessions from exceeding contextTokens * maxHistoryShare before hitting model limit.
+          // Issue: https://github.com/openclaw/openclaw/issues/11224
+          const needsCompaction = needsProactiveCompaction({
+            messages: activeSession.messages,
+            contextTokens: lookupContextTokens(params.modelId),
+            maxHistoryShare: params.config?.agents?.defaults?.compaction?.maxHistoryShare,
+            modelId: params.modelId,
+          });
+
+          if (needsCompaction) {
+            log.info(
+              `[proactive-compaction] compacting session before prompt: ` +
+                `runId=${params.runId} sessionId=${params.sessionId}`
+            );
+
+            // Use runtime check to avoid TypeScript errors if API doesn't exist
+            const agent: any = activeSession.agent;
+            if (typeof agent?.compact === 'function') {
+              try {
+                const compactResult = await agent.compact();
+                log.info(
+                  `[proactive-compaction] compaction complete, ` +
+                    `summary length=${compactResult.summary?.length ?? 0}`
+                );
+              } catch (compactError) {
+                log.warn(
+                  `[proactive-compaction] compaction failed, continuing with prompt: ` +
+                    `${String(compactError)}`
+                );
+              }
+            } else {
+              log.warn(
+                `[proactive-compaction] agent.compact() not available, skipping compaction`
+              );
+            }
+          }
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
