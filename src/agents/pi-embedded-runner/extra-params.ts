@@ -33,6 +33,12 @@ import {
 } from "./proxy-stream-wrappers.js";
 
 /**
+ * Anthropic beta header required for fast mode.
+ * @see https://docs.anthropic.com/en/docs/about-claude/models#fast-mode
+ */
+const ANTHROPIC_FAST_MODE_BETA = "fast-mode-2026-02-01";
+
+/**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
  *
@@ -68,6 +74,42 @@ export function resolveExtraParams(params: {
   }
 
   return merged;
+}
+
+/**
+ * Resolve Anthropic speed mode from extraParams.
+ * Only applies to the Anthropic provider.
+ *
+ * @see https://docs.anthropic.com/en/docs/about-claude/models#fast-mode
+ */
+function resolveAnthropicSpeed(
+  extraParams: Record<string, unknown> | undefined,
+  provider: string,
+): "fast" | undefined {
+  if (provider !== "anthropic") {
+    return undefined;
+  }
+  if (extraParams?.speed === "fast") {
+    return "fast";
+  }
+  return undefined;
+}
+
+/**
+ * Append a beta feature to an existing anthropic-beta header value.
+ * Avoids duplicates and preserves existing betas.
+ *
+ * @internal Exported for testing
+ */
+export function appendAnthropicBeta(existingHeader: string | undefined, newBeta: string): string {
+  if (!existingHeader?.trim()) {
+    return newBeta;
+  }
+  const existing = existingHeader.split(",").map((s) => s.trim());
+  if (existing.includes(newBeta)) {
+    return existingHeader;
+  }
+  return `${existingHeader},${newBeta}`;
 }
 
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
@@ -106,12 +148,9 @@ function createStreamFnWithExtraParams(
     streamParams.cacheRetention = cacheRetention;
   }
 
+  const speed = resolveAnthropicSpeed(extraParams, provider);
+
   // Extract OpenRouter provider routing preferences from extraParams.provider.
-  // Injected into model.compat.openRouterRouting so pi-ai's buildParams sets
-  // params.provider in the API request body (openai-completions.js L359-362).
-  // pi-ai's OpenRouterRouting type only declares { only?, order? }, but at
-  // runtime the full object is forwarded — enabling allow_fallbacks,
-  // data_collection, ignore, sort, quantizations, etc.
   const providerRouting =
     provider === "openrouter" &&
     extraParams.provider != null &&
@@ -119,7 +158,7 @@ function createStreamFnWithExtraParams(
       ? (extraParams.provider as Record<string, unknown>)
       : undefined;
 
-  if (Object.keys(streamParams).length === 0 && !providerRouting) {
+  if (Object.keys(streamParams).length === 0 && !providerRouting && !speed) {
     return undefined;
   }
 
@@ -127,11 +166,40 @@ function createStreamFnWithExtraParams(
   if (providerRouting) {
     log.debug(`OpenRouter provider routing: ${JSON.stringify(providerRouting)}`);
   }
+  if (speed) {
+    log.debug(`Anthropic speed mode: ${speed}`);
+  }
 
   const underlying = baseStreamFn ?? streamSimple;
+
+  if (speed) {
+    const wrappedStreamFn: StreamFn = (model, context, options) => {
+      const existingBeta =
+        options?.headers?.["anthropic-beta"] ?? model.headers?.["anthropic-beta"];
+      const betaHeader = appendAnthropicBeta(existingBeta, ANTHROPIC_FAST_MODE_BETA);
+
+      const originalOnPayload = options?.onPayload;
+      const onPayload = (payload: unknown) => {
+        if (payload && typeof payload === "object") {
+          (payload as Record<string, unknown>).speed = speed;
+        }
+        originalOnPayload?.(payload);
+      };
+
+      return underlying(model, context, {
+        ...streamParams,
+        ...options,
+        headers: {
+          ...options?.headers,
+          "anthropic-beta": betaHeader,
+        },
+        onPayload,
+      });
+    };
+    return wrappedStreamFn;
+  }
+
   const wrappedStreamFn: StreamFn = (model, context, options) => {
-    // When provider routing is configured, inject it into model.compat so
-    // pi-ai picks it up via model.compat.openRouterRouting.
     const effectiveModel = providerRouting
       ? ({
           ...model,
