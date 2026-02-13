@@ -62,6 +62,13 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Command: `pnpm test:e2e`
 - Config: `vitest.e2e.config.ts`
 - Files: `src/**/*.e2e.test.ts`
+- Runtime defaults:
+  - Uses Vitest `vmForks` for faster file startup.
+  - Uses adaptive workers (CI: 2-4, local: 4-8).
+  - Runs in silent mode by default to reduce console I/O overhead.
+- Useful overrides:
+  - `OPENCLAW_E2E_WORKERS=<n>` to force worker count (capped at 16).
+  - `OPENCLAW_E2E_VERBOSE=1` to re-enable verbose console output.
 - Scope:
   - Multi-instance gateway end-to-end behavior
   - WebSocket/HTTP surfaces, node pairing, and heavier networking
