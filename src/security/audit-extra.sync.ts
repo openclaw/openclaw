@@ -935,10 +935,12 @@ export function collectSandboxModeFindings(params: {
   }
 
   // Check if dangerous tools are available using proper tool policy resolution
+  const policies = resolveToolPolicies({ cfg: params.cfg, sandboxMode });
   const hasWebTools =
-    isWebSearchEnabled(params.cfg, params.env) ||
-    isWebFetchEnabled(params.cfg) ||
-    isBrowserEnabled(params.cfg);
+    (isWebSearchEnabled(params.cfg, params.env) &&
+      isToolAllowedByPolicies("web_search", policies)) ||
+    (isWebFetchEnabled(params.cfg) && isToolAllowedByPolicies("web_fetch", policies)) ||
+    (isBrowserEnabled(params.cfg) && isToolAllowedByPolicies("browser", policies));
   const hasExecTools = isToolAvailable(params.cfg, "exec");
 
   findings.push({
