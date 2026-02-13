@@ -82,6 +82,20 @@ function resolveCwd(pid) {
   return match ? match[1] : "unknown";
 }
 
+function sanitizeCommand(cmd) {
+  // Avoid leaking obvious secrets when this diagnostic output is shared.
+  return cmd
+    .replace(
+      /(--(?:token|api[-_]?key|password|secret|authorization)\s+)([^\s]+)/gi,
+      "$1<redacted>",
+    )
+    .replace(
+      /((?:token|api[-_]?key|password|secret|authorization)=)([^\s]+)/gi,
+      "$1<redacted>",
+    )
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/g, "$1<redacted>");
+}
+
 // Pre-filter candidate PIDs using pgrep to avoid scanning all processes.
 // Only falls back to a full ps scan when pgrep is genuinely unavailable
 // (ENOENT), not when it simply finds no matches (exit code 1).
@@ -162,7 +176,7 @@ for (const rawLine of lines) {
 
   orphaned.push({
     pid,
-    cmd,
+    cmd: sanitizeCommand(cmd),
     cwd: resolveCwd(pid),
     started: resolveStarted(pid),
   });
