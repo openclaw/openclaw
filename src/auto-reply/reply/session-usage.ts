@@ -36,7 +36,11 @@ export async function persistSessionUsageUpdate(params: {
   }
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
-  if (hasNonzeroUsage(params.usage)) {
+  // Check if either accumulated usage or lastCallUsage has valid data
+  // This ensures totalTokens gets updated even when the final request fails
+  // but we have valid lastCallUsage from a previous successful request in the run
+  const hasAnyUsage = hasNonzeroUsage(params.usage) || hasNonzeroUsage(params.lastCallUsage);
+  if (hasAnyUsage) {
     try {
       await updateSessionStoreEntry({
         storePath,
