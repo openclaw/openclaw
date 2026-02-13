@@ -78,6 +78,7 @@ import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
   setActiveEmbeddedRun,
+  forceClearActiveEmbeddedRun,
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
@@ -679,6 +680,11 @@ export async function runEmbeddedAttempt(
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
+      let forceCleanupTimer: NodeJS.Timeout | undefined;
+      // Grace period before warning about still-streaming after abort
+      const ABORT_WARN_DELAY_MS = 10_000;
+      // Grace period before force-clearing stuck runs after timeout
+      const FORCE_CLEAR_GRACE_MS = 30_000;
       const abortTimer = setTimeout(
         () => {
           if (!isProbeSession) {
@@ -697,8 +703,14 @@ export async function runEmbeddedAttempt(
                   `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
                 );
               }
-            }, 10_000);
+            }, ABORT_WARN_DELAY_MS);
           }
+          // Force-clear active run entry after grace period to prevent session from
+          // being permanently stuck when the run fails to clean up after abort.
+          // Pass queueHandle to ensure we only clear THIS run, not a newer replacement.
+          forceCleanupTimer = setTimeout(() => {
+            forceClearActiveEmbeddedRun(params.sessionId, queueHandle);
+          }, FORCE_CLEAR_GRACE_MS);
         },
         Math.max(1, params.timeoutMs),
       );
@@ -895,6 +907,9 @@ export async function runEmbeddedAttempt(
         clearTimeout(abortTimer);
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);
+        }
+        if (forceCleanupTimer) {
+          clearTimeout(forceCleanupTimer);
         }
         unsubscribe();
         clearActiveEmbeddedRun(params.sessionId, queueHandle);
