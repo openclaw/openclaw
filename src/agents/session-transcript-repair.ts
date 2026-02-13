@@ -29,18 +29,16 @@ function extractToolCallsFromAssistant(
       continue;
     }
     const rec = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (typeof rec.id !== "string" || !rec.id) {
+    const id = typeof rec.id === "string" ? rec.id.trim() : "";
+    if (!id) {
       continue;
     }
 
     if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
       const name = typeof rec.name === "string" ? rec.name.trim() : "";
-      if (!name) {
-        continue;
-      }
       toolCalls.push({
-        id: rec.id,
-        name: name,
+        id: id,
+        name: name || "unknown",
       });
     }
   }
@@ -55,13 +53,7 @@ function isToolCallBlock(block: unknown): block is ToolCallBlock {
   return typeof type === "string" && TOOL_CALL_TYPES.has(type);
 }
 
-function isValidToolCallBlock(block: ToolCallBlock): boolean {
-  const id = typeof block.id === "string" ? block.id.trim() : "";
-  const name = typeof block.name === "string" ? block.name.trim() : "";
-  if (!id || !name) {
-    return false;
-  }
-
+function hasToolCallInput(block: ToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
@@ -126,23 +118,45 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
 
     const nextContent = [];
     let droppedInMessage = 0;
+    let messageChanged = false;
 
     for (const block of msg.content) {
       if (isToolCallBlock(block)) {
-        if (!isValidToolCallBlock(block)) {
+        const b = block as ToolCallBlock;
+        const id = typeof b.id === "string" ? b.id.trim() : "";
+        const name = typeof b.name === "string" ? b.name.trim() : "";
+
+        // Only drop if it has NO ID (unidentifiable) or NO input/arguments (invalid/empty call).
+        // This minimizes the "orphan results" issue highlighted in PR review.
+        if (!id || !hasToolCallInput(b)) {
           droppedToolCalls += 1;
           droppedInMessage += 1;
-          changed = true;
+          messageChanged = true;
+          continue;
+        }
+
+        // If it has a valid ID and input, but missing name, fix it instead of dropping.
+        // This fixes Gemini 400 errors without orphaning potential existing tool results.
+        if (!name) {
+          nextContent.push({ ...b, id, name: "unknown" });
+          messageChanged = true;
+          continue;
+        }
+
+        // Ensure ID is trimmed
+        if (id !== b.id) {
+          nextContent.push({ ...b, id });
+          messageChanged = true;
           continue;
         }
       }
       nextContent.push(block);
     }
 
-    if (droppedInMessage > 0) {
+    if (messageChanged) {
+      changed = true;
       if (nextContent.length === 0) {
         droppedAssistantMessages += 1;
-        changed = true;
         continue;
       }
       out.push({ ...msg, content: nextContent });
