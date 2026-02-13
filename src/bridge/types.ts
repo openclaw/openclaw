@@ -14,7 +14,6 @@ export type BridgeContext = {
 export type BridgeResult<T = unknown> = {
   success: boolean;
   data?: T;
-  /** Error message when success=false, or a warning when success=true (partial success). */
   error?: string;
   /** Optional structured view hint for adapters (e.g. 'table', 'list'). */
   view?: "table" | "list" | "text" | "json";
@@ -52,4 +51,10 @@ export type BridgeCommand<TArgs = unknown> = {
     adminOnly?: boolean;
     hidden?: boolean;
   };
+};
+
+export type BridgeRegistry = {
+  register<T>(command: BridgeCommand<T>): void;
+  unregister(name: string): boolean;
+  get(name: string): BridgeCommand | undefined;
 };

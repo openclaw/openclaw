@@ -1,13 +1,13 @@
-import { BridgeCommand } from "./types.js";
+import { BridgeCommand, BridgeRegistry } from "./types.js";
 
-export class CommandBridgeRegistry {
+export class CommandBridgeRegistry implements BridgeRegistry {
   private commands = new Map<string, BridgeCommand>();
 
   register<T>(command: BridgeCommand<T>) {
     if (this.commands.has(command.name)) {
       throw new Error(`Command '${command.name}' is already registered.`);
     }
-    this.commands.set(command.name, command as BridgeCommand<unknown>);
+    this.commands.set(command.name, command as BridgeCommand);
   }
 
   unregister(name: string): boolean {

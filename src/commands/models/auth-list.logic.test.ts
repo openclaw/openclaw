@@ -17,7 +17,12 @@ vi.mock("../../agents/auth-profiles.js", () => ({
     },
   }),
   resolveAuthStorePathForDisplay: () => "/mock/agent/dir/auth-profiles.json",
-  listProfilesForProvider: (_store: unknown, provider: string) => [`${provider}/default`],
+  resolveProfileDisplayInfos: ({ provider }: { provider: string }) => [
+    { id: `${provider}/default`, name: "Default", isDefault: true, isActive: true },
+  ],
+  listProfilesForProvider: ({ provider }: { provider: string }) => [
+    { id: `${provider}/default`, provider, email: "mock@example.com" },
+  ],
 }));
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => ({}) as OpenClawConfig,
@@ -27,18 +32,6 @@ vi.mock("../../utils.js", () => ({
 }));
 vi.mock("./shared.js", () => ({
   resolveKnownAgentId: () => undefined,
-}));
-vi.mock("./list.auth-overview.js", () => ({
-  resolveProfileDisplayInfos: ({ provider }: { provider: string }) => [
-    {
-      id: `${provider}/default`,
-      profileId: `${provider}/default`,
-      provider,
-      type: "token",
-      status: "ok",
-      active: true,
-    },
-  ],
 }));
 
 describe("modelsAuthListLogic", () => {
@@ -52,6 +45,7 @@ describe("modelsAuthListLogic", () => {
 
   it("should filter by provider", async () => {
     const result = await modelsAuthListLogic({ provider: "openai" });
+    console.log("DEBUG profiles:", JSON.stringify(result.profiles, null, 2));
     expect(result.profiles).toHaveLength(1);
     expect(result.profiles[0].id).toContain("openai");
   });

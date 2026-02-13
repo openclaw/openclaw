@@ -11,7 +11,15 @@ if [ -z "$HOME" ]; then
 fi
 
 # Add common paths for Bun/Node/Homebrew
-export PATH="$HOME/.bun/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ | tail -n1)/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
+# Load NVM (if available) to ensure `node` is available if needed by openclaw
+if [ -d "$HOME/.nvm/versions/node" ]; then
+  NVM_NODE=$(find "$HOME/.nvm/versions/node" -maxdepth 1 -type d | sort -V | tail -n1)
+  if [ -n "$NVM_NODE" ]; then
+    export PATH="$NVM_NODE/bin:$PATH"
+  fi
+fi
 
 # 2. Navigate to repo root (one level up from scripts/)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

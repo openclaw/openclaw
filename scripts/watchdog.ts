@@ -4,8 +4,13 @@ import { $ } from "bun";
 
 // Configuration
 const ALERT_CHANNEL = "telegram";
-const TARGET_USER = process.env.OPENCLAW_WATCHDOG_TARGET || "512037841"; // Yee (@Zack0ll0)
+const TARGET_USER = process.env.OPENCLAW_WATCHDOG_TARGET;
 const CHECK_WINDOW_MINUTES = Number(process.env.WATCHDOG_WINDOW) || 60; // Look for errors in the last hour
+
+if (!TARGET_USER) {
+  console.error("Error: OPENCLAW_WATCHDOG_TARGET env var is required.");
+  process.exit(1);
+}
 
 interface CronJob {
   id: string;
