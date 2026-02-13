@@ -49,7 +49,7 @@ function ensureDir(dir: string): void {
 function writeJsonSecure(filepath: string, data: unknown): void {
   const dir = path.dirname(filepath);
   ensureDir(dir);
-  const content = JSON.stringify(data, Object.keys(data as object).sort(), 2) + "\n";
+  const content = JSON.stringify(data, Object.keys(data as object).toSorted(), 2) + "\n";
   fs.writeFileSync(filepath, content, { mode: 0o600 });
 }
 
@@ -113,8 +113,7 @@ export class AgentShieldApprovalStore {
     const filepath = path.join(this.decisionsDir, `${record.id}.json`);
     writeJsonSecure(filepath, record);
     // Update the request status
-    const newStatus: ApprovalRequestStatus =
-      record.decision === "deny" ? "denied" : "approved";
+    const newStatus: ApprovalRequestStatus = record.decision === "deny" ? "denied" : "approved";
     this.updateRequestStatus(record.id, newStatus);
   }
 
@@ -129,17 +128,16 @@ export class AgentShieldApprovalStore {
   /**
    * List all approval requests, optionally filtered by status.
    */
-  listRequests(opts?: {
-    status?: ApprovalRequestStatus;
-    limit?: number;
-  }): ApprovalRequestRecord[] {
+  listRequests(opts?: { status?: ApprovalRequestStatus; limit?: number }): ApprovalRequestRecord[] {
     ensureDir(this.requestsDir);
     const files = fs.readdirSync(this.requestsDir).filter((f) => f.endsWith(".json"));
     const records: ApprovalRequestRecord[] = [];
 
     for (const file of files) {
       const record = readJson<ApprovalRequestRecord>(path.join(this.requestsDir, file));
-      if (!record) continue;
+      if (!record) {
+        continue;
+      }
 
       // Check for expired pending requests
       if (record.status === "pending" && new Date(record.expiresAt) < new Date()) {

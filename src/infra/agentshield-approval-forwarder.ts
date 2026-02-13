@@ -167,7 +167,9 @@ async function deliverToTargets(params: {
         payloads: [{ text: params.text }],
       });
     } catch (err) {
-      log.error(`agentshield approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
+      log.error(
+        `agentshield approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`,
+      );
     }
   });
   await Promise.allSettled(deliveries);

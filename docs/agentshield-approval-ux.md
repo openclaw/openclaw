@@ -20,6 +20,7 @@ AGENTSHIELD_APPROVALS_ENABLED=1
 ```
 
 When disabled:
+
 - Tool wrappers pass through unchanged
 - No gateway methods are activated
 - CLI commands return a clear "approvals disabled" error
@@ -66,6 +67,7 @@ openclaw agentshield-approvals list --limit 10
 ```
 
 Output:
+
 ```
 AgentShield Approvals
 ID           Tool          Agent   Status    Age
@@ -80,6 +82,7 @@ openclaw agentshield-approvals view <id>
 ```
 
 Output:
+
 ```
 ID:          a1b2c3d4-5e6f-7g8h-9i0j-k1l2m3n4o5p6
 Tool:        file_write
@@ -213,11 +216,11 @@ Encrypted file-based store for tool-call args:
 
 Three RPC methods (scope: `operator.approvals`):
 
-| Method | Description |
-|--------|-------------|
+| Method                         | Description                                                    |
+| ------------------------------ | -------------------------------------------------------------- |
 | `agentshield.approval.request` | Create record, store encrypted args, broadcast, await decision |
-| `agentshield.approval.resolve` | Resolve decision, broadcast, update allowlist |
-| `agentshield.approval.list` | Return all pending approval snapshots |
+| `agentshield.approval.resolve` | Resolve decision, broadcast, update allowlist                  |
+| `agentshield.approval.list`    | Return all pending approval snapshots                          |
 
 ### Forwarder (`agentshield-approval-forwarder.ts`)
 
@@ -263,10 +266,10 @@ openclaw agentshield-approvals approve <id> <decision>
 
 ## Gateway Events
 
-| Event | Payload |
-|-------|---------|
+| Event                            | Payload                                                               |
+| -------------------------------- | --------------------------------------------------------------------- |
 | `agentshield.approval.requested` | `{ id, toolName, argsFingerprint, agentId, sessionKey, expiresAtMs }` |
-| `agentshield.approval.resolved` | `{ id, decision, resolvedBy, ts }` |
+| `agentshield.approval.resolved`  | `{ id, decision, resolvedBy, ts }`                                    |
 
 ## Troubleshooting
 

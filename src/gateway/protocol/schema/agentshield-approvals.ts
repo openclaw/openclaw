@@ -27,7 +27,4 @@ export const AgentShieldApprovalResolveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const AgentShieldApprovalListParamsSchema = Type.Object(
-  {},
-  { additionalProperties: false },
-);
+export const AgentShieldApprovalListParamsSchema = Type.Object({}, { additionalProperties: false });

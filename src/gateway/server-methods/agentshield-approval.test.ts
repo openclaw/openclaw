@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { AgentShieldApprovalManager } from "../agentshield-approval-manager.js";
-import { createAgentShieldApprovalHandlers } from "./agentshield-approval.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { AgentShieldApprovalManager } from "../agentshield-approval-manager.js";
 import { listGatewayMethods } from "../server-methods-list.js";
+import { createAgentShieldApprovalHandlers } from "./agentshield-approval.js";
 
 const HANDLER_KEYS = [
   "agentshield.approval.request",
@@ -36,9 +36,7 @@ describe("agentshield approval handler wiring gate", () => {
     process.env.AGENTSHIELD_APPROVALS_ENABLED = "1";
     const handlers = wireHandlers();
     for (const key of HANDLER_KEYS) {
-      expect(handlers[key], `expected handler for ${key}`).toBeTypeOf(
-        "function",
-      );
+      expect(handlers[key], `expected handler for ${key}`).toBeTypeOf("function");
     }
   });
 
@@ -75,5 +73,4 @@ describe("agentshield approval handler wiring gate", () => {
     expect(filtered).not.toContain("agentshield.approval.resolve");
     expect(filtered).not.toContain("agentshield.approval.list");
   });
-
 });
