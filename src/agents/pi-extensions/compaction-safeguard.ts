@@ -163,6 +163,24 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
+
+    // Cancel spurious compaction triggered by stale usage data.
+    // After a recent compaction, the actual session tokens (tokensBefore) may be
+    // tiny even though the SDK's threshold check used stale usage from a
+    // pre-compaction assistant message.
+    const runtimeForGuard = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const guardContextWindow =
+      runtimeForGuard?.contextWindowTokens ??
+      (ctx.model ? resolveContextWindowTokens(ctx.model) : 0);
+    if (
+      guardContextWindow > 0 &&
+      typeof preparation.tokensBefore === "number" &&
+      Number.isFinite(preparation.tokensBefore) &&
+      preparation.tokensBefore < guardContextWindow * 0.05
+    ) {
+      return { cancel: true };
+    }
+
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([

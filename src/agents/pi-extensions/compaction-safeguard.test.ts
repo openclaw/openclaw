@@ -1,10 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import { __testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
 const {
   collectToolFailures,
@@ -247,5 +248,110 @@ describe("compaction-safeguard runtime registry", () => {
     setCompactionSafeguardRuntime(sm2, { maxHistoryShare: 0.8 });
     expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
     expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
+  });
+});
+
+describe("spurious compaction cancel guard", () => {
+  function captureHandler() {
+    let handler: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
+    const api = {
+      on(event: string, h: unknown) {
+        if (event === "session_before_compact") {
+          handler = h as (event: unknown, ctx: unknown) => Promise<unknown>;
+        }
+      },
+    } as unknown as ExtensionAPI;
+    compactionSafeguardExtension(api);
+    if (!handler) {
+      throw new Error("handler not registered");
+    }
+    return handler;
+  }
+
+  function makeEvent(tokensBefore: number) {
+    return {
+      preparation: {
+        tokensBefore,
+        messagesToSummarize: [],
+        turnPrefixMessages: [],
+        isSplitTurn: false,
+        firstKeptEntryId: "entry-1",
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 1000 },
+      },
+      branchEntries: [],
+      signal: AbortSignal.abort(),
+    };
+  }
+
+  function makeCtx(sessionManager: object, model?: { contextWindow: number }) {
+    return {
+      sessionManager,
+      model: model ?? undefined,
+      modelRegistry: { getApiKey: async () => null },
+      ui: {},
+      hasUI: false,
+      cwd: "/tmp",
+      isIdle: () => true,
+      abort: () => {},
+      hasPendingMessages: () => false,
+      shutdown: () => {},
+    };
+  }
+
+  it("cancels compaction when tokensBefore < 5% of context window (runtime)", async () => {
+    const handler = captureHandler();
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { contextWindowTokens: 200_000 });
+
+    // 1,472 tokens is well below 5% of 200K (10,000)
+    const result = await handler(makeEvent(1_472), makeCtx(sm));
+    expect(result).toEqual({ cancel: true });
+
+    // cleanup
+    setCompactionSafeguardRuntime(sm, null);
+  });
+
+  it("cancels compaction when tokensBefore < 5% of context window (model fallback)", async () => {
+    const handler = captureHandler();
+    const sm = {};
+    // No runtime set — falls back to ctx.model.contextWindow
+
+    const result = await handler(makeEvent(500), makeCtx(sm, { contextWindow: 200_000 }));
+    expect(result).toEqual({ cancel: true });
+  });
+
+  it("does not cancel when tokensBefore >= 5% of context window", async () => {
+    const handler = captureHandler();
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { contextWindowTokens: 200_000 });
+
+    // 15,000 tokens > 5% of 200K (10,000) — should NOT cancel
+    const result = await handler(makeEvent(15_000), makeCtx(sm));
+    // Result should not have cancel: true (it will be a compaction result or fallback)
+    expect(result?.cancel).not.toBe(true);
+
+    setCompactionSafeguardRuntime(sm, null);
+  });
+
+  it("does not cancel at exactly 5% boundary", async () => {
+    const handler = captureHandler();
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { contextWindowTokens: 200_000 });
+
+    // Exactly 10,000 = 5% of 200K — should NOT cancel (guard uses strict <)
+    const result = await handler(makeEvent(10_000), makeCtx(sm));
+    expect(result?.cancel).not.toBe(true);
+
+    setCompactionSafeguardRuntime(sm, null);
+  });
+
+  it("does not cancel when context window is unknown (0)", async () => {
+    const handler = captureHandler();
+    const sm = {};
+    // No runtime, no model — guardContextWindow will be 0, guard skipped
+
+    const result = await handler(makeEvent(100), makeCtx(sm));
+    expect(result?.cancel).not.toBe(true);
   });
 });
