@@ -4,8 +4,8 @@ import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import { extractAudioBlocks } from "./audio-extract.ts";
+import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
   extractThinkingCached,
@@ -273,15 +273,17 @@ function renderGroupedMessage(
     <div class="${bubbleClasses}">
       ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
       ${renderMessageImages(images)}
-      ${audioBlocks.length > 0
-        ? audioBlocks.map(
-            (block) => html`
+      ${
+        audioBlocks.length > 0
+          ? audioBlocks.map(
+              (block) => html`
               <audio class="chat-audio-player" controls preload="auto">
                 <source src="${block.dataUri}" type="${block.mimeType}">
               </audio>
             `,
-          )
-        : nothing}
+            )
+          : nothing
+      }
       ${
         reasoningMarkdown
           ? html`<div class="chat-thinking">${unsafeHTML(

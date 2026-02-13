@@ -1,7 +1,6 @@
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-import { inlineAudioInMessage } from "../chat-audio-inline.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -20,6 +19,7 @@ import {
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import { inlineAudioInMessage } from "../chat-audio-inline.js";
 import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
