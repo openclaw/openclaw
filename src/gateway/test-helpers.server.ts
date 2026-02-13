@@ -221,10 +221,10 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   if (scope === "suite") {
     beforeAll(async () => {
       await setupGatewayTestHome();
-      await resetGatewayTestState({ uniqueConfigRoot: false });
+      await resetGatewayTestState({ uniqueConfigRoot: true });
     });
     beforeEach(async () => {
-      await resetGatewayTestState({ uniqueConfigRoot: false });
+      await resetGatewayTestState({ uniqueConfigRoot: true });
     }, 60_000);
     afterEach(async () => {
       await cleanupGatewayTestHome({ restoreEnv: false });
