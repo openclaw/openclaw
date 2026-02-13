@@ -15,6 +15,7 @@ import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -185,16 +186,89 @@ function extractAgentIdFromSource(source: string): string | null {
   return match?.[1] ?? null;
 }
 
-function pickToolPolicy(config?: { allow?: string[]; deny?: string[] }): SandboxToolPolicy | null {
+function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
+  if (!Array.isArray(extra) || extra.length === 0) {
+    return base;
+  }
+  if (!Array.isArray(base) || base.length === 0) {
+    return Array.from(new Set(["*", ...extra]));
+  }
+  return Array.from(new Set([...base, ...extra]));
+}
+
+function pickToolPolicy(config?: {
+  allow?: string[];
+  alsoAllow?: string[];
+  deny?: string[];
+}): SandboxToolPolicy | null {
   if (!config) {
     return null;
   }
-  const allow = Array.isArray(config.allow) ? config.allow : undefined;
+  const allow = Array.isArray(config.allow)
+    ? unionAllow(config.allow, config.alsoAllow)
+    : Array.isArray(config.alsoAllow) && config.alsoAllow.length > 0
+      ? unionAllow(undefined, config.alsoAllow)
+      : undefined;
   const deny = Array.isArray(config.deny) ? config.deny : undefined;
   if (!allow && !deny) {
     return null;
   }
   return { allow, deny };
+}
+
+function hasConfiguredDockerConfig(
+  docker: Record<string, unknown> | undefined | null,
+): docker is Record<string, unknown> {
+  if (!docker || typeof docker !== "object") {
+    return false;
+  }
+  return Object.values(docker).some((value) => value !== undefined);
+}
+
+function normalizeNodeCommand(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
+  const baseCfg: OpenClawConfig = {
+    ...cfg,
+    gateway: {
+      ...cfg.gateway,
+      nodes: {
+        ...cfg.gateway?.nodes,
+        denyCommands: [],
+      },
+    },
+  };
+  const out = new Set<string>();
+  for (const platform of ["ios", "android", "macos", "linux", "windows", "unknown"]) {
+    const allow = resolveNodeCommandAllowlist(baseCfg, { platform });
+    for (const cmd of allow) {
+      const normalized = normalizeNodeCommand(cmd);
+      if (normalized) {
+        out.add(normalized);
+      }
+    }
+  }
+  return out;
+}
+
+function looksLikeNodeCommandPattern(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  if (/[?*[\]{}(),|]/.test(value)) {
+    return true;
+  }
+  if (
+    value.startsWith("/") ||
+    value.endsWith("/") ||
+    value.startsWith("^") ||
+    value.endsWith("$")
+  ) {
+    return true;
+  }
+  return /\s/.test(value) || value.includes("group:");
 }
 
 function resolveToolPolicies(params: {
@@ -467,6 +541,141 @@ export function collectHooksHardeningFindings(cfg: OpenClawConfig): SecurityAudi
         'Set hooks.allowedSessionKeyPrefixes (for example, ["hook:"]) or disable request overrides.',
     });
   }
+
+  return findings;
+}
+
+export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const configuredPaths: string[] = [];
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+
+  const defaultsSandbox = cfg.agents?.defaults?.sandbox;
+  const hasDefaultDocker = hasConfiguredDockerConfig(
+    defaultsSandbox?.docker as Record<string, unknown> | undefined,
+  );
+  const defaultMode = defaultsSandbox?.mode ?? "off";
+  const hasAnySandboxEnabledAgent = agents.some((entry) => {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      return false;
+    }
+    return resolveSandboxConfigForAgent(cfg, entry.id).mode !== "off";
+  });
+  if (hasDefaultDocker && defaultMode === "off" && !hasAnySandboxEnabledAgent) {
+    configuredPaths.push("agents.defaults.sandbox.docker");
+  }
+
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      continue;
+    }
+    if (!hasConfiguredDockerConfig(entry.sandbox?.docker as Record<string, unknown> | undefined)) {
+      continue;
+    }
+    if (resolveSandboxConfigForAgent(cfg, entry.id).mode === "off") {
+      configuredPaths.push(`agents.list.${entry.id}.sandbox.docker`);
+    }
+  }
+
+  if (configuredPaths.length === 0) {
+    return findings;
+  }
+
+  findings.push({
+    checkId: "sandbox.docker_config_mode_off",
+    severity: "warn",
+    title: "Sandbox docker settings configured while sandbox mode is off",
+    detail:
+      "These docker settings will not take effect until sandbox mode is enabled:\n" +
+      configuredPaths.map((entry) => `- ${entry}`).join("\n"),
+    remediation:
+      'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) where needed, or remove unused docker settings.',
+  });
+
+  return findings;
+}
+
+export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const denyListRaw = cfg.gateway?.nodes?.denyCommands;
+  if (!Array.isArray(denyListRaw) || denyListRaw.length === 0) {
+    return findings;
+  }
+
+  const denyList = denyListRaw.map(normalizeNodeCommand).filter(Boolean);
+  if (denyList.length === 0) {
+    return findings;
+  }
+
+  const knownCommands = listKnownNodeCommands(cfg);
+  const patternLike = denyList.filter((entry) => looksLikeNodeCommandPattern(entry));
+  const unknownExact = denyList.filter(
+    (entry) => !looksLikeNodeCommandPattern(entry) && !knownCommands.has(entry),
+  );
+  if (patternLike.length === 0 && unknownExact.length === 0) {
+    return findings;
+  }
+
+  const detailParts: string[] = [];
+  if (patternLike.length > 0) {
+    detailParts.push(
+      `Pattern-like entries (not supported by exact matching): ${patternLike.join(", ")}`,
+    );
+  }
+  if (unknownExact.length > 0) {
+    detailParts.push(
+      `Unknown command names (not in defaults/allowCommands): ${unknownExact.join(", ")}`,
+    );
+  }
+  const examples = Array.from(knownCommands).slice(0, 8);
+
+  findings.push({
+    checkId: "gateway.nodes.deny_commands_ineffective",
+    severity: "warn",
+    title: "Some gateway.nodes.denyCommands entries are ineffective",
+    detail:
+      "gateway.nodes.denyCommands uses exact command-name matching only.\n" +
+      detailParts.map((entry) => `- ${entry}`).join("\n"),
+    remediation:
+      `Use exact command names (for example: ${examples.join(", ")}). ` +
+      "If you need broader restrictions, remove risky commands from allowCommands/default workflows.",
+  });
+
+  return findings;
+}
+
+export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  if (cfg.tools?.profile !== "minimal") {
+    return findings;
+  }
+
+  const overrides = (cfg.agents?.list ?? [])
+    .filter((entry): entry is { id: string; tools?: AgentToolsConfig } => {
+      return Boolean(
+        entry &&
+        typeof entry === "object" &&
+        typeof entry.id === "string" &&
+        entry.tools?.profile &&
+        entry.tools.profile !== "minimal",
+      );
+    })
+    .map((entry) => `${entry.id}=${entry.tools?.profile}`);
+
+  if (overrides.length === 0) {
+    return findings;
+  }
+
+  findings.push({
+    checkId: "tools.profile_minimal_overridden",
+    severity: "warn",
+    title: "Global tools.profile=minimal is overridden by agent profiles",
+    detail:
+      "Global minimal profile is set, but these agent profiles take precedence:\n" +
+      overrides.map((entry) => `- agents.list.${entry}`).join("\n"),
+    remediation:
+      'Set those agents to `tools.profile="minimal"` (or remove the agent override) if you want minimal tools enforced globally.',
+  });
 
   return findings;
 }
