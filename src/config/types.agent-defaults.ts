@@ -106,8 +106,6 @@ export type AgentDefaultsConfig = {
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
-  /** Extra bootstrap file paths or glob patterns loaded into agent context every turn. */
-  extraBootstrapFiles?: string[];
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */

@@ -325,6 +325,12 @@ export async function loadExtraBootstrapFiles(
     return [];
   }
   const resolvedDir = resolveUserPath(dir);
+  let realResolvedDir = resolvedDir;
+  try {
+    realResolvedDir = await fs.realpath(resolvedDir);
+  } catch {
+    // Keep lexical root if realpath fails.
+  }
 
   // Resolve glob patterns into concrete file paths
   const resolvedPaths = new Set<string>();
@@ -354,7 +360,10 @@ export async function loadExtraBootstrapFiles(
     try {
       // Resolve symlinks and verify the real path is still within workspace
       const realFilePath = await fs.realpath(filePath);
-      if (!realFilePath.startsWith(resolvedDir + path.sep) && realFilePath !== resolvedDir) {
+      if (
+        !realFilePath.startsWith(realResolvedDir + path.sep) &&
+        realFilePath !== realResolvedDir
+      ) {
         continue;
       }
       // Only load files whose basename is a recognized bootstrap filename
