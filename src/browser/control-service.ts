@@ -1,6 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
+import { ensureBrowserControlAuth } from "./control-auth.js";
 import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
 
@@ -27,6 +28,14 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   if (!resolved.enabled) {
     return null;
+  }
+  try {
+    const ensured = await ensureBrowserControlAuth({ cfg });
+    if (ensured.generatedToken) {
+      logService.info("No browser auth configured; generated gateway.auth.token automatically.");
+    }
+  } catch (err) {
+    logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
   }
 
   state = {

@@ -287,6 +287,52 @@ describe("security audit", () => {
     );
   });
 
+  it("flags browser control without auth when browser is enabled", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        controlUi: { enabled: false },
+        auth: {},
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "browser.control_no_auth", severity: "critical" }),
+      ]),
+    );
+  });
+
+  it("does not flag browser control auth when gateway token is configured", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        controlUi: { enabled: false },
+        auth: { token: "very-long-browser-token-0123456789" },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings.some((f) => f.checkId === "browser.control_no_auth")).toBe(false);
+  });
+
   it("warns when remote CDP uses HTTP", async () => {
     const cfg: OpenClawConfig = {
       browser: {

@@ -192,6 +192,7 @@ Notes:
 Key ideas:
 
 - Browser control is loopback-only; access flows through the Gateway’s auth or node pairing.
+- If browser control is enabled and no auth is configured, OpenClaw auto-generates `gateway.auth.token` on startup and persists it to config.
 - Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
 - Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
 
@@ -314,6 +315,11 @@ For local integrations only, the Gateway exposes a small loopback HTTP API:
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
 
 All endpoints accept `?profile=<name>`.
+
+If gateway auth is configured, browser HTTP routes require auth too:
+
+- `Authorization: Bearer <gateway token>`
+- `x-openclaw-password: <gateway password>` or HTTP Basic auth with that password
 
 ### Playwright requirement
 
