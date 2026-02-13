@@ -223,6 +223,7 @@ export type PluginRuntime = {
       dispatchReplyFromConfig: DispatchReplyFromConfig;
       finalizeInboundContext: FinalizeInboundContext;
       formatAgentEnvelope: FormatAgentEnvelope;
+      /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
       formatInboundEnvelope: FormatInboundEnvelope;
       resolveEnvelopeFormatOptions: ResolveEnvelopeFormatOptions;
     };

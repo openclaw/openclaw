@@ -19,6 +19,7 @@ import {
   buildGroupDisplayName,
   canonicalizeMainSessionAlias,
   loadSessionStore,
+  resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
   resolveStorePath,
   type SessionEntry,
@@ -29,6 +30,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import {
   readFirstUserMessageFromTranscript,
@@ -205,12 +207,6 @@ export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySe
     return "group";
   }
   return "direct";
-}
-
-function isCronRunSessionKey(key: string): boolean {
-  const parsed = parseAgentSessionKey(key);
-  const raw = parsed?.rest ?? key;
-  return /^cron:[^:]+:run:[^:]+$/.test(raw);
 }
 
 export function parseGroupKey(
@@ -612,9 +608,9 @@ export function listSessionsFromStore(params: {
     })
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;
-      const input = entry?.inputTokens ?? 0;
-      const output = entry?.outputTokens ?? 0;
-      const total = entry?.totalTokens ?? input + output;
+      const total = resolveFreshSessionTotalTokens(entry);
+      const totalTokensFresh =
+        typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
       const parsed = parseGroupKey(key);
       const channel = entry?.channel ?? parsed?.channel;
       const subject = entry?.subject;
@@ -667,6 +663,7 @@ export function listSessionsFromStore(params: {
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,
         totalTokens: total,
+        totalTokensFresh,
         responseUsage: entry?.responseUsage,
         modelProvider,
         model,

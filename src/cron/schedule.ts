@@ -50,16 +50,18 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     catch: false,
   });
   // Cron operates at second granularity, so floor nowMs to the start of the
-  // current second.  This prevents the lookback from landing inside a matching
-  // second — if nowMs is e.g. 12:00:00.500 and the pattern fires at second 0,
-  // a 1ms lookback (12:00:00.499) is still *within* that second, causing
-  // croner to skip ahead to the next occurrence (e.g. the following day).
-  // Flooring first ensures the lookback always falls in the *previous* second.
+  // current second.  We ask croner for the next occurrence strictly *after*
+  // nowSecondMs so that a job whose schedule matches the current second is
+  // never re-scheduled into the same (already-elapsed) second.
+  //
+  // Previous code used `nowSecondMs - 1` which caused croner to return the
+  // current second as a valid next-run, leading to rapid duplicate fires when
+  // multiple jobs triggered simultaneously (see #14164).
   const nowSecondMs = Math.floor(nowMs / 1000) * 1000;
-  const next = cron.nextRun(new Date(nowSecondMs - 1));
+  const next = cron.nextRun(new Date(nowSecondMs));
   if (!next) {
     return undefined;
   }
   const nextMs = next.getTime();
-  return Number.isFinite(nextMs) && nextMs >= nowSecondMs ? nextMs : undefined;
+  return Number.isFinite(nextMs) && nextMs > nowSecondMs ? nextMs : undefined;
 }

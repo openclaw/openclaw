@@ -3,7 +3,7 @@ import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { truncateUtf16Safe } from "../../utils.js";
+import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
@@ -155,10 +155,6 @@ async function buildReminderContextLines(params: {
   } catch {
     return [];
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function stripThreadSuffixFromSessionKey(sessionKey: string): string {

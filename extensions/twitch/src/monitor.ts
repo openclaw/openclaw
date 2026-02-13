@@ -69,6 +69,7 @@ async function processTwitchMessage(params: {
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: `twitch:user:${message.userId}`,

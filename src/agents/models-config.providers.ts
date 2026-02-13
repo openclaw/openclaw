@@ -10,6 +10,12 @@ import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import {
+  discoverHuggingfaceModels,
+  HUGGINGFACE_BASE_URL,
+  HUGGINGFACE_MODEL_CATALOG,
+  buildHuggingfaceModelDefinition,
+} from "./huggingface-models.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import {
   buildSyntheticModelDefinition,
@@ -85,6 +91,16 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
+const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
+const VLLM_DEFAULT_MAX_TOKENS = 8192;
+const VLLM_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -111,13 +127,37 @@ interface OllamaTagsResponse {
   models: OllamaModel[];
 }
 
-async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
+type VllmModelsResponse = {
+  data?: Array<{
+    id?: string;
+  }>;
+};
+
+/**
+ * Derive the Ollama native API base URL from a configured base URL.
+ *
+ * Users typically configure `baseUrl` with a `/v1` suffix (e.g.
+ * `http://192.168.20.14:11434/v1`) for the OpenAI-compatible endpoint.
+ * The native Ollama API lives at the root (e.g. `/api/tags`), so we
+ * strip the `/v1` suffix when present.
+ */
+export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
+  if (!configuredBaseUrl) {
+    return OLLAMA_API_BASE_URL;
+  }
+  // Strip trailing slash, then strip /v1 suffix if present
+  const trimmed = configuredBaseUrl.replace(/\/+$/, "");
+  return trimmed.replace(/\/v1$/i, "");
+}
+
+async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionConfig[]> {
   // Skip Ollama discovery in test environments
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
   }
   try {
-    const response = await fetch(`${OLLAMA_API_BASE_URL}/api/tags`, {
+    const apiBase = resolveOllamaApiBase(baseUrl);
+    const response = await fetch(`${apiBase}/api/tags`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
@@ -150,6 +190,59 @@ async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
     });
   } catch (error) {
     console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    return [];
+  }
+}
+
+async function discoverVllmModels(
+  baseUrl: string,
+  apiKey?: string,
+): Promise<ModelDefinitionConfig[]> {
+  // Skip vLLM discovery in test environments
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+
+  const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  const url = `${trimmedBaseUrl}/models`;
+
+  try {
+    const trimmedApiKey = apiKey?.trim();
+    const response = await fetch(url, {
+      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      console.warn(`Failed to discover vLLM models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as VllmModelsResponse;
+    const models = data.data ?? [];
+    if (models.length === 0) {
+      console.warn("No vLLM models found on local instance");
+      return [];
+    }
+
+    return models
+      .map((m) => ({ id: typeof m.id === "string" ? m.id.trim() : "" }))
+      .filter((m) => Boolean(m.id))
+      .map((m) => {
+        const modelId = m.id;
+        const lower = modelId.toLowerCase();
+        const isReasoning =
+          lower.includes("r1") || lower.includes("reasoning") || lower.includes("think");
+        return {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoning,
+          input: ["text"],
+          cost: VLLM_DEFAULT_COST,
+          contextWindow: VLLM_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: VLLM_DEFAULT_MAX_TOKENS,
+        } satisfies ModelDefinitionConfig;
+      });
+  } catch (error) {
+    console.warn(`Failed to discover vLLM models: ${String(error)}`);
     return [];
   }
 }
@@ -300,10 +393,37 @@ function buildMinimaxProvider(): ProviderConfig {
         maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
       },
       {
+        id: "MiniMax-M2.1-lightning",
+        name: "MiniMax M2.1 Lightning",
+        reasoning: false,
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+      {
         id: MINIMAX_DEFAULT_VISION_MODEL_ID,
         name: "MiniMax VL 01",
         reasoning: false,
         input: ["text", "image"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "MiniMax-M2.5",
+        name: "MiniMax M2.5",
+        reasoning: true,
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "MiniMax-M2.5-Lightning",
+        name: "MiniMax M2.5 Lightning",
+        reasoning: true,
+        input: ["text"],
         cost: MINIMAX_API_COST,
         contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
         maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
@@ -321,6 +441,15 @@ function buildMinimaxPortalProvider(): ProviderConfig {
         id: MINIMAX_DEFAULT_MODEL_ID,
         name: "MiniMax M2.1",
         reasoning: false,
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "MiniMax-M2.5",
+        name: "MiniMax M2.5",
+        reasoning: true,
         input: ["text"],
         cost: MINIMAX_API_COST,
         contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
@@ -410,10 +539,29 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
-async function buildOllamaProvider(): Promise<ProviderConfig> {
-  const models = await discoverOllamaModels();
+async function buildOllamaProvider(configuredBaseUrl?: string): Promise<ProviderConfig> {
+  const models = await discoverOllamaModels(configuredBaseUrl);
   return {
-    baseUrl: OLLAMA_BASE_URL,
+    baseUrl: configuredBaseUrl ?? OLLAMA_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
+async function buildHuggingfaceProvider(apiKey?: string): Promise<ProviderConfig> {
+  // Resolve env var name to value for discovery (GET /v1/models requires Bearer token).
+  const resolvedSecret =
+    apiKey?.trim() !== ""
+      ? /^[A-Z][A-Z0-9_]*$/.test(apiKey!.trim())
+        ? (process.env[apiKey!.trim()] ?? "").trim()
+        : apiKey!.trim()
+      : "";
+  const models =
+    resolvedSecret !== ""
+      ? await discoverHuggingfaceModels(resolvedSecret)
+      : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
+  return {
+    baseUrl: HUGGINGFACE_BASE_URL,
     api: "openai-completions",
     models,
   };
@@ -427,6 +575,18 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
+async function buildVllmProvider(params?: {
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<ProviderConfig> {
+  const baseUrl = (params?.baseUrl?.trim() || VLLM_BASE_URL).replace(/\/+$/, "");
+  const models = await discoverVllmModels(baseUrl, params?.apiKey);
+  return {
+    baseUrl,
+    api: "openai-completions",
+    models,
+  };
+}
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -456,6 +616,7 @@ export function buildQianfanProvider(): ProviderConfig {
 
 export async function resolveImplicitProviders(params: {
   agentDir: string;
+  explicitProviders?: Record<string, ProviderConfig> | null;
 }): Promise<ModelsConfig["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const authStore = ensureAuthProfileStore(params.agentDir, {
@@ -541,12 +702,32 @@ export async function resolveImplicitProviders(params: {
     break;
   }
 
-  // Ollama provider - only add if explicitly configured
+  // Ollama provider - only add if explicitly configured.
+  // Use the user's configured baseUrl (from explicit providers) for model
+  // discovery so that remote / non-default Ollama instances are reachable.
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
-    providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+    const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
+    providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+  }
+
+  // vLLM provider - OpenAI-compatible local server (opt-in via env/profile).
+  // If explicitly configured, keep user-defined models/settings as-is.
+  if (!params.explicitProviders?.vllm) {
+    const vllmEnvVar = resolveEnvApiKeyVarName("vllm");
+    const vllmProfileKey = resolveApiKeyFromProfiles({ provider: "vllm", store: authStore });
+    const vllmKey = vllmEnvVar ?? vllmProfileKey;
+    if (vllmKey) {
+      const discoveryApiKey = vllmEnvVar
+        ? (process.env[vllmEnvVar]?.trim() ?? "")
+        : (vllmProfileKey ?? "");
+      providers.vllm = {
+        ...(await buildVllmProvider({ apiKey: discoveryApiKey || undefined })),
+        apiKey: vllmKey,
+      };
+    }
   }
 
   const togetherKey =
@@ -556,6 +737,17 @@ export async function resolveImplicitProviders(params: {
     providers.together = {
       ...buildTogetherProvider(),
       apiKey: togetherKey,
+    };
+  }
+
+  const huggingfaceKey =
+    resolveEnvApiKeyVarName("huggingface") ??
+    resolveApiKeyFromProfiles({ provider: "huggingface", store: authStore });
+  if (huggingfaceKey) {
+    const hfProvider = await buildHuggingfaceProvider(huggingfaceKey);
+    providers.huggingface = {
+      ...hfProvider,
+      apiKey: huggingfaceKey,
     };
   }
 
