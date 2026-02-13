@@ -87,6 +87,20 @@ jobs:
           GH_TOKEN: ${{ env.SYNC_TOKEN }}
         run: |
           set -euo pipefail
+          OPEN_SYNC_PR_COUNT="$(
+            gh pr list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --state open \
+              --base main \
+              --search "head:sync/upstream-main-" \
+              --json number \
+              --jq 'length'
+          )"
+          if [[ "${OPEN_SYNC_PR_COUNT}" != "0" ]]; then
+            echo "An upstream sync PR is already open; skipping."
+            exit 0
+          fi
+
           EXISTING_COUNT="$(
             gh pr list \
               --repo "${GITHUB_REPOSITORY}" \
