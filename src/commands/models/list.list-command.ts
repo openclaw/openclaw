@@ -3,9 +3,9 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { ModelRow } from "./list.types.js";
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import { parseModelRef } from "../../agents/model-selection.js";
-import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
+import { formatErrorWithStack } from "./list.errors.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import { printModelTable } from "./list.table.js";
 import { DEFAULT_PROVIDER, ensureFlagCompatibility, modelKey } from "./shared.js";
@@ -34,12 +34,21 @@ export async function modelsListCommand(
 
   let models: Model<Api>[] = [];
   let availableKeys: Set<string> | undefined;
+  let availabilityErrorMessage: string | undefined;
   try {
     const loaded = await loadModelRegistry(cfg);
     models = loaded.models;
     availableKeys = loaded.availableKeys;
+    availabilityErrorMessage = loaded.availabilityErrorMessage;
   } catch (err) {
-    runtime.error(`Model registry unavailable: ${String(err)}`);
+    runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (availabilityErrorMessage !== undefined) {
+    runtime.error(
+      `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
+    );
   }
 
   const modelByKey = new Map(models.map((model) => [modelKey(model.provider, model.id), model]));
@@ -100,13 +109,7 @@ export async function modelsListCommand(
       if (providerFilter && entry.ref.provider.toLowerCase() !== providerFilter) {
         continue;
       }
-      let model = modelByKey.get(entry.key);
-      if (!model) {
-        const resolved = resolveModel(entry.ref.provider, entry.ref.model, undefined, cfg);
-        if (resolved.model && !resolved.error) {
-          model = resolved.model;
-        }
-      }
+      const model = modelByKey.get(entry.key);
       if (opts.local && model && !isLocalBaseUrl(model.baseUrl)) {
         continue;
       }
