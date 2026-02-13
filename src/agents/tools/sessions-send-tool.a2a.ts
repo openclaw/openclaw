@@ -15,6 +15,37 @@ import {
 
 const log = createSubsystemLogger("agents/sessions-send");
 
+async function shouldDeliverAnnounce(params: { announceReply: string; targetSessionKey: string }) {
+  const candidate = params.announceReply.trim();
+  if (!candidate || isAnnounceSkip(candidate)) {
+    return false;
+  }
+
+  // Guard against eventual-consistency lag in chat.history:
+  // if the announce step truly returned ANNOUNCE_SKIP, avoid posting stale text.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const latest = await readLatestAssistantReply({
+      sessionKey: params.targetSessionKey,
+      limit: 20,
+    });
+    if (!latest) {
+      break;
+    }
+    const normalizedLatest = latest.trim();
+    if (!normalizedLatest) {
+      break;
+    }
+    if (isAnnounceSkip(normalizedLatest)) {
+      return false;
+    }
+    if (normalizedLatest === candidate) {
+      break;
+    }
+  }
+
+  return true;
+}
+
 export async function runSessionsSendA2AFlow(params: {
   targetSessionKey: string;
   displayKey: string;
@@ -118,7 +149,14 @@ export async function runSessionsSendA2AFlow(params: {
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+    if (
+      announceTarget &&
+      announceReply &&
+      (await shouldDeliverAnnounce({
+        announceReply,
+        targetSessionKey: params.targetSessionKey,
+      }))
+    ) {
       try {
         await callGateway({
           method: "send",
