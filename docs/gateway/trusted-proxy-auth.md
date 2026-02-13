@@ -1,8 +1,8 @@
 ---
 summary: "Delegate gateway authentication to a trusted reverse proxy (Pomerium, Caddy, nginx + OAuth)"
 read_when:
-  - Running Clawdbot behind an identity-aware proxy
-  - Setting up Pomerium, Caddy, or nginx with OAuth in front of Clawdbot
+  - Running OpenClaw behind an identity-aware proxy
+  - Setting up Pomerium, Caddy, or nginx with OAuth in front of OpenClaw
   - Fixing WebSocket 1008 unauthorized errors with reverse proxy setups
 ---
 # Trusted Proxy Auth
@@ -13,7 +13,7 @@ read_when:
 
 Use `trusted-proxy` auth mode when:
 
-- You run Clawdbot behind an **identity-aware proxy** (Pomerium, Caddy + OAuth, nginx + oauth2-proxy, Traefik + forward auth)
+- You run OpenClaw behind an **identity-aware proxy** (Pomerium, Caddy + OAuth, nginx + oauth2-proxy, Traefik + forward auth)
 - Your proxy handles all authentication and passes user identity via headers
 - You're in a Kubernetes or container environment where the proxy is the only path to the Gateway
 - You're hitting WebSocket `1008 unauthorized` errors because browsers can't pass tokens in WS payloads
@@ -29,8 +29,8 @@ Use `trusted-proxy` auth mode when:
 
 1. Your reverse proxy authenticates users (OAuth, OIDC, SAML, etc.)
 2. Proxy adds a header with the authenticated user identity (e.g., `x-forwarded-user: nick@example.com`)
-3. Clawdbot checks that the request came from a **trusted proxy IP** (configured in `gateway.trustedProxies`)
-4. Clawdbot extracts the user identity from the configured header
+3. OpenClaw checks that the request came from a **trusted proxy IP** (configured in `gateway.trustedProxies`)
+4. OpenClaw extracts the user identity from the configured header
 5. If everything checks out, the request is authorized
 
 ## Configuration
@@ -96,8 +96,8 @@ Pomerium passes identity in `x-pomerium-claim-email` (or other claim headers) an
 Pomerium config snippet:
 ```yaml
 routes:
-  - from: https://clawdbot.example.com
-    to: http://clawdbot-gateway:18789
+  - from: https://openclaw.example.com
+    to: http://openclaw-gateway:18789
     policy:
       - allow:
           or:
@@ -127,11 +127,11 @@ Caddy with the `caddy-security` plugin can authenticate users and pass identity 
 
 Caddyfile snippet:
 ```
-clawdbot.example.com {
+openclaw.example.com {
     authenticate with oauth2_provider
     authorize with policy1
     
-    reverse_proxy clawdbot:18789 {
+    reverse_proxy openclaw:18789 {
         header_up X-Forwarded-User {http.auth.user.email}
     }
 }
@@ -162,7 +162,7 @@ location / {
     auth_request /oauth2/auth;
     auth_request_set $user $upstream_http_x_auth_request_email;
     
-    proxy_pass http://clawdbot:18789;
+    proxy_pass http://openclaw:18789;
     proxy_set_header X-Auth-Request-Email $user;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -199,7 +199,7 @@ Before enabling trusted-proxy auth, verify:
 
 ## Security Audit
 
-`clawdbot security audit` will flag trusted-proxy auth with a **critical** severity finding. This is intentional — it's a reminder that you're delegating security to your proxy setup.
+`openclaw security audit` will flag trusted-proxy auth with a **critical** severity finding. This is intentional — it's a reminder that you're delegating security to your proxy setup.
 
 The audit checks for:
 - Missing `trustedProxies` configuration
@@ -245,10 +245,10 @@ If you're moving from token auth to trusted-proxy:
 
 1. Configure your proxy to authenticate users and pass headers
 2. Test the proxy setup independently (curl with headers)
-3. Update Clawdbot config with trusted-proxy auth
+3. Update OpenClaw config with trusted-proxy auth
 4. Restart the Gateway
 5. Test WebSocket connections from the Control UI
-6. Run `clawdbot security audit` and review findings
+6. Run `openclaw security audit` and review findings
 
 ## Related
 
