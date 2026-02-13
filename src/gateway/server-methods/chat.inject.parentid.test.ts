@@ -30,7 +30,7 @@ describe("gateway chat.inject transcript writes", () => {
       return {
         ...original,
         loadSessionEntry: () => ({
-          storePath: "/tmp/store.json",
+          storePath: path.join(dir, "sessions.json"),
           entry: {
             sessionId: "sess-1",
             sessionFile: transcriptPath,

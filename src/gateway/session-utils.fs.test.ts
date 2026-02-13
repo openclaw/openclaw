@@ -507,3 +507,26 @@ describe("resolveSessionTranscriptCandidates", () => {
     );
   });
 });
+
+describe("resolveSessionTranscriptCandidates safety", () => {
+  test("drops unsafe session IDs instead of producing traversal paths", () => {
+    const candidates = resolveSessionTranscriptCandidates(
+      "../etc/passwd",
+      "/tmp/openclaw/agents/main/sessions/sessions.json",
+    );
+
+    expect(candidates).toEqual([]);
+  });
+
+  test("drops unsafe sessionFile candidates and keeps safe fallbacks", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const candidates = resolveSessionTranscriptCandidates(
+      "sess-safe",
+      storePath,
+      "../../etc/passwd",
+    );
+
+    expect(candidates.some((value) => value.includes("etc/passwd"))).toBe(false);
+    expect(candidates).toContain(path.join(path.dirname(storePath), "sess-safe.jsonl"));
+  });
+});
