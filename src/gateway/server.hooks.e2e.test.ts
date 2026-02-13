@@ -318,4 +318,59 @@ describe("gateway server hooks", () => {
       await server.close();
     }
   });
+
+  test("throttles repeated hook auth failures and resets after success", async () => {
+    testState.hooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    try {
+      const firstFail = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer wrong",
+        },
+        body: JSON.stringify({ text: "blocked" }),
+      });
+      expect(firstFail.status).toBe(401);
+
+      let throttled: Response | null = null;
+      for (let i = 0; i < 20; i++) {
+        throttled = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer wrong",
+          },
+          body: JSON.stringify({ text: "blocked" }),
+        });
+      }
+      expect(throttled?.status).toBe(429);
+      expect(throttled?.headers.get("retry-after")).toBeTruthy();
+
+      const allowed = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ text: "auth reset" }),
+      });
+      expect(allowed.status).toBe(200);
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+
+      const failAfterSuccess = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer wrong",
+        },
+        body: JSON.stringify({ text: "blocked" }),
+      });
+      expect(failAfterSuccess.status).toBe(401);
+    } finally {
+      await server.close();
+    }
+  });
 });
