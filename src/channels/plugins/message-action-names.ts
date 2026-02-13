@@ -56,6 +56,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "x-repost",
   "x-unrepost",
   "x-reply",
+  "x-post",
   "set-presence",
 ] as const;
 

@@ -1,7 +1,7 @@
 /**
  * X (Twitter) action handlers for the message tool.
  *
- * Supports: x-follow, x-unfollow, x-dm, x-like, x-unlike, x-repost, x-unrepost, x-reply
+ * Supports: x-follow, x-unfollow, x-dm, x-like, x-unlike, x-repost, x-unrepost, x-reply, x-post
  *
  * These handlers delegate to the X service layer for actual API operations.
  */
@@ -21,6 +21,7 @@ const X_ACTIONS = new Set([
   "x-reply",
   "x-repost",
   "x-unrepost",
+  "x-post",
 ]);
 
 /**
@@ -113,6 +114,30 @@ function checkXActionsAllowed(params: {
   throw new Error(
     `Permission denied: X actions are not supported from ${origChannel}. Supported origins: x, ${[...CROSS_CHANNEL_X_ACTION_SOURCES].join(", ")}.`,
   );
+}
+
+/**
+ * Handle x-post action (post a new standalone tweet).
+ */
+async function handlePost(
+  params: Record<string, unknown>,
+  cfg: OpenClawConfig,
+  accountId?: string,
+): Promise<AgentToolResult<unknown>> {
+  const message = readStringParam(params, "message", { required: true });
+  const xService = createXService(cfg, { accountId: accountId ?? DEFAULT_ACCOUNT_ID });
+
+  const result = await xService.sendTweet(message);
+
+  if (!result.ok) {
+    throw new Error(result.error ?? "Failed to post tweet");
+  }
+
+  return jsonResult({
+    ok: true,
+    action: "x-post",
+    tweetId: result.tweetId,
+  });
 }
 
 /**
@@ -406,6 +431,8 @@ export async function handleXAction(
       return handleRepost(params, cfg, accountId);
     case "x-unrepost":
       return handleUnrepost(params, cfg, accountId);
+    case "x-post":
+      return handlePost(params, cfg, accountId);
     default:
       throw new Error(`Unknown X action: ${action}`);
   }
