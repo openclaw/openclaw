@@ -330,6 +330,37 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
   </Accordion>
 
+  <Accordion title="Gateway proxy">
+    Route Discord gateway WebSocket traffic through an HTTP(S) proxy with `channels.discord.proxy`.
+
+```json5
+{
+  channels: {
+    discord: {
+      proxy: "http://proxy.example:8080",
+    },
+  },
+}
+```
+
+    Per-account override:
+
+```json5
+{
+  channels: {
+    discord: {
+      accounts: {
+        primary: {
+          proxy: "http://proxy.example:8080",
+        },
+      },
+    },
+  },
+}
+```
+
+  </Accordion>
+
   <Accordion title="PluralKit support">
     Enable PluralKit resolution to map proxied messages to system member identity:
 
