@@ -289,6 +289,13 @@ function pruneFinishedSessions() {
       finishedSessions.delete(id);
     }
   }
+  // Defensive cleanup: reap running sessions that exited but were never
+  // drained/cleaned by their caller (e.g. abandoned after an error).
+  for (const [id, session] of runningSessions.entries()) {
+    if (session.exited && session.startedAt < cutoff) {
+      runningSessions.delete(id);
+    }
+  }
 }
 
 function startSweeper() {

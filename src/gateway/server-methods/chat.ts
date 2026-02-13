@@ -626,6 +626,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         })
         .finally(() => {
           context.chatAbortControllers.delete(clientRunId);
+          context.chatRunBuffers.delete(clientRunId);
+          context.chatDeltaSentAt.delete(clientRunId);
         });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
