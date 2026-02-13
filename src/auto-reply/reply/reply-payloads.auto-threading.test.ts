@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyReplyThreading } from "./reply-payloads.js";
 
-describe("applyReplyThreading auto-injects replyToCurrent", () => {
+describe("applyReplyThreading auto-threading", () => {
   it("sets replyToId to currentMessageId even without [[reply_to_current]] tag", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "Hello" }],
@@ -46,5 +46,30 @@ describe("applyReplyThreading auto-injects replyToCurrent", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].replyToId).toBeUndefined();
+  });
+
+  it("does not bypass off mode for Slack when reply is implicit", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "A" }],
+      replyToMode: "off",
+      replyToChannel: "slack",
+      currentMessageId: "42",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBeUndefined();
+  });
+
+  it("keeps explicit tags for Slack when off mode allows tags", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "[[reply_to_current]]A" }],
+      replyToMode: "off",
+      replyToChannel: "slack",
+      currentMessageId: "42",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("42");
+    expect(result[0].replyToTag).toBe(true);
   });
 });

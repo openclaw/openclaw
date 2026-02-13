@@ -376,9 +376,11 @@ export async function runAgentTurnWithFallback(params: {
                       text,
                       mediaUrls: payload.mediaUrls,
                       mediaUrl: payload.mediaUrls?.[0],
-                      replyToId: payload.replyToId,
+                      replyToId:
+                        payload.replyToId ??
+                        (payload.replyToCurrent === false ? undefined : currentMessageId),
                       replyToTag: payload.replyToTag,
-                      replyToCurrent: true,
+                      replyToCurrent: payload.replyToCurrent,
                     },
                     currentMessageId,
                   );
