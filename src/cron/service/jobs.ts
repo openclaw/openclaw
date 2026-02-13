@@ -558,6 +558,7 @@ function mergeCronDelivery(
 ): CronDelivery {
   const next: CronDelivery = {
     mode: existing?.mode ?? "none",
+    format: existing?.format,
     channel: existing?.channel,
     to: existing?.to,
     bestEffort: existing?.bestEffort,
@@ -565,6 +566,14 @@ function mergeCronDelivery(
 
   if (typeof patch.mode === "string") {
     next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
+  }
+  if ("format" in patch) {
+    const format = typeof patch.format === "string" ? patch.format.trim().toLowerCase() : "";
+    if (format === "summary" || format === "full") {
+      next.format = format;
+    } else {
+      next.format = undefined;
+    }
   }
   if ("channel" in patch) {
     const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";
@@ -576,6 +585,9 @@ function mergeCronDelivery(
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+  if (next.format === undefined) {
+    delete (next as { format?: unknown }).format;
   }
 
   return next;

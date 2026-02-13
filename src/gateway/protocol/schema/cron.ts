@@ -98,6 +98,7 @@ export const CronPayloadPatchSchema = Type.Union([
 ]);
 
 const CronDeliverySharedProperties = {
+  format: Type.Optional(Type.Union([Type.Literal("summary"), Type.Literal("full")])),
   channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
   bestEffort: Type.Optional(Type.Boolean()),
 };

@@ -17,9 +17,11 @@ export type CronWakeMode = "next-heartbeat" | "now";
 export type CronMessageChannel = ChannelId | "last";
 
 export type CronDeliveryMode = "none" | "announce" | "webhook";
+export type CronDeliveryFormat = "summary" | "full";
 
 export type CronDelivery = {
   mode: CronDeliveryMode;
+  format?: CronDeliveryFormat;
   channel?: CronMessageChannel;
   to?: string;
   bestEffort?: boolean;

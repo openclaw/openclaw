@@ -359,6 +359,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const deliveryRequested = deliveryPlan.requested;
+  const deliveryFormat = deliveryPlan.format;
 
   const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
     channel: deliveryPlan.channel ?? "last",
@@ -406,8 +407,11 @@ export async function runCronIsolatedAgentTurn(params: {
     commandBody = `${base}\n${timeLine}`.trim();
   }
   if (deliveryRequested) {
-    commandBody =
-      `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+    const deliveryInstruction =
+      deliveryFormat === "full"
+        ? "Return your full final output as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself."
+        : "Return your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.";
+    commandBody = `${commandBody}\n\n${deliveryInstruction}`.trim();
   }
 
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
@@ -659,6 +663,35 @@ export async function runCronIsolatedAgentTurn(params: {
         }
       }
     } else if (synthesizedText) {
+      if (deliveryFormat === "full") {
+        try {
+          const deliveryResults = await deliverOutboundPayloads({
+            cfg: cfgWithAgentDefaults,
+            channel: resolvedDelivery.channel,
+            to: resolvedDelivery.to,
+            accountId: resolvedDelivery.accountId,
+            threadId: resolvedDelivery.threadId,
+            payloads: deliveryPayloads,
+            agentId,
+            identity,
+            bestEffort: deliveryBestEffort,
+            deps: createOutboundSendDeps(params.deps),
+          });
+          delivered = deliveryResults.length > 0;
+        } catch (err) {
+          if (!deliveryBestEffort) {
+            return withRunSession({
+              status: "error",
+              summary,
+              outputText,
+              error: String(err),
+              ...telemetry,
+            });
+          }
+          logWarn(`[cron:${params.job.id}] ${String(err)}`);
+        }
+        return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+      }
       const announceMainSessionKey = resolveAgentMainSessionKey({
         cfg: params.cfg,
         agentId,

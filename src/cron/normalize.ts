@@ -167,6 +167,16 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if ("mode" in next) {
     delete next.mode;
   }
+  if (typeof delivery.format === "string") {
+    const format = delivery.format.trim().toLowerCase();
+    if (format === "summary" || format === "full") {
+      next.format = format;
+    } else {
+      delete next.format;
+    }
+  } else if ("format" in next) {
+    delete next.format;
+  }
   if (typeof delivery.channel === "string") {
     const trimmed = delivery.channel.trim().toLowerCase();
     if (trimmed) {

@@ -153,8 +153,8 @@ Key behaviors:
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
 - Each run starts a **fresh session id** (no prior conversation carry-over).
 - Default behavior: if `delivery` is omitted, isolated jobs announce a summary (`delivery.mode = "announce"`).
-- `delivery.mode` chooses what happens:
-  - `announce`: deliver a summary to the target channel and post a brief summary to the main session.
+- `delivery.mode` (isolated-only) chooses what happens:
+  - `announce`: deliver to the target channel (`delivery.format` controls summary vs full) and post a brief summary to the main session.
   - `webhook`: POST the finished event payload to `delivery.to` when the finished event includes a summary.
   - `none`: internal only (no delivery, no main-session summary).
 - `wakeMode` controls when the main-session summary posts:
@@ -180,6 +180,7 @@ Common `agentTurn` fields:
 Delivery config:
 
 - `delivery.mode`: `none` | `announce` | `webhook`.
+- `delivery.format`: `summary` | `full` (default: `summary`, for announce mode).
 - `delivery.channel`: `last` or a specific channel.
 - `delivery.to`: channel-specific target (announce) or webhook URL (webhook mode).
 - `delivery.bestEffort`: avoid failing the job if announce delivery fails.
@@ -196,8 +197,11 @@ The main agent is not spun up to craft or forward the message.
 
 Behavior details:
 
-- Content: delivery uses the isolated run's outbound payloads (text/media) with normal chunking and
-  channel formatting.
+- Content:
+  - `delivery.format = "summary"` (default): a brief announce rewrite is sent.
+  - `delivery.format = "full"`: the isolated run's final outbound payload is delivered directly
+    (no brief rewrite).
+  - Media/channel payloads are always delivered directly to preserve structured content.
 - Heartbeat-only responses (`HEARTBEAT_OK` with no real content) are not delivered.
 - If the isolated run already sent a message to the same target via the message tool, delivery is
   skipped to avoid duplicates.

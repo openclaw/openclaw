@@ -108,6 +108,20 @@ Quick status:
   - Update Discord provider command registration (`src/discord/monitor/provider.ts`) to pass those agent IDs into `listSkillCommandsForAgents(...)`.
   - Add regression tests in `src/routing/bindings.test.ts`.
 
+### 9) Cron delivery: add `delivery.format` (`summary`|`full`) and use `full` for morning rollup
+
+- Commit: _pending_ — `feat(cron): support full announce delivery format for isolated jobs`
+- Why:
+  - Some jobs (notably `morning-rollup`) must deliver full/untrimmed output.
+  - Existing announce flow always rewrote isolated output into a 1–2 sentence summary via `subagent-announce`, overriding skill/user intent.
+- What:
+  - Add `delivery.format?: "summary" | "full"` across cron types/normalization/gateway schema.
+  - Keep default behavior as `summary` when omitted.
+  - In isolated runner:
+    - `summary` keeps existing shared announce rewrite behavior.
+    - `full` bypasses shared announce rewrite for text and delivers payload directly via outbound adapters.
+  - Add regression tests for plan/normalization and isolated full-delivery behavior.
+
 ## Operating rules
 
 - Treat this file as the **source of truth** for why a local commit exists.

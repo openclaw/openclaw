@@ -1,7 +1,8 @@
-import type { CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
+import type { CronDeliveryFormat, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
+  format: CronDeliveryFormat;
   channel?: CronMessageChannel;
   to?: string;
   source: "delivery" | "payload";
@@ -44,11 +45,14 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
             ? "announce"
             : undefined;
 
+  const rawFormat = hasDelivery ? (delivery as { format?: unknown }).format : undefined;
+  const normalizedFormat =
+    typeof rawFormat === "string" ? rawFormat.trim().toLowerCase() : rawFormat;
+  const format = normalizedFormat === "full" ? "full" : "summary";
+
   const payloadChannel = normalizeChannel(payload?.channel);
   const payloadTo = normalizeTo(payload?.to);
-  const deliveryChannel = normalizeChannel(
-    (delivery as { channel?: unknown } | undefined)?.channel,
-  );
+  const deliveryChannel = normalizeChannel((delivery as { channel?: unknown } | undefined)?.channel);
   const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
 
   const channel = deliveryChannel ?? payloadChannel ?? "last";
@@ -57,6 +61,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     const resolvedMode = mode ?? "announce";
     return {
       mode: resolvedMode,
+      format,
       channel: resolvedMode === "announce" ? channel : undefined,
       to,
       source: "delivery",
@@ -71,6 +76,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
 
   return {
     mode: requested ? "announce" : "none",
+    format: "summary",
     channel,
     to,
     source: "payload",

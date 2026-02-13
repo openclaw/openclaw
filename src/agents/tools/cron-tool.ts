@@ -227,7 +227,7 @@ JOB SCHEMA (for add action):
   "name": "string (optional)",
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
-  "delivery": { ... },      // Optional: announce summary or webhook POST
+  "delivery": { ... },      // Optional: isolated delivery settings (announce summary/full, none, webhook)
   "sessionTarget": "main" | "isolated",  // Required
   "enabled": true | false   // Optional, default true
 }
@@ -248,12 +248,12 @@ PAYLOAD TYPES (payload.kind):
 - "agentTurn": Runs agent with message (isolated sessions only)
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
 
-DELIVERY (top-level):
-  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
+DELIVERY (isolated-only, top-level):
+  { "mode": "none|announce|webhook", "format": "summary|full", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
   - Default for isolated agentTurn jobs (when delivery omitted): "announce"
-  - announce: send to chat channel (optional channel/to target)
-  - webhook: send finished-run event as HTTP POST to delivery.to (URL required)
-  - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
+  - announce: `delivery.format` defaults to "summary"; use "full" to deliver the isolated run output untrimmed.
+  - webhook: sends finished event payload as HTTP POST to `delivery.to` (URL required).
+  - If the task needs to send to a specific chat/recipient, set delivery.channel/to here; do not call messaging tools inside the run.
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"

@@ -418,6 +418,23 @@ export async function ensureLoaded(
         (delivery as { mode?: unknown }).mode = "announce";
         mutated = true;
       }
+
+      const formatRaw = (delivery as { format?: unknown }).format;
+      if (typeof formatRaw === "string") {
+        const normalized = formatRaw.trim().toLowerCase();
+        if (normalized === "summary" || normalized === "full") {
+          if (normalized !== formatRaw) {
+            (delivery as { format?: unknown }).format = normalized;
+            mutated = true;
+          }
+        } else {
+          delete (delivery as { format?: unknown }).format;
+          mutated = true;
+        }
+      } else if ("format" in (delivery as Record<string, unknown>)) {
+        delete (delivery as { format?: unknown }).format;
+        mutated = true;
+      }
     }
 
     const isolation = raw.isolation;

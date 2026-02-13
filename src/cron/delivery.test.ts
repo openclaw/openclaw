@@ -27,9 +27,20 @@ describe("resolveCronDeliveryPlan", () => {
       }),
     );
     expect(plan.mode).toBe("announce");
+    expect(plan.format).toBe("summary");
     expect(plan.requested).toBe(true);
     expect(plan.channel).toBe("telegram");
     expect(plan.to).toBe("123");
+  });
+
+  it("supports explicit full delivery format", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: { mode: "announce", format: "full", channel: "telegram", to: "123" },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.format).toBe("full");
   });
 
   it("respects legacy payload deliver=false", () => {
@@ -40,6 +51,7 @@ describe("resolveCronDeliveryPlan", () => {
       }),
     );
     expect(plan.mode).toBe("none");
+    expect(plan.format).toBe("summary");
     expect(plan.requested).toBe(false);
   });
 

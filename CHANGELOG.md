@@ -779,6 +779,7 @@ Docs: https://docs.openclaw.ai
 - Memory/QMD: add `memory.qmd.searchMode` to choose `query`, `search`, or `vsearch` recall mode. (#9967, #10084)
 - Memory/QMD (local): force per-agent qmd config/cache scoping for both memory manager and `exec qmd ...` calls to prevent host-index leakage across agent boundaries.
 - Discord/native skills (local): register per-skill slash commands only for agents bound to Discord channel/account routing, avoiding duplicate suffix variants like `_2` from unrelated agents.
+- Cron/delivery (local): add `delivery.format` (`summary` | `full`) for isolated announce jobs; `full` bypasses the 1–2 sentence announce rewrite and delivers untrimmed output.
 - Media understanding: recognize `.caf` audio attachments for transcription. (#10982) Thanks @succ985.
 - State dir: honor `OPENCLAW_STATE_DIR` for default device identity and canvas storage paths. (#4824) Thanks @kossoy.
 - Doctor/State dir: suppress repeated legacy migration warnings only for valid symlink mirrors, while keeping warnings for empty or invalid legacy trees. (#11709) Thanks @gumadeiras.
