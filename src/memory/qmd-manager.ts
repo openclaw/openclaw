@@ -188,11 +188,63 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
+  private async killExistingQmdMcpProcesses(): Promise<void> {
+    try {
+      // Find existing "qmd mcp" processes (exclude grep itself)
+      const psProc = spawn("sh", [
+        "-c",
+        "ps aux | grep 'qmd.*mcp' | grep -v grep | awk '{print $2}'",
+      ]);
+
+      let stdout = "";
+      psProc.stdout.on("data", (data: Buffer) => {
+        stdout += data.toString();
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        psProc.on("close", (code: number | null) => {
+          if (code === 0 || code === 1) {
+            resolve();
+          } // code 1 = no matches, OK
+          else {
+            reject(new Error(`ps command failed with code ${code}`));
+          }
+        });
+        psProc.on("error", reject);
+      });
+
+      const pids = stdout
+        .split("\n")
+        .map((line: string) => line.trim())
+        .filter((line: string) => line && /^\d+$/.test(line));
+
+      if (pids.length > 0) {
+        log.info(
+          `[qmd-mcp] Killing ${pids.length} existing QMD MCP process(es): ${pids.join(", ")}`,
+        );
+        for (const pid of pids) {
+          try {
+            process.kill(parseInt(pid, 10), "SIGTERM");
+          } catch (err) {
+            // Process may have already exited, ignore
+          }
+        }
+        // Wait a moment for processes to die
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    } catch (err) {
+      log.warn(`[qmd-mcp] Failed to kill existing processes: ${String(err)}`);
+    }
+  }
+
   private async startMcpDaemon(): Promise<void> {
     const command = this.qmd.mcp?.command || this.qmd.command;
     const args = this.qmd.mcp?.args || ["mcp"];
 
     log.info(`[qmd-mcp] Starting QMD MCP daemon: ${command} ${args.join(" ")}`);
+
+    // Kill any existing QMD MCP processes to prevent zombies
+    await this.killExistingQmdMcpProcesses();
 
     // Create stdio transport
     this.mcpTransport = new StdioClientTransport({
