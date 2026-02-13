@@ -21,4 +21,23 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts searxng provider and config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "searxng",
+            searxng: {
+              baseUrl: "http://localhost:8080",
+            },
+          },
+        },
+      },
+    });
+
+
+    expect(res.ok).toBe(true);
+  });
 });

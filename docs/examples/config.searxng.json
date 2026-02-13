@@ -1,0 +1,13 @@
+{
+  "tools": {
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "searxng",
+        "searxng": {
+          "baseUrl": "http://searxng:8080"
+        }
+      }
+    }
+  }
+}
