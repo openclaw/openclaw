@@ -19,7 +19,7 @@ spec:
       containers:
         - name: gateway
           # Replace with your image registry path or use a local image if configured
-          image: ghcr.io/openclaw/openclaw:latest
+          image: ghcr.io/openclaw/openclaw:main
           imagePullPolicy: IfNotPresent
           command:
             - node

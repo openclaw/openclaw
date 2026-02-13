@@ -113,6 +113,94 @@ describe("buildInlineProviderModels", () => {
       name: "claude-opus-4.5",
     });
   });
+
+  it("inherits provider-level headers when model has none", () => {
+    const providers = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        headers: { "x-custom": "value" },
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({ "x-custom": "value" });
+  });
+
+  it("uses model-level headers when provider has none", () => {
+    const providers = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        models: [{ ...makeModel("custom-model"), headers: { "x-model": "model-value" } }],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({ "x-model": "model-value" });
+  });
+
+  it("merges provider and model headers with model taking precedence", () => {
+    const providers = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        headers: { "x-shared": "provider-val", "x-provider-only": "keep" },
+        models: [
+          {
+            ...makeModel("custom-model"),
+            headers: { "x-shared": "model-val", "x-model-only": "keep" },
+          },
+        ],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({
+      "x-shared": "model-val",
+      "x-provider-only": "keep",
+      "x-model-only": "keep",
+    });
+  });
+
+  it("omits headers when neither provider nor model specifies them", () => {
+    const providers = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toBeUndefined();
+  });
+
+  it("azure-openai-responses api is inherited from provider", () => {
+    const providers = {
+      azure: {
+        baseUrl: "https://myresource.openai.azure.com/openai/v1",
+        api: "azure-openai-responses" as const,
+        headers: { "api-key": "my-azure-key" },
+        models: [makeModel("gpt-4o")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      provider: "azure",
+      baseUrl: "https://myresource.openai.azure.com/openai/v1",
+      api: "azure-openai-responses",
+      headers: { "api-key": "my-azure-key" },
+    });
+  });
 });
 
 describe("resolveModel", () => {

@@ -17,24 +17,24 @@ If you prefer using Helm, there are community-maintained charts available:
 
 ## Setup Instructions
 
-### 1. Configure Secrets
+### 1. Create the Secret
 
-Edit `secret.yaml` to set your secure gateway token.
+Create the gateway token secret imperatively (this avoids committing secrets to version control):
 
 ```bash
-# Generate a token
-openssl rand -hex 32
+# Generate a secure token
+TOKEN=$(openssl rand -hex 32)
 
-# Update the file
-nano secret.yaml
+# Create the Kubernetes secret
+kubectl create secret generic openclaw-secret \
+  --from-literal=OPENCLAW_GATEWAY_TOKEN="$TOKEN"
 ```
+
+Alternatively, use the deploy script (`scripts/k8s-deploy.sh`) which handles secret creation automatically.
 
 ### 2. Apply Manifests
 
-Apply the configuration in the following order:
-
 ```bash
-kubectl apply -f secret.yaml
 kubectl apply -f pvc.yaml
 kubectl apply -f deployment.yaml
 kubectl apply -f service.yaml
