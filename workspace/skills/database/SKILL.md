@@ -18,7 +18,8 @@ This is your database superpower. JSON in, JSON out. No SQL. The tool is smart, 
 
 ```bash
 pip install supabase
-# Env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY)
+# Env vars auto-loaded from workspace root .env file
+# Or set manually: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 ```
 
 ---
@@ -366,7 +367,7 @@ python scripts/db_tool.py write --intent '...'
 
 ## Environment Variables
 
-Set these before running any command:
+Auto-loaded from `workspace/.env`. Or set manually:
 
 ```powershell
 $env:SUPABASE_URL='<your-supabase-url>'
