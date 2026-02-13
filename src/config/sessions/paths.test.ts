@@ -75,4 +75,24 @@ describe("session path safety", () => {
     const resolved = resolveSessionTranscriptPath("sess-1", "main");
     expect(resolved.endsWith(path.join("agents", "main", "sessions", "sess-1.jsonl"))).toBe(true);
   });
+
+  it("resolves sessionFile within the correct agent sessions dir when agentId is provided", () => {
+    const resolved = resolveSessionFilePath("sess-1", undefined, { agentId: "hachiko" });
+    expect(resolved).toContain(path.join("agents", "hachiko", "sessions"));
+    expect(resolved.endsWith("sess-1.jsonl")).toBe(true);
+  });
+
+  it("resolves to main agent dir when agentId is omitted", () => {
+    const resolved = resolveSessionFilePath("sess-1", undefined);
+    expect(resolved).toContain(path.join("agents", "main", "sessions"));
+  });
+
+  it("does not throw for sessionFile stored in a non-default agent dir", () => {
+    // Regression test: when a session belongs to a named agent (e.g. "hachiko"),
+    // omitting agentId would resolve against agents/main/sessions, causing
+    // the path-traversal guard to reject files in agents/hachiko/sessions.
+    const resolvedAgent = resolveSessionFilePath("sess-1", undefined, { agentId: "hachiko" });
+    const resolvedMain = resolveSessionFilePath("sess-1", undefined);
+    expect(resolvedAgent).not.toBe(resolvedMain);
+  });
 });
