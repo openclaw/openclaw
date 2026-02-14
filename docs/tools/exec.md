@@ -120,7 +120,8 @@ running after `tools.exec.approvalRunningNoticeMs`, a single `Exec running` noti
 Allowlist enforcement matches **resolved binary paths only** (no basename matches). When
 `security=allowlist`, shell commands are auto-allowed only if every pipeline segment is
 allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
-allowlist mode.
+allowlist mode unless every top-level segment satisfies the allowlist (including safe bins).
+Redirections remain unsupported.
 
 ## Examples
 
