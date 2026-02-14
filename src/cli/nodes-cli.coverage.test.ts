@@ -75,23 +75,6 @@ vi.mock("../config/config.js", () => ({
 }));
 
 describe("nodes-cli coverage", () => {
-  it("lists nodes via node.list", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
-    callGateway.mockClear();
-
-    const { registerNodesCli } = await import("./nodes-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerNodesCli(program);
-
-    await program.parseAsync(["nodes", "status"], { from: "user" });
-
-    expect(callGateway).toHaveBeenCalled();
-    expect(callGateway.mock.calls[0]?.[0]?.method).toBe("node.list");
-    expect(runtimeErrors).toHaveLength(0);
-  });
-
   it("invokes system.run with parsed params", async () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;

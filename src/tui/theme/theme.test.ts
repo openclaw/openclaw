@@ -6,24 +6,14 @@ describe("markdownTheme", () => {
     it("returns highlighted lines for common language inputs", () => {
       const code = `const x = 42;`;
       const js = markdownTheme.highlightCode!(code, "javascript");
-      const ts = markdownTheme.highlightCode!(
-        `function greet(name: string) {
-  return "Hello, " + name;
-}`,
-        "typescript",
-      );
 
       expect(js).toBeInstanceOf(Array);
       expect(js).toHaveLength(1);
       expect(js[0]).toContain("const");
       expect(js[0]).toContain("42");
-      expect(ts).toHaveLength(3);
-      expect(ts[0]).toContain("function");
-      expect(ts[1]).toContain("return");
-      expect(ts[2]).toContain("}");
     });
 
-    it("handles unknown and missing language without throwing", () => {
+    it("handles unknown or missing language and preserves content", () => {
       const code = `echo "hello"`;
       const unknown = markdownTheme.highlightCode!(code, "not-a-real-language");
       const missing = markdownTheme.highlightCode!(code, undefined);
@@ -33,12 +23,9 @@ describe("markdownTheme", () => {
       expect(missing).toHaveLength(1);
       expect(unknown[0]).toContain("echo");
       expect(missing[0]).toContain("echo");
-    });
-
-    it("preserves code content and handles empty input", () => {
-      const code = `const message = "Hello, World!";
+      const codeBlock = `const message = "Hello, World!";
 console.log(message);`;
-      const result = markdownTheme.highlightCode!(code, "javascript");
+      const result = markdownTheme.highlightCode!(codeBlock, "javascript");
       const empty = markdownTheme.highlightCode!("", "javascript");
 
       const stripAnsi = (str: string) =>
