@@ -262,9 +262,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const qmdSearchCommand = this.qmd.searchMode;
     const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
-    if (qmdSearchCommand === "query") {
-      args.push(...collectionFilterArgs);
-    }
+
+    // Always scope to managed collections (default + custom). Even for `search`/`vsearch`,
+    // pass collection filters; if a given QMD build rejects these flags, we fall back to `query`.
+    args.push(...collectionFilterArgs);
     let stdout: string;
     let stderr: string;
     try {

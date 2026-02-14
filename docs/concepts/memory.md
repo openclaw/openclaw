@@ -139,8 +139,8 @@ out to QMD for retrieval. Key points:
 - Boot refresh now runs in the background by default so chat startup is not
   blocked; set `memory.qmd.update.waitForBootSync = true` to keep the previous
   blocking behavior.
-- Searches run via `memory.qmd.searchMode` (default `qmd query --json`; also
-  supports `search` and `vsearch`). If the selected mode rejects flags on your
+- Searches run via `memory.qmd.searchMode` (default `qmd search --json`; also
+  supports `vsearch` and `query`). If the selected mode rejects flags on your
   QMD build, OpenClaw retries with `qmd query`. If QMD fails or the binary is
   missing, OpenClaw automatically falls back to the builtin SQLite manager so
   memory tools keep working.
@@ -178,8 +178,8 @@ out to QMD for retrieval. Key points:
 **Config surface (`memory.qmd.*`)**
 
 - `command` (default `qmd`): override the executable path.
-- `searchMode` (default `query`): pick which QMD command backs
-  `memory_search` (`query`, `search`, `vsearch`).
+- `searchMode` (default `search`): pick which QMD command backs
+  `memory_search` (`search`, `vsearch`, `query`).
 - `includeDefaultMemory` (default `true`): auto-index `MEMORY.md` + `memory/**/*.md`.
 - `paths[]`: add extra directories/files (`path`, optional `pattern`, optional
   stable `name`).
