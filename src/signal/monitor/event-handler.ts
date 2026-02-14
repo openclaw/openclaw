@@ -53,20 +53,6 @@ import {
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { renderSignalMentions } from "./mentions.js";
 
-function attachmentLooksLikeVoiceNote(attachment: {
-  voiceNote?: boolean | null;
-  filename?: string | null;
-}): boolean {
-  if (attachment.voiceNote === true) {
-    return true;
-  }
-  const fileName = attachment.filename?.trim().toLowerCase() ?? "";
-  if (fileName.includes("voice") || fileName.includes("ptt")) {
-    return true;
-  }
-  return false;
-}
-
 function normalizeDimensionValue(value?: number | null): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -667,14 +653,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const contactContext = buildSignalContactContext(dataMessage?.contacts);
     const attachments = dataMessage?.attachments ?? [];
     const allAttachments = sticker?.attachment ? [...attachments, sticker.attachment] : attachments;
-    const voiceNoteIndices = allAttachments.flatMap((attachment, index) =>
-      attachmentLooksLikeVoiceNote(attachment) ? [index + 1] : [],
-    );
-    const voiceContext =
-      voiceNoteIndices.length > 0
-        ? [`Signal voice note attachment indexes: ${voiceNoteIndices.join(",")}`]
-        : [];
-    const firstAttachmentIsVoiceNote = voiceNoteIndices.includes(1);
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && allAttachments.length > 0);
 
@@ -885,16 +863,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         // When we're skipping a message we intentionally avoid downloading attachments.
         // Still record a useful placeholder for pending-history context.
         if (deps.ignoreAttachments) {
-          if (firstAttachmentIsVoiceNote) {
-            return "<media:audio> (voice note)";
-          }
           return "<media:attachment>";
         }
         const firstContentType = allAttachments[0]?.contentType;
         const pendingKind = mediaKindFromMime(firstContentType ?? undefined);
-        if (pendingKind === "audio" && firstAttachmentIsVoiceNote) {
-          return "<media:audio> (voice note)";
-        }
         return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
       })();
       const pendingBodyText = messageText || pendingPlaceholder || quoteText;
@@ -994,8 +966,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const kind = mediaKindFromMime(mediaType ?? firstAttachmentContentType);
     if (sticker) {
       placeholder = "<media:sticker>";
-    } else if (firstAttachmentIsVoiceNote) {
-      placeholder = "<media:audio> (voice note)";
     } else if (kind && kind !== "unknown") {
       placeholder = `<media:${kind}>`;
     } else if (allAttachments.length) {
@@ -1060,11 +1030,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaDimension,
       mediaDimensions,
       untrustedContext:
-        stickerContext.length > 0 ||
-        voiceContext.length > 0 ||
-        linkPreviewContext.length > 0 ||
-        contactContext.length > 0
-          ? [...stickerContext, ...voiceContext, ...linkPreviewContext, ...contactContext]
+        stickerContext.length > 0 || linkPreviewContext.length > 0 || contactContext.length > 0
+          ? [...stickerContext, ...linkPreviewContext, ...contactContext]
           : undefined,
       replyToId: quoteReplyId,
       replyToBody: quoteText || undefined,

@@ -69,7 +69,6 @@ export type SignalAttachment = {
   filename?: string | null;
   caption?: string | null;
   size?: number | null;
-  voiceNote?: boolean | null;
   width?: number | null;
   height?: number | null;
 };
