@@ -80,7 +80,7 @@ describe("compaction hook wiring", () => {
     expect(event.compactedCount).toBe(1);
   });
 
-  it("calls runAfterCompaction when willRetry is true", async () => {
+  it("does not call runAfterCompaction when willRetry is true", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const { handleAutoCompactionEnd } =
@@ -103,12 +103,7 @@ describe("compaction hook wiring", () => {
       } as never,
     );
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
-    });
-    const [event] = hookMocks.runner.runAfterCompaction.mock.calls[0];
-    expect(event.messageCount).toBe(0);
-    expect(event.compactedCount).toBe(0);
+    expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
     expect(ctx.noteCompactionRetry).toHaveBeenCalledTimes(1);
     expect(ctx.resetForCompactionRetry).toHaveBeenCalledTimes(1);
   });

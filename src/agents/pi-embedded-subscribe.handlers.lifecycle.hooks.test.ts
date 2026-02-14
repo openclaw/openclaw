@@ -34,6 +34,7 @@ describe("embedded subscribe lifecycle hook wiring", () => {
       noteCompactionRetry: vi.fn(),
       resetForCompactionRetry: vi.fn(),
       maybeResolveCompactionWait: vi.fn(),
+      getCompactionCount: vi.fn(() => 2),
       paramsOnAgentEvent: vi.fn(),
     } as unknown as Parameters<typeof handleAutoCompactionStart>[0];
 
