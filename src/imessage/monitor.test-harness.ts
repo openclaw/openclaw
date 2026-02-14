@@ -112,12 +112,20 @@ vi.mock("./probe.js", () => ({
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 export async function waitForSubscribe() {
+  for (let i = 0; i < 25; i += 1) {
+    if (state.requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) {
+      return;
+    }
+    // Prefer microtask turns over timers for speed.
+    await Promise.resolve();
+  }
   for (let i = 0; i < 5; i += 1) {
     if (state.requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) {
       return;
     }
     await flush();
   }
+  throw new Error("imessage test harness: watch.subscribe not observed");
 }
 
 export function installMonitorIMessageProviderTestHooks() {
