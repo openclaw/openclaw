@@ -53,6 +53,58 @@ describe("applyPatch", () => {
     });
   });
 
+  it("rejects path traversal in add file", async () => {
+    await withTempDir(async (dir) => {
+      const patch = `*** Begin Patch
+*** Add File: ../../../etc/malicious
++pwned
+*** End Patch`;
+
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Path escapes sandbox root/);
+    });
+  });
+
+  it("rejects path traversal in delete file", async () => {
+    await withTempDir(async (dir) => {
+      const patch = `*** Begin Patch
+*** Delete File: ../../../etc/passwd
+*** End Patch`;
+
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Path escapes sandbox root/);
+    });
+  });
+
+  it("rejects path traversal in update file", async () => {
+    await withTempDir(async (dir) => {
+      await fs.writeFile(path.join(dir, "legit.txt"), "ok\n", "utf8");
+
+      const patch = `*** Begin Patch
+*** Update File: ../../etc/shadow
+@@
+ ok
++injected
+*** End Patch`;
+
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Path escapes sandbox root/);
+    });
+  });
+
+  it("rejects path traversal in move target", async () => {
+    await withTempDir(async (dir) => {
+      await fs.writeFile(path.join(dir, "source.txt"), "foo\n", "utf8");
+
+      const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: ../../../tmp/escaped
+@@
+ foo
++bar
+*** End Patch`;
+
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Path escapes sandbox root/);
+    });
+  });
+
   it("supports end-of-file inserts", async () => {
     await withTempDir(async (dir) => {
       const target = path.join(dir, "end.txt");
