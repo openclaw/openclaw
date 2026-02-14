@@ -166,4 +166,55 @@ describe("wrapStreamFnWithSystemCacheControl", () => {
     const systemMsg = (getParams()!.messages as MsgArray)[1];
     expect(Array.isArray(systemMsg.content)).toBe(true);
   });
+
+  it("falls through to later system/developer message when first has no text parts", () => {
+    const [inner, getParams] = makeInnerStreamFn(() => ({
+      messages: [
+        { role: "system", content: [{ type: "image", source: "x" }] },
+        { role: "developer", content: "System fallback" },
+      ],
+    }));
+
+    const wrapped = wrapStreamFnWithSystemCacheControl(inner);
+    void wrapped(openRouterAnthropicModel, fakeContext, {});
+
+    const messages = getParams()!.messages as MsgArray;
+    expect(messages[0].content).toEqual([{ type: "image", source: "x" }]);
+    expect(messages[1].content).toEqual([
+      {
+        type: "text",
+        text: "System fallback",
+        cache_control: { type: "ephemeral" },
+      },
+    ]);
+  });
+
+  it("preserves existing cache_control on text parts", () => {
+    const [inner, getParams] = makeInnerStreamFn(() => ({
+      messages: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "text",
+              text: "System prompt",
+              cache_control: { type: "persistent" },
+            },
+          ],
+        },
+      ],
+    }));
+
+    const wrapped = wrapStreamFnWithSystemCacheControl(inner);
+    void wrapped(openRouterAnthropicModel, fakeContext, {});
+
+    const systemMsg = (getParams()!.messages as MsgArray)[0];
+    expect(systemMsg.content).toEqual([
+      {
+        type: "text",
+        text: "System prompt",
+        cache_control: { type: "persistent" },
+      },
+    ]);
+  });
 });

@@ -79,11 +79,13 @@ function addCacheControlToSystemMessage(params: Record<string, unknown>): void {
       for (let i = content.length - 1; i >= 0; i--) {
         const part = content[i];
         if (part?.type === "text") {
-          Object.assign(part, { cache_control: { type: "ephemeral" } });
+          if (typeof part === "object" && !("cache_control" in part)) {
+            Object.assign(part, { cache_control: { type: "ephemeral" } });
+          }
           return;
         }
       }
     }
-    return; // Only process the first system/developer message
+    // No patchable text found in this system/developer message; keep scanning.
   }
 }
