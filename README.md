@@ -48,26 +48,32 @@ It answers you on the channels you already use (WhatsApp, Telegram, Slack, Disco
 
 **System requirements:** Node.js 22.12+ (one-liner auto-installs if missing), Python 3.12+ (for skills)
 
-### One-liner (recommended)
+**CLI commands:** Use `qverisbot` as the primary command; `openclaw` is a compatible alias. For example: `qverisbot onboard`, `qverisbot gateway`, `qverisbot channels status` — all work with `openclaw` as well.
 
-```bash
-curl -fsSL https://qveris.ai/qverisbot/install.sh | bash
-```
-
-### npm (global package)
+### 1. npm install (recommended, fastest)
 
 ```bash
 npm i -g @qverisai/qverisbot
 qverisbot onboard
 ```
 
-Backward-compatible command alias is also available:
+After install, run `qverisbot onboard` — the wizard guides you through model, QVeris, X channel, and more.
+
+### 2. One-liner (macOS / Linux)
 
 ```bash
-openclaw onboard
+curl -fsSL https://qveris.ai/qverisbot/install.sh | bash
 ```
 
-### Hackable (from source)
+The script detects Node.js and installs it if missing, then runs `qverisbot onboard`.
+
+### 3. Windows PowerShell
+
+```powershell
+irm https://qveris.ai/qverisbot/install.ps1 | iex
+```
+
+### 4. From source (hackable)
 
 ```bash
 git clone https://github.com/QVerisAI/QVerisBot.git
@@ -75,23 +81,26 @@ cd QVerisBot
 pnpm install
 pnpm ui:build   # first run only
 pnpm build
-pnpm openclaw onboard --install-daemon
+pnpm qverisbot onboard --install-daemon
 ```
 
-### Windows PowerShell
+See [Source guide](docs/qverisbot-from-source.md).
 
-```powershell
-irm https://qveris.ai/qverisbot/install.ps1 | iex
-```
+---
 
-The onboarding wizard guides you through: model/auth, **QVeris API key**, `web_search` (defaults to QVeris Smart Search), **X (Twitter) credentials**, channels, and skills. For Feishu/飞书, see [QVerisBot Source Guide](docs/qverisbot-from-source.md).
-
-**Verify:** Start the gateway and chat:
+**Verify:** Start the gateway and test:
 
 ```bash
-pnpm openclaw gateway --port 18789 --verbose
-pnpm openclaw agent --message "Hello QVerisBot" --thinking high
+# npm install
+qverisbot gateway --port 18789 --verbose
+qverisbot agent --message "Hello QVerisBot" --thinking high
+
+# from source
+pnpm qverisbot gateway --port 18789 --verbose
+pnpm qverisbot agent --message "Hello QVerisBot" --thinking high
 ```
+
+The onboarding wizard guides you through: model auth, **QVeris API key**, `web_search` (defaults to QVeris Smart Search), **X (Twitter) credentials**, channels, and skills. For Feishu setup, see [Source guide](docs/qverisbot-from-source.md).
 
 ## QVeris Universal Toolbox — The Core of QVerisBot
 
@@ -146,7 +155,7 @@ pnpm openclaw agent --message "Hello QVerisBot" --thinking high
 ## What Else Makes QVerisBot Special
 
 - **OpenClaw + QVeris optimization layer** — keeps OpenClaw's core reliability while adding QVeris-first defaults for practical business/research workflows
-- **[Feishu (飞书) Native Support](docs/qverisbot-from-source.md#3-飞书账号准备)** — WebSocket-based deep integration, ideal for Chinese enterprise users
+- **[Feishu Native Support](docs/qverisbot-from-source.md)** — WebSocket-based deep integration, ideal for Chinese enterprise users
 - **Improved onboarding across CLI/macOS/web wizard flows** — guided QVeris API key setup, auto-default `web_search` to QVeris Xiaosu Smart Search, and built-in X (Twitter) channel credential onboarding
 - **Multi-channel inbox** — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, **Feishu**, Microsoft Teams, Matrix, Zalo, WebChat
 - **Voice Wake + Talk Mode** — always-on speech for macOS/iOS/Android

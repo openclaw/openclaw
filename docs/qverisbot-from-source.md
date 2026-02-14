@@ -1,8 +1,35 @@
-# QVerisBot 从源码安装与运行指南
+# QVerisBot 安装与运行指南
 
-本文档用于从源码完成 QVerisBot 的安装、配置、启动与排障，适用于 macOS 和 Linux。
+本文档涵盖 QVerisBot 的安装、配置、启动与排障，适用于 macOS 和 Linux。
 
-如果你希望更快安装（npm 包或 one-liner），请先看 [安装总览](/install)。
+## 安装方式速览
+
+| 方式         | 适用场景                    | 命令                                                        |
+| :----------- | :-------------------------- | :---------------------------------------------------------- |
+| **npm 安装** | 最快上手，推荐大多数用户    | `npm i -g @qverisai/qverisbot` → `qverisbot onboard`        |
+| **一键脚本** | macOS/Linux，自动检测环境   | `curl -fsSL https://qveris.ai/qverisbot/install.sh \| bash` |
+| **从源码**   | 开发、定制、飞书/X 深度配置 | 见下方 [3. 从源码构建](#3-从源码构建)                       |
+
+**首次使用建议：** 优先用 npm 安装，一条命令即可开始。需要飞书、X 或 QVeris 时，onboarding 向导会引导配置。
+
+### 1. npm 快速安装（推荐）
+
+```bash
+npm i -g @qverisai/qverisbot
+qverisbot onboard
+```
+
+安装后运行 `qverisbot onboard`，按向导完成模型、QVeris、X、飞书等配置，然后启动网关：
+
+```bash
+qverisbot gateway --port 18789 --verbose
+```
+
+### 2. 一键脚本（macOS / Linux）
+
+```bash
+curl -fsSL https://qveris.ai/qverisbot/install.sh | bash
+```
 
 ---
 
@@ -17,6 +44,8 @@
 ## 功能概览
 
 QVerisBot 基于 [OpenClaw](https://github.com/openclaw/openclaw) 构建，核心能力包括：
+
+**CLI 命令说明：** 本文档以 `qverisbot` 作为主命令，`openclaw` 为兼容别名，两者可互换使用。
 
 - 多渠道接入（飞书、X、Telegram、Slack、Discord、Signal、Web 等）
 - QVeris 工具调用（搜索工具并执行）
@@ -151,7 +180,9 @@ pip3 install fastapi httpx uvicorn pytest
 
 ---
 
-## 3. 获取源码与构建
+## 3. 从源码构建（开发 / 定制）
+
+适用于需要修改代码、调试或深度定制的用户。若仅需快速使用，请用 [npm 快速安装](#1-npm-快速安装推荐) 或 [一键脚本](#2-一键脚本macos--linux)。
 
 ### 3.1 克隆项目
 
@@ -177,28 +208,28 @@ pnpm build
 
 ```bash
 ls -la dist/
-pnpm openclaw --version
+pnpm qverisbot --version   # 或 pnpm openclaw --version
 ```
 
 ---
 
 ## 4. Onboard 一键配置（推荐）
 
-从当前版本开始，`qverisbot onboard`（兼容 `openclaw onboard`）已支持在向导内完成 QVeris、Feishu、X 的关键认证配置。  
+从当前版本开始，`qverisbot onboard`（兼容别名 `openclaw onboard`）已支持在向导内完成 QVeris、Feishu、X 的关键认证配置。  
 常规场景下**无需手动编辑** `~/.openclaw/openclaw.json`，只需要在向导里填入对应 auth 信息即可开箱使用。
 
 ### 4.1 一键流程（CLI）
 
+从源码运行：
+
 ```bash
-pnpm openclaw onboard --flow quickstart
+pnpm qverisbot onboard --flow quickstart   # 或 pnpm openclaw onboard --flow quickstart
 ```
 
-如果你通过 npm 全局安装：
+npm 全局安装：
 
 ```bash
-qverisbot onboard --flow quickstart
-# 兼容别名:
-openclaw onboard --flow quickstart
+qverisbot onboard --flow quickstart   # 或 openclaw onboard --flow quickstart
 ```
 
 建议选择 `quickstart`，按提示完成：
@@ -228,19 +259,23 @@ openclaw onboard --flow quickstart
 
 ### 4.4 运行后快速验证
 
+从源码运行：
+
 ```bash
-pnpm openclaw channels status
-pnpm openclaw channels status --deep
-pnpm openclaw channels status feishu
-pnpm openclaw channels status x
+pnpm qverisbot channels status
+pnpm qverisbot channels status --deep
+pnpm qverisbot channels status feishu
+pnpm qverisbot channels status x
 ```
 
-全局安装版本可直接使用：
+npm 全局安装：
 
 ```bash
 qverisbot channels status
 qverisbot channels status --deep
 ```
+
+以上命令均可用 `openclaw` 替代 `qverisbot`。
 
 ---
 
@@ -410,19 +445,19 @@ export HTTPS_PROXY="http://127.0.0.1:7890"
 
 ```bash
 # 前台运行（调试推荐）
-pnpm openclaw gateway --port 18789 --verbose
+pnpm qverisbot gateway --port 18789 --verbose
 
 # 后台运行
-nohup pnpm openclaw gateway --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
+nohup pnpm qverisbot gateway --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
 ```
 
 ### 6.2 健康检查
 
 ```bash
-pnpm openclaw channels status
-pnpm openclaw channels status --deep
-pnpm openclaw channels status feishu
-pnpm openclaw channels status x
+pnpm qverisbot channels status
+pnpm qverisbot channels status --deep
+pnpm qverisbot channels status feishu
+pnpm qverisbot channels status x
 ```
 
 ### 6.3 完成飞书事件订阅
@@ -467,13 +502,13 @@ feishu: connected as "QVerisBot" (ou_xxx)
 
 ```bash
 # 发送消息
-pnpm openclaw message send --to oc_xxx --message "Hello from QVerisBot"
+pnpm qverisbot message send --to oc_xxx --message "Hello from QVerisBot"
 
 # 与助手对话
-pnpm openclaw agent --message "帮我写一个 Python 脚本" --thinking high
+pnpm qverisbot agent --message "帮我写一个 Python 脚本" --thinking high
 
 # 查看帮助
-pnpm openclaw --help
+pnpm qverisbot --help
 ```
 
 ---
@@ -483,7 +518,7 @@ pnpm openclaw --help
 ### 8.1 通用诊断
 
 ```bash
-pnpm openclaw doctor
+pnpm qverisbot doctor
 ```
 
 ```bash
@@ -491,8 +526,8 @@ pnpm openclaw doctor
 tail -f /tmp/openclaw-gateway.log
 
 # 更多日志
-pnpm openclaw gateway --verbose
-DEBUG=* pnpm openclaw gateway
+pnpm qverisbot gateway --verbose
+DEBUG=* pnpm qverisbot gateway
 ```
 
 ### 8.2 常见问题速查
