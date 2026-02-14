@@ -9,6 +9,33 @@ import {
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
 
+function makeMoonshotConfig(home: string, storePath: string) {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        workspace: path.join(home, "openclaw"),
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "moonshot/kimi-k2-0905-preview": {},
+        },
+      },
+    },
+    models: {
+      mode: "merge",
+      providers: {
+        moonshot: {
+          baseUrl: "https://api.moonshot.ai/v1",
+          apiKey: "sk-test",
+          api: "openai-completions",
+          models: [{ id: "kimi-k2-0905-preview", name: "Kimi K2" }],
+        },
+      },
+    },
+    session: { store: storePath },
+  };
+}
+
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
@@ -19,30 +46,7 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         { Body: "/model kimi", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        {
-          agents: {
-            defaults: {
-              model: { primary: "anthropic/claude-opus-4-5" },
-              workspace: path.join(home, "openclaw"),
-              models: {
-                "anthropic/claude-opus-4-5": {},
-                "moonshot/kimi-k2-0905-preview": {},
-              },
-            },
-          },
-          models: {
-            mode: "merge",
-            providers: {
-              moonshot: {
-                baseUrl: "https://api.moonshot.ai/v1",
-                apiKey: "sk-test",
-                api: "openai-completions",
-                models: [{ id: "kimi-k2-0905-preview", name: "Kimi K2" }],
-              },
-            },
-          },
-          session: { store: storePath },
-        },
+        makeMoonshotConfig(home, storePath),
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
@@ -66,30 +70,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        {
-          agents: {
-            defaults: {
-              model: { primary: "anthropic/claude-opus-4-5" },
-              workspace: path.join(home, "openclaw"),
-              models: {
-                "anthropic/claude-opus-4-5": {},
-                "moonshot/kimi-k2-0905-preview": {},
-              },
-            },
-          },
-          models: {
-            mode: "merge",
-            providers: {
-              moonshot: {
-                baseUrl: "https://api.moonshot.ai/v1",
-                apiKey: "sk-test",
-                api: "openai-completions",
-                models: [{ id: "kimi-k2-0905-preview", name: "Kimi K2" }],
-              },
-            },
-          },
-          session: { store: storePath },
-        },
+        makeMoonshotConfig(home, storePath),
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
@@ -108,30 +89,7 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         { Body: "/model moonshot/kimi", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        {
-          agents: {
-            defaults: {
-              model: { primary: "anthropic/claude-opus-4-5" },
-              workspace: path.join(home, "openclaw"),
-              models: {
-                "anthropic/claude-opus-4-5": {},
-                "moonshot/kimi-k2-0905-preview": {},
-              },
-            },
-          },
-          models: {
-            mode: "merge",
-            providers: {
-              moonshot: {
-                baseUrl: "https://api.moonshot.ai/v1",
-                apiKey: "sk-test",
-                api: "openai-completions",
-                models: [{ id: "kimi-k2-0905-preview", name: "Kimi K2" }],
-              },
-            },
-          },
-          session: { store: storePath },
-        },
+        makeMoonshotConfig(home, storePath),
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
