@@ -54,6 +54,7 @@ import {
   getHookType,
   isExternalHookSession,
 } from "../../security/external-content.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
@@ -227,6 +228,14 @@ export async function runCronIsolatedAgentTurn(params: {
     agentId,
     nowMs: now,
   });
+  // Apply payload.model override to the session entry so session_status and
+  // auth profile resolution see the requested model, matching sub-agent behavior.
+  if (provider !== resolvedDefault.provider || model !== resolvedDefault.model) {
+    applyModelOverrideToSessionEntry({
+      entry: cronSession.sessionEntry,
+      selection: { provider, model },
+    });
+  }
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
     ? `${agentSessionKey}:run:${runSessionId}`
@@ -429,6 +438,8 @@ export async function runCronIsolatedAgentTurn(params: {
             cliSessionId,
           });
         }
+        const cronAuthProfileId =
+          providerOverride === provider ? cronSession.sessionEntry.authProfileOverride : undefined;
         return runEmbeddedPiAgent({
           sessionId: cronSession.sessionEntry.sessionId,
           sessionKey: agentSessionKey,
@@ -443,6 +454,10 @@ export async function runCronIsolatedAgentTurn(params: {
           lane: params.lane ?? "cron",
           provider: providerOverride,
           model: modelOverride,
+          authProfileId: cronAuthProfileId,
+          authProfileIdSource: cronAuthProfileId
+            ? cronSession.sessionEntry.authProfileOverrideSource
+            : undefined,
           thinkLevel,
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,

@@ -25,6 +25,8 @@ export function resolveCronSession(params: {
     model: entry?.model,
     modelOverride: entry?.modelOverride,
     providerOverride: entry?.providerOverride,
+    authProfileOverride: entry?.authProfileOverride,
+    authProfileOverrideSource: entry?.authProfileOverrideSource,
     contextTokens: entry?.contextTokens,
     sendPolicy: entry?.sendPolicy,
     lastChannel: entry?.lastChannel,
