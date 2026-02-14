@@ -829,6 +829,30 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("errors when qmd output exceeds command output safety cap", async () => {
+    const noisyPayload = "x".repeat(240_000);
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", noisyPayload);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    await expect(
+      manager.search("noise", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/too much output/);
+    await manager.close();
+  });
+
   it("treats plain-text no-results stdout as an empty result set", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
