@@ -331,117 +331,80 @@ describe("profile CRUD endpoints", () => {
     await stopBrowserControlServer();
   });
 
-  it("POST /profiles/create returns 400 for missing name", async () => {
+  it("validates profile create/delete endpoints", async () => {
     await startBrowserControlServerFromConfig();
     const base = `http://127.0.0.1:${testPort}`;
 
-    const result = await realFetch(`${base}/profiles/create`, {
+    const createMissingName = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    expect(result.status).toBe(400);
-    const body = (await result.json()) as { error: string };
-    expect(body.error).toContain("name is required");
-  });
+    expect(createMissingName.status).toBe(400);
+    const createMissingNameBody = (await createMissingName.json()) as { error: string };
+    expect(createMissingNameBody.error).toContain("name is required");
 
-  it("POST /profiles/create returns 400 for invalid name format", async () => {
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-
-    const result = await realFetch(`${base}/profiles/create`, {
+    const createInvalidName = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "Invalid Name!" }),
     });
-    expect(result.status).toBe(400);
-    const body = (await result.json()) as { error: string };
-    expect(body.error).toContain("invalid profile name");
-  });
+    expect(createInvalidName.status).toBe(400);
+    const createInvalidNameBody = (await createInvalidName.json()) as { error: string };
+    expect(createInvalidNameBody.error).toContain("invalid profile name");
 
-  it("POST /profiles/create returns 409 for duplicate name", async () => {
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-
-    // "openclaw" already exists as the default profile
-    const result = await realFetch(`${base}/profiles/create`, {
+    const createDuplicate = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "openclaw" }),
     });
-    expect(result.status).toBe(409);
-    const body = (await result.json()) as { error: string };
-    expect(body.error).toContain("already exists");
-  });
+    expect(createDuplicate.status).toBe(409);
+    const createDuplicateBody = (await createDuplicate.json()) as { error: string };
+    expect(createDuplicateBody.error).toContain("already exists");
 
-  it("POST /profiles/create accepts cdpUrl for remote profiles", async () => {
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-
-    const result = await realFetch(`${base}/profiles/create`, {
+    const createRemote = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "remote", cdpUrl: "http://10.0.0.42:9222" }),
     });
-    expect(result.status).toBe(200);
-    const body = (await result.json()) as {
+    expect(createRemote.status).toBe(200);
+    const createRemoteBody = (await createRemote.json()) as {
       profile?: string;
       cdpUrl?: string;
       isRemote?: boolean;
     };
-    expect(body.profile).toBe("remote");
-    expect(body.cdpUrl).toBe("http://10.0.0.42:9222");
-    expect(body.isRemote).toBe(true);
-  });
+    expect(createRemoteBody.profile).toBe("remote");
+    expect(createRemoteBody.cdpUrl).toBe("http://10.0.0.42:9222");
+    expect(createRemoteBody.isRemote).toBe(true);
 
-  it("POST /profiles/create returns 400 for invalid cdpUrl", async () => {
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-
-    const result = await realFetch(`${base}/profiles/create`, {
+    const createBadRemote = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "badremote", cdpUrl: "ws://bad" }),
     });
-    expect(result.status).toBe(400);
-    const body = (await result.json()) as { error: string };
-    expect(body.error).toContain("cdpUrl");
-  });
+    expect(createBadRemote.status).toBe(400);
+    const createBadRemoteBody = (await createBadRemote.json()) as { error: string };
+    expect(createBadRemoteBody.error).toContain("cdpUrl");
 
-  it("DELETE /profiles/:name returns 404 for non-existent profile", async () => {
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-
-    const result = await realFetch(`${base}/profiles/nonexistent`, {
+    const deleteMissing = await realFetch(`${base}/profiles/nonexistent`, {
       method: "DELETE",
     });
-    expect(result.status).toBe(404);
-    const body = (await result.json()) as { error: string };
-    expect(body.error).toContain("not found");
-  });
+    expect(deleteMissing.status).toBe(404);
+    const deleteMissingBody = (await deleteMissing.json()) as { error: string };
+    expect(deleteMissingBody.error).toContain("not found");
 
-  it("DELETE /profiles/:name returns 400 for default profile deletion", async () => {
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-
-    // openclaw is the default profile
-    const result = await realFetch(`${base}/profiles/openclaw`, {
+    const deleteDefault = await realFetch(`${base}/profiles/openclaw`, {
       method: "DELETE",
     });
-    expect(result.status).toBe(400);
-    const body = (await result.json()) as { error: string };
-    expect(body.error).toContain("cannot delete the default profile");
-  });
+    expect(deleteDefault.status).toBe(400);
+    const deleteDefaultBody = (await deleteDefault.json()) as { error: string };
+    expect(deleteDefaultBody.error).toContain("cannot delete the default profile");
 
-  it("DELETE /profiles/:name returns 400 for invalid name format", async () => {
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-
-    const result = await realFetch(`${base}/profiles/Invalid-Name!`, {
+    const deleteInvalid = await realFetch(`${base}/profiles/Invalid-Name!`, {
       method: "DELETE",
     });
-    expect(result.status).toBe(400);
-    const body = (await result.json()) as { error: string };
-    expect(body.error).toContain("invalid profile name");
+    expect(deleteInvalid.status).toBe(400);
+    const deleteInvalidBody = (await deleteInvalid.json()) as { error: string };
+    expect(deleteInvalidBody.error).toContain("invalid profile name");
   });
 });
