@@ -71,7 +71,7 @@ At `2026-02-13T18:36:28Z`, logs showed:
 ## Suggested fix
 
 1. Add a runner option for probe mode (or "do not penalize auth profiles") and bypass `markAuthProfileFailure` when enabled.
-2. In fallback summary, group provider-cooldown skips or label them as skipped-not-attempted so users can see root cause quickly.
+2. In fallback summary, keep `provider/model:` formatting and label provider-cooldown entries as skipped-not-attempted.
 3. Add tests for:
    - probe run does not update `cooldownUntil`
    - fallback summary distinguishes model failures from provider/profile skip reasons

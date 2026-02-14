@@ -64,6 +64,8 @@ export type EmbeddedRunAttemptParams = {
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
   runId: string;
+  /** Explicit probe marker for diagnostic runs (suppresses auth-penalty side effects). */
+  isProbeRun?: boolean;
   abortSignal?: AbortSignal;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;

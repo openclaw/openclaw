@@ -111,7 +111,11 @@ function notifyEmbeddedRunEnded(sessionId: string) {
   }
 }
 
-export function setActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueHandle) {
+export function setActiveEmbeddedRun(
+  sessionId: string,
+  handle: EmbeddedPiQueueHandle,
+  opts?: { isProbeRun?: boolean },
+) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
   logSessionStateChange({
@@ -119,16 +123,20 @@ export function setActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueH
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
-  if (!sessionId.startsWith("probe-")) {
+  if (!opts?.isProbeRun) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
 }
 
-export function clearActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueHandle) {
+export function clearActiveEmbeddedRun(
+  sessionId: string,
+  handle: EmbeddedPiQueueHandle,
+  opts?: { isProbeRun?: boolean },
+) {
   if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     logSessionStateChange({ sessionId, state: "idle", reason: "run_completed" });
-    if (!sessionId.startsWith("probe-")) {
+    if (!opts?.isProbeRun) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
     }
     notifyEmbeddedRunEnded(sessionId);

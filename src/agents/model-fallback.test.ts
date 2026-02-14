@@ -204,7 +204,7 @@ describe("runWithModelFallback", () => {
     }
   });
 
-  it("groups provider-cooldown skips in final error summaries", async () => {
+  it("keeps provider/model prefixes for provider-cooldown skips in final error summaries", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
     const provider = `cooldown-summary-${crypto.randomUUID()}`;
     const profileId = `${provider}:default`;
@@ -249,7 +249,29 @@ describe("runWithModelFallback", () => {
           run,
         }),
       ).rejects.toThrow(
-        `${provider}: skipped 3 models (m1, m2, m3) because all auth profiles are in cooldown (rate_limit)`,
+        `${provider}/m1: skipped (provider cooldown: all auth profiles in cooldown) (rate_limit)`,
+      );
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider,
+          model: "m1",
+          agentDir: tempDir,
+          run,
+        }),
+      ).rejects.toThrow(
+        `${provider}/m2: skipped (provider cooldown: all auth profiles in cooldown) (rate_limit)`,
+      );
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider,
+          model: "m1",
+          agentDir: tempDir,
+          run,
+        }),
+      ).rejects.toThrow(
+        `${provider}/m3: skipped (provider cooldown: all auth profiles in cooldown) (rate_limit)`,
       );
       expect(run).not.toHaveBeenCalled();
     } finally {

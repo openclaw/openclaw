@@ -60,12 +60,9 @@ Representative error:
 
 Changes:
 
-- Add skip metadata (`skip: "provider_cooldown"`) for pre-skipped attempts.
-- Group these skips by provider in final error summary.
-
-New summary style for skip-only provider group:
-
-- `providerX: skipped N models (m1, m2, ...) because all auth profiles are in cooldown (rate_limit)`
+- Preserve `provider/model:` per-attempt formatting for compatibility.
+- Mark provider-cooldown skips explicitly at model-entry level:
+  - `provider/model: skipped (provider cooldown: all auth profiles in cooldown) (rate_limit)`
 
 Files:
 
@@ -76,7 +73,9 @@ Files:
 
 Changes:
 
-- Guard cooldown writes with `!isProbeSession` where `markAuthProfileFailure` is called in embedded run failure paths.
+- Add explicit probe flag (`isProbeRun`) and thread it from `models status --probe`.
+- Guard cooldown writes with `!isProbeRun` where `markAuthProfileFailure` is called in embedded run failure paths.
+- Remove cooldown-suppression heuristics based on `sessionId.startsWith("probe-")` in patched runner paths.
 
 Files:
 
