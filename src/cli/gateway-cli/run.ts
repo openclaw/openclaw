@@ -247,7 +247,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  if (bind !== "loopback" && !hasSharedSecret) {
+  if (bind !== "loopback" && !hasSharedSecret && resolvedAuthMode !== "trusted-proxy") {
     defaultRuntime.error(
       [
         `Refusing to bind gateway to ${bind} without auth.`,

@@ -139,12 +139,65 @@ function parseRealIp(realIp?: string): string | undefined {
   return normalizeIp(stripOptionalPort(raw));
 }
 
+/**
+ * Check if an IP address matches a CIDR block.
+ * Supports IPv4 CIDR notation (e.g., "10.42.0.0/24").
+ *
+ * @param ip - The IP address to check (e.g., "10.42.0.59")
+ * @param cidr - The CIDR block (e.g., "10.42.0.0/24")
+ * @returns True if the IP is within the CIDR block
+ */
+function ipMatchesCIDR(ip: string, cidr: string): boolean {
+  // Handle exact IP match (no CIDR notation)
+  if (!cidr.includes("/")) {
+    return ip === cidr;
+  }
+
+  const [subnet, prefixLenStr] = cidr.split("/");
+  const prefixLen = parseInt(prefixLenStr, 10);
+
+  // Validate prefix length
+  if (Number.isNaN(prefixLen) || prefixLen < 0 || prefixLen > 32) {
+    return false;
+  }
+
+  // Convert IPs to 32-bit integers
+  const ipParts = ip.split(".").map((p) => parseInt(p, 10));
+  const subnetParts = subnet.split(".").map((p) => parseInt(p, 10));
+
+  // Validate IP format
+  if (
+    ipParts.length !== 4 ||
+    subnetParts.length !== 4 ||
+    ipParts.some((p) => Number.isNaN(p) || p < 0 || p > 255) ||
+    subnetParts.some((p) => Number.isNaN(p) || p < 0 || p > 255)
+  ) {
+    return false;
+  }
+
+  const ipInt = (ipParts[0] << 24) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
+  const subnetInt =
+    (subnetParts[0] << 24) | (subnetParts[1] << 16) | (subnetParts[2] << 8) | subnetParts[3];
+
+  // Create mask and compare
+  const mask = prefixLen === 0 ? 0 : (-1 >>> (32 - prefixLen)) << (32 - prefixLen);
+  return (ipInt & mask) === (subnetInt & mask);
+}
+
 export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
   const normalized = normalizeIp(ip);
   if (!normalized || !trustedProxies || trustedProxies.length === 0) {
     return false;
   }
-  return trustedProxies.some((proxy) => normalizeIp(proxy) === normalized);
+
+  return trustedProxies.some((proxy) => {
+    // Handle CIDR notation
+    if (proxy.includes("/")) {
+      return ipMatchesCIDR(normalized, proxy);
+    }
+    // Exact IP match
+    return normalizeIp(proxy) === normalized;
+  });
 }
 
 export function resolveGatewayClientIp(params: {

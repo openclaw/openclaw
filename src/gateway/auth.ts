@@ -1,5 +1,9 @@
 import type { IncomingMessage } from "node:http";
-import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
+import type {
+  GatewayAuthConfig,
+  GatewayTailscaleMode,
+  GatewayTrustedProxyConfig,
+} from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
@@ -14,18 +18,19 @@ import {
   resolveGatewayClientIp,
 } from "./net.js";
 
-export type ResolvedGatewayAuthMode = "token" | "password";
+export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 
 export type ResolvedGatewayAuth = {
   mode: ResolvedGatewayAuthMode;
   token?: string;
   password?: string;
   allowTailscale: boolean;
+  trustedProxy?: GatewayTrustedProxyConfig;
 };
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "token" | "password" | "tailscale" | "device-token";
+  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy";
   user?: string;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
@@ -192,21 +197,31 @@ export function resolveGatewayAuth(params: {
 }): ResolvedGatewayAuth {
   const authConfig = params.authConfig ?? {};
   const env = params.env ?? process.env;
-  const token =
-    authConfig.token ?? env.OPENCLAW_GATEWAY_TOKEN ?? env.CLAWDBOT_GATEWAY_TOKEN ?? undefined;
-  const password =
-    authConfig.password ??
-    env.OPENCLAW_GATEWAY_PASSWORD ??
-    env.CLAWDBOT_GATEWAY_PASSWORD ??
-    undefined;
-  const mode: ResolvedGatewayAuth["mode"] = authConfig.mode ?? (password ? "password" : "token");
+  const token = authConfig.token ?? env.OPENCLAW_GATEWAY_TOKEN ?? undefined;
+  const password = authConfig.password ?? env.OPENCLAW_GATEWAY_PASSWORD ?? undefined;
+  const trustedProxy = authConfig.trustedProxy;
+
+  let mode: ResolvedGatewayAuth["mode"];
+  if (authConfig.mode) {
+    mode = authConfig.mode;
+  } else if (password) {
+    mode = "password";
+  } else if (token) {
+    mode = "token";
+  } else {
+    mode = "none";
+  }
+
   const allowTailscale =
-    authConfig.allowTailscale ?? (params.tailscaleMode === "serve" && mode !== "password");
+    authConfig.allowTailscale ??
+    (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy");
+
   return {
     mode,
     token,
     password,
     allowTailscale,
+    trustedProxy,
   };
 }
 
@@ -222,6 +237,61 @@ export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
   if (auth.mode === "password" && !auth.password) {
     throw new Error("gateway auth mode is password, but no password was configured");
   }
+  if (auth.mode === "trusted-proxy") {
+    if (!auth.trustedProxy) {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but no trustedProxy config was provided (set gateway.auth.trustedProxy)",
+      );
+    }
+    if (!auth.trustedProxy.userHeader || auth.trustedProxy.userHeader.trim() === "") {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but trustedProxy.userHeader is empty (set gateway.auth.trustedProxy.userHeader)",
+      );
+    }
+  }
+}
+
+/**
+ * Check if the request came from a trusted proxy and extract user identity.
+ * Returns the user identity if valid, or null with a reason if not.
+ */
+function authorizeTrustedProxy(params: {
+  req?: IncomingMessage;
+  trustedProxies?: string[];
+  trustedProxyConfig: GatewayTrustedProxyConfig;
+}): { user: string } | { reason: string } {
+  const { req, trustedProxies, trustedProxyConfig } = params;
+
+  if (!req) {
+    return { reason: "trusted_proxy_no_request" };
+  }
+
+  const remoteAddr = req.socket?.remoteAddress;
+  if (!remoteAddr || !isTrustedProxyAddress(remoteAddr, trustedProxies)) {
+    return { reason: "trusted_proxy_untrusted_source" };
+  }
+
+  const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];
+  for (const header of requiredHeaders) {
+    const value = headerValue(req.headers[header.toLowerCase()]);
+    if (!value || value.trim() === "") {
+      return { reason: `trusted_proxy_missing_header_${header}` };
+    }
+  }
+
+  const userHeaderValue = headerValue(req.headers[trustedProxyConfig.userHeader.toLowerCase()]);
+  if (!userHeaderValue || userHeaderValue.trim() === "") {
+    return { reason: "trusted_proxy_user_missing" };
+  }
+
+  const user = userHeaderValue.trim();
+
+  const allowUsers = trustedProxyConfig.allowUsers ?? [];
+  if (allowUsers.length > 0 && !allowUsers.includes(user)) {
+    return { reason: "trusted_proxy_user_not_allowed" };
+  }
+
+  return { user };
 }
 
 export async function authorizeGatewayConnect(params: {
@@ -241,7 +311,26 @@ export async function authorizeGatewayConnect(params: {
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
 
-  // --- Rate-limit gate ---
+  if (auth.mode === "trusted-proxy") {
+    if (!auth.trustedProxy) {
+      return { ok: false, reason: "trusted_proxy_config_missing" };
+    }
+    if (!trustedProxies || trustedProxies.length === 0) {
+      return { ok: false, reason: "trusted_proxy_no_proxies_configured" };
+    }
+
+    const result = authorizeTrustedProxy({
+      req,
+      trustedProxies,
+      trustedProxyConfig: auth.trustedProxy,
+    });
+
+    if ("user" in result) {
+      return { ok: true, method: "trusted-proxy", user: result.user };
+    }
+    return { ok: false, reason: result.reason };
+  }
+
   const limiter = params.rateLimiter;
   const ip =
     params.clientIp ?? resolveRequestClientIp(req, trustedProxies) ?? req?.socket?.remoteAddress;
@@ -264,7 +353,6 @@ export async function authorizeGatewayConnect(params: {
       tailscaleWhois,
     });
     if (tailscaleCheck.ok) {
-      // Successful auth – reset rate-limit counter for this IP.
       limiter?.reset(ip, rateLimitScope);
       return {
         ok: true,
