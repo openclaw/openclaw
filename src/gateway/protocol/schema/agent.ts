@@ -35,7 +35,15 @@ export const PollParamsSchema = Type.Object(
     question: NonEmptyString,
     options: Type.Array(NonEmptyString, { minItems: 2, maxItems: 12 }),
     maxSelections: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
+    /** Poll duration in seconds (channel-specific limits may apply). */
+    durationSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 600 })),
     durationHours: Type.Optional(Type.Integer({ minimum: 1 })),
+    /** Send silently (no notification) where supported. */
+    silent: Type.Optional(Type.Boolean()),
+    /** Poll anonymity where supported (e.g. Telegram polls default to anonymous). */
+    isAnonymous: Type.Optional(Type.Boolean()),
+    /** Thread id (channel-specific meaning, e.g. Telegram forum topic id). */
+    threadId: Type.Optional(Type.String()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
