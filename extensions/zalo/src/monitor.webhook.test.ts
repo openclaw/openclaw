@@ -24,7 +24,9 @@ async function withServer(
   }
 }
 
-describe("handleZaloWebhookRequest", () => {
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
+describeListen("handleZaloWebhookRequest", () => {
   it("returns 400 for non-object payloads", async () => {
     const core = {} as PluginRuntime;
     const account: ResolvedZaloAccount = {

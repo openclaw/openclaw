@@ -30,6 +30,7 @@ import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
@@ -56,6 +57,8 @@ import {
   hasBotMention,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
+
+const REACTION_INVALID_RE = /REACTION_INVALID/i;
 
 export type TelegramMediaRef = {
   path: string;
@@ -519,11 +522,15 @@ export const buildTelegramMessageContext = async ({
     shouldAckReaction() && msg.message_id && reactionApi
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
+          shouldLog: (err) => !REACTION_INVALID_RE.test(formatErrorMessage(err)),
           fn: () => reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]),
         }).then(
           () => true,
           (err) => {
-            logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);
+            const errText = formatErrorMessage(err);
+            if (!REACTION_INVALID_RE.test(errText)) {
+              logVerbose(`telegram react failed for chat ${chatId}: ${errText}`);
+            }
             return false;
           },
         )

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { startTelegramWebhook } from "./webhook.js";
 
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
 const handlerSpy = vi.fn(
   (_req: unknown, res: { writeHead: (status: number) => void; end: (body?: string) => void }) => {
     res.writeHead(200);
@@ -24,7 +26,7 @@ vi.mock("./bot.js", () => ({
   createTelegramBot: (...args: unknown[]) => createTelegramBotSpy(...args),
 }));
 
-describe("startTelegramWebhook", () => {
+describeListen("startTelegramWebhook", () => {
   it("starts server, registers webhook, and serves health", async () => {
     createTelegramBotSpy.mockClear();
     const abort = new AbortController();

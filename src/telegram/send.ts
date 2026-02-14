@@ -73,6 +73,7 @@ type TelegramReactionOpts = {
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const REPLY_TARGET_NOT_FOUND_RE = /400:\s*Bad Request:\s*message to be replied not found/i;
+const REACTION_INVALID_RE = /REACTION_INVALID/i;
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 const reactionLogger = createSubsystemLogger("telegram/reactions");
 const TELEGRAM_REPLY_TRACE_FLAG = "telegram.reply-route";
@@ -710,9 +711,14 @@ export async function reactMessageTelegram(
     shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
   const logHttpError = createTelegramHttpLogger(cfg);
-  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+  const requestWithDiag = <T>(
+    fn: () => Promise<T>,
+    label?: string,
+    shouldLog?: (err: unknown) => boolean,
+  ) =>
     withTelegramApiErrorLogging({
       operation: label ?? "request",
+      shouldLog,
       fn: () => request(fn, label),
     }).catch((err) => {
       logHttpError(label ?? "request", err);
@@ -730,7 +736,11 @@ export async function reactMessageTelegram(
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }
   try {
-    await requestWithDiag(() => api.setMessageReaction(chatId, messageId, reactions), "reaction");
+    await requestWithDiag(
+      () => api.setMessageReaction(chatId, messageId, reactions),
+      "reaction",
+      (err) => !REACTION_INVALID_RE.test(formatErrorMessage(err)),
+    );
     const action = remove || !trimmedEmoji ? "cleared" : "added";
     const emojiForLog = remove || !trimmedEmoji ? "(cleared)" : trimmedEmoji;
     reactionLogger.info(

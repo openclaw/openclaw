@@ -8,6 +8,12 @@ import { optimizeImageToPng } from "../media/image-ops.js";
 import { loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } from "./media.js";
 
 const tmpFiles: string[] = [];
+const originalFetch = globalThis.fetch;
+
+const setGlobalFetch = (impl: typeof fetch) => {
+  globalThis.fetch = impl;
+  return impl;
+};
 
 async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
   const file = path.join(
@@ -32,12 +38,17 @@ function buildDeterministicBytes(length: number): Buffer {
 afterEach(async () => {
   await Promise.all(tmpFiles.map((file) => fs.rm(file, { force: true })));
   tmpFiles.length = 0;
+  if (originalFetch) {
+    globalThis.fetch = originalFetch;
+  } else {
+    delete (globalThis as { fetch?: typeof fetch }).fetch;
+  }
   vi.restoreAllMocks();
 });
 
 describe("web media loading", () => {
   beforeEach(() => {
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
       const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
       const addresses = ["93.184.216.34"];
       return {
@@ -85,25 +96,24 @@ describe("web media loading", () => {
   });
 
   it("adds extension to URL fileName when missing", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+    const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
       body: true,
       arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
       headers: { get: () => "application/pdf" },
       status: 200,
     } as Response);
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const result = await loadWebMedia("https://example.com/download", 1024 * 1024);
 
     expect(result.kind).toBe("document");
     expect(result.contentType).toBe("application/pdf");
     expect(result.fileName).toBe("download.pdf");
-
-    fetchMock.mockRestore();
   });
 
   it("includes URL + status in fetch errors", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+    const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: false,
       body: true,
       text: async () => "Not Found",
@@ -112,32 +122,30 @@ describe("web media loading", () => {
       statusText: "Not Found",
       url: "https://example.com/missing.jpg",
     } as Response);
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     await expect(loadWebMedia("https://example.com/missing.jpg", 1024 * 1024)).rejects.toThrow(
       /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
     );
-
-    fetchMock.mockRestore();
   });
 
   it("respects maxBytes for raw URL fetches", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+    const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
       body: true,
       arrayBuffer: async () => Buffer.alloc(2048).buffer,
       headers: { get: () => "image/png" },
       status: 200,
     } as Response);
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     await expect(loadWebMediaRaw("https://example.com/too-big.png", 1024)).rejects.toThrow(
       /exceeds maxBytes 1024/i,
     );
-
-    fetchMock.mockRestore();
   });
 
   it("uses content-disposition filename when available", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+    const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
       body: true,
       arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
@@ -154,13 +162,12 @@ describe("web media loading", () => {
       },
       status: 200,
     } as Response);
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const result = await loadWebMedia("https://example.com/download?id=1", 1024 * 1024);
 
     expect(result.kind).toBe("document");
     expect(result.fileName).toBe("report.pdf");
-
-    fetchMock.mockRestore();
   });
 
   it("preserves GIF animation by skipping JPEG optimization", async () => {
@@ -213,7 +220,7 @@ describe("web media loading", () => {
       0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x44, 0x00, 0x3b,
     ]);
 
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+    const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
       body: true,
       arrayBuffer: async () =>
@@ -221,14 +228,13 @@ describe("web media loading", () => {
       headers: { get: () => "image/gif" },
       status: 200,
     } as Response);
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const result = await loadWebMedia("https://example.com/animation.gif", 1024 * 1024);
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/gif");
     expect(result.buffer.slice(0, 3).toString()).toBe("GIF");
-
-    fetchMock.mockRestore();
   });
 
   it("preserves PNG alpha when under the cap", async () => {

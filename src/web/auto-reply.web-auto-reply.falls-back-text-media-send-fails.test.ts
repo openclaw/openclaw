@@ -104,7 +104,7 @@ describe("web auto-reply", () => {
     resetBaileysMocks();
     resetLoadConfigMock();
     resolvePinnedHostnameSpy = vi
-      .spyOn(ssrf, "resolvePinnedHostname")
+      .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
       .mockImplementation(async (hostname) => {
         // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
         const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
