@@ -292,7 +292,7 @@ describe("subagent announce formatting", () => {
         lastChannel: "whatsapp",
         lastTo: "+1555",
         queueMode: "collect",
-        queueDebounceMs: 80,
+        queueDebounceMs: 0,
       },
     };
 
@@ -327,7 +327,7 @@ describe("subagent announce formatting", () => {
       }),
     ]);
 
-    await new Promise((r) => setTimeout(r, 120));
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(2);
     expect(agentSpy).toHaveBeenCalledTimes(2);
     const accountIds = agentSpy.mock.calls.map(
       (call) => (call?.[0] as { params?: { accountId?: string } })?.params?.accountId,
@@ -512,59 +512,5 @@ describe("subagent announce formatting", () => {
     // The channel should match requesterOrigin, NOT the stale session entry.
     expect(call?.params?.channel).toBe("bluebubbles");
     expect(call?.params?.to).toBe("bluebubbles:chat_guid:123");
-  });
-
-  it("splits collect-mode announces when accountId differs", async () => {
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
-    sessionStore = {
-      "agent:main:main": {
-        sessionId: "session-789",
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-        queueMode: "collect",
-        queueDebounceMs: 0,
-      },
-    };
-
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-a",
-      requesterSessionKey: "main",
-      requesterOrigin: { accountId: "acct-a" },
-      requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-    });
-
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-b",
-      requesterSessionKey: "main",
-      requesterOrigin: { accountId: "acct-b" },
-      requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-    });
-
-    await expect.poll(() => agentSpy.mock.calls.length).toBe(2);
-
-    const accountIds = agentSpy.mock.calls.map(
-      (call) => (call[0] as { params?: Record<string, unknown> }).params?.accountId,
-    );
-    expect(accountIds).toContain("acct-a");
-    expect(accountIds).toContain("acct-b");
-    expect(agentSpy).toHaveBeenCalledTimes(2);
   });
 });
