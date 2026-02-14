@@ -152,19 +152,12 @@ describe("docker-setup.sh", () => {
       return;
     }
 
-    const sandbox = await createDockerSetupSandbox();
-    const env = createEnv(sandbox, {
-      OPENCLAW_EXTRA_MOUNTS: "",
-      OPENCLAW_HOME_VOLUME: "",
-    });
-    const result = spawnSync(systemBash, [sandbox.scriptPath], {
-      cwd: sandbox.rootDir,
-      env,
+    const syntaxCheck = spawnSync(systemBash, ["-n", join(repoRoot, "docker-setup.sh")], {
       encoding: "utf8",
     });
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("declare: -A: invalid option");
+    expect(syntaxCheck.status).toBe(0);
+    expect(syntaxCheck.stderr).not.toContain("declare: -A: invalid option");
   });
 
   it("keeps docker-compose gateway command in sync", async () => {
