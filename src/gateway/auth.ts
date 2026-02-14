@@ -1,13 +1,19 @@
 import type { IncomingMessage } from "node:http";
-import { timingSafeEqual } from "node:crypto";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  type AuthRateLimiter,
+  type RateLimitCheckResult,
+} from "./auth-rate-limit.js";
 import {
   isLoopbackAddress,
   isTrustedProxyAddress,
   parseForwardedForClientIp,
   resolveGatewayClientIp,
 } from "./net.js";
+
 export type ResolvedGatewayAuthMode = "token" | "password";
 
 export type ResolvedGatewayAuth = {
@@ -22,6 +28,10 @@ export type GatewayAuthResult = {
   method?: "token" | "password" | "tailscale" | "device-token";
   user?: string;
   reason?: string;
+  /** Present when the request was blocked by the rate limiter. */
+  rateLimited?: boolean;
+  /** Milliseconds the client should wait before retrying (when rate-limited). */
+  retryAfterMs?: number;
 };
 
 type ConnectAuth = {
@@ -36,13 +46,6 @@ type TailscaleUser = {
 };
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
-
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
 
 function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
@@ -227,10 +230,33 @@ export async function authorizeGatewayConnect(params: {
   req?: IncomingMessage;
   trustedProxies?: string[];
   tailscaleWhois?: TailscaleWhoisLookup;
+  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
+  rateLimiter?: AuthRateLimiter;
+  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
+  clientIp?: string;
+  /** Optional limiter scope; defaults to shared-secret auth scope. */
+  rateLimitScope?: string;
 }): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
+
+  // --- Rate-limit gate ---
+  const limiter = params.rateLimiter;
+  const ip =
+    params.clientIp ?? resolveRequestClientIp(req, trustedProxies) ?? req?.socket?.remoteAddress;
+  const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
+  if (limiter) {
+    const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
+    if (!rlCheck.allowed) {
+      return {
+        ok: false,
+        reason: "rate_limited",
+        rateLimited: true,
+        retryAfterMs: rlCheck.retryAfterMs,
+      };
+    }
+  }
 
   if (auth.allowTailscale && !localDirect) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
@@ -238,6 +264,8 @@ export async function authorizeGatewayConnect(params: {
       tailscaleWhois,
     });
     if (tailscaleCheck.ok) {
+      // Successful auth – reset rate-limit counter for this IP.
+      limiter?.reset(ip, rateLimitScope);
       return {
         ok: true,
         method: "tailscale",
@@ -251,11 +279,14 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "token_missing_config" };
     }
     if (!connectAuth?.token) {
+      limiter?.recordFailure(ip, rateLimitScope);
       return { ok: false, reason: "token_missing" };
     }
-    if (!safeEqual(connectAuth.token, auth.token)) {
+    if (!safeEqualSecret(connectAuth.token, auth.token)) {
+      limiter?.recordFailure(ip, rateLimitScope);
       return { ok: false, reason: "token_mismatch" };
     }
+    limiter?.reset(ip, rateLimitScope);
     return { ok: true, method: "token" };
   }
 
@@ -265,13 +296,17 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "password_missing_config" };
     }
     if (!password) {
+      limiter?.recordFailure(ip, rateLimitScope);
       return { ok: false, reason: "password_missing" };
     }
-    if (!safeEqual(password, auth.password)) {
+    if (!safeEqualSecret(password, auth.password)) {
+      limiter?.recordFailure(ip, rateLimitScope);
       return { ok: false, reason: "password_mismatch" };
     }
+    limiter?.reset(ip, rateLimitScope);
     return { ok: true, method: "password" };
   }
 
+  limiter?.recordFailure(ip, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
 }

@@ -80,6 +80,7 @@ export type ChannelOutboundContext = {
   threadId?: string | number | null;
   accountId?: string | null;
   deps?: OutboundSendDeps;
+  silent?: boolean;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {

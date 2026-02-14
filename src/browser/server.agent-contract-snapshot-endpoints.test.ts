@@ -154,6 +154,9 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
+const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
+  await import("./server.js");
+
 async function getFreePort(): Promise<number> {
   while (true) {
     const port = await new Promise<number>((resolve, reject) => {
@@ -271,12 +274,10 @@ describe("browser control server", () => {
     } else {
       process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
     }
-    const { stopBrowserControlServer } = await import("./server.js");
     await stopBrowserControlServer();
   });
 
   const startServerAndBase = async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();
     const base = `http://127.0.0.1:${testPort}`;
     await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
@@ -315,6 +316,17 @@ describe("browser control server", () => {
       cdpUrl: cdpBaseUrl,
       targetId: "abcd1234",
       maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+    });
+
+    const snapAiZero = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
+      r.json(),
+    )) as { ok: boolean; format?: string };
+    expect(snapAiZero.ok).toBe(true);
+    expect(snapAiZero.format).toBe("ai");
+    const [lastCall] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
+    expect(lastCall).toEqual({
+      cdpUrl: cdpBaseUrl,
+      targetId: "abcd1234",
     });
   });
 

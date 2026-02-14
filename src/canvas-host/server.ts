@@ -7,7 +7,7 @@ import http, { type IncomingMessage, type Server, type ServerResponse } from "no
 import path from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../runtime.js";
-import { STATE_DIR } from "../config/paths.js";
+import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
@@ -235,7 +235,7 @@ async function prepareCanvasRoot(rootDir: string) {
 }
 
 function resolveDefaultCanvasRoot(): string {
-  const candidates = [path.join(STATE_DIR, "canvas")];
+  const candidates = [path.join(resolveStateDir(), "canvas")];
   const existing = candidates.find((dir) => {
     try {
       return fsSync.statSync(dir).isDirectory();
@@ -264,6 +264,10 @@ export async function createCanvasHostHandler(
   const rootReal = await prepareCanvasRoot(rootDir);
 
   const liveReload = opts.liveReload !== false;
+  const testMode = opts.allowInTests === true;
+  const reloadDebounceMs = testMode ? 12 : 75;
+  const writeStabilityThresholdMs = testMode ? 12 : 75;
+  const writePollIntervalMs = testMode ? 5 : 10;
   const wss = liveReload ? new WebSocketServer({ noServer: true }) : null;
   const sockets = new Set<WebSocket>();
   if (wss) {
@@ -293,7 +297,7 @@ export async function createCanvasHostHandler(
     debounce = setTimeout(() => {
       debounce = null;
       broadcastReload();
-    }, 75);
+    }, reloadDebounceMs);
     debounce.unref?.();
   };
 
@@ -301,8 +305,11 @@ export async function createCanvasHostHandler(
   const watcher = liveReload
     ? chokidar.watch(rootReal, {
         ignoreInitial: true,
-        awaitWriteFinish: { stabilityThreshold: 75, pollInterval: 10 },
-        usePolling: opts.allowInTests === true,
+        awaitWriteFinish: {
+          stabilityThreshold: writeStabilityThresholdMs,
+          pollInterval: writePollIntervalMs,
+        },
+        usePolling: testMode,
         ignored: [
           /(^|[\\/])\../, // dotfiles
           /(^|[\\/])node_modules([\\/]|$)/,
@@ -449,7 +456,7 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
     }));
   const ownsHandler = opts.ownsHandler ?? opts.handler === undefined;
 
-  const bindHost = opts.listenHost?.trim() || "0.0.0.0";
+  const bindHost = opts.listenHost?.trim() || "127.0.0.1";
   const server: Server = http.createServer((req, res) => {
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
       return;

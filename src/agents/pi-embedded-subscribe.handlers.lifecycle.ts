@@ -2,6 +2,7 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
@@ -33,6 +34,21 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
     stream: "compaction",
     data: { phase: "start" },
   });
+
+  // Run before_compaction plugin hook (fire-and-forget)
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_compaction")) {
+    void hookRunner
+      .runBeforeCompaction(
+        {
+          messageCount: ctx.params.session.messages?.length ?? 0,
+        },
+        {},
+      )
+      .catch((err) => {
+        ctx.log.warn(`before_compaction hook failed: ${String(err)}`);
+      });
+  }
 }
 
 export function handleAutoCompactionEnd(
@@ -57,6 +73,24 @@ export function handleAutoCompactionEnd(
     stream: "compaction",
     data: { phase: "end", willRetry },
   });
+
+  // Run after_compaction plugin hook (fire-and-forget)
+  if (!willRetry) {
+    const hookRunnerEnd = getGlobalHookRunner();
+    if (hookRunnerEnd?.hasHooks("after_compaction")) {
+      void hookRunnerEnd
+        .runAfterCompaction(
+          {
+            messageCount: ctx.params.session.messages?.length ?? 0,
+            compactedCount: ctx.getCompactionCount(),
+          },
+          {},
+        )
+        .catch((err) => {
+          ctx.log.warn(`after_compaction hook failed: ${String(err)}`);
+        });
+    }
+  }
 }
 
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {

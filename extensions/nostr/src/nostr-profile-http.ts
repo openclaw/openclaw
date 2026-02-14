@@ -8,6 +8,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { readJsonBodyWithLimit, requestBodyErrorToText } from "openclaw/plugin-sdk";
 import { z } from "zod";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
@@ -234,54 +235,24 @@ async function readJsonBody(
   maxBytes = 64 * 1024,
   timeoutMs = 30_000,
 ): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    let done = false;
-    const finish = (fn: () => void) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      clearTimeout(timer);
-      fn();
-    };
-
-    const timer = setTimeout(() => {
-      finish(() => {
-        const err = new Error("Request body timeout");
-        req.destroy(err);
-        reject(err);
-      });
-    }, timeoutMs);
-
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-
-    req.on("data", (chunk: Buffer) => {
-      totalBytes += chunk.length;
-      if (totalBytes > maxBytes) {
-        finish(() => {
-          reject(new Error("Request body too large"));
-          req.destroy();
-        });
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on("end", () => {
-      finish(() => {
-        try {
-          const body = Buffer.concat(chunks).toString("utf-8");
-          resolve(body ? JSON.parse(body) : {});
-        } catch {
-          reject(new Error("Invalid JSON"));
-        }
-      });
-    });
-
-    req.on("error", (err) => finish(() => reject(err)));
-    req.on("close", () => finish(() => reject(new Error("Connection closed"))));
+  const result = await readJsonBodyWithLimit(req, {
+    maxBytes,
+    timeoutMs,
+    emptyObjectOnEmpty: true,
   });
+  if (result.ok) {
+    return result.value;
+  }
+  if (result.code === "PAYLOAD_TOO_LARGE") {
+    throw new Error("Request body too large");
+  }
+  if (result.code === "REQUEST_BODY_TIMEOUT") {
+    throw new Error(requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+  }
+  if (result.code === "CONNECTION_CLOSED") {
+    throw new Error(requestBodyErrorToText("CONNECTION_CLOSED"));
+  }
+  throw new Error(result.code === "INVALID_JSON" ? "Invalid JSON" : result.error);
 }
 
 function parseAccountIdFromPath(pathname: string): string | null {

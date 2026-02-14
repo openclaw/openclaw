@@ -115,6 +115,23 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   return fetch(resolvedUrl.toString(), { redirect: "follow" });
 }
 
+/**
+ * Slack voice messages (audio clips, huddle recordings) carry a `subtype` of
+ * `"slack_audio"` but are served with a `video/*` MIME type (e.g. `video/mp4`,
+ * `video/webm`).  Override the primary type to `audio/` so the
+ * media-understanding pipeline routes them to transcription.
+ */
+function resolveSlackMediaMimetype(
+  file: SlackFile,
+  fetchedContentType?: string,
+): string | undefined {
+  const mime = fetchedContentType ?? file.mimetype;
+  if (file.subtype === "slack_audio" && mime?.startsWith("video/")) {
+    return mime.replace("video/", "audio/");
+  }
+  return mime;
+}
+
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
@@ -144,16 +161,17 @@ export async function resolveSlackMedia(params: {
       if (fetched.buffer.byteLength > params.maxBytes) {
         continue;
       }
+      const effectiveMime = resolveSlackMediaMimetype(file, fetched.contentType);
       const saved = await saveMediaBuffer(
         fetched.buffer,
-        fetched.contentType ?? file.mimetype,
+        effectiveMime,
         "inbound",
         params.maxBytes,
       );
       const label = fetched.fileName ?? file.name;
       return {
         path: saved.path,
-        contentType: saved.contentType,
+        contentType: effectiveMime ?? saved.contentType,
         placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
       };
     } catch {
@@ -204,5 +222,93 @@ export async function resolveSlackThreadStarter(params: {
     return starter;
   } catch {
     return null;
+  }
+}
+
+export type SlackThreadMessage = {
+  text: string;
+  userId?: string;
+  ts?: string;
+  botId?: string;
+  files?: SlackFile[];
+};
+
+type SlackRepliesPageMessage = {
+  text?: string;
+  user?: string;
+  bot_id?: string;
+  ts?: string;
+  files?: SlackFile[];
+};
+
+type SlackRepliesPage = {
+  messages?: SlackRepliesPageMessage[];
+  response_metadata?: { next_cursor?: string };
+};
+
+/**
+ * Fetches the most recent messages in a Slack thread (excluding the current message).
+ * Used to populate thread context when a new thread session starts.
+ *
+ * Uses cursor pagination and keeps only the latest N retained messages so long threads
+ * still produce up-to-date context without unbounded memory growth.
+ */
+export async function resolveSlackThreadHistory(params: {
+  channelId: string;
+  threadTs: string;
+  client: SlackWebClient;
+  currentMessageTs?: string;
+  limit?: number;
+}): Promise<SlackThreadMessage[]> {
+  const maxMessages = params.limit ?? 20;
+  if (!Number.isFinite(maxMessages) || maxMessages <= 0) {
+    return [];
+  }
+
+  // Slack recommends no more than 200 per page.
+  const fetchLimit = 200;
+  const retained: SlackRepliesPageMessage[] = [];
+  let cursor: string | undefined;
+
+  try {
+    do {
+      const response = (await params.client.conversations.replies({
+        channel: params.channelId,
+        ts: params.threadTs,
+        limit: fetchLimit,
+        inclusive: true,
+        ...(cursor ? { cursor } : {}),
+      })) as SlackRepliesPage;
+
+      for (const msg of response.messages ?? []) {
+        // Keep messages with text OR file attachments
+        if (!msg.text?.trim() && !msg.files?.length) {
+          continue;
+        }
+        if (params.currentMessageTs && msg.ts === params.currentMessageTs) {
+          continue;
+        }
+        retained.push(msg);
+        if (retained.length > maxMessages) {
+          retained.shift();
+        }
+      }
+
+      const next = response.response_metadata?.next_cursor;
+      cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
+    } while (cursor);
+
+    return retained.map((msg) => ({
+      // For file-only messages, create a placeholder showing attached filenames
+      text: msg.text?.trim()
+        ? msg.text
+        : `[attached: ${msg.files?.map((f) => f.name ?? "file").join(", ")}]`,
+      userId: msg.user,
+      botId: msg.bot_id,
+      ts: msg.ts,
+      files: msg.files,
+    }));
+  } catch {
+    return [];
   }
 }

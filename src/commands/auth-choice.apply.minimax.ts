@@ -55,7 +55,7 @@ export async function applyAuthChoiceMiniMax(
     params.authChoice === "minimax-api-lightning"
   ) {
     const modelId =
-      params.authChoice === "minimax-api-lightning" ? "MiniMax-M2.1-lightning" : "MiniMax-M2.1";
+      params.authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-Lightning" : "MiniMax-M2.5";
     let hasCredential = false;
     const envKey = resolveEnvApiKey("minimax");
     if (envKey) {

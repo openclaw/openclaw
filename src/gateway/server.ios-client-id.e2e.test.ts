@@ -3,16 +3,24 @@ import WebSocket from "ws";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { getFreePort, onceMessage, startGatewayServer } from "./test-helpers.server.js";
 
-let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 let port = 0;
+let previousToken: string | undefined;
 
 beforeAll(async () => {
+  previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  process.env.OPENCLAW_GATEWAY_TOKEN = "test-gateway-token-1234567890";
   port = await getFreePort();
   server = await startGatewayServer(port);
 });
 
 afterAll(async () => {
-  await server.close();
+  await server?.close();
+  if (previousToken === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  } else {
+    process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+  }
 });
 
 function connectReq(

@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw plugins` (list, install, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (list, install, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage in-process Gateway plugins
   - You want to debug plugin load failures
@@ -23,6 +23,7 @@ openclaw plugins list
 openclaw plugins info <id>
 openclaw plugins enable <id>
 openclaw plugins disable <id>
+openclaw plugins uninstall <id>
 openclaw plugins doctor
 openclaw plugins update <id>
 openclaw plugins update --all
@@ -50,6 +51,24 @@ Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 ```bash
 openclaw plugins install -l ./my-plugin
 ```
+
+### Uninstall
+
+```bash
+openclaw plugins uninstall <id>
+openclaw plugins uninstall <id> --dry-run
+openclaw plugins uninstall <id> --keep-files
+```
+
+`uninstall` removes plugin records from `plugins.entries`, `plugins.installs`,
+the plugin allowlist, and linked `plugins.load.paths` entries when applicable.
+For active memory plugins, the memory slot resets to `memory-core`.
+
+By default, uninstall also removes the plugin install directory under the active
+state dir extensions root (`$OPENCLAW_STATE_DIR/extensions/<id>`). Use
+`--keep-files` to keep files on disk.
+
+`--keep-config` is supported as a deprecated alias for `--keep-files`.
 
 ### Update
 

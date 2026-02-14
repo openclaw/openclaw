@@ -4,6 +4,7 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-rep
 import type { AgentStreamParams } from "../../../commands/agent/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
@@ -87,6 +88,7 @@ export type EmbeddedRunAttemptParams = {
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   extraSystemPrompt?: string;
+  inputProvenance?: InputProvenance;
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;

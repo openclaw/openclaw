@@ -1,0 +1,591 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type {
+  MediaUnderstandingConfig,
+  MediaUnderstandingModelConfig,
+} from "../config/types.tools.js";
+import type {
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingModelDecision,
+  MediaUnderstandingOutput,
+  MediaUnderstandingProvider,
+} from "./types.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { applyTemplate } from "../auto-reply/templating.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { runExec } from "../process/exec.js";
+import { MediaAttachmentCache } from "./attachments.js";
+import {
+  CLI_OUTPUT_MAX_BUFFER,
+  DEFAULT_AUDIO_MODELS,
+  DEFAULT_TIMEOUT_SECONDS,
+} from "./defaults.js";
+import { MediaUnderstandingSkipError } from "./errors.js";
+import { describeImageWithModel } from "./providers/image.js";
+import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./providers/index.js";
+import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
+import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
+
+export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+
+function trimOutput(text: string, maxChars?: number): string {
+  const trimmed = text.trim();
+  if (!maxChars || trimmed.length <= maxChars) {
+    return trimmed;
+  }
+  return trimmed.slice(0, maxChars).trim();
+}
+
+function extractLastJsonObject(raw: string): unknown {
+  const trimmed = raw.trim();
+  const start = trimmed.lastIndexOf("{");
+  if (start === -1) {
+    return null;
+  }
+  const slice = trimmed.slice(start);
+  try {
+    return JSON.parse(slice);
+  } catch {
+    return null;
+  }
+}
+
+function extractGeminiResponse(raw: string): string | null {
+  const payload = extractLastJsonObject(raw);
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const response = (payload as { response?: unknown }).response;
+  if (typeof response !== "string") {
+    return null;
+  }
+  const trimmed = response.trim();
+  return trimmed || null;
+}
+
+function extractSherpaOnnxText(raw: string): string | null {
+  const tryParse = (value: string): string | null => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const head = trimmed[0];
+    if (head !== "{" && head !== '"') {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (typeof parsed === "string") {
+        return tryParse(parsed);
+      }
+      if (parsed && typeof parsed === "object") {
+        const text = (parsed as { text?: unknown }).text;
+        if (typeof text === "string" && text.trim()) {
+          return text.trim();
+        }
+      }
+    } catch {}
+    return null;
+  };
+
+  const direct = tryParse(raw);
+  if (direct) {
+    return direct;
+  }
+
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const parsed = tryParse(lines[i] ?? "");
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function commandBase(command: string): string {
+  return path.parse(command).name;
+}
+
+function findArgValue(args: string[], keys: string[]): string | undefined {
+  for (let i = 0; i < args.length; i += 1) {
+    if (keys.includes(args[i] ?? "")) {
+      const value = args[i + 1];
+      if (value) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function hasArg(args: string[], keys: string[]): boolean {
+  return args.some((arg) => keys.includes(arg));
+}
+
+function resolveWhisperOutputPath(args: string[], mediaPath: string): string | null {
+  const outputDir = findArgValue(args, ["--output_dir", "-o"]);
+  const outputFormat = findArgValue(args, ["--output_format"]);
+  if (!outputDir || !outputFormat) {
+    return null;
+  }
+  const formats = outputFormat.split(",").map((value) => value.trim());
+  if (!formats.includes("txt")) {
+    return null;
+  }
+  const base = path.parse(mediaPath).name;
+  return path.join(outputDir, `${base}.txt`);
+}
+
+function resolveWhisperCppOutputPath(args: string[]): string | null {
+  if (!hasArg(args, ["-otxt", "--output-txt"])) {
+    return null;
+  }
+  const outputBase = findArgValue(args, ["-of", "--output-file"]);
+  if (!outputBase) {
+    return null;
+  }
+  return `${outputBase}.txt`;
+}
+
+async function fileExists(filePath?: string | null): Promise<boolean> {
+  if (!filePath) {
+    return false;
+  }
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveCliOutput(params: {
+  command: string;
+  args: string[];
+  stdout: string;
+  mediaPath: string;
+}): Promise<string> {
+  const commandId = commandBase(params.command);
+  const fileOutput =
+    commandId === "whisper-cli"
+      ? resolveWhisperCppOutputPath(params.args)
+      : commandId === "whisper"
+        ? resolveWhisperOutputPath(params.args, params.mediaPath)
+        : null;
+  if (fileOutput && (await fileExists(fileOutput))) {
+    try {
+      const content = await fs.readFile(fileOutput, "utf8");
+      if (content.trim()) {
+        return content.trim();
+      }
+    } catch {}
+  }
+
+  if (commandId === "gemini") {
+    const response = extractGeminiResponse(params.stdout);
+    if (response) {
+      return response;
+    }
+  }
+
+  if (commandId === "sherpa-onnx-offline") {
+    const response = extractSherpaOnnxText(params.stdout);
+    if (response) {
+      return response;
+    }
+  }
+
+  return params.stdout.trim();
+}
+
+type ProviderQuery = Record<string, string | number | boolean>;
+
+function normalizeProviderQuery(
+  options?: Record<string, string | number | boolean>,
+): ProviderQuery | undefined {
+  if (!options) {
+    return undefined;
+  }
+  const query: ProviderQuery = {};
+  for (const [key, value] of Object.entries(options)) {
+    if (value === undefined) {
+      continue;
+    }
+    query[key] = value;
+  }
+  return Object.keys(query).length > 0 ? query : undefined;
+}
+
+function buildDeepgramCompatQuery(options?: {
+  detectLanguage?: boolean;
+  punctuate?: boolean;
+  smartFormat?: boolean;
+}): ProviderQuery | undefined {
+  if (!options) {
+    return undefined;
+  }
+  const query: ProviderQuery = {};
+  if (typeof options.detectLanguage === "boolean") {
+    query.detect_language = options.detectLanguage;
+  }
+  if (typeof options.punctuate === "boolean") {
+    query.punctuate = options.punctuate;
+  }
+  if (typeof options.smartFormat === "boolean") {
+    query.smart_format = options.smartFormat;
+  }
+  return Object.keys(query).length > 0 ? query : undefined;
+}
+
+function normalizeDeepgramQueryKeys(query: ProviderQuery): ProviderQuery {
+  const normalized = { ...query };
+  if ("detectLanguage" in normalized) {
+    normalized.detect_language = normalized.detectLanguage as boolean;
+    delete normalized.detectLanguage;
+  }
+  if ("smartFormat" in normalized) {
+    normalized.smart_format = normalized.smartFormat as boolean;
+    delete normalized.smartFormat;
+  }
+  return normalized;
+}
+
+function resolveProviderQuery(params: {
+  providerId: string;
+  config?: MediaUnderstandingConfig;
+  entry: MediaUnderstandingModelConfig;
+}): ProviderQuery | undefined {
+  const { providerId, config, entry } = params;
+  const mergedOptions = normalizeProviderQuery({
+    ...config?.providerOptions?.[providerId],
+    ...entry.providerOptions?.[providerId],
+  });
+  if (providerId !== "deepgram") {
+    return mergedOptions;
+  }
+  const query = normalizeDeepgramQueryKeys(mergedOptions ?? {});
+  const compat = buildDeepgramCompatQuery({ ...config?.deepgram, ...entry.deepgram });
+  for (const [key, value] of Object.entries(compat ?? {})) {
+    if (query[key] === undefined) {
+      query[key] = value;
+    }
+  }
+  return Object.keys(query).length > 0 ? query : undefined;
+}
+
+export function buildModelDecision(params: {
+  entry: MediaUnderstandingModelConfig;
+  entryType: "provider" | "cli";
+  outcome: MediaUnderstandingModelDecision["outcome"];
+  reason?: string;
+}): MediaUnderstandingModelDecision {
+  if (params.entryType === "cli") {
+    const command = params.entry.command?.trim();
+    return {
+      type: "cli",
+      provider: command ?? "cli",
+      model: params.entry.model ?? command,
+      outcome: params.outcome,
+      reason: params.reason,
+    };
+  }
+  const providerIdRaw = params.entry.provider?.trim();
+  const providerId = providerIdRaw ? normalizeMediaProviderId(providerIdRaw) : undefined;
+  return {
+    type: "provider",
+    provider: providerId ?? providerIdRaw,
+    model: params.entry.model,
+    outcome: params.outcome,
+    reason: params.reason,
+  };
+}
+
+export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
+  const total = decision.attachments.length;
+  const success = decision.attachments.filter(
+    (entry) => entry.chosen?.outcome === "success",
+  ).length;
+  const chosen = decision.attachments.find((entry) => entry.chosen)?.chosen;
+  const provider = chosen?.provider?.trim();
+  const model = chosen?.model?.trim();
+  const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : undefined;
+  const reason = decision.attachments
+    .flatMap((entry) => entry.attempts.map((attempt) => attempt.reason).filter(Boolean))
+    .find(Boolean);
+  const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
+  const countLabel = total > 0 ? ` (${success}/${total})` : "";
+  const viaLabel = modelLabel ? ` via ${modelLabel}` : "";
+  const reasonLabel = shortReason ? ` reason=${shortReason}` : "";
+  return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
+}
+
+export async function runProviderEntry(params: {
+  capability: MediaUnderstandingCapability;
+  entry: MediaUnderstandingModelConfig;
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+  attachmentIndex: number;
+  cache: MediaAttachmentCache;
+  agentDir?: string;
+  providerRegistry: ProviderRegistry;
+  config?: MediaUnderstandingConfig;
+}): Promise<MediaUnderstandingOutput | null> {
+  const { entry, capability, cfg } = params;
+  const providerIdRaw = entry.provider?.trim();
+  if (!providerIdRaw) {
+    throw new Error(`Provider entry missing provider for ${capability}`);
+  }
+  const providerId = normalizeMediaProviderId(providerIdRaw);
+  const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
+  const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
+  const timeoutMs = resolveTimeoutMs(
+    entry.timeoutSeconds ??
+      params.config?.timeoutSeconds ??
+      cfg.tools?.media?.[capability]?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS[capability],
+  );
+  const prompt = resolvePrompt(
+    capability,
+    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt,
+    maxChars,
+  );
+
+  if (capability === "image") {
+    if (!params.agentDir) {
+      throw new Error("Image understanding requires agentDir");
+    }
+    const modelId = entry.model?.trim();
+    if (!modelId) {
+      throw new Error("Image understanding requires model id");
+    }
+    const media = await params.cache.getBuffer({
+      attachmentIndex: params.attachmentIndex,
+      maxBytes,
+      timeoutMs,
+    });
+    const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
+    const result = provider?.describeImage
+      ? await provider.describeImage({
+          buffer: media.buffer,
+          fileName: media.fileName,
+          mime: media.mime,
+          model: modelId,
+          provider: providerId,
+          prompt,
+          timeoutMs,
+          profile: entry.profile,
+          preferredProfile: entry.preferredProfile,
+          agentDir: params.agentDir,
+          cfg: params.cfg,
+        })
+      : await describeImageWithModel({
+          buffer: media.buffer,
+          fileName: media.fileName,
+          mime: media.mime,
+          model: modelId,
+          provider: providerId,
+          prompt,
+          timeoutMs,
+          profile: entry.profile,
+          preferredProfile: entry.preferredProfile,
+          agentDir: params.agentDir,
+          cfg: params.cfg,
+        });
+    return {
+      kind: "image.description",
+      attachmentIndex: params.attachmentIndex,
+      text: trimOutput(result.text, maxChars),
+      provider: providerId,
+      model: result.model ?? modelId,
+    };
+  }
+
+  const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
+  if (!provider) {
+    throw new Error(`Media provider not available: ${providerId}`);
+  }
+
+  if (capability === "audio") {
+    if (!provider.transcribeAudio) {
+      throw new Error(`Audio transcription provider "${providerId}" not available.`);
+    }
+    const media = await params.cache.getBuffer({
+      attachmentIndex: params.attachmentIndex,
+      maxBytes,
+      timeoutMs,
+    });
+    const auth = await resolveApiKeyForProvider({
+      provider: providerId,
+      cfg,
+      profileId: entry.profile,
+      preferredProfile: entry.preferredProfile,
+      agentDir: params.agentDir,
+    });
+    const apiKey = requireApiKey(auth, providerId);
+    const providerConfig = cfg.models?.providers?.[providerId];
+    const baseUrl = entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
+    const mergedHeaders = {
+      ...providerConfig?.headers,
+      ...params.config?.headers,
+      ...entry.headers,
+    };
+    const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
+    const providerQuery = resolveProviderQuery({
+      providerId,
+      config: params.config,
+      entry,
+    });
+    const model = entry.model?.trim() || DEFAULT_AUDIO_MODELS[providerId] || entry.model;
+    const result = await provider.transcribeAudio({
+      buffer: media.buffer,
+      fileName: media.fileName,
+      mime: media.mime,
+      apiKey,
+      baseUrl,
+      headers,
+      model,
+      language: entry.language ?? params.config?.language ?? cfg.tools?.media?.audio?.language,
+      prompt,
+      query: providerQuery,
+      timeoutMs,
+    });
+    return {
+      kind: "audio.transcription",
+      attachmentIndex: params.attachmentIndex,
+      text: trimOutput(result.text, maxChars),
+      provider: providerId,
+      model: result.model ?? model,
+    };
+  }
+
+  if (!provider.describeVideo) {
+    throw new Error(`Video understanding provider "${providerId}" not available.`);
+  }
+  const media = await params.cache.getBuffer({
+    attachmentIndex: params.attachmentIndex,
+    maxBytes,
+    timeoutMs,
+  });
+  const estimatedBase64Bytes = estimateBase64Size(media.size);
+  const maxBase64Bytes = resolveVideoMaxBase64Bytes(maxBytes);
+  if (estimatedBase64Bytes > maxBase64Bytes) {
+    throw new MediaUnderstandingSkipError(
+      "maxBytes",
+      `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
+    );
+  }
+  const auth = await resolveApiKeyForProvider({
+    provider: providerId,
+    cfg,
+    profileId: entry.profile,
+    preferredProfile: entry.preferredProfile,
+    agentDir: params.agentDir,
+  });
+  const apiKey = requireApiKey(auth, providerId);
+  const providerConfig = cfg.models?.providers?.[providerId];
+  const result = await provider.describeVideo({
+    buffer: media.buffer,
+    fileName: media.fileName,
+    mime: media.mime,
+    apiKey,
+    baseUrl: providerConfig?.baseUrl,
+    headers: providerConfig?.headers,
+    model: entry.model,
+    prompt,
+    timeoutMs,
+  });
+  return {
+    kind: "video.description",
+    attachmentIndex: params.attachmentIndex,
+    text: trimOutput(result.text, maxChars),
+    provider: providerId,
+    model: result.model ?? entry.model,
+  };
+}
+
+export async function runCliEntry(params: {
+  capability: MediaUnderstandingCapability;
+  entry: MediaUnderstandingModelConfig;
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+  attachmentIndex: number;
+  cache: MediaAttachmentCache;
+  config?: MediaUnderstandingConfig;
+}): Promise<MediaUnderstandingOutput | null> {
+  const { entry, capability, cfg, ctx } = params;
+  const command = entry.command?.trim();
+  const args = entry.args ?? [];
+  if (!command) {
+    throw new Error(`CLI entry missing command for ${capability}`);
+  }
+  const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
+  const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
+  const timeoutMs = resolveTimeoutMs(
+    entry.timeoutSeconds ??
+      params.config?.timeoutSeconds ??
+      cfg.tools?.media?.[capability]?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS[capability],
+  );
+  const prompt = resolvePrompt(
+    capability,
+    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt,
+    maxChars,
+  );
+  const pathResult = await params.cache.getPath({
+    attachmentIndex: params.attachmentIndex,
+    maxBytes,
+    timeoutMs,
+  });
+  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cli-"));
+  const mediaPath = pathResult.path;
+  const outputBase = path.join(outputDir, path.parse(mediaPath).name);
+
+  const templCtx: MsgContext = {
+    ...ctx,
+    MediaPath: mediaPath,
+    MediaDir: path.dirname(mediaPath),
+    OutputDir: outputDir,
+    OutputBase: outputBase,
+    Prompt: prompt,
+    MaxChars: maxChars,
+  };
+  const argv = [command, ...args].map((part, index) =>
+    index === 0 ? part : applyTemplate(part, templCtx),
+  );
+  try {
+    if (shouldLogVerbose()) {
+      logVerbose(`Media understanding via CLI: ${argv.join(" ")}`);
+    }
+    const { stdout } = await runExec(argv[0], argv.slice(1), {
+      timeoutMs,
+      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+    });
+    const resolved = await resolveCliOutput({
+      command,
+      args: argv.slice(1),
+      stdout,
+      mediaPath,
+    });
+    const text = trimOutput(resolved, maxChars);
+    if (!text) {
+      return null;
+    }
+    return {
+      kind: capability === "audio" ? "audio.transcription" : `${capability}.description`,
+      attachmentIndex: params.attachmentIndex,
+      text,
+      provider: "cli",
+      model: command,
+    };
+  } finally {
+    await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
+  }
+}

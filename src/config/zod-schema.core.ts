@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 export const ModelApiSchema = z.union([
   z.literal("openai-completions"),
@@ -8,6 +9,7 @@ export const ModelApiSchema = z.union([
   z.literal("google-generative-ai"),
   z.literal("github-copilot"),
   z.literal("bedrock-converse-stream"),
+  z.literal("ollama"),
 ]);
 
 export const ModelCompatSchema = z
@@ -15,9 +17,16 @@ export const ModelCompatSchema = z
     supportsStore: z.boolean().optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
+    supportsUsageInStreaming: z.boolean().optional(),
+    supportsStrictMode: z.boolean().optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
+    thinkingFormat: z.union([z.literal("openai"), z.literal("zai"), z.literal("qwen")]).optional(),
+    requiresToolResultName: z.boolean().optional(),
+    requiresAssistantAfterToolResult: z.boolean().optional(),
+    requiresThinkingAsText: z.boolean().optional(),
+    requiresMistralToolIds: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -48,7 +57,7 @@ export const ModelDefinitionSchema = z
 export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
-    apiKey: z.string().optional(),
+    apiKey: z.string().optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
@@ -180,7 +189,7 @@ export const TtsConfigSchema = z
       .optional(),
     elevenlabs: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         baseUrl: z.string().optional(),
         voiceId: z.string().optional(),
         modelId: z.string().optional(),
@@ -202,7 +211,7 @@ export const TtsConfigSchema = z
       .optional(),
     openai: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         model: z.string().optional(),
         voice: z.string().optional(),
       })

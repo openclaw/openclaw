@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { pathExists } from "../utils.js";
 import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis.js";
 
@@ -235,6 +236,9 @@ export function registerCompletionCli(program: Command) {
     )
     .option("-y, --yes", "Skip confirmation (non-interactive)", false)
     .action(async (options) => {
+      // Route logs to stderr so plugin loading messages do not corrupt
+      // the completion script written to stdout.
+      routeLogsToStderr();
       const shell = options.shell ?? "zsh";
       // Eagerly register all subcommands to build the full tree
       const entries = getSubCliEntries();
@@ -269,7 +273,7 @@ export function registerCompletionCli(program: Command) {
         throw new Error(`Unsupported shell: ${shell}`);
       }
       const script = getCompletionScript(shell, program);
-      console.log(script);
+      process.stdout.write(script + "\n");
     });
 }
 

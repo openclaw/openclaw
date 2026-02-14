@@ -2,17 +2,34 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const githubCopilotLoginCommand = vi.fn();
 const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
+const noopAsync = vi.fn(async () => undefined);
 
-vi.mock("../commands/models.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../commands/models.js")>("../commands/models.js");
-
-  return {
-    ...actual,
-    githubCopilotLoginCommand,
-    modelsStatusCommand,
-  };
-});
+vi.mock("../commands/models.js", () => ({
+  githubCopilotLoginCommand,
+  modelsStatusCommand,
+  modelsAliasesAddCommand: noopAsync,
+  modelsAliasesListCommand: noopAsync,
+  modelsAliasesRemoveCommand: noopAsync,
+  modelsAuthAddCommand: noopAsync,
+  modelsAuthLoginCommand: noopAsync,
+  modelsAuthOrderClearCommand: noopAsync,
+  modelsAuthOrderGetCommand: noopAsync,
+  modelsAuthOrderSetCommand: noopAsync,
+  modelsAuthPasteTokenCommand: noopAsync,
+  modelsAuthSetupTokenCommand: noopAsync,
+  modelsFallbacksAddCommand: noopAsync,
+  modelsFallbacksClearCommand: noopAsync,
+  modelsFallbacksListCommand: noopAsync,
+  modelsFallbacksRemoveCommand: noopAsync,
+  modelsImageFallbacksAddCommand: noopAsync,
+  modelsImageFallbacksClearCommand: noopAsync,
+  modelsImageFallbacksListCommand: noopAsync,
+  modelsImageFallbacksRemoveCommand: noopAsync,
+  modelsListCommand: noopAsync,
+  modelsScanCommand: noopAsync,
+  modelsSetCommand: noopAsync,
+  modelsSetImageCommand: noopAsync,
+}));
 
 describe("models cli", () => {
   beforeEach(() => {

@@ -5,20 +5,19 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
-import { logDebug, logError, logWarn } from "../logger.js";
+import { logDebug, logError } from "../logger.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
-import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import {
+  consumeAdjustedParamsForToolCall,
+  isToolWrappedWithBeforeToolCallHook,
+  runBeforeToolCallHook,
+} from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 
 // oxlint-disable-next-line typescript/no-explicit-any
 type AnyAgentTool = AgentTool<any, unknown>;
-
-export type ToolDefinitionHookContext = {
-  agentId?: string;
-  sessionKey?: string;
-};
 
 type ToolExecuteArgsCurrent = [
   string,
@@ -84,13 +83,11 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export function toToolDefinitions(
-  tools: AnyAgentTool[],
-  hookCtx?: ToolDefinitionHookContext,
-): ToolDefinition[] {
+export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
+    const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
     return {
       name,
       label: tool.label ?? name,
@@ -98,59 +95,41 @@ export function toToolDefinitions(
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
-        const startMs = Date.now();
-        let effectiveParams = params;
-
-        // Run before_tool_call plugin hooks — may modify params or block execution.
-        const hookRunner = getGlobalHookRunner();
-        if (hookRunner?.hasHooks("before_tool_call")) {
-          try {
-            const hookResult = await hookRunner.runBeforeToolCall(
-              { toolName: normalizedName, params: params as Record<string, unknown> },
-              {
-                agentId: hookCtx?.agentId,
-                sessionKey: hookCtx?.sessionKey,
-                toolName: normalizedName,
-              },
-            );
-            if (hookResult?.block) {
-              const reason = hookResult.blockReason ?? "Blocked by plugin hook";
-              logWarn(`[tools] ${normalizedName} blocked by before_tool_call hook: ${reason}`);
-              return jsonResult({ status: "blocked", tool: normalizedName, error: reason });
-            }
-            if (hookResult?.params) {
-              effectiveParams = hookResult.params;
-            }
-          } catch (hookErr) {
-            logWarn(
-              `[tools] before_tool_call hook error for ${normalizedName}: ${String(hookErr)}`,
-            );
-          }
-        }
-
+        let executeParams = params;
         try {
-          const result = await tool.execute(toolCallId, effectiveParams, signal, onUpdate);
+          if (!beforeHookWrapped) {
+            const hookOutcome = await runBeforeToolCallHook({
+              toolName: name,
+              params,
+              toolCallId,
+            });
+            if (hookOutcome.blocked) {
+              throw new Error(hookOutcome.reason);
+            }
+            executeParams = hookOutcome.params;
+          }
+          const result = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const afterParams = beforeHookWrapped
+            ? (consumeAdjustedParamsForToolCall(toolCallId) ?? executeParams)
+            : executeParams;
 
-          // Fire after_tool_call hooks (best-effort, non-blocking).
+          // Call after_tool_call hook
+          const hookRunner = getGlobalHookRunner();
           if (hookRunner?.hasHooks("after_tool_call")) {
-            const durationMs = Date.now() - startMs;
-            hookRunner
-              .runAfterToolCall(
+            try {
+              await hookRunner.runAfterToolCall(
                 {
-                  toolName: normalizedName,
-                  params: effectiveParams as Record<string, unknown>,
-                  result: result?.details,
-                  durationMs,
+                  toolName: name,
+                  params: isPlainObject(afterParams) ? afterParams : {},
+                  result,
                 },
-                {
-                  agentId: hookCtx?.agentId,
-                  sessionKey: hookCtx?.sessionKey,
-                  toolName: normalizedName,
-                },
-              )
-              .catch((err) =>
-                logWarn(`[tools] after_tool_call hook error for ${normalizedName}: ${String(err)}`),
+                { toolName: name },
               );
+            } catch (hookErr) {
+              logDebug(
+                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
+              );
+            }
           }
 
           return result;
@@ -165,39 +144,41 @@ export function toToolDefinitions(
           if (name === "AbortError") {
             throw err;
           }
+          if (beforeHookWrapped) {
+            consumeAdjustedParamsForToolCall(toolCallId);
+          }
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
           logError(`[tools] ${normalizedName} failed: ${described.message}`);
 
-          // Fire after_tool_call hooks on error path too.
-          if (hookRunner?.hasHooks("after_tool_call")) {
-            const durationMs = Date.now() - startMs;
-            hookRunner
-              .runAfterToolCall(
-                {
-                  toolName: normalizedName,
-                  params: effectiveParams as Record<string, unknown>,
-                  error: described.message,
-                  durationMs,
-                },
-                {
-                  agentId: hookCtx?.agentId,
-                  sessionKey: hookCtx?.sessionKey,
-                  toolName: normalizedName,
-                },
-              )
-              .catch((e) =>
-                logWarn(`[tools] after_tool_call hook error for ${normalizedName}: ${String(e)}`),
-              );
-          }
-
-          return jsonResult({
+          const errorResult = jsonResult({
             status: "error",
             tool: normalizedName,
             error: described.message,
           });
+
+          // Call after_tool_call hook for errors too
+          const hookRunner = getGlobalHookRunner();
+          if (hookRunner?.hasHooks("after_tool_call")) {
+            try {
+              await hookRunner.runAfterToolCall(
+                {
+                  toolName: normalizedName,
+                  params: isPlainObject(params) ? params : {},
+                  error: described.message,
+                },
+                { toolName: normalizedName },
+              );
+            } catch (hookErr) {
+              logDebug(
+                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
+              );
+            }
+          }
+
+          return errorResult;
         }
       },
     } satisfies ToolDefinition;

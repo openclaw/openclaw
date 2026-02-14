@@ -87,6 +87,19 @@ export type GatewayAuthConfig = {
   password?: string;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /** Rate-limit configuration for failed authentication attempts. */
+  rateLimit?: GatewayAuthRateLimitConfig;
+};
+
+export type GatewayAuthRateLimitConfig = {
+  /** Maximum failed attempts per IP before blocking.  @default 10 */
+  maxAttempts?: number;
+  /** Sliding window duration in milliseconds.  @default 60000 (1 min) */
+  windowMs?: number;
+  /** Lockout duration in milliseconds after the limit is exceeded.  @default 300000 (5 min) */
+  lockoutMs?: number;
+  /** Exempt localhost/loopback addresses from auth rate limiting.  @default true */
+  exemptLoopback?: boolean;
 };
 
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";
@@ -143,6 +156,11 @@ export type GatewayHttpResponsesConfig = {
    * Default: 20MB.
    */
   maxBodyBytes?: number;
+  /**
+   * Max number of URL-based `input_file` + `input_image` parts per request.
+   * Default: 8.
+   */
+  maxUrlParts?: number;
   /** File inputs (input_file). */
   files?: GatewayHttpResponsesFilesConfig;
   /** Image inputs (input_image). */
@@ -152,6 +170,11 @@ export type GatewayHttpResponsesConfig = {
 export type GatewayHttpResponsesFilesConfig = {
   /** Allow URL fetches for input_file. Default: true. */
   allowUrl?: boolean;
+  /**
+   * Optional hostname allowlist for URL fetches.
+   * Supports exact hosts and `*.example.com` wildcards.
+   */
+  urlAllowlist?: string[];
   /** Allowed MIME types (case-insensitive). */
   allowedMimes?: string[];
   /** Max bytes per file. Default: 5MB. */
@@ -178,6 +201,11 @@ export type GatewayHttpResponsesPdfConfig = {
 export type GatewayHttpResponsesImagesConfig = {
   /** Allow URL fetches for input_image. Default: true. */
   allowUrl?: boolean;
+  /**
+   * Optional hostname allowlist for URL fetches.
+   * Supports exact hosts and `*.example.com` wildcards.
+   */
+  urlAllowlist?: string[];
   /** Allowed MIME types (case-insensitive). */
   allowedMimes?: string[];
   /** Max bytes per image. Default: 10MB. */
@@ -209,6 +237,13 @@ export type GatewayNodesConfig = {
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */
   denyCommands?: string[];
+};
+
+export type GatewayToolsConfig = {
+  /** Tools to deny via gateway HTTP /tools/invoke (extends defaults). */
+  deny?: string[];
+  /** Tools to explicitly allow (removes from default deny list). */
+  allow?: string[];
 };
 
 export type GatewayConfig = {
@@ -245,4 +280,6 @@ export type GatewayConfig = {
    * `x-real-ip`) to determine the client IP for local pairing and HTTP checks.
    */
   trustedProxies?: string[];
+  /** Tool access restrictions for HTTP /tools/invoke endpoint. */
+  tools?: GatewayToolsConfig;
 };

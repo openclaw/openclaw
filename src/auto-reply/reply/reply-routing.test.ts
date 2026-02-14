@@ -100,6 +100,8 @@ describe("createReplyDispatcher", () => {
     dispatcher.sendFinalReply({ text: "two" });
 
     await dispatcher.waitForIdle();
+    dispatcher.markComplete();
+    await Promise.resolve();
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 

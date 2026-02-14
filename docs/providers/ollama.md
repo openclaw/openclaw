@@ -8,7 +8,7 @@ title: "Ollama"
 
 # Ollama
 
-Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's OpenAI-compatible API and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
+Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's native API (`/api/chat`), supporting streaming and tool calling, and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
 ## Quick start
 
@@ -101,10 +101,9 @@ Use explicit config when:
   models: {
     providers: {
       ollama: {
-        // Use a host that includes /v1 for OpenAI-compatible APIs
-        baseUrl: "http://ollama-host:11434/v1",
+        baseUrl: "http://ollama-host:11434",
         apiKey: "ollama-local",
-        api: "openai-completions",
+        api: "ollama",
         models: [
           {
             id: "gpt-oss:20b",
@@ -134,7 +133,7 @@ If Ollama is running on a different host or port (explicit config disables auto-
     providers: {
       ollama: {
         apiKey: "ollama-local",
-        baseUrl: "http://ollama-host:11434/v1",
+        baseUrl: "http://ollama-host:11434",
       },
     },
   },
@@ -174,45 +173,28 @@ Ollama is free and runs locally, so all model costs are set to $0.
 
 ### Streaming Configuration
 
-Due to a [known issue](https://github.com/badlogic/pi-mono/issues/1205) in the underlying SDK with Ollama's response format, **streaming is disabled by default** for Ollama models. This prevents corrupted responses when using tool-capable models.
+OpenClaw's Ollama integration uses the **native Ollama API** (`/api/chat`) by default, which fully supports streaming and tool calling simultaneously. No special configuration is needed.
 
-When streaming is disabled, responses are delivered all at once (non-streaming mode), which avoids the issue where interleaved content/reasoning deltas cause garbled output.
+#### Legacy OpenAI-Compatible Mode
 
-#### Re-enable Streaming (Advanced)
-
-If you want to re-enable streaming for Ollama (may cause issues with tool-capable models):
+If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy that only supports OpenAI format), set `api: "openai-completions"` explicitly:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      models: {
-        "ollama/gpt-oss:20b": {
-          streaming: true,
-        },
-      },
-    },
-  },
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://ollama-host:11434/v1",
+        api: "openai-completions",
+        apiKey: "ollama-local",
+        models: [...]
+      }
+    }
+  }
 }
 ```
 
-#### Disable Streaming for Other Providers
-
-You can also disable streaming for any provider if needed:
-
-```json5
-{
-  agents: {
-    defaults: {
-      models: {
-        "openai/gpt-4": {
-          streaming: false,
-        },
-      },
-    },
-  },
-}
-```
+Note: The OpenAI-compatible endpoint may not support streaming + tool calling simultaneously. You may need to disable streaming with `params: { streaming: false }` in model config.
 
 ### Context windows
 
@@ -260,15 +242,6 @@ ps aux | grep ollama
 # Or restart Ollama
 ollama serve
 ```
-
-### Corrupted responses or tool names in output
-
-If you see garbled responses containing tool names (like `sessions_send`, `memory_get`) or fragmented text when using Ollama models, this is due to an upstream SDK issue with streaming responses. **This is fixed by default** in the latest OpenClaw version by disabling streaming for Ollama models.
-
-If you manually enabled streaming and experience this issue:
-
-1. Remove the `streaming: true` configuration from your Ollama model entries, or
-2. Explicitly set `streaming: false` for Ollama models (see [Streaming Configuration](#streaming-configuration))
 
 ## See Also
 
