@@ -19,10 +19,10 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   // Apply autoSelectFamily workaround
   const autoSelectDecision = resolveTelegramAutoSelectFamilyDecision({ network });
   if (autoSelectDecision.value !== null && autoSelectDecision.value !== appliedAutoSelectFamily) {
-    appliedAutoSelectFamily = autoSelectDecision.value;
     if (typeof net.setDefaultAutoSelectFamily === "function") {
       try {
         net.setDefaultAutoSelectFamily(autoSelectDecision.value);
+        appliedAutoSelectFamily = autoSelectDecision.value;
         const label = autoSelectDecision.source ? ` (${autoSelectDecision.source})` : "";
         log.info(`autoSelectFamily=${autoSelectDecision.value}${label}`);
       } catch {
@@ -36,10 +36,10 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   // See: https://github.com/openclaw/openclaw/issues/5311
   const dnsDecision = resolveTelegramDnsResultOrderDecision({ network });
   if (dnsDecision.value !== null && dnsDecision.value !== appliedDnsResultOrder) {
-    appliedDnsResultOrder = dnsDecision.value;
     if (typeof dns.setDefaultResultOrder === "function") {
       try {
         dns.setDefaultResultOrder(dnsDecision.value as "ipv4first" | "verbatim");
+        appliedDnsResultOrder = dnsDecision.value;
         const label = dnsDecision.source ? ` (${dnsDecision.source})` : "";
         log.info(`dnsResultOrder=${dnsDecision.value}${label}`);
       } catch {
@@ -67,4 +67,5 @@ export function resolveTelegramFetch(
 
 export function resetTelegramFetchStateForTests(): void {
   appliedAutoSelectFamily = null;
+  appliedDnsResultOrder = null;
 }

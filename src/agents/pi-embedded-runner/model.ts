@@ -57,13 +57,7 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  let model = modelRegistry.find(provider, modelId) as Model<Api> | null;
-
-  // Fallback: OpenRouter's "auto" model is stored with full id "openrouter/auto"
-  // but parseModelRef splits it into provider="openrouter", modelId="auto"
-  if (!model && provider === "openrouter" && modelId === "auto") {
-    model = modelRegistry.find(provider, "openrouter/auto") as Model<Api> | null;
-  }
+  const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
