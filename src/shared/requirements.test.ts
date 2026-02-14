@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildConfigChecks,
+  evaluateRequirementsFromMetadata,
   resolveMissingAnyBins,
   resolveMissingBins,
   resolveMissingEnv,
@@ -59,5 +60,25 @@ describe("requirements helpers", () => {
         isSatisfied: (p) => p === "a.b",
       }),
     ).toEqual([{ path: "a.b", value: 1, satisfied: true }]);
+  });
+
+  it("evaluateRequirementsFromMetadata derives required+missing", () => {
+    const res = evaluateRequirementsFromMetadata({
+      always: false,
+      metadata: {
+        requires: { bins: ["a"], anyBins: ["b"], env: ["E"], config: ["cfg.value"] },
+        os: ["darwin"],
+      },
+      hasLocalBin: (bin) => bin === "a",
+      localPlatform: "linux",
+      isEnvSatisfied: (name) => name === "E",
+      resolveConfigValue: () => "x",
+      isConfigSatisfied: () => false,
+    });
+
+    expect(res.required.bins).toEqual(["a"]);
+    expect(res.missing.config).toEqual(["cfg.value"]);
+    expect(res.missing.os).toEqual(["darwin"]);
+    expect(res.eligible).toBe(false);
   });
 });

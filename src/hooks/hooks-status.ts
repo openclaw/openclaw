@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
-import { evaluateRequirements } from "../shared/requirements.js";
+import { evaluateRequirementsFromMetadata } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isConfigPathTruthy, resolveConfigPath, resolveHookConfig } from "./config.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
@@ -110,25 +110,14 @@ function buildHookStatus(
   const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
   const events = entry.metadata?.events ?? [];
 
-  const requiredBins = entry.metadata?.requires?.bins ?? [];
-  const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
-  const requiredEnv = entry.metadata?.requires?.env ?? [];
-  const requiredConfig = entry.metadata?.requires?.config ?? [];
-  const requiredOs = entry.metadata?.os ?? [];
-
   const {
+    required,
     missing,
     eligible: requirementsSatisfied,
     configChecks,
-  } = evaluateRequirements({
+  } = evaluateRequirementsFromMetadata({
     always,
-    required: {
-      bins: requiredBins,
-      anyBins: requiredAnyBins,
-      env: requiredEnv,
-      config: requiredConfig,
-      os: requiredOs,
-    },
+    metadata: entry.metadata,
     hasLocalBin: hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasRemoteAnyBin: eligibility?.remote?.hasAnyBin,
@@ -157,13 +146,7 @@ function buildHookStatus(
     disabled,
     eligible,
     managedByPlugin,
-    requirements: {
-      bins: requiredBins,
-      anyBins: requiredAnyBins,
-      env: requiredEnv,
-      config: requiredConfig,
-      os: requiredOs,
-    },
+    requirements: required,
     missing,
     configChecks,
     install: normalizeInstallOptions(entry),
