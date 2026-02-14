@@ -9,7 +9,9 @@ import {
   PortInUseError,
 } from "./ports.js";
 
-describe("ports helpers", () => {
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
+describeListen("ports helpers", () => {
   it("ensurePortAvailable rejects when port busy", async () => {
     const server = net.createServer();
     await new Promise((resolve) => server.listen(0, resolve));

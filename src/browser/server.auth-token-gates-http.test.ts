@@ -2,6 +2,8 @@ import { createServer, type AddressInfo } from "node:net";
 import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
 let testPort = 0;
 let prevGatewayPort: string | undefined;
 
@@ -51,7 +53,7 @@ vi.mock("./server-context.js", async (importOriginal) => {
   };
 });
 
-describe("browser control HTTP auth", () => {
+describeListen("browser control HTTP auth", () => {
   beforeEach(async () => {
     prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
 

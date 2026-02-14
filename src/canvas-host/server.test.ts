@@ -10,7 +10,9 @@ import { defaultRuntime } from "../runtime.js";
 import { CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
 import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 
-describe("canvas host", () => {
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
+describeListen("canvas host", () => {
   it("injects live reload script", () => {
     const out = injectCanvasLiveReload("<html><body>Hello</body></html>");
     expect(out).toContain(CANVAS_WS_PATH);

@@ -16,6 +16,8 @@ const CLI_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND);
 const CLI_IMAGE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE);
 const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
+const describeLiveListen =
+  process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describeLive : describe.skip;
 
 const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-5";
 const DEFAULT_CLAUDE_ARGS = ["-p", "--output-format", "json", "--dangerously-skip-permissions"];
@@ -201,7 +203,7 @@ async function connectClient(params: { url: string; token: string }) {
   });
 }
 
-describeLive("gateway live (cli backend)", () => {
+describeLiveListen("gateway live (cli backend)", () => {
   it("runs the agent pipeline against the local CLI backend", async () => {
     const previous = {
       configPath: process.env.OPENCLAW_CONFIG_PATH,

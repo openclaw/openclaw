@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 
 const lookupMock = vi.fn();
-const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
 
 function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
   return {
@@ -29,17 +29,20 @@ function textResponse(body: string): Response {
 }
 
 describe("web_fetch SSRF protection", () => {
-  const priorFetch = global.fetch;
+  const priorFetch = globalThis.fetch;
 
   beforeEach(() => {
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
-      resolvePinnedHostname(hostname, lookupMock),
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation((hostname, params) =>
+      resolvePinnedHostnameWithPolicy(hostname, {
+        ...params,
+        lookupFn: async (name) => lookupMock(name),
+      }),
     );
   });
 
   afterEach(() => {
     // @ts-expect-error restore
-    global.fetch = priorFetch;
+    globalThis.fetch = priorFetch;
     lookupMock.mockReset();
     vi.restoreAllMocks();
   });
@@ -47,7 +50,7 @@ describe("web_fetch SSRF protection", () => {
   it("blocks localhost hostnames before fetch/firecrawl", async () => {
     const fetchSpy = vi.fn();
     // @ts-expect-error mock fetch
-    global.fetch = fetchSpy;
+    globalThis.fetch = fetchSpy;
 
     const { createWebFetchTool } = await import("./web-tools.js");
     const tool = createWebFetchTool({
@@ -73,7 +76,7 @@ describe("web_fetch SSRF protection", () => {
   it("blocks private IP literals without DNS", async () => {
     const fetchSpy = vi.fn();
     // @ts-expect-error mock fetch
-    global.fetch = fetchSpy;
+    globalThis.fetch = fetchSpy;
 
     const { createWebFetchTool } = await import("./web-tools.js");
     const tool = createWebFetchTool({
@@ -102,7 +105,7 @@ describe("web_fetch SSRF protection", () => {
 
     const fetchSpy = vi.fn();
     // @ts-expect-error mock fetch
-    global.fetch = fetchSpy;
+    globalThis.fetch = fetchSpy;
 
     const { createWebFetchTool } = await import("./web-tools.js");
     const tool = createWebFetchTool({
@@ -122,14 +125,14 @@ describe("web_fetch SSRF protection", () => {
 
     const fetchSpy = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1/secret"));
     // @ts-expect-error mock fetch
-    global.fetch = fetchSpy;
+    globalThis.fetch = fetchSpy;
 
     const { createWebFetchTool } = await import("./web-tools.js");
     const tool = createWebFetchTool({
       config: {
         tools: {
           web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { apiKey: "firecrawl-test" } },
+            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } },
           },
         },
       },
@@ -146,7 +149,7 @@ describe("web_fetch SSRF protection", () => {
 
     const fetchSpy = vi.fn().mockResolvedValue(textResponse("ok"));
     // @ts-expect-error mock fetch
-    global.fetch = fetchSpy;
+    globalThis.fetch = fetchSpy;
 
     const { createWebFetchTool } = await import("./web-tools.js");
     const tool = createWebFetchTool({

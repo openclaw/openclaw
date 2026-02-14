@@ -61,6 +61,12 @@ function packToArchive({
   outDir: string;
   outName: string;
 }) {
+  const beforeFiles = new Set(
+    fs
+      .readdirSync(outDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"))
+      .map((entry) => entry.name),
+  );
   const npmCli = resolveNpmCliJs();
   const cmd = npmCli ? process.execPath : "npm";
   const args = npmCli
@@ -73,7 +79,25 @@ function packToArchive({
     throw new Error(`npm pack failed: ${res.stderr || res.stdout || "<no output>"}`);
   }
 
-  const packed = (res.stdout || "").trim().split(/\r?\n/).filter(Boolean).at(-1);
+  let packed = (res.stdout || "").trim().split(/\r?\n/).filter(Boolean).at(-1);
+  if (!packed) {
+    const afterFiles = fs
+      .readdirSync(outDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"))
+      .map((entry) => entry.name);
+    const newlyCreated = afterFiles.filter((name) => !beforeFiles.has(name));
+    if (newlyCreated.length === 1) {
+      packed = newlyCreated[0];
+    } else if (newlyCreated.length > 1) {
+      packed = newlyCreated
+        .map((name) => ({ name, mtime: fs.statSync(path.join(outDir, name)).mtimeMs }))
+        .toSorted((a, b) => b.mtime - a.mtime)[0]?.name;
+    } else if (afterFiles.length > 0) {
+      packed = afterFiles
+        .map((name) => ({ name, mtime: fs.statSync(path.join(outDir, name)).mtimeMs }))
+        .toSorted((a, b) => b.mtime - a.mtime)[0]?.name;
+    }
+  }
   if (!packed) {
     throw new Error(`npm pack did not output a filename: ${res.stdout || "<no stdout>"}`);
   }

@@ -40,6 +40,8 @@ const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 
 const describeLive = LIVE || GATEWAY_LIVE ? describe : describe.skip;
+const describeLiveListen =
+  process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describeLive : describe.skip;
 
 function parseFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
@@ -1009,7 +1011,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   }
 }
 
-describeLive("gateway live (dev agent, profile keys)", () => {
+describeLiveListen("gateway live (dev agent, profile keys)", () => {
   it(
     "runs meaningful prompts across models with available keys",
     async () => {

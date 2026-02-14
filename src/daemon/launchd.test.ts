@@ -16,7 +16,6 @@ async function withLaunchctlStub(
   run: (context: { env: Record<string, string | undefined>; logPath: string }) => Promise<void>,
 ) {
   const originalPath = process.env.PATH;
-  const originalLogPath = process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
   const originalListOutput = process.env.OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT;
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launchctl-test-"));
@@ -24,21 +23,27 @@ async function withLaunchctlStub(
     const binDir = path.join(tmpDir, "bin");
     const homeDir = path.join(tmpDir, "home");
     const logPath = path.join(tmpDir, "launchctl.log");
+    const listPath = path.join(tmpDir, "launchctl.list");
     await fs.mkdir(binDir, { recursive: true });
     await fs.mkdir(homeDir, { recursive: true });
+    await fs.writeFile(listPath, options.listOutput ?? "", "utf8");
 
-    const stubJsPath = path.join(binDir, "launchctl.js");
+    const stubPath = path.join(binDir, "launchctl");
     await fs.writeFile(
-      stubJsPath,
+      stubPath,
       [
-        'import fs from "node:fs";',
+        "#!/usr/bin/env node",
+        'const fs = require("node:fs");',
+        'const path = require("node:path");',
+        'const baseDir = path.resolve(__dirname, "..");',
+        'const logPath = path.join(baseDir, "launchctl.log");',
+        'const listPath = path.join(baseDir, "launchctl.list");',
         "const args = process.argv.slice(2);",
-        "const logPath = process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;",
         "if (logPath) {",
         '  fs.appendFileSync(logPath, JSON.stringify(args) + "\\n", "utf8");',
         "}",
         'if (args[0] === "list") {',
-        '  const output = process.env.OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT || "";',
+        '  const output = fs.existsSync(listPath) ? fs.readFileSync(listPath, "utf8") : "";',
         "  process.stdout.write(output);",
         "}",
         "process.exit(0);",
@@ -50,16 +55,13 @@ async function withLaunchctlStub(
     if (process.platform === "win32") {
       await fs.writeFile(
         path.join(binDir, "launchctl.cmd"),
-        `@echo off\r\nnode "%~dp0\\launchctl.js" %*\r\n`,
+        `@echo off\r\nnode "%~dp0\\launchctl" %*\r\n`,
         "utf8",
       );
     } else {
-      const shPath = path.join(binDir, "launchctl");
-      await fs.writeFile(shPath, `#!/bin/sh\nnode "$(dirname "$0")/launchctl.js" "$@"\n`, "utf8");
-      await fs.chmod(shPath, 0o755);
+      await fs.chmod(stubPath, 0o755);
     }
 
-    process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = logPath;
     process.env.OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT = options.listOutput ?? "";
     process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
 
@@ -72,11 +74,6 @@ async function withLaunchctlStub(
     });
   } finally {
     process.env.PATH = originalPath;
-    if (originalLogPath === undefined) {
-      delete process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
-    } else {
-      process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = originalLogPath;
-    }
     if (originalListOutput === undefined) {
       delete process.env.OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT;
     } else {
@@ -143,7 +140,6 @@ describe("launchd bootstrap repair", () => {
 describe("launchd install", () => {
   it("enables service before bootstrap (clears persisted disabled state)", async () => {
     const originalPath = process.env.PATH;
-    const originalLogPath = process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
 
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launchctl-test-"));
     try {
@@ -153,12 +149,15 @@ describe("launchd install", () => {
       await fs.mkdir(binDir, { recursive: true });
       await fs.mkdir(homeDir, { recursive: true });
 
-      const stubJsPath = path.join(binDir, "launchctl.js");
+      const stubPath = path.join(binDir, "launchctl");
       await fs.writeFile(
-        stubJsPath,
+        stubPath,
         [
-          'import fs from "node:fs";',
-          "const logPath = process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;",
+          "#!/usr/bin/env node",
+          'const fs = require("node:fs");',
+          'const path = require("node:path");',
+          'const baseDir = path.resolve(__dirname, "..");',
+          'const logPath = path.join(baseDir, "launchctl.log");',
           "if (logPath) {",
           '  fs.appendFileSync(logPath, JSON.stringify(process.argv.slice(2)) + "\\n", "utf8");',
           "}",
@@ -171,16 +170,13 @@ describe("launchd install", () => {
       if (process.platform === "win32") {
         await fs.writeFile(
           path.join(binDir, "launchctl.cmd"),
-          `@echo off\r\nnode "%~dp0\\launchctl.js" %*\r\n`,
+          `@echo off\r\nnode "%~dp0\\launchctl" %*\r\n`,
           "utf8",
         );
       } else {
-        const shPath = path.join(binDir, "launchctl");
-        await fs.writeFile(shPath, `#!/bin/sh\nnode "$(dirname "$0")/launchctl.js" "$@"\n`, "utf8");
-        await fs.chmod(shPath, 0o755);
+        await fs.chmod(stubPath, 0o755);
       }
 
-      process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = logPath;
       process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
 
       const env: Record<string, string | undefined> = {
@@ -215,11 +211,6 @@ describe("launchd install", () => {
       expect(enableIndex).toBeLessThan(bootstrapIndex);
     } finally {
       process.env.PATH = originalPath;
-      if (originalLogPath === undefined) {
-        delete process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
-      } else {
-        process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = originalLogPath;
-      }
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });

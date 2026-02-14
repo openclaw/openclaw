@@ -5,6 +5,8 @@ import process from "node:process";
 import { afterEach, describe, expect, it } from "vitest";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
 
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
 function waitForLine(stream: NodeJS.ReadableStream, timeoutMs = 10_000): Promise<string> {
   return new Promise((resolve, reject) => {
     let buffer = "";
@@ -51,7 +53,7 @@ function canConnect(port: number): Promise<boolean> {
   });
 }
 
-describe("attachChildProcessBridge", () => {
+describeListen("attachChildProcessBridge", () => {
   const children: Array<{ kill: (signal?: NodeJS.Signals) => boolean }> = [];
   const detachments: Array<() => void> = [];
 

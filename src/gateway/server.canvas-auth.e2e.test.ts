@@ -9,6 +9,8 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../canvas-host/a2ui.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
 async function withTempConfig(params: { cfg: unknown; run: () => Promise<void> }): Promise<void> {
   const prevConfigPath = process.env.OPENCLAW_CONFIG_PATH;
   const prevDisableCache = process.env.OPENCLAW_DISABLE_CONFIG_CACHE;
@@ -75,7 +77,7 @@ async function expectWsRejected(url: string, headers: Record<string, string>): P
   });
 }
 
-describe("gateway canvas host auth", () => {
+describeListen("gateway canvas host auth", () => {
   test("authorizes canvas/a2ui HTTP and canvas WS by matching an authenticated gateway ws client ip", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",

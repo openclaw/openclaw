@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
 import { loginChutes } from "./chutes-oauth.js";
 
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -26,7 +28,7 @@ const urlToString = (url: Request | URL | string): string => {
   return "url" in url ? url.url : String(url);
 };
 
-describe("loginChutes", () => {
+describeListen("loginChutes", () => {
   it("captures local redirect and exchanges code for tokens", async () => {
     const port = await getFreePort();
     const redirectUri = `http://127.0.0.1:${port}/oauth-callback`;

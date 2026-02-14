@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
 const gatewayClientCalls: Array<{
   url?: string;
   token?: string;
@@ -96,7 +98,7 @@ const runtime = {
   },
 };
 
-describe("onboard (non-interactive): gateway and remote auth", () => {
+describeListen("onboard (non-interactive): gateway and remote auth", () => {
   const prev = {
     home: process.env.HOME,
     stateDir: process.env.OPENCLAW_STATE_DIR,

@@ -1,7 +1,81 @@
+import { spawn } from "node:child_process";
+import * as net from "node:net";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
+
+// Default to disabled to avoid race conditions in setup ordering.
+(globalThis as { __OPENCLAW_CAN_LISTEN__?: boolean }).__OPENCLAW_CAN_LISTEN__ = false;
+process.env.OPENCLAW_TEST_CAN_LISTEN = "0";
+
+const canListenOnLoopback = await new Promise<boolean>((resolve) => {
+  const server = net.createServer();
+  server.once("error", (err) => {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    resolve(code !== "EPERM");
+  });
+  server.listen(0, "127.0.0.1", () => {
+    server.close(() => resolve(true));
+  });
+});
+
+(globalThis as { __OPENCLAW_CAN_LISTEN__?: boolean }).__OPENCLAW_CAN_LISTEN__ = canListenOnLoopback;
+process.env.OPENCLAW_TEST_CAN_LISTEN = canListenOnLoopback ? "1" : "0";
+
+let canPty = false;
+try {
+  const pty = await import("@lydell/node-pty");
+  canPty = await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(ok);
+    };
+    try {
+      const proc = pty.spawn(process.execPath, ["-e", "process.exit(0)"], {
+        name: "xterm-color",
+        cols: 80,
+        rows: 24,
+      });
+      if ("onExit" in proc && typeof proc.onExit === "function") {
+        proc.onExit((evt: { exitCode: number }) => finish(evt.exitCode === 0));
+      } else if ("on" in proc && typeof proc.on === "function") {
+        proc.on("exit", (code: number) => finish(code === 0));
+        proc.on("error", () => finish(false));
+      } else {
+        finish(false);
+      }
+    } catch {
+      finish(false);
+    }
+  });
+} catch {
+  canPty = false;
+}
+
+(globalThis as { __OPENCLAW_CAN_PTY__?: boolean }).__OPENCLAW_CAN_PTY__ = canPty;
+process.env.OPENCLAW_TEST_CAN_PTY = canPty ? "1" : "0";
+
+const canCaptureChildOutput = await new Promise<boolean>((resolve) => {
+  const child = spawn(process.execPath, ["-e", 'process.stdout.write("ok")'], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout?.on("data", (chunk) => {
+    output += chunk.toString();
+  });
+  child.once("error", () => resolve(false));
+  child.once("close", () => resolve(output === "ok"));
+});
+
+(
+  globalThis as { __OPENCLAW_CAN_CAPTURE_CHILD_OUTPUT__?: boolean }
+).__OPENCLAW_CAN_CAPTURE_CHILD_OUTPUT__ = canCaptureChildOutput;
+process.env.OPENCLAW_TEST_CAN_CAPTURE_CHILD_OUTPUT = canCaptureChildOutput ? "1" : "0";
 
 import type {
   ChannelId,

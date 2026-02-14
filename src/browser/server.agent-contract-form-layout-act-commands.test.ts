@@ -2,6 +2,8 @@ import { type AddressInfo, createServer } from "node:net";
 import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
 let testPort = 0;
 let cdpBaseUrl = "";
 let reachable = false;
@@ -9,6 +11,32 @@ let cfgAttachOnly = false;
 let cfgEvaluateEnabled = true;
 let createTargetId: string | null = null;
 let prevGatewayPort: string | undefined;
+const authEnvKeys = [
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
+  "CLAWDBOT_GATEWAY_TOKEN",
+  "CLAWDBOT_GATEWAY_PASSWORD",
+] as const;
+let prevAuthEnv: Partial<Record<(typeof authEnvKeys)[number], string | undefined>> = {};
+
+function clearGatewayAuthEnv() {
+  prevAuthEnv = {};
+  for (const key of authEnvKeys) {
+    prevAuthEnv[key] = process.env[key];
+    delete process.env[key];
+  }
+}
+
+function restoreGatewayAuthEnv() {
+  for (const key of authEnvKeys) {
+    const value = prevAuthEnv[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
 
 const cdpMocks = vi.hoisted(() => ({
   createTargetViaCdp: vi.fn(async () => {
@@ -186,7 +214,7 @@ function makeResponse(
   } as unknown as Response;
 }
 
-describe("browser control server", () => {
+describeListen("browser control server", () => {
   beforeEach(async () => {
     reachable = false;
     cfgAttachOnly = false;
@@ -210,6 +238,7 @@ describe("browser control server", () => {
     testPort = await getFreePort();
     cdpBaseUrl = `http://127.0.0.1:${testPort + 1}`;
     prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
+    clearGatewayAuthEnv();
     process.env.OPENCLAW_GATEWAY_PORT = String(testPort - 2);
 
     // Minimal CDP JSON endpoints used by the server.
@@ -268,6 +297,7 @@ describe("browser control server", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    restoreGatewayAuthEnv();
     if (prevGatewayPort === undefined) {
       delete process.env.OPENCLAW_GATEWAY_PORT;
     } else {

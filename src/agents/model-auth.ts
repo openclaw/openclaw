@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { loadProviderUsageSummary, resolveUsageProviderId } from "../infra/provider-usage.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   normalizeOptionalSecretInput,
@@ -139,6 +140,7 @@ export async function resolveApiKeyForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  modelId?: string;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
@@ -167,11 +169,17 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  const order = resolveAuthProfileOrder({
+  let order = resolveAuthProfileOrder({
     cfg,
     store,
     provider,
     preferredProfile,
+  });
+  order = await reorderProfilesByUsage({
+    provider,
+    profileOrder: order,
+    preferredProfile,
+    agentDir: params.agentDir,
   });
   for (const candidate of order) {
     try {
@@ -230,6 +238,73 @@ export async function resolveApiKeyForProvider(params: {
       `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
     ].join(" "),
   );
+}
+
+async function reorderProfilesByUsage(params: {
+  provider: string;
+  profileOrder: string[];
+  preferredProfile?: string;
+  agentDir?: string;
+}): Promise<string[]> {
+  if (params.profileOrder.length <= 1) {
+    return params.profileOrder;
+  }
+  if (params.preferredProfile?.trim()) {
+    return params.profileOrder;
+  }
+  const usageProvider = resolveUsageProviderId(params.provider);
+  if (!usageProvider) {
+    return params.profileOrder;
+  }
+
+  try {
+    const usage = await loadProviderUsageSummary({
+      providers: [usageProvider],
+      agentDir: params.agentDir,
+      timeoutMs: 1_500,
+    });
+    const baselineIndex = new Map<string, number>(
+      params.profileOrder.map((profileId, index) => [profileId, index]),
+    );
+    const scoreByProfile = new Map<string, number>();
+    for (const snapshot of usage.providers) {
+      if (snapshot.provider !== usageProvider) {
+        continue;
+      }
+      const profileId = snapshot.profileId?.trim();
+      if (!profileId || !baselineIndex.has(profileId)) {
+        continue;
+      }
+      if (snapshot.error || snapshot.windows.length === 0) {
+        scoreByProfile.set(profileId, -1);
+        continue;
+      }
+      const remaining = Math.max(...snapshot.windows.map((window) => 100 - window.usedPercent));
+      const existing = scoreByProfile.get(profileId);
+      if (existing === undefined || remaining > existing) {
+        scoreByProfile.set(profileId, remaining);
+      }
+    }
+    if (scoreByProfile.size === 0) {
+      return params.profileOrder;
+    }
+
+    return [...params.profileOrder].toSorted((a, b) => {
+      const aScore = scoreByProfile.get(a);
+      const bScore = scoreByProfile.get(b);
+      const aHasScore = aScore !== undefined;
+      const bHasScore = bScore !== undefined;
+      if (aHasScore && bHasScore && aScore !== bScore) {
+        return (bScore ?? -1) - (aScore ?? -1);
+      }
+      if (aHasScore !== bHasScore) {
+        return aHasScore ? -1 : 1;
+      }
+      return (baselineIndex.get(a) ?? 0) - (baselineIndex.get(b) ?? 0);
+    });
+  } catch {
+    return params.profileOrder;
+  }
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
@@ -388,6 +463,7 @@ export async function getApiKeyForModel(params: {
     preferredProfile: params.preferredProfile,
     store: params.store,
     agentDir: params.agentDir,
+    modelId: params.model.id,
   });
 }
 

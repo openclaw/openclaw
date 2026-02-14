@@ -23,6 +23,7 @@ describe("run-node script", () => {
         const fakePnpmPath = path.join(fakeBinDir, "pnpm");
         const argsPath = path.join(tmp, ".pnpm-args.txt");
         const indexPath = path.join(tmp, "dist", "control-ui", "index.html");
+        const versionPath = path.join(tmp, ".openclaw-version.txt");
 
         await fs.mkdir(fakeBinDir, { recursive: true });
         await fs.mkdir(path.join(tmp, "src"), { recursive: true });
@@ -42,7 +43,13 @@ describe("run-node script", () => {
 
         await fs.writeFile(
           path.join(tmp, "openclaw.mjs"),
-          "#!/usr/bin/env node\nif (process.argv.includes('--version')) console.log('9.9.9-test');\n",
+          `#!/usr/bin/env node
+import fs from "node:fs";
+if (process.argv.includes("--version")) {
+  fs.writeFileSync(${JSON.stringify(versionPath)}, "9.9.9-test", "utf-8");
+  console.log("9.9.9-test");
+}
+`,
           "utf-8",
         );
         await fs.chmod(path.join(tmp, "openclaw.mjs"), 0o755);
@@ -75,7 +82,7 @@ fs.writeFileSync(path.join(cwd, "dist", "entry.js"), "export {}\\n", "utf-8");
         });
 
         expect(result.status).toBe(0);
-        expect(result.stdout).toContain("9.9.9-test");
+        await expect(fs.readFile(versionPath, "utf-8")).resolves.toContain("9.9.9-test");
         await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain("exec tsdown --no-clean");
         await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
       });

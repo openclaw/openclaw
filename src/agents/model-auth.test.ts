@@ -261,7 +261,7 @@ describe("getApiKeyForModel", () => {
     const previous = process.env.QIANFAN_API_KEY;
 
     try {
-      process.env.QIANFAN_API_KEY = "qianfan-test-key";
+      process.env.QIANFAN_API_KEY = "qianfan-test-key"; // pragma: allowlist secret
 
       vi.resetModules();
       const { resolveApiKeyForProvider } = await import("./model-auth.js");
@@ -492,7 +492,7 @@ describe("getApiKeyForModel", () => {
     const previous = process.env.VOYAGE_API_KEY;
 
     try {
-      process.env.VOYAGE_API_KEY = "voyage-test-key";
+      process.env.VOYAGE_API_KEY = "voyage-test-key"; // pragma: allowlist secret
 
       vi.resetModules();
       const { resolveApiKeyForProvider } = await import("./model-auth.js");
@@ -516,7 +516,7 @@ describe("getApiKeyForModel", () => {
     const previous = process.env.ANTHROPIC_API_KEY;
 
     try {
-      process.env.ANTHROPIC_API_KEY = "sk-ant-test-\r\nkey";
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-\r\nkey"; // pragma: allowlist secret
 
       vi.resetModules();
       const { resolveEnvApiKey } = await import("./model-auth.js");
@@ -530,6 +530,68 @@ describe("getApiKeyForModel", () => {
       } else {
         process.env.ANTHROPIC_API_KEY = previous;
       }
+    }
+  });
+
+  it("reorders profile selection by usage snapshot when multiple accounts exist", async () => {
+    vi.resetModules();
+    vi.doMock("../infra/provider-usage.js", async () => {
+      const actual = await vi.importActual<typeof import("../infra/provider-usage.js")>(
+        "../infra/provider-usage.js",
+      );
+      return {
+        ...actual,
+        loadProviderUsageSummary: vi.fn(async () => ({
+          updatedAt: Date.now(),
+          providers: [
+            {
+              provider: "github-copilot",
+              displayName: "Copilot",
+              profileId: "github-copilot:work",
+              accountLabel: "work@example.com",
+              windows: [{ label: "Premium", usedPercent: 100 }],
+            },
+            {
+              provider: "github-copilot",
+              displayName: "Copilot",
+              profileId: "github-copilot:personal",
+              accountLabel: "personal@example.com",
+              windows: [{ label: "Premium", usedPercent: 20 }],
+            },
+          ],
+        })),
+      };
+    });
+
+    try {
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+      const resolved = await resolveApiKeyForProvider({
+        provider: "github-copilot",
+        cfg: {
+          auth: {
+            order: { "github-copilot": ["github-copilot:work", "github-copilot:personal"] },
+          },
+        } as never,
+        store: {
+          version: 1,
+          profiles: {
+            "github-copilot:work": {
+              type: "token",
+              provider: "github-copilot",
+              token: "work-token",
+            },
+            "github-copilot:personal": {
+              type: "token",
+              provider: "github-copilot",
+              token: "personal-token",
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("personal-token");
+      expect(resolved.profileId).toBe("github-copilot:personal");
+    } finally {
+      vi.doUnmock("../infra/provider-usage.js");
     }
   });
 });

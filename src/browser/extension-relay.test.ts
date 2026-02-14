@@ -8,6 +8,8 @@ import {
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
 
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
 async function getFreePort(): Promise<number> {
   while (true) {
     const port = await new Promise<number>((resolve, reject) => {
@@ -134,7 +136,7 @@ async function waitForListMatch<T>(
   }
 }
 
-describe("chrome extension relay server", () => {
+describeListen("chrome extension relay server", () => {
   let cdpUrl = "";
 
   afterEach(async () => {

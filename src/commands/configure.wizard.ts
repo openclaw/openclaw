@@ -9,6 +9,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { resolveUsageProviderId, loadProviderUsageSummary } from "../infra/provider-usage.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
@@ -44,6 +45,91 @@ import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
+
+function resolveConfiguredPrimaryModel(config: OpenClawConfig): string | null {
+  const model = config.agents?.defaults?.model as unknown;
+  if (!model) {
+    return null;
+  }
+  if (typeof model === "string") {
+    const trimmed = model.trim();
+    return trimmed || null;
+  }
+  if (typeof model === "object") {
+    const primary = (model as { primary?: unknown }).primary;
+    if (typeof primary === "string" && primary.trim()) {
+      return primary.trim();
+    }
+  }
+  return null;
+}
+
+function resolveWindowLeftText(window: {
+  usedPercent: number;
+  remaining?: number;
+  limit?: number;
+}): string {
+  const percentLeft = Math.max(0, Math.min(100, 100 - window.usedPercent));
+  if (typeof window.remaining === "number" && typeof window.limit === "number") {
+    return `${Math.max(0, Math.round(window.remaining))}/${Math.max(0, Math.round(window.limit))} (~${percentLeft.toFixed(0)}%)`;
+  }
+  return `${percentLeft.toFixed(0)}%`;
+}
+
+function pickBestWindow(
+  windows: Array<{ usedPercent: number; label: string; remaining?: number; limit?: number }>,
+) {
+  if (windows.length === 0) {
+    return null;
+  }
+  const scored = [...windows].toSorted((a, b) => 100 - b.usedPercent - (100 - a.usedPercent));
+  return scored[0] ?? null;
+}
+
+async function summarizeExistingConfigWithUsage(config: OpenClawConfig): Promise<string> {
+  const base = summarizeExistingConfig(config);
+  const model = resolveConfiguredPrimaryModel(config);
+  if (!model) {
+    return base;
+  }
+  const providerRaw = model.includes("/") ? model.split("/")[0] : model;
+  const usageProvider = resolveUsageProviderId(providerRaw);
+  if (!usageProvider) {
+    return base;
+  }
+  try {
+    const usage = await loadProviderUsageSummary({
+      providers: [usageProvider],
+      timeoutMs: 2_500,
+    });
+    const candidates = usage.providers.filter(
+      (entry) => entry.provider === usageProvider && !entry.error,
+    );
+    if (candidates.length === 0) {
+      return base;
+    }
+    const scored = candidates
+      .map((entry) => ({ entry, window: pickBestWindow(entry.windows) }))
+      .filter((entry) => entry.window)
+      .toSorted((a, b) => 100 - b.window!.usedPercent - (100 - a.window!.usedPercent));
+    const selected = scored[0];
+    if (!selected || !selected.window) {
+      return base;
+    }
+    const account = selected.entry.accountLabel ?? selected.entry.profileId ?? "default";
+    const leftText = resolveWindowLeftText(selected.window);
+    const modelLine = `model: ${model} (${account}, Left ${leftText} [in ${selected.window.label}])`;
+    const rows = base.split("\n");
+    const idx = rows.findIndex((line) => line.startsWith("model: "));
+    if (idx >= 0) {
+      rows[idx] = modelLine;
+      return rows.join("\n");
+    }
+    return `${base}\n${modelLine}`;
+  } catch {
+    return base;
+  }
+}
 
 async function promptConfigureSection(
   runtime: RuntimeEnv,
@@ -183,7 +269,7 @@ export async function runConfigureWizard(
 
     if (snapshot.exists) {
       const title = snapshot.valid ? "Existing config detected" : "Invalid config";
-      note(summarizeExistingConfig(baseConfig), title);
+      note(await summarizeExistingConfigWithUsage(baseConfig), title);
       if (!snapshot.valid && snapshot.issues.length > 0) {
         note(
           [

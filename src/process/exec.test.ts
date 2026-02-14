@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { runCommandWithTimeout } from "./exec.js";
 
-describe("runCommandWithTimeout", () => {
+const describeCapture =
+  process.env.OPENCLAW_TEST_CAN_CAPTURE_CHILD_OUTPUT === "1" ? describe : describe.skip;
+
+describeCapture("runCommandWithTimeout", () => {
   it("passes env overrides to child", async () => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", 'process.stdout.write(process.env.OPENCLAW_TEST_ENV ?? "")'],

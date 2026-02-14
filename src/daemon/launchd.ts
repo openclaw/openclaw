@@ -104,6 +104,16 @@ export function buildLaunchAgentPlist({
 async function execLaunchctl(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
+  if (process.env.VITEST === "true" && args[0] === "list") {
+    const testOutput = process.env.OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT;
+    if (typeof testOutput === "string") {
+      return {
+        stdout: testOutput,
+        stderr: "",
+        code: 0,
+      };
+    }
+  }
   try {
     const { stdout, stderr } = await execFileAsync("launchctl", args, {
       encoding: "utf8",

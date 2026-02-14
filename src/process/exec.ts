@@ -47,7 +47,14 @@ export async function runExec(
   try {
     const { stdout, stderr } = await execFileAsync(resolveCommand(command), args, options);
     if (shouldLogVerbose()) {
-      if (stdout.trim()) {
+      const commandLower = command.toLowerCase();
+      const suppressVerboseStdout =
+        args.includes("--json") &&
+        (commandLower.includes("tailscale") ||
+          args.includes("status") ||
+          args.includes("funnel") ||
+          args.includes("serve"));
+      if (stdout.trim() && !suppressVerboseStdout) {
         logDebug(stdout.trim());
       }
       if (stderr.trim()) {

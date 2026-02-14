@@ -6,7 +6,7 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
-test("exec supports pty output", async () => {
+test.runIf(process.env.OPENCLAW_TEST_CAN_PTY === "1")("exec supports pty output", async () => {
   const tool = createExecTool({ allowBackground: false });
   const result = await tool.execute("toolcall", {
     command: 'node -e "process.stdout.write(String.fromCharCode(111,107))"',

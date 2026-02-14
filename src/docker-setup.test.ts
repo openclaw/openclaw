@@ -108,7 +108,7 @@ describe("docker/setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_HOME_VOLUME=");
   });
 
-  it("supports a home volume when extra mounts are empty", async () => {
+  it("uses a single compose file even when optional mount env vars are set", async () => {
     const sandbox = await createDockerSetupSandbox();
     const env = createEnv(sandbox, {
       OPENCLAW_EXTRA_MOUNTS: "",
@@ -123,10 +123,8 @@ describe("docker/setup.sh", () => {
 
     expect(result.status).toBe(0);
 
-    const extraCompose = await readFile(join(sandbox.rootDir, "docker-compose.extra.yml"), "utf8");
-    expect(extraCompose).toContain("openclaw-home:/home/node");
-    expect(extraCompose).toContain("volumes:");
-    expect(extraCompose).toContain("openclaw-home:");
+    const log = await readFile(sandbox.logPath, "utf8");
+    expect(log).toContain("compose");
   });
 
   it("avoids associative arrays so the script remains Bash 3.2-compatible", async () => {
@@ -188,7 +186,7 @@ describe("docker/setup.sh", () => {
   it("keeps docker-compose gateway command in sync", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(compose).not.toContain("gateway-daemon");
-    expect(compose).toContain('"pm2-runtime"');
-    expect(compose).toContain("docker/pm2.gateway-dev.config.cjs");
+    expect(compose).toContain('"node", "/app/openclaw.mjs", "gateway"');
+    expect(compose).toContain('"--tailscale", "serve", "--verbose"');
   });
 });

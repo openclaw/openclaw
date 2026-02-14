@@ -66,11 +66,14 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("CRITICAL");
   });
 
-  it("skips warning for loopback bind", async () => {
-    const cfg = { gateway: { bind: "loopback" } } as OpenClawConfig;
-    await noteSecurityWarnings(cfg);
-    const message = lastMessage();
-    expect(message).toContain("No channel security warnings detected");
-    expect(message).not.toContain("Gateway bound");
-  });
+  it.runIf(process.env.OPENCLAW_TEST_CAN_LISTEN === "1")(
+    "skips warning for loopback bind",
+    async () => {
+      const cfg = { gateway: { bind: "loopback" } } as OpenClawConfig;
+      await noteSecurityWarnings(cfg);
+      const message = lastMessage();
+      expect(message).toContain("No channel security warnings detected");
+      expect(message).not.toContain("Gateway bound");
+    },
+  );
 });

@@ -287,9 +287,14 @@ export async function startGatewayServer(
       cwd: process.cwd(),
     });
     if (!resolvedRoot) {
-      const ensureResult = await ensureControlUiAssetsBuilt(gatewayRuntime);
-      if (!ensureResult.ok && ensureResult.message) {
-        log.warn(`gateway: ${ensureResult.message}`);
+      const skipControlUiBuild = process.env.OPENCLAW_GATEWAY_SKIP_CONTROL_UI_BUILD === "1";
+      if (skipControlUiBuild) {
+        log.warn("gateway: control UI assets missing; skipping auto-build at startup");
+      } else {
+        const ensureResult = await ensureControlUiAssetsBuilt(gatewayRuntime);
+        if (!ensureResult.ok && ensureResult.message) {
+          log.warn(`gateway: ${ensureResult.message}`);
+        }
       }
       resolvedRoot = resolveControlUiRootSync({
         moduleUrl: import.meta.url,
@@ -538,14 +543,6 @@ export async function startGatewayServer(
     isNixMode,
   });
   scheduleGatewayUpdateCheck({ cfg: cfgAtStart, log, isNixMode });
-  const tailscaleCleanup = await startGatewayTailscaleExposure({
-    tailscaleMode,
-    resetOnExit: tailscaleConfig.resetOnExit,
-    port,
-    controlUiBasePath,
-    logTailscale,
-  });
-
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   ({ browserControl, pluginServices } = await startGatewaySidecars({
     cfg: cfgAtStart,
@@ -558,6 +555,13 @@ export async function startGatewayServer(
     logChannels,
     logBrowser,
   }));
+  const tailscaleCleanup = await startGatewayTailscaleExposure({
+    tailscaleMode,
+    resetOnExit: tailscaleConfig.resetOnExit,
+    port,
+    controlUiBasePath,
+    logTailscale,
+  });
 
   // Run gateway_start plugin hook (fire-and-forget)
   {

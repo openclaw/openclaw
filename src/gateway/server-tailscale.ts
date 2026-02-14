@@ -3,7 +3,6 @@ import {
   disableTailscaleServe,
   enableTailscaleFunnel,
   enableTailscaleServe,
-  getTailnetHostname,
 } from "../infra/tailscale.js";
 
 export async function startGatewayTailscaleExposure(params: {
@@ -23,22 +22,9 @@ export async function startGatewayTailscaleExposure(params: {
     } else {
       await enableTailscaleFunnel(params.port);
     }
-    // Daemon may need a moment to expose status after serve/funnel; retry with short delay.
-    let host: string | null = await getTailnetHostname().catch(() => null);
-    if (!host) {
-      await new Promise((r) => setTimeout(r, 2000));
-      host = await getTailnetHostname().catch(() => null);
-    }
-    if (host) {
-      const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
-      params.logTailscale.info(
-        `${params.tailscaleMode} enabled: https://${host}${uiPath} (WS via wss://${host})`,
-      );
-    } else {
-      params.logTailscale.info(
-        `${params.tailscaleMode} enabled (run \`tailscale status\` to see this machine's hostname)`,
-      );
-    }
+    params.logTailscale.info(
+      `${params.tailscaleMode} enabled (run \`tailscale status\` to see this machine's hostname)`,
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const stderr =

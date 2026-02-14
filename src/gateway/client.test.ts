@@ -5,6 +5,8 @@ import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { GatewayClient } from "./client.js";
 
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
 // Find a free localhost port for ad-hoc WS servers.
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -16,7 +18,7 @@ async function getFreePort(): Promise<number> {
   });
 }
 
-describe("GatewayClient", () => {
+describeListen("GatewayClient", () => {
   let wss: WebSocketServer | null = null;
   let httpsServer: ReturnType<typeof createHttpsServer> | null = null;
 

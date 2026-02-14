@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
 const MEDIA_DIR = path.join(process.cwd(), "tmp-media-test");
 const cleanOldMedia = vi.fn().mockResolvedValue(undefined);
 
@@ -31,7 +33,7 @@ const waitForFileRemoval = async (file: string, timeoutMs = 200) => {
   throw new Error(`timed out waiting for ${file} removal`);
 };
 
-describe("media server", () => {
+describeListen("media server", () => {
   beforeAll(async () => {
     await fs.rm(MEDIA_DIR, { recursive: true, force: true });
     await fs.mkdir(MEDIA_DIR, { recursive: true });

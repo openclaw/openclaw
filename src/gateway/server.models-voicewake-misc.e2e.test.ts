@@ -89,7 +89,9 @@ const whatsappRegistry = createRegistry([
 ]);
 const emptyRegistry = createRegistry([]);
 
-describe("gateway server models + voicewake", () => {
+const describeListen = process.env.OPENCLAW_TEST_CAN_LISTEN === "1" ? describe : describe.skip;
+
+describeListen("gateway server models + voicewake", () => {
   const setTempHome = (homeDir: string) => {
     const prevHome = process.env.HOME;
     const prevStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -312,7 +314,7 @@ describe("gateway server models + voicewake", () => {
   });
 });
 
-describe("gateway server misc", () => {
+describeListen("gateway server misc", () => {
   test("hello-ok advertises the gateway port for canvas host", async () => {
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     const prevCanvasPort = process.env.OPENCLAW_CANVAS_HOST_PORT;

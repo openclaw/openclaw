@@ -353,9 +353,7 @@ export async function ensureFunnel(
       [...tailscaleSocketArgs(), "funnel", "--yes", "--bg", `${port}`],
       { maxBuffer: 200_000, timeoutMs: 15_000 },
     );
-    if (stdout.trim()) {
-      console.log(stdout.trim());
-    }
+    void stdout;
   } catch (err) {
     const errOutput = err as { stdout?: unknown; stderr?: unknown };
     const stdout = typeof errOutput.stdout === "string" ? errOutput.stdout : "";
