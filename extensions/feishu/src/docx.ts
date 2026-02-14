@@ -1,10 +1,13 @@
-import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { Type } from "@sinclair/typebox";
 import { Readable } from "stream";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { hasFeishuToolEnabledForAnyAccount, withFeishuToolClient } from "./tools-common/tool-exec.js";
+import {
+  hasFeishuToolEnabledForAnyAccount,
+  withFeishuToolClient,
+} from "./tools-common/tool-exec.js";
 
 // ============ Helpers ============
 
@@ -60,14 +63,14 @@ const UNSUPPORTED_CREATE_TYPES = new Set([32]);
  */
 function reorderBlocks(blocks: any[], firstLevelBlockIds: string[]): any[] {
   if (!firstLevelBlockIds || firstLevelBlockIds.length === 0) return blocks;
-  
+
   const blockMap = new Map<string, any>();
   for (const block of blocks) {
     if (block.block_id) {
       blockMap.set(block.block_id, block);
     }
   }
-  
+
   const ordered: any[] = [];
   for (const id of firstLevelBlockIds) {
     const block = blockMap.get(id);
@@ -242,7 +245,9 @@ async function insertTableWithCells(
     return {
       children: tableInsert.children,
       skipped: tableInsert.skipped,
-      warnings: ["Table created but API did not return generated cells; table content may be empty."],
+      warnings: [
+        "Table created but API did not return generated cells; table content may be empty.",
+      ],
     };
   }
 
@@ -530,7 +535,9 @@ export async function writeDoc(
 
   // Check content length and warn if too long
   if (markdown.length > MAX_CONTENT_LENGTH) {
-    console.warn(`[feishu_doc] Content length (${markdown.length}) exceeds recommended limit (${MAX_CONTENT_LENGTH}). May cause API errors.`);
+    console.warn(
+      `[feishu_doc] Content length (${markdown.length}) exceeds recommended limit (${MAX_CONTENT_LENGTH}). May cause API errors.`,
+    );
   }
 
   const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
@@ -545,12 +552,11 @@ export async function writeDoc(
   const blockMap = buildBlockMap(blocks);
 
   // Insert blocks while preserving table content when possible.
-  const { children: inserted, skipped, warnings } = await insertBlocksPreservingTables(
-    client,
-    docToken,
-    orderedBlocks,
-    blockMap,
-  );
+  const {
+    children: inserted,
+    skipped,
+    warnings,
+  } = await insertBlocksPreservingTables(client, docToken, orderedBlocks, blockMap);
   const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
 
   const warningParts: string[] = [];
@@ -589,7 +595,7 @@ async function insertBlocksInBatches(
   for (let i = 0; i < blocks.length; i += MAX_BLOCKS_PER_INSERT) {
     const batch = blocks.slice(i, i + MAX_BLOCKS_PER_INSERT);
     const { cleaned, skipped } = cleanBlocksForInsert(batch);
-    
+
     allSkipped.push(...skipped);
 
     if (cleaned.length === 0) {
@@ -601,7 +607,7 @@ async function insertBlocksInBatches(
         path: { document_id: docToken, block_id: blockId },
         data: { children: cleaned },
       });
-      
+
       if (res.code !== 0) {
         // If batch insert fails, try inserting one by one
         console.warn(`[feishu_doc] Batch insert failed: ${res.msg}. Trying individual inserts...`);
@@ -632,7 +638,12 @@ async function insertBlocksInBatches(
   return { children: allInserted, skipped: [...new Set(allSkipped)] };
 }
 
-async function appendDoc(client: Lark.Client, docToken: string, markdown: string, maxBytes: number) {
+async function appendDoc(
+  client: Lark.Client,
+  docToken: string,
+  markdown: string,
+  maxBytes: number,
+) {
   const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
   if (blocks.length === 0) {
     throw new Error("Content is empty");
@@ -642,12 +653,11 @@ async function appendDoc(client: Lark.Client, docToken: string, markdown: string
   const orderedBlocks = reorderBlocks(blocks, firstLevelBlockIds);
 
   const blockMap = buildBlockMap(blocks);
-  const { children: inserted, skipped, warnings } = await insertBlocksPreservingTables(
-    client,
-    docToken,
-    orderedBlocks,
-    blockMap,
-  );
+  const {
+    children: inserted,
+    skipped,
+    warnings,
+  } = await insertBlocksPreservingTables(client, docToken, orderedBlocks, blockMap);
   const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
 
   const warningParts: string[] = [];
@@ -777,78 +787,78 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   // Main document tool with action-based dispatch
   if (docEnabled) {
     api.registerTool(
-    {
-      name: "feishu_doc",
-      label: "Feishu Doc",
-      description:
-        "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block",
-      parameters: FeishuDocSchema,
-      async execute(_toolCallId, params) {
-        const p = params as FeishuDocParams;
-        try {
-          return await withFeishuToolClient({
-            api,
-            toolName: "feishu_doc",
-            requiredTool: "doc",
-            run: async ({ client, account }) => {
-              const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
-              switch (p.action) {
-                case "read":
-                  return json(await readDoc(client, p.doc_token));
-                case "write":
-                  return json(await writeDoc(client, p.doc_token, p.content, mediaMaxBytes));
-                case "append":
-                  return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
-                case "create":
-                  return json(await createDoc(client, p.title, p.folder_token));
-                case "list_blocks":
-                  return json(await listBlocks(client, p.doc_token));
-                case "get_block":
-                  return json(await getBlock(client, p.doc_token, p.block_id));
-                case "update_block":
-                  return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
-                case "delete_block":
-                  return json(await deleteBlock(client, p.doc_token, p.block_id));
-                default:
-                  return json({ error: `Unknown action: ${(p as any).action}` });
-              }
-            },
-          });
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
+      {
+        name: "feishu_doc",
+        label: "Feishu Doc",
+        description:
+          "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block",
+        parameters: FeishuDocSchema,
+        async execute(_toolCallId, params) {
+          const p = params as FeishuDocParams;
+          try {
+            return await withFeishuToolClient({
+              api,
+              toolName: "feishu_doc",
+              requiredTool: "doc",
+              run: async ({ client, account }) => {
+                const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
+                switch (p.action) {
+                  case "read":
+                    return json(await readDoc(client, p.doc_token));
+                  case "write":
+                    return json(await writeDoc(client, p.doc_token, p.content, mediaMaxBytes));
+                  case "append":
+                    return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
+                  case "create":
+                    return json(await createDoc(client, p.title, p.folder_token));
+                  case "list_blocks":
+                    return json(await listBlocks(client, p.doc_token));
+                  case "get_block":
+                    return json(await getBlock(client, p.doc_token, p.block_id));
+                  case "update_block":
+                    return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
+                  case "delete_block":
+                    return json(await deleteBlock(client, p.doc_token, p.block_id));
+                  default:
+                    return json({ error: `Unknown action: ${(p as any).action}` });
+                }
+              },
+            });
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
       },
-    },
-    { name: "feishu_doc" },
-  );
+      { name: "feishu_doc" },
+    );
     registered.push("feishu_doc");
   }
 
   // Keep feishu_app_scopes as independent tool
   if (scopesEnabled) {
     api.registerTool(
-    {
-      name: "feishu_app_scopes",
-      label: "Feishu App Scopes",
-      description:
-        "List current app permissions (scopes). Use to debug permission issues or check available capabilities.",
-      parameters: Type.Object({}),
-      async execute() {
-        try {
-          const result = await withFeishuToolClient({
-            api,
-            toolName: "feishu_app_scopes",
-            requiredTool: "scopes",
-            run: async ({ client }) => listAppScopes(client),
-          });
-          return json(result);
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
+      {
+        name: "feishu_app_scopes",
+        label: "Feishu App Scopes",
+        description:
+          "List current app permissions (scopes). Use to debug permission issues or check available capabilities.",
+        parameters: Type.Object({}),
+        async execute() {
+          try {
+            const result = await withFeishuToolClient({
+              api,
+              toolName: "feishu_app_scopes",
+              requiredTool: "scopes",
+              run: async ({ client }) => listAppScopes(client),
+            });
+            return json(result);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
       },
-    },
-    { name: "feishu_app_scopes" },
-  );
+      { name: "feishu_app_scopes" },
+    );
     registered.push("feishu_app_scopes");
   }
 

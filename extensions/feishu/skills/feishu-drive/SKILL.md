@@ -45,6 +45,7 @@ Searches for the file in the root directory. Note: file must be in root or use `
 ```
 
 In parent folder:
+
 ```json
 { "action": "create_folder", "name": "New Folder", "folder_token": "fldcnXXX" }
 ```
@@ -63,16 +64,16 @@ In parent folder:
 
 ## File Types
 
-| Type | Description |
-|------|-------------|
-| `doc` | Old format document |
-| `docx` | New format document |
-| `sheet` | Spreadsheet |
-| `bitable` | Multi-dimensional table |
-| `folder` | Folder |
-| `file` | Uploaded file |
-| `mindnote` | Mind map |
-| `shortcut` | Shortcut |
+| Type       | Description             |
+| ---------- | ----------------------- |
+| `doc`      | Old format document     |
+| `docx`     | New format document     |
+| `sheet`    | Spreadsheet             |
+| `bitable`  | Multi-dimensional table |
+| `folder`   | Folder                  |
+| `file`     | Uploaded file           |
+| `mindnote` | Mind map                |
+| `shortcut` | Shortcut                |
 
 ## Configuration
 
@@ -80,7 +81,7 @@ In parent folder:
 channels:
   feishu:
     tools:
-      drive: true  # default: true
+      drive: true # default: true
 ```
 
 ## Permissions

@@ -1,6 +1,11 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
-import type { FeishuConfig, FeishuAccountConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
+import type {
+  FeishuConfig,
+  FeishuAccountConfig,
+  FeishuDomain,
+  ResolvedFeishuAccount,
+} from "./types.js";
 
 /**
  * List all configured account IDs from the accounts field.
@@ -55,10 +60,7 @@ function resolveAccountConfig(
  * Merge top-level config with account-specific config.
  * Account-specific fields override top-level fields.
  */
-function mergeFeishuAccountConfig(
-  cfg: ClawdbotConfig,
-  accountId: string,
-): FeishuConfig {
+function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
   // Extract base config (exclude accounts field to avoid recursion)

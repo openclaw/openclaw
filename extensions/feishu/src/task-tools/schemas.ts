@@ -44,8 +44,7 @@ export type UpdateTaskParams = {
 const TaskDateSchema = Type.Object({
   timestamp: Type.Optional(
     Type.String({
-      description:
-        "Unix timestamp in milliseconds (string), e.g. \"1735689600000\" (13-digit ms)",
+      description: 'Unix timestamp in milliseconds (string), e.g. "1735689600000" (13-digit ms)',
     }),
   ),
   is_all_day: Type.Optional(Type.Boolean({ description: "Whether this is an all-day date" })),
@@ -53,8 +52,8 @@ const TaskDateSchema = Type.Object({
 
 const TaskMemberSchema = Type.Object({
   id: Type.String({ description: "Member ID (with type controlled by user_id_type)" }),
-  type: Type.Optional(Type.String({ description: "Member type (usually \"user\")" })),
-  role: Type.String({ description: "Member role, e.g. \"assignee\"" }),
+  type: Type.Optional(Type.String({ description: 'Member type (usually "user")' })),
+  role: Type.String({ description: 'Member role, e.g. "assignee"' }),
   name: Type.Optional(Type.String({ description: "Optional display name" })),
 });
 
@@ -110,7 +109,8 @@ const TaskUpdateContentSchema = Type.Object(
     extra: Type.Optional(Type.String({ description: "Updated extra metadata" })),
     completed_at: Type.Optional(
       Type.String({
-        description: "Updated completion time (Unix timestamp in milliseconds, string, 13-digit ms)",
+        description:
+          "Updated completion time (Unix timestamp in milliseconds, string, 13-digit ms)",
       }),
     ),
     repeat_rule: Type.Optional(Type.String({ description: "Updated repeat rule" })),

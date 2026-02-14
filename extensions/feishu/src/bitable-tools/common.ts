@@ -15,10 +15,14 @@ type AppTableFieldCreatePayload = NonNullable<
 type AppTableFieldUpdatePayload = NonNullable<
   Parameters<BitableClient["bitable"]["appTableField"]["update"]>[0]
 >;
+type AppTableRecordCreatePayload = NonNullable<
+  Parameters<BitableClient["bitable"]["appTableRecord"]["create"]>[0]
+>;
 
 export type BitableFieldCreateData = AppTableFieldCreatePayload["data"];
 export type BitableFieldUpdateData = AppTableFieldUpdatePayload["data"];
 export type BitableFieldDescription = NonNullable<BitableFieldCreateData["description"]>;
+export type BitableRecordFields = NonNullable<AppTableRecordCreatePayload["data"]>["fields"];
 
 export { json, errorResult };
 
@@ -76,7 +80,10 @@ export function formatField(field: {
   ui_type?: string;
   is_hidden?: boolean;
 }) {
-  const typeName = field.type != null ? FIELD_TYPE_NAMES[field.type] || `type_${field.type}` : undefined;
+  const typeName =
+    field.type != null ? FIELD_TYPE_NAMES[field.type] || `type_${field.type}` : undefined;
+  const property =
+    field.property && typeof field.property === "object" ? { property: field.property } : {};
   return {
     field_id: field.field_id,
     field_name: field.field_name,
@@ -85,6 +92,6 @@ export function formatField(field: {
     is_primary: field.is_primary,
     ui_type: field.ui_type,
     is_hidden: field.is_hidden,
-    ...(field.property && { property: field.property }),
+    ...property,
   };
 }

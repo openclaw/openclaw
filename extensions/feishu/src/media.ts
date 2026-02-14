@@ -1,12 +1,12 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import { createFeishuClient } from "./client.js";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { Readable } from "stream";
 import { resolveFeishuAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
-import fs from "fs";
-import path from "path";
-import os from "os";
-import { Readable } from "stream";
 
 export type DownloadImageResult = {
   buffer: Buffer;
@@ -42,7 +42,9 @@ export async function downloadImageFeishu(params: {
 
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(`Feishu image download failed: ${responseAny.msg || `code ${responseAny.code}`}`);
+    throw new Error(
+      `Feishu image download failed: ${responseAny.msg || `code ${responseAny.code}`}`,
+    );
   }
 
   // Handle various response formats from Feishu SDK
@@ -87,10 +89,8 @@ export async function downloadImageFeishu(params: {
   } else {
     // Debug: log what we actually received
     const keys = Object.keys(responseAny);
-    const types = keys.map(k => `${k}: ${typeof responseAny[k]}`).join(", ");
-    throw new Error(
-      `Feishu image download failed: unexpected response format. Keys: [${types}]`,
-    );
+    const types = keys.map((k) => `${k}: ${typeof responseAny[k]}`).join(", ");
+    throw new Error(`Feishu image download failed: unexpected response format. Keys: [${types}]`);
   }
 
   return { buffer };
@@ -169,7 +169,7 @@ export async function downloadMessageResourceFeishu(params: {
   } else {
     // Debug: log what we actually received
     const keys = Object.keys(responseAny);
-    const types = keys.map(k => `${k}: ${typeof responseAny[k]}`).join(", ");
+    const types = keys.map((k) => `${k}: ${typeof responseAny[k]}`).join(", ");
     throw new Error(
       `Feishu message resource download failed: unexpected response format. Keys: [${types}]`,
     );
@@ -211,8 +211,7 @@ export async function uploadImageFeishu(params: {
 
   // SDK expects a Readable stream, not a Buffer
   // Use type assertion since SDK actually accepts any Readable at runtime
-  const imageStream =
-    typeof image === "string" ? fs.createReadStream(image) : Readable.from(image);
+  const imageStream = typeof image === "string" ? fs.createReadStream(image) : Readable.from(image);
 
   const response = await client.im.image.create({
     data: {
@@ -258,8 +257,7 @@ export async function uploadFileFeishu(params: {
 
   // SDK expects a Readable stream, not a Buffer
   // Use type assertion since SDK actually accepts any Readable at runtime
-  const fileStream =
-    typeof file === "string" ? fs.createReadStream(file) : Readable.from(file);
+  const fileStream = typeof file === "string" ? fs.createReadStream(file) : Readable.from(file);
 
   const response = await client.im.file.create({
     data: {

@@ -1,7 +1,7 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
+import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu } from "./send.js";
-import { sendMediaFeishu } from "./media.js";
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -9,32 +9,48 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId }) => {
-    const result = await sendMessageFeishu({ cfg, to, text, accountId });
+    const result = await sendMessageFeishu({ cfg, to, text, accountId: accountId ?? undefined });
     return { channel: "feishu", ...result };
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
+    const resolvedAccountId = accountId ?? undefined;
     // Send text first if provided
     if (text?.trim()) {
-      await sendMessageFeishu({ cfg, to, text, accountId });
+      await sendMessageFeishu({ cfg, to, text, accountId: resolvedAccountId });
     }
 
     // Upload and send media if URL provided
     if (mediaUrl) {
       try {
-        const result = await sendMediaFeishu({ cfg, to, mediaUrl, accountId });
+        const result = await sendMediaFeishu({
+          cfg,
+          to,
+          mediaUrl,
+          accountId: resolvedAccountId,
+        });
         return { channel: "feishu", ...result };
       } catch (err) {
         // Log the error for debugging
         console.error(`[feishu] sendMediaFeishu failed:`, err);
         // Fallback to URL link if upload fails
         const fallbackText = `📎 ${mediaUrl}`;
-        const result = await sendMessageFeishu({ cfg, to, text: fallbackText, accountId });
+        const result = await sendMessageFeishu({
+          cfg,
+          to,
+          text: fallbackText,
+          accountId: resolvedAccountId,
+        });
         return { channel: "feishu", ...result };
       }
     }
 
     // No media URL, just return text result
-    const result = await sendMessageFeishu({ cfg, to, text: text ?? "", accountId });
+    const result = await sendMessageFeishu({
+      cfg,
+      to,
+      text: text ?? "",
+      accountId: resolvedAccountId,
+    });
     return { channel: "feishu", ...result };
   },
 };

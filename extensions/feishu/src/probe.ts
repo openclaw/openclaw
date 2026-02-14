@@ -51,14 +51,14 @@ function getCachedResult(creds: FeishuClientCredentials): FeishuProbeResult | nu
   const key = getCacheKey(creds);
   const cached = probeCache.get(key);
   if (!cached) return null;
-  
+
   const now = Date.now();
   if (now - cached.timestamp > cached.ttlMs) {
     // Cache expired
     probeCache.delete(key);
     return null;
   }
-  
+
   return cached.result;
 }
 
@@ -129,10 +129,10 @@ export async function probeFeishu(creds?: FeishuClientCredentials): Promise<Feis
       botName: bot?.bot_name,
       botOpenId: bot?.open_id,
     };
-    
+
     // Cache successful result
     setCachedResult(creds, result);
-    
+
     return result;
   } catch (err) {
     const result: FeishuProbeResult = {

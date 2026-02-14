@@ -20,9 +20,7 @@ const SUPPORTED_PATCH_FIELDS = new Set<keyof TaskUpdateTask>([
 ]);
 
 function omitUndefined<T extends Record<string, unknown>>(obj: T): T {
-  return Object.fromEntries(
-    Object.entries(obj).filter(([, value]) => value !== undefined),
-  ) as T;
+  return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined)) as T;
 }
 
 function inferUpdateFields(task: TaskUpdateTask): string[] {
@@ -108,7 +106,9 @@ export async function getTask(client: TaskClient, params: GetTaskParams) {
 
 export async function updateTask(client: TaskClient, params: UpdateTaskParams) {
   const task = omitUndefined(params.task as Record<string, unknown>) as TaskUpdateTask;
-  const updateFields = params.update_fields?.length ? params.update_fields : inferUpdateFields(task);
+  const updateFields = params.update_fields?.length
+    ? params.update_fields
+    : inferUpdateFields(task);
 
   if (Object.keys(task).length === 0) {
     throw new Error("task update payload is empty");

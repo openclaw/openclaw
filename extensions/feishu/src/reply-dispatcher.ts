@@ -164,7 +164,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         let first = true;
         if (useCard) {
-          for (const chunk of core.channel.text.chunkTextWithMode(text, textChunkLimit, chunkMode)) {
+          for (const chunk of core.channel.text.chunkTextWithMode(
+            text,
+            textChunkLimit,
+            chunkMode,
+          )) {
             await sendMarkdownCardFeishu({
               cfg,
               to: chatId,

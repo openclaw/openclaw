@@ -1,6 +1,6 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import { createFeishuClient } from "./client.js";
 import { resolveFeishuAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
 import { normalizeFeishuTarget } from "./targets.js";
 
 export type FeishuDirectoryPeer = {

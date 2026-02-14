@@ -52,11 +52,13 @@ export const FeishuDriveSchema = Type.Union([
       description: "Document title",
     }),
     content: Type.String({
-      description: "Markdown content to import. Supports full Markdown syntax including tables, lists, code blocks, etc.",
+      description:
+        "Markdown content to import. Supports full Markdown syntax including tables, lists, code blocks, etc.",
     }),
     folder_token: Type.Optional(
       Type.String({
-        description: "Target folder token (optional, defaults to root). Use 'list' to find folder tokens.",
+        description:
+          "Target folder token (optional, defaults to root). Use 'list' to find folder tokens.",
       }),
     ),
     doc_type: Type.Optional(DocType),

@@ -1,13 +1,13 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import { registerFeishuBitableTools } from "./src/bitable.js";
 import { feishuPlugin } from "./src/channel.js";
-import { setFeishuRuntime } from "./src/runtime.js";
 import { registerFeishuDocTools } from "./src/docx.js";
-import { registerFeishuWikiTools } from "./src/wiki.js";
 import { registerFeishuDriveTools } from "./src/drive.js";
 import { registerFeishuPermTools } from "./src/perm.js";
-import { registerFeishuBitableTools } from "./src/bitable.js";
+import { setFeishuRuntime } from "./src/runtime.js";
 import { registerFeishuTaskTools } from "./src/task.js";
+import { registerFeishuWikiTools } from "./src/wiki.js";
 
 export { monitorFeishuProvider } from "./src/monitor.js";
 export {

@@ -81,8 +81,7 @@ export type BatchDeleteRecordsParams = {
 
 export const GetMetaSchema = Type.Object({
   url: Type.String({
-    description:
-      "Bitable URL. Supports both formats: /base/XXX?table=YYY or /wiki/XXX?table=YYY",
+    description: "Bitable URL. Supports both formats: /base/XXX?table=YYY or /wiki/XXX?table=YYY",
   }),
 });
 
@@ -167,7 +166,9 @@ export const ListRecordsSchema = Type.Object({
       maximum: 500,
     }),
   ),
-  page_token: Type.Optional(Type.String({ description: "Pagination token from previous response" })),
+  page_token: Type.Optional(
+    Type.String({ description: "Pagination token from previous response" }),
+  ),
 });
 
 export const GetRecordSchema = Type.Object({

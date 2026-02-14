@@ -2,6 +2,7 @@ import type {
   BitableClient,
   BitableFieldCreateData,
   BitableFieldUpdateData,
+  BitableRecordFields,
 } from "./common.js";
 import { formatField, runBitableApiCall } from "./common.js";
 
@@ -125,7 +126,7 @@ export async function createRecord(
   client: BitableClient,
   appToken: string,
   tableId: string,
-  fields: Record<string, unknown>,
+  fields: BitableRecordFields,
 ) {
   const res = await runBitableApiCall("bitable.appTableRecord.create", () =>
     client.bitable.appTableRecord.create({
@@ -144,7 +145,7 @@ export async function updateRecord(
   appToken: string,
   tableId: string,
   recordId: string,
-  fields: Record<string, unknown>,
+  fields: BitableRecordFields,
 ) {
   const res = await runBitableApiCall("bitable.appTableRecord.update", () =>
     client.bitable.appTableRecord.update({

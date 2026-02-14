@@ -1,8 +1,11 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
-import { hasFeishuToolEnabledForAnyAccount, withFeishuToolClient } from "./tools-common/tool-exec.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { writeDoc } from "./docx.js";
+import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
+import {
+  hasFeishuToolEnabledForAnyAccount,
+  withFeishuToolClient,
+} from "./tools-common/tool-exec.js";
 
 // ============ Helpers ============
 
@@ -101,16 +104,19 @@ async function createFolder(client: Lark.Client, name: string, folderToken?: str
   };
 }
 
-async function moveFile(
-  client: Lark.Client,
-  fileToken: string,
-  type: string,
-  folderToken: string,
-) {
+async function moveFile(client: Lark.Client, fileToken: string, type: string, folderToken: string) {
   const res = await client.drive.file.move({
     path: { file_token: fileToken },
     data: {
-      type: type as "doc" | "docx" | "sheet" | "bitable" | "folder" | "file" | "mindnote" | "slides",
+      type: type as
+        | "doc"
+        | "docx"
+        | "sheet"
+        | "bitable"
+        | "folder"
+        | "file"
+        | "mindnote"
+        | "slides",
       folder_token: folderToken,
     },
   });
@@ -165,7 +171,7 @@ async function importDocument(
   const createRes = await client.docx.document.create({
     data: { title, folder_token: folderToken },
   });
-  
+
   if (createRes.code !== 0) {
     throw new Error(`Failed to create document: ${createRes.msg}`);
   }

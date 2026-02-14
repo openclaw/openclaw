@@ -1,6 +1,9 @@
 import type { TSchema } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { hasFeishuToolEnabledForAnyAccount, withFeishuToolClient } from "../tools-common/tool-exec.js";
+import {
+  hasFeishuToolEnabledForAnyAccount,
+  withFeishuToolClient,
+} from "../tools-common/tool-exec.js";
 import {
   batchDeleteRecords,
   createField,
@@ -13,7 +16,7 @@ import {
   updateField,
   updateRecord,
 } from "./actions.js";
-import { errorResult, json, type BitableClient } from "./common.js";
+import { errorResult, json, type BitableClient, type BitableRecordFields } from "./common.js";
 import { getBitableMeta } from "./meta.js";
 import {
   BatchDeleteRecordsSchema,
@@ -50,10 +53,7 @@ type ToolSpec<P> = {
 
 // Shared registration wrapper keeps all bitable tools consistent:
 // same response envelope and same error conversion path.
-function registerBitableTool<P>(
-  api: OpenClawPluginApi,
-  spec: ToolSpec<P>,
-) {
+function registerBitableTool<P>(api: OpenClawPluginApi, spec: ToolSpec<P>) {
   api.registerTool(
     {
       name: spec.name,
@@ -131,7 +131,10 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable Update Field",
     description: "Update an existing field (column) in a Bitable table",
     parameters: UpdateFieldSchema,
-    run: (client, { app_token, table_id, field_id, field_name, type, property, description, ui_type }) =>
+    run: (
+      client,
+      { app_token, table_id, field_id, field_name, type, property, description, ui_type },
+    ) =>
       updateField(client, app_token, table_id, field_id, {
         field_name,
         type,
@@ -146,7 +149,8 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable Delete Field",
     description: "Delete a field (column) from a Bitable table",
     parameters: DeleteFieldSchema,
-    run: (client, { app_token, table_id, field_id }) => deleteField(client, app_token, table_id, field_id),
+    run: (client, { app_token, table_id, field_id }) =>
+      deleteField(client, app_token, table_id, field_id),
   });
 
   registerBitableTool<GetRecordParams>(api, {
@@ -154,7 +158,8 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable Get Record",
     description: "Get a single record by ID from a Bitable table",
     parameters: GetRecordSchema,
-    run: (client, { app_token, table_id, record_id }) => getRecord(client, app_token, table_id, record_id),
+    run: (client, { app_token, table_id, record_id }) =>
+      getRecord(client, app_token, table_id, record_id),
   });
 
   registerBitableTool<CreateRecordParams>(api, {
@@ -162,7 +167,8 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable Create Record",
     description: "Create a new record (row) in a Bitable table",
     parameters: CreateRecordSchema,
-    run: (client, { app_token, table_id, fields }) => createRecord(client, app_token, table_id, fields),
+    run: (client, { app_token, table_id, fields }) =>
+      createRecord(client, app_token, table_id, fields as BitableRecordFields),
   });
 
   registerBitableTool<UpdateRecordParams>(api, {
@@ -171,7 +177,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     description: "Update an existing record (row) in a Bitable table",
     parameters: UpdateRecordSchema,
     run: (client, { app_token, table_id, record_id, fields }) =>
-      updateRecord(client, app_token, table_id, record_id, fields),
+      updateRecord(client, app_token, table_id, record_id, fields as BitableRecordFields),
   });
 
   registerBitableTool<DeleteRecordParams>(api, {
@@ -179,7 +185,8 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable Delete Record",
     description: "Delete a single record (row) from a Bitable table",
     parameters: DeleteRecordSchema,
-    run: (client, { app_token, table_id, record_id }) => deleteRecord(client, app_token, table_id, record_id),
+    run: (client, { app_token, table_id, record_id }) =>
+      deleteRecord(client, app_token, table_id, record_id),
   });
 
   registerBitableTool<BatchDeleteRecordsParams>(api, {

@@ -12,7 +12,7 @@ import {
   normalizeAccountId,
   promptAccountId,
 } from "openclaw/plugin-sdk";
-
+import type { FeishuConfig } from "./types.js";
 import {
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
@@ -20,7 +20,6 @@ import {
   resolveFeishuCredentials,
 } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
-import type { FeishuConfig } from "./types.js";
 
 const channel = "feishu" as const;
 
@@ -93,7 +92,11 @@ function setFeishuDmPolicy(
   });
 }
 
-function setFeishuAllowFrom(cfg: ClawdbotConfig, allowFrom: string[], accountId?: string): ClawdbotConfig {
+function setFeishuAllowFrom(
+  cfg: ClawdbotConfig,
+  allowFrom: string[],
+  accountId?: string,
+): ClawdbotConfig {
   const resolvedAccountId = resolveOnboardingAccountId(cfg, accountId);
   return upsertFeishuAccountConfig(cfg, resolvedAccountId, { allowFrom });
 }
@@ -178,7 +181,11 @@ function setFeishuGroupAllowFrom(
   return upsertFeishuAccountConfig(cfg, resolvedAccountId, { groupAllowFrom });
 }
 
-function setFeishuDomain(cfg: ClawdbotConfig, domain: "feishu" | "lark", accountId?: string): ClawdbotConfig {
+function setFeishuDomain(
+  cfg: ClawdbotConfig,
+  domain: "feishu" | "lark",
+  accountId?: string,
+): ClawdbotConfig {
   const resolvedAccountId = resolveOnboardingAccountId(cfg, accountId);
   return upsertFeishuAccountConfig(cfg, resolvedAccountId, { domain });
 }
@@ -230,7 +237,9 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
         statusLines.push(`Feishu: ${configuredAccounts.length} account(s) configured`);
       }
     } else if (!override && configuredAccounts.length > 1) {
-      statusLines.push(`Feishu: configured (${configuredAccounts.length} account(s), connection not verified)`);
+      statusLines.push(
+        `Feishu: configured (${configuredAccounts.length} account(s), connection not verified)`,
+      );
     } else {
       statusLines.push("Feishu: configured (connection not verified)");
     }
@@ -269,8 +278,8 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
     const canUseEnv = Boolean(
       feishuAccountId === DEFAULT_ACCOUNT_ID &&
       !hasConfigCreds &&
-        process.env.FEISHU_APP_ID?.trim() &&
-        process.env.FEISHU_APP_SECRET?.trim(),
+      process.env.FEISHU_APP_ID?.trim() &&
+      process.env.FEISHU_APP_SECRET?.trim(),
     );
 
     let next = cfg;
@@ -375,7 +384,8 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     // Domain selection
-    const currentDomain = resolveFeishuAccount({ cfg: next, accountId: feishuAccountId }).config.domain ?? "feishu";
+    const currentDomain =
+      resolveFeishuAccount({ cfg: next, accountId: feishuAccountId }).config.domain ?? "feishu";
     const domain = await prompter.select({
       message: "Which Feishu domain?",
       options: [

@@ -1,7 +1,10 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
-import { hasFeishuToolEnabledForAnyAccount, withFeishuToolClient } from "./tools-common/tool-exec.js";
+import {
+  hasFeishuToolEnabledForAnyAccount,
+  withFeishuToolClient,
+} from "./tools-common/tool-exec.js";
 
 // ============ Helpers ============
 
@@ -147,7 +150,9 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
                     await addMember(client, p.token, p.type, p.member_type, p.member_id, p.perm),
                   );
                 case "remove":
-                  return json(await removeMember(client, p.token, p.type, p.member_type, p.member_id));
+                  return json(
+                    await removeMember(client, p.token, p.type, p.member_type, p.member_id),
+                  );
                 default:
                   return json({ error: `Unknown action: ${(p as any).action}` });
               }

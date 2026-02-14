@@ -1,6 +1,9 @@
 import type { TSchema } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { hasFeishuToolEnabledForAnyAccount, withFeishuToolClient } from "../tools-common/tool-exec.js";
+import {
+  hasFeishuToolEnabledForAnyAccount,
+  withFeishuToolClient,
+} from "../tools-common/tool-exec.js";
 import { createTask, deleteTask, getTask, updateTask } from "./actions.js";
 import { errorResult, json, type TaskClient } from "./common.js";
 import {
@@ -22,10 +25,7 @@ type ToolSpec<P> = {
   run: (client: TaskClient, params: P) => Promise<unknown>;
 };
 
-function registerTaskTool<P>(
-  api: OpenClawPluginApi,
-  spec: ToolSpec<P>,
-) {
+function registerTaskTool<P>(api: OpenClawPluginApi, spec: ToolSpec<P>) {
   api.registerTool(
     {
       name: spec.name,

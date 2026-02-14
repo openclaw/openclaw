@@ -29,6 +29,7 @@ Returns all accessible wiki spaces.
 ```
 
 With parent:
+
 ```json
 { "action": "nodes", "space_id": "7xxx", "parent_node_token": "wikcnXXX" }
 ```
@@ -48,8 +49,15 @@ Returns: `node_token`, `obj_token`, `obj_type`, etc. Use `obj_token` with `feish
 ```
 
 With type and parent:
+
 ```json
-{ "action": "create", "space_id": "7xxx", "title": "Sheet", "obj_type": "sheet", "parent_node_token": "wikcnXXX" }
+{
+  "action": "create",
+  "space_id": "7xxx",
+  "title": "Sheet",
+  "obj_type": "sheet",
+  "parent_node_token": "wikcnXXX"
+}
 ```
 
 `obj_type`: `docx` (default), `sheet`, `bitable`, `mindnote`, `file`, `doc`, `slides`
@@ -61,8 +69,15 @@ With type and parent:
 ```
 
 To different location:
+
 ```json
-{ "action": "move", "space_id": "7xxx", "node_token": "wikcnXXX", "target_space_id": "7yyy", "target_parent_token": "wikcnYYY" }
+{
+  "action": "move",
+  "space_id": "7xxx",
+  "node_token": "wikcnXXX",
+  "target_space_id": "7yyy",
+  "target_parent_token": "wikcnYYY"
+}
 ```
 
 ### Rename Node
@@ -85,8 +100,8 @@ To edit a wiki page:
 channels:
   feishu:
     tools:
-      wiki: true  # default: true
-      doc: true   # required - wiki content uses feishu_doc
+      wiki: true # default: true
+      doc: true # required - wiki content uses feishu_doc
 ```
 
 **Dependency:** This tool requires `feishu_doc` to be enabled. Wiki pages are documents - use `feishu_wiki` to navigate, then `feishu_doc` to read/edit content.

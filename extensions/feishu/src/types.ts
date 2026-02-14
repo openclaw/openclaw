@@ -1,4 +1,9 @@
-import type { FeishuConfigSchema, FeishuGroupSchema, FeishuAccountConfigSchema, z } from "./config-schema.js";
+import type {
+  FeishuConfigSchema,
+  FeishuGroupSchema,
+  FeishuAccountConfigSchema,
+  z,
+} from "./config-schema.js";
 import type { MentionTarget } from "./mention.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;

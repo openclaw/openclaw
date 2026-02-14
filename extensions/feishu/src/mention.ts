@@ -38,10 +38,7 @@ export function extractMentionTargets(
  * - Group: message mentions bot + at least one other user
  * - DM: message mentions any user (no need to mention bot)
  */
-export function isMentionForwardRequest(
-  event: FeishuMessageEvent,
-  botOpenId?: string,
-): boolean {
+export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: string): boolean {
   const mentions = event.message.mentions ?? [];
   if (mentions.length === 0) return false;
 

@@ -7,9 +7,9 @@ import {
   installRequestBodyLimitGuard,
 } from "openclaw/plugin-sdk";
 import type { ResolvedFeishuAccount } from "./types.js";
-import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
+import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { probeFeishu } from "./probe.js";
 
 export type MonitorFeishuOpts = {
@@ -26,9 +26,7 @@ const botOpenIds = new Map<string, string>();
 const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
-async function fetchBotOpenId(
-  account: ResolvedFeishuAccount,
-): Promise<string | undefined> {
+async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | undefined> {
   try {
     const result = await probeFeishu(account);
     return result.ok ? result.botOpenId : undefined;
@@ -146,7 +144,11 @@ type ConnectionParams = {
   eventDispatcher: Lark.EventDispatcher;
 };
 
-async function monitorWebSocket({ params, accountId, eventDispatcher }: ConnectionParams): Promise<void> {
+async function monitorWebSocket({
+  params,
+  accountId,
+  eventDispatcher,
+}: ConnectionParams): Promise<void> {
   const { account, runtime, abortSignal } = params;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -187,7 +189,11 @@ async function monitorWebSocket({ params, accountId, eventDispatcher }: Connecti
   });
 }
 
-async function monitorWebhook({ params, accountId, eventDispatcher }: ConnectionParams): Promise<void> {
+async function monitorWebhook({
+  params,
+  accountId,
+  eventDispatcher,
+}: ConnectionParams): Promise<void> {
   const { account, runtime, abortSignal } = params;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -285,7 +291,9 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     throw new Error("No enabled Feishu accounts configured");
   }
 
-  log(`feishu: starting ${accounts.length} account(s): ${accounts.map((a) => a.accountId).join(", ")}`);
+  log(
+    `feishu: starting ${accounts.length} account(s): ${accounts.map((a) => a.accountId).join(", ")}`,
+  );
 
   // Start all accounts in parallel
   await Promise.all(

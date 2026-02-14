@@ -47,6 +47,7 @@ Appends markdown to end of document.
 ```
 
 With folder:
+
 ```json
 { "action": "create", "title": "New Document", "folder_token": "fldcnXXX" }
 ```
@@ -68,7 +69,12 @@ Returns full block data including tables, images. Use this to read structured co
 ### Update Block Text
 
 ```json
-{ "action": "update_block", "doc_token": "ABC123def", "block_id": "doxcnXXX", "content": "New text" }
+{
+  "action": "update_block",
+  "doc_token": "ABC123def",
+  "block_id": "doxcnXXX",
+  "content": "New text"
+}
 ```
 
 ### Delete Block
@@ -89,7 +95,7 @@ Returns full block data including tables, images. Use this to read structured co
 channels:
   feishu:
     tools:
-      doc: true  # default: true
+      doc: true # default: true
 ```
 
 **Note:** `feishu_wiki` depends on this tool - wiki page content is read/written via `feishu_doc`.
