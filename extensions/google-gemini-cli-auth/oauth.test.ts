@@ -1,6 +1,10 @@
 import { join, parse } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
+vi.mock("openclaw/plugin-sdk", () => ({
+  isWSL2Sync: () => false,
+}));
+
 // Mock fs module before importing the module under test
 const mockExistsSync = vi.fn();
 const mockReadFileSync = vi.fn();
@@ -32,7 +36,6 @@ describe("extractGeminiCliCredentials", () => {
   let originalPath: string | undefined;
 
   beforeEach(async () => {
-    vi.resetModules();
     vi.clearAllMocks();
     originalPath = process.env.PATH;
   });

@@ -28,10 +28,7 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./pw-session.js", () => sessionMocks);
-
-async function importModule() {
-  return await import("./pw-tools-core.js");
-}
+const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
   beforeEach(() => {
@@ -75,7 +72,6 @@ describe("pw-tools-core", () => {
       keyboard: { press: vi.fn(async () => {}) },
     };
 
-    const mod = await importModule();
     await mod.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       paths: ["/tmp/1"],
@@ -101,7 +97,6 @@ describe("pw-tools-core", () => {
       waitForEvent,
     };
 
-    const mod = await importModule();
     await mod.armDialogViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       accept: true,
@@ -145,7 +140,6 @@ describe("pw-tools-core", () => {
       getByText: vi.fn(() => ({ first: () => ({ waitFor: vi.fn() }) })),
     };
 
-    const mod = await importModule();
     await mod.waitForViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       selector: "#main",

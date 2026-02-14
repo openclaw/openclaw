@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -115,6 +116,28 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
 
 export function clearSessionStoreCacheForTest(): void {
   SESSION_STORE_CACHE.clear();
+  for (const queue of LOCK_QUEUES.values()) {
+    for (const task of queue.pending) {
+      task.timedOut = true;
+      if (task.timer) {
+        clearTimeout(task.timer);
+      }
+    }
+  }
+  LOCK_QUEUES.clear();
+}
+
+/** Expose lock queue size for tests. */
+export function getSessionStoreLockQueueSizeForTest(): number {
+  return LOCK_QUEUES.size;
+}
+
+export async function withSessionStoreLockForTest<T>(
+  storePath: string,
+  fn: () => Promise<T>,
+  opts: SessionStoreLockOptions = {},
+): Promise<T> {
+  return await withSessionStoreLock(storePath, fn, opts);
 }
 
 type LoadSessionStoreOptions = {
@@ -584,76 +607,149 @@ type SessionStoreLockOptions = {
   staleMs?: number;
 };
 
+type SessionStoreLockTask = {
+  fn: () => Promise<unknown>;
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+  timeoutAt?: number;
+  staleMs: number;
+  timer?: ReturnType<typeof setTimeout>;
+  started: boolean;
+  timedOut: boolean;
+};
+
+type SessionStoreLockQueue = {
+  running: boolean;
+  pending: SessionStoreLockTask[];
+};
+
+const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
+
+function lockTimeoutError(storePath: string): Error {
+  return new Error(`timeout waiting for session store lock: ${storePath}`);
+}
+
+function getOrCreateLockQueue(storePath: string): SessionStoreLockQueue {
+  const existing = LOCK_QUEUES.get(storePath);
+  if (existing) {
+    return existing;
+  }
+  const created: SessionStoreLockQueue = { running: false, pending: [] };
+  LOCK_QUEUES.set(storePath, created);
+  return created;
+}
+
+function removePendingTask(queue: SessionStoreLockQueue, task: SessionStoreLockTask): void {
+  const idx = queue.pending.indexOf(task);
+  if (idx >= 0) {
+    queue.pending.splice(idx, 1);
+  }
+}
+
+async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
+  const queue = LOCK_QUEUES.get(storePath);
+  if (!queue || queue.running) {
+    return;
+  }
+  queue.running = true;
+  try {
+    while (queue.pending.length > 0) {
+      const task = queue.pending.shift();
+      if (!task || task.timedOut) {
+        continue;
+      }
+
+      if (task.timer) {
+        clearTimeout(task.timer);
+      }
+      task.started = true;
+
+      const remainingTimeoutMs =
+        task.timeoutAt != null
+          ? Math.max(0, task.timeoutAt - Date.now())
+          : Number.POSITIVE_INFINITY;
+      if (task.timeoutAt != null && remainingTimeoutMs <= 0) {
+        task.timedOut = true;
+        task.reject(lockTimeoutError(storePath));
+        continue;
+      }
+
+      let lock: { release: () => Promise<void> } | undefined;
+      let result: unknown;
+      let failed: unknown;
+      let hasFailure = false;
+      try {
+        lock = await acquireSessionWriteLock({
+          sessionFile: storePath,
+          timeoutMs: remainingTimeoutMs,
+          staleMs: task.staleMs,
+        });
+        result = await task.fn();
+      } catch (err) {
+        hasFailure = true;
+        failed = err;
+      } finally {
+        await lock?.release().catch(() => undefined);
+      }
+      if (hasFailure) {
+        task.reject(failed);
+        continue;
+      }
+      task.resolve(result);
+    }
+  } finally {
+    queue.running = false;
+    if (queue.pending.length === 0) {
+      LOCK_QUEUES.delete(storePath);
+    } else {
+      queueMicrotask(() => {
+        void drainSessionStoreLockQueue(storePath);
+      });
+    }
+  }
+}
+
 async function withSessionStoreLock<T>(
   storePath: string,
   fn: () => Promise<T>,
   opts: SessionStoreLockOptions = {},
 ): Promise<T> {
   const timeoutMs = opts.timeoutMs ?? 10_000;
-  const pollIntervalMs = opts.pollIntervalMs ?? 25;
   const staleMs = opts.staleMs ?? 30_000;
-  const lockPath = `${storePath}.lock`;
-  const startedAt = Date.now();
+  // `pollIntervalMs` is retained for API compatibility with older lock options.
+  void opts.pollIntervalMs;
 
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+  const hasTimeout = timeoutMs > 0 && Number.isFinite(timeoutMs);
+  const timeoutAt = hasTimeout ? Date.now() + timeoutMs : undefined;
+  const queue = getOrCreateLockQueue(storePath);
 
-  while (true) {
-    try {
-      const handle = await fs.promises.open(lockPath, "wx");
-      try {
-        await handle.writeFile(
-          JSON.stringify({ pid: process.pid, startedAt: Date.now() }),
-          "utf-8",
-        );
-      } catch {
-        // best-effort
-      }
-      await handle.close();
-      break;
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err
-          ? String((err as { code?: unknown }).code)
-          : null;
-      if (code === "ENOENT") {
-        // Store directory may be deleted/recreated in tests while writes are in-flight.
-        // Best-effort: recreate the parent dir and retry until timeout.
-        await fs.promises
-          .mkdir(path.dirname(storePath), { recursive: true })
-          .catch(() => undefined);
-        await new Promise((r) => setTimeout(r, pollIntervalMs));
-        continue;
-      }
-      if (code !== "EEXIST") {
-        throw err;
-      }
+  const promise = new Promise<T>((resolve, reject) => {
+    const task: SessionStoreLockTask = {
+      fn: async () => await fn(),
+      resolve: (value) => resolve(value as T),
+      reject,
+      timeoutAt,
+      staleMs,
+      started: false,
+      timedOut: false,
+    };
 
-      const now = Date.now();
-      if (now - startedAt > timeoutMs) {
-        throw new Error(`timeout acquiring session store lock: ${lockPath}`, { cause: err });
-      }
-
-      // Best-effort stale lock eviction (e.g. crashed process).
-      try {
-        const st = await fs.promises.stat(lockPath);
-        const ageMs = now - st.mtimeMs;
-        if (ageMs > staleMs) {
-          await fs.promises.unlink(lockPath);
-          continue;
+    if (hasTimeout) {
+      task.timer = setTimeout(() => {
+        if (task.started || task.timedOut) {
+          return;
         }
-      } catch {
-        // ignore
-      }
-
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
+        task.timedOut = true;
+        removePendingTask(queue, task);
+        reject(lockTimeoutError(storePath));
+      }, timeoutMs);
     }
-  }
 
-  try {
-    return await fn();
-  } finally {
-    await fs.promises.unlink(lockPath).catch(() => undefined);
-  }
+    queue.pending.push(task);
+    void drainSessionStoreLockQueue(storePath);
+  });
+
+  return await promise;
 }
 
 export async function updateSessionStoreEntry(params: {

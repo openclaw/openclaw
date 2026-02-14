@@ -70,7 +70,7 @@ function applyJobResult(
   }
 
   const shouldDelete =
-    job.schedule.kind === "at" && result.status === "ok" && job.deleteAfterRun === true;
+    job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
@@ -483,10 +483,15 @@ async function executeJobCore(
     message: job.payload.message,
   });
 
-  // Post a short summary back to the main session.
+  // Post a short summary back to the main session — but only when the
+  // isolated run did NOT already deliver its output to the target channel.
+  // When `res.delivered` is true the announce flow (or direct outbound
+  // delivery) already sent the result, so posting the summary to main
+  // would wake the main agent and cause a duplicate message.
+  // See: https://github.com/openclaw/openclaw/issues/15692
   const summaryText = res.summary?.trim();
   const deliveryPlan = resolveCronDeliveryPlan(job);
-  if (summaryText && deliveryPlan.requested) {
+  if (summaryText && deliveryPlan.requested && !res.delivered) {
     const prefix = "Cron";
     const label =
       res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;

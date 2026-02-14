@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { movePathToTrash } from "../browser/trash.js";
-import { STATE_DIR } from "../config/paths.js";
+import { resolveStateDir } from "../config/paths.js";
 import { danger, info } from "../globals.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { defaultRuntime } from "../runtime.js";
@@ -32,7 +32,7 @@ export function resolveBundledExtensionRootDir(
 }
 
 function installedExtensionRootDir() {
-  return path.join(STATE_DIR, "browser", "chrome-extension");
+  return path.join(resolveStateDir(), "browser", "chrome-extension");
 }
 
 function hasManifest(dir: string) {
@@ -48,7 +48,7 @@ export async function installChromeExtension(opts?: {
     throw new Error("Bundled Chrome extension is missing. Reinstall OpenClaw and try again.");
   }
 
-  const stateDir = opts?.stateDir ?? STATE_DIR;
+  const stateDir = opts?.stateDir ?? resolveStateDir();
   const dest = path.join(stateDir, "browser", "chrome-extension");
   fs.mkdirSync(path.dirname(dest), { recursive: true });
 

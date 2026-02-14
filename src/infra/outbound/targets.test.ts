@@ -16,7 +16,7 @@ describe("resolveOutboundTarget", () => {
     );
   });
 
-  it("falls back to whatsapp allowFrom via config", () => {
+  it("rejects whatsapp with empty target even when allowFrom configured", () => {
     const cfg: OpenClawConfig = {
       channels: { whatsapp: { allowFrom: ["+1555"] } },
     };
@@ -26,7 +26,10 @@ describe("resolveOutboundTarget", () => {
       cfg,
       mode: "explicit",
     });
-    expect(res).toEqual({ ok: true, to: "+1555" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.message).toContain("WhatsApp");
+    }
   });
 
   it.each([
@@ -49,18 +52,18 @@ describe("resolveOutboundTarget", () => {
       expected: { ok: true as const, to: "120363401234567890@g.us" },
     },
     {
-      name: "falls back to whatsapp allowFrom",
+      name: "rejects whatsapp with empty target and allowFrom (no silent fallback)",
       input: { channel: "whatsapp" as const, to: "", allowFrom: ["+1555"] },
-      expected: { ok: true as const, to: "+1555" },
+      expectedErrorIncludes: "WhatsApp",
     },
     {
-      name: "normalizes whatsapp allowFrom fallback targets",
+      name: "rejects whatsapp with empty target and prefixed allowFrom (no silent fallback)",
       input: {
         channel: "whatsapp" as const,
         to: "",
         allowFrom: ["whatsapp:(555) 123-4567"],
       },
-      expected: { ok: true as const, to: "+5551234567" },
+      expectedErrorIncludes: "WhatsApp",
     },
     {
       name: "rejects invalid whatsapp target",

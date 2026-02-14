@@ -546,6 +546,15 @@ For a hackable (git) install:
 curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --verbose
 ```
 
+Windows (PowerShell) equivalent:
+
+```powershell
+# install.ps1 has no dedicated -Verbose flag yet.
+Set-PSDebug -Trace 1
+& ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -NoOnboard
+Set-PSDebug -Trace 0
+```
+
 More options: [Installer flags](/install/installer).
 
 ### Windows install says git not found or openclaw not recognized

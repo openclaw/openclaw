@@ -3,14 +3,35 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { defaultRuntime } from "../runtime.js";
-import { CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
+import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
 import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 
 describe("canvas host", () => {
+  const quietRuntime = {
+    ...defaultRuntime,
+    log: (..._args: Parameters<typeof console.log>) => {},
+  };
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  const createCaseDir = async () => {
+    const dir = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
   it("injects live reload script", () => {
     const out = injectCanvasLiveReload("<html><body>Hello</body></html>");
     expect(out).toContain(CANVAS_WS_PATH);
@@ -20,10 +41,10 @@ describe("canvas host", () => {
   });
 
   it("creates a default index.html when missing", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
+    const dir = await createCaseDir();
 
     const server = await startCanvasHost({
-      runtime: defaultRuntime,
+      runtime: quietRuntime,
       rootDir: dir,
       port: 0,
       listenHost: "127.0.0.1",
@@ -39,16 +60,15 @@ describe("canvas host", () => {
       expect(html).toContain(CANVAS_WS_PATH);
     } finally {
       await server.close();
-      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 
   it("skips live reload injection when disabled", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
+    const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>no-reload</body></html>", "utf8");
 
     const server = await startCanvasHost({
-      runtime: defaultRuntime,
+      runtime: quietRuntime,
       rootDir: dir,
       port: 0,
       listenHost: "127.0.0.1",
@@ -67,16 +87,15 @@ describe("canvas host", () => {
       expect(wsRes.status).toBe(404);
     } finally {
       await server.close();
-      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 
   it("serves canvas content from the mounted base path", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
+    const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
 
     const handler = await createCanvasHostHandler({
-      runtime: defaultRuntime,
+      runtime: quietRuntime,
       rootDir: dir,
       basePath: CANVAS_HOST_PATH,
       allowInTests: true,
@@ -116,16 +135,15 @@ describe("canvas host", () => {
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
       );
-      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 
   it("reuses a handler without closing it twice", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
+    const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
 
     const handler = await createCanvasHostHandler({
-      runtime: defaultRuntime,
+      runtime: quietRuntime,
       rootDir: dir,
       basePath: CANVAS_HOST_PATH,
       allowInTests: true,
@@ -135,7 +153,7 @@ describe("canvas host", () => {
     handler.close = closeSpy;
 
     const server = await startCanvasHost({
-      runtime: defaultRuntime,
+      runtime: quietRuntime,
       handler,
       ownsHandler: false,
       port: 0,
@@ -149,17 +167,16 @@ describe("canvas host", () => {
       await server.close();
       expect(closeSpy).not.toHaveBeenCalled();
       await originalClose();
-      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 
   it("serves HTML with injection and broadcasts reload on file changes", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
+    const dir = await createCaseDir();
     const index = path.join(dir, "index.html");
     await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
 
     const server = await startCanvasHost({
-      runtime: defaultRuntime,
+      runtime: quietRuntime,
       rootDir: dir,
       port: 0,
       listenHost: "127.0.0.1",
@@ -194,21 +211,22 @@ describe("canvas host", () => {
         });
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
       await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
       expect(await msg).toBe("reload");
       ws.close();
     } finally {
       await server.close();
-      await fs.rm(dir, { recursive: true, force: true });
     }
   }, 20_000);
 
-  it("serves the gateway-hosted A2UI scaffold", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
+  it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
+    const dir = await createCaseDir();
     const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");
     const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
+    const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
+    const linkPath = path.join(a2uiRoot, linkName);
     let createdBundle = false;
+    let createdLink = false;
 
     try {
       await fs.stat(bundlePath);
@@ -217,8 +235,11 @@ describe("canvas host", () => {
       createdBundle = true;
     }
 
+    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+    createdLink = true;
+
     const server = await startCanvasHost({
-      runtime: defaultRuntime,
+      runtime: quietRuntime,
       rootDir: dir,
       port: 0,
       listenHost: "127.0.0.1",
@@ -238,12 +259,22 @@ describe("canvas host", () => {
       const js = await bundleRes.text();
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
+      const traversalRes = await fetch(
+        `http://127.0.0.1:${server.port}${A2UI_PATH}/%2e%2e%2fpackage.json`,
+      );
+      expect(traversalRes.status).toBe(404);
+      expect(await traversalRes.text()).toBe("not found");
+      const symlinkRes = await fetch(`http://127.0.0.1:${server.port}${A2UI_PATH}/${linkName}`);
+      expect(symlinkRes.status).toBe(404);
+      expect(await symlinkRes.text()).toBe("not found");
     } finally {
       await server.close();
+      if (createdLink) {
+        await fs.rm(linkPath, { force: true });
+      }
       if (createdBundle) {
         await fs.rm(bundlePath, { force: true });
       }
-      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 });

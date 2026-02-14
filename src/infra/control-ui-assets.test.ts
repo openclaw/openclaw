@@ -10,6 +10,25 @@ import {
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "./control-ui-assets.js";
+import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+
+/** Try to create a symlink; returns false if the OS denies it (Windows CI without Developer Mode). */
+async function trySymlink(target: string, linkPath: string): Promise<boolean> {
+  try {
+    await fs.symlink(target, linkPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function canonicalPath(p: string): Promise<string> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
 
 describe("control UI assets helpers", () => {
   it("resolves repo root from src argv1", async () => {
@@ -217,6 +236,91 @@ describe("control UI assets helpers", () => {
         indexPath,
         exists: false,
       });
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves control-ui root when argv1 is a symlink (nvm scenario)", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      const realPkg = path.join(tmp, "real-pkg");
+      const bin = path.join(tmp, "bin");
+      await fs.mkdir(realPkg, { recursive: true });
+      await fs.mkdir(bin, { recursive: true });
+      await fs.writeFile(path.join(realPkg, "package.json"), JSON.stringify({ name: "openclaw" }));
+      await fs.writeFile(path.join(realPkg, "openclaw.mjs"), "export {};\n");
+      await fs.mkdir(path.join(realPkg, "dist", "control-ui"), { recursive: true });
+      await fs.writeFile(path.join(realPkg, "dist", "control-ui", "index.html"), "<html></html>\n");
+      const ok = await trySymlink(
+        path.join("..", "real-pkg", "openclaw.mjs"),
+        path.join(bin, "openclaw"),
+      );
+      if (!ok) {
+        return; // symlinks not supported (Windows CI)
+      }
+
+      const resolvedRoot = resolveControlUiRootSync({ argv1: path.join(bin, "openclaw") });
+      expect(resolvedRoot).not.toBeNull();
+      expect(await canonicalPath(resolvedRoot ?? "")).toBe(
+        await canonicalPath(path.join(realPkg, "dist", "control-ui")),
+      );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves package root via symlinked argv1", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      const realPkg = path.join(tmp, "real-pkg");
+      const bin = path.join(tmp, "bin");
+      await fs.mkdir(realPkg, { recursive: true });
+      await fs.mkdir(bin, { recursive: true });
+      await fs.writeFile(path.join(realPkg, "package.json"), JSON.stringify({ name: "openclaw" }));
+      await fs.writeFile(path.join(realPkg, "openclaw.mjs"), "export {};\n");
+      await fs.mkdir(path.join(realPkg, "dist", "control-ui"), { recursive: true });
+      await fs.writeFile(path.join(realPkg, "dist", "control-ui", "index.html"), "<html></html>\n");
+      const ok = await trySymlink(
+        path.join("..", "real-pkg", "openclaw.mjs"),
+        path.join(bin, "openclaw"),
+      );
+      if (!ok) {
+        return; // symlinks not supported (Windows CI)
+      }
+
+      const packageRoot = await resolveOpenClawPackageRoot({ argv1: path.join(bin, "openclaw") });
+      expect(packageRoot).not.toBeNull();
+      expect(await canonicalPath(packageRoot ?? "")).toBe(await canonicalPath(realPkg));
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves dist index path via symlinked argv1 (async)", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      const realPkg = path.join(tmp, "real-pkg");
+      const bin = path.join(tmp, "bin");
+      await fs.mkdir(realPkg, { recursive: true });
+      await fs.mkdir(bin, { recursive: true });
+      await fs.writeFile(path.join(realPkg, "package.json"), JSON.stringify({ name: "openclaw" }));
+      await fs.writeFile(path.join(realPkg, "openclaw.mjs"), "export {};\n");
+      await fs.mkdir(path.join(realPkg, "dist", "control-ui"), { recursive: true });
+      await fs.writeFile(path.join(realPkg, "dist", "control-ui", "index.html"), "<html></html>\n");
+      const ok = await trySymlink(
+        path.join("..", "real-pkg", "openclaw.mjs"),
+        path.join(bin, "openclaw"),
+      );
+      if (!ok) {
+        return; // symlinks not supported (Windows CI)
+      }
+
+      const indexPath = await resolveControlUiDistIndexPath(path.join(bin, "openclaw"));
+      expect(indexPath).not.toBeNull();
+      expect(await canonicalPath(indexPath ?? "")).toBe(
+        await canonicalPath(path.join(realPkg, "dist", "control-ui", "index.html")),
+      );
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }

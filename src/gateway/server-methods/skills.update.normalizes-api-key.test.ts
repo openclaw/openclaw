@@ -15,10 +15,11 @@ vi.mock("../../config/config.js", () => {
   };
 });
 
+const { skillsHandlers } = await import("./skills.js");
+
 describe("skills.update", () => {
   it("strips embedded CR/LF from apiKey", async () => {
     writtenConfig = null;
-    const { skillsHandlers } = await import("./skills.js");
 
     let ok: boolean | null = null;
     let error: unknown = null;

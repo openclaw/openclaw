@@ -26,13 +26,6 @@ export function restoreTerminalState(reason?: string): void {
     } catch (err) {
       reportRestoreFailure("raw mode", err, reason);
     }
-    if (typeof stdin.isPaused === "function" && stdin.isPaused()) {
-      try {
-        stdin.resume();
-      } catch (err) {
-        reportRestoreFailure("stdin resume", err, reason);
-      }
-    }
   }
 
   if (process.stdout.isTTY) {

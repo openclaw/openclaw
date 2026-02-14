@@ -116,9 +116,9 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       const normalized = normalizeTestText(text ?? "");
       expect(normalized).toContain("Current: anthropic/claude-opus-4-5");
-      expect(normalized).toContain("Switch: /model <provider/model>");
-      expect(normalized).toContain("Browse: /models (providers) or /models <provider> (models)");
-      expect(normalized).toContain("More: /model status");
+      expect(normalized).toContain("/model <provider/model> to switch");
+      expect(normalized).toContain("Tap below to browse models");
+      expect(normalized).toContain("/model status for details");
       expect(normalized).not.toContain("reasoning");
       expect(normalized).not.toContain("image");
     });

@@ -30,6 +30,9 @@ export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
 
+const workspaceTemplateCache = new Map<string, Promise<string>>();
+let gitAvailabilityPromise: Promise<boolean> | null = null;
+
 function stripFrontMatter(content: string): string {
   if (!content.startsWith("---")) {
     return content;
@@ -45,15 +48,30 @@ function stripFrontMatter(content: string): string {
 }
 
 async function loadTemplate(name: string): Promise<string> {
-  const templateDir = await resolveWorkspaceTemplateDir();
-  const templatePath = path.join(templateDir, name);
+  const cached = workspaceTemplateCache.get(name);
+  if (cached) {
+    return cached;
+  }
+
+  const pending = (async () => {
+    const templateDir = await resolveWorkspaceTemplateDir();
+    const templatePath = path.join(templateDir, name);
+    try {
+      const content = await fs.readFile(templatePath, "utf-8");
+      return stripFrontMatter(content);
+    } catch {
+      throw new Error(
+        `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
+      );
+    }
+  })();
+
+  workspaceTemplateCache.set(name, pending);
   try {
-    const content = await fs.readFile(templatePath, "utf-8");
-    return stripFrontMatter(content);
-  } catch {
-    throw new Error(
-      `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
-    );
+    return await pending;
+  } catch (error) {
+    workspaceTemplateCache.delete(name);
+    throw error;
   }
 }
 
@@ -74,6 +92,19 @@ export type WorkspaceBootstrapFile = {
   content?: string;
   missing: boolean;
 };
+
+/** Set of recognized bootstrap filenames for runtime validation */
+const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_MEMORY_ALT_FILENAME,
+]);
 
 async function writeFileIfMissing(filePath: string, content: string) {
   try {
@@ -99,12 +130,20 @@ async function hasGitRepo(dir: string): Promise<boolean> {
 }
 
 async function isGitAvailable(): Promise<boolean> {
-  try {
-    const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
-    return result.code === 0;
-  } catch {
-    return false;
+  if (gitAvailabilityPromise) {
+    return gitAvailabilityPromise;
   }
+
+  gitAvailabilityPromise = (async () => {
+    try {
+      const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
+      return result.code === 0;
+    } catch {
+      return false;
+    }
+  })();
+
+  return gitAvailabilityPromise;
 }
 
 async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
@@ -134,7 +173,6 @@ export async function ensureAgentWorkspace(params?: {
   toolsPath?: string;
   identityPath?: string;
   userPath?: string;
-  heartbeatPath?: string;
   bootstrapPath?: string;
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
@@ -150,11 +188,13 @@ export async function ensureAgentWorkspace(params?: {
   const toolsPath = path.join(dir, DEFAULT_TOOLS_FILENAME);
   const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
-  const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
+  // HEARTBEAT.md is intentionally NOT created from template.
+  // Per docs: "If the file is missing, the heartbeat still runs and the model decides what to do."
+  // Creating it from template (which is effectively empty) would cause heartbeat to be skipped.
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
 
   const isBrandNewWorkspace = await (async () => {
-    const paths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
+    const paths = [agentsPath, soulPath, toolsPath, identityPath, userPath];
     const existing = await Promise.all(
       paths.map(async (p) => {
         try {
@@ -173,7 +213,6 @@ export async function ensureAgentWorkspace(params?: {
   const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
-  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
 
   await writeFileIfMissing(agentsPath, agentsTemplate);
@@ -181,7 +220,6 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(toolsPath, toolsTemplate);
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
   if (isBrandNewWorkspace) {
     await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
   }
@@ -194,7 +232,6 @@ export async function ensureAgentWorkspace(params?: {
     toolsPath,
     identityPath,
     userPath,
-    heartbeatPath,
     bootstrapPath,
   };
 }
@@ -302,4 +339,72 @@ export function filterBootstrapFilesForSession(
     return files;
   }
   return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+}
+
+export async function loadExtraBootstrapFiles(
+  dir: string,
+  extraPatterns: string[],
+): Promise<WorkspaceBootstrapFile[]> {
+  if (!extraPatterns.length) {
+    return [];
+  }
+  const resolvedDir = resolveUserPath(dir);
+  let realResolvedDir = resolvedDir;
+  try {
+    realResolvedDir = await fs.realpath(resolvedDir);
+  } catch {
+    // Keep lexical root if realpath fails.
+  }
+
+  // Resolve glob patterns into concrete file paths
+  const resolvedPaths = new Set<string>();
+  for (const pattern of extraPatterns) {
+    if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
+      try {
+        const matches = fs.glob(pattern, { cwd: resolvedDir });
+        for await (const m of matches) {
+          resolvedPaths.add(m);
+        }
+      } catch {
+        // glob not available or pattern error — fall back to literal
+        resolvedPaths.add(pattern);
+      }
+    } else {
+      resolvedPaths.add(pattern);
+    }
+  }
+
+  const result: WorkspaceBootstrapFile[] = [];
+  for (const relPath of resolvedPaths) {
+    const filePath = path.resolve(resolvedDir, relPath);
+    // Guard against path traversal — resolved path must stay within workspace
+    if (!filePath.startsWith(resolvedDir + path.sep) && filePath !== resolvedDir) {
+      continue;
+    }
+    try {
+      // Resolve symlinks and verify the real path is still within workspace
+      const realFilePath = await fs.realpath(filePath);
+      if (
+        !realFilePath.startsWith(realResolvedDir + path.sep) &&
+        realFilePath !== realResolvedDir
+      ) {
+        continue;
+      }
+      // Only load files whose basename is a recognized bootstrap filename
+      const baseName = path.basename(relPath);
+      if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
+        continue;
+      }
+      const content = await fs.readFile(realFilePath, "utf-8");
+      result.push({
+        name: baseName as WorkspaceBootstrapFileName,
+        path: filePath,
+        content,
+        missing: false,
+      });
+    } catch {
+      // Silently skip missing extra files
+    }
+  }
+  return result;
 }

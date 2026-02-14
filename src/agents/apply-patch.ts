@@ -3,8 +3,8 @@ import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -59,9 +59,14 @@ export type ApplyPatchToolDetails = {
   summary: ApplyPatchSummary;
 };
 
+type SandboxApplyPatchConfig = {
+  root: string;
+  bridge: SandboxFsBridge;
+};
+
 type ApplyPatchOptions = {
   cwd: string;
-  sandboxRoot?: string;
+  sandbox?: SandboxApplyPatchConfig;
   signal?: AbortSignal;
 };
 
@@ -72,11 +77,10 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandboxRoot?: string } = {},
-  // oxlint-disable-next-line typescript/no-explicit-any
-): AgentTool<any, ApplyPatchToolDetails> {
+  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig } = {},
+): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
-  const sandboxRoot = options.sandboxRoot;
+  const sandbox = options.sandbox;
 
   return {
     name: "apply_patch",
@@ -98,7 +102,7 @@ export function createApplyPatchTool(
 
       const result = await applyPatch(input, {
         cwd,
-        sandboxRoot,
+        sandbox,
         signal,
       });
 
@@ -129,6 +133,7 @@ export async function applyPatch(
     modified: new Set<string>(),
     deleted: new Set<string>(),
   };
+  const fileOps = resolvePatchFileOps(options);
 
   for (const hunk of parsed.hunks) {
     if (options.signal?.aborted) {
@@ -139,30 +144,32 @@ export async function applyPatch(
 
     if (hunk.kind === "add") {
       const target = await resolvePatchPath(hunk.path, options);
-      await ensureDir(target.resolved);
-      await fs.writeFile(target.resolved, hunk.contents, "utf8");
+      await ensureDir(target.resolved, fileOps);
+      await fileOps.writeFile(target.resolved, hunk.contents);
       recordSummary(summary, seen, "added", target.display);
       continue;
     }
 
     if (hunk.kind === "delete") {
       const target = await resolvePatchPath(hunk.path, options);
-      await fs.rm(target.resolved);
+      await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
     }
 
     const target = await resolvePatchPath(hunk.path, options);
-    const applied = await applyUpdateHunk(target.resolved, hunk.chunks);
+    const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
+      readFile: (path) => fileOps.readFile(path),
+    });
 
     if (hunk.movePath) {
       const moveTarget = await resolvePatchPath(hunk.movePath, options);
-      await ensureDir(moveTarget.resolved);
-      await fs.writeFile(moveTarget.resolved, applied, "utf8");
-      await fs.rm(target.resolved);
+      await ensureDir(moveTarget.resolved, fileOps);
+      await fileOps.writeFile(moveTarget.resolved, applied);
+      await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "modified", moveTarget.display);
     } else {
-      await fs.writeFile(target.resolved, applied, "utf8");
+      await fileOps.writeFile(target.resolved, applied);
       recordSummary(summary, seen, "modified", target.display);
     }
   }
@@ -204,27 +211,54 @@ function formatSummary(summary: ApplyPatchSummary): string {
   return lines.join("\n");
 }
 
-async function ensureDir(filePath: string) {
+type PatchFileOps = {
+  readFile: (filePath: string) => Promise<string>;
+  writeFile: (filePath: string, content: string) => Promise<void>;
+  remove: (filePath: string) => Promise<void>;
+  mkdirp: (dir: string) => Promise<void>;
+};
+
+function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
+  if (options.sandbox) {
+    const { root, bridge } = options.sandbox;
+    return {
+      readFile: async (filePath) => {
+        const buf = await bridge.readFile({ filePath, cwd: root });
+        return buf.toString("utf8");
+      },
+      writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
+      remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
+      mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
+    };
+  }
+  return {
+    readFile: (filePath) => fs.readFile(filePath, "utf8"),
+    writeFile: (filePath, content) => fs.writeFile(filePath, content, "utf8"),
+    remove: (filePath) => fs.rm(filePath),
+    mkdirp: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+  };
+}
+
+async function ensureDir(filePath: string, ops: PatchFileOps) {
   const parent = path.dirname(filePath);
   if (!parent || parent === ".") {
     return;
   }
-  await fs.mkdir(parent, { recursive: true });
+  await ops.mkdirp(parent);
 }
 
 async function resolvePatchPath(
   filePath: string,
   options: ApplyPatchOptions,
 ): Promise<{ resolved: string; display: string }> {
-  if (options.sandboxRoot) {
-    const resolved = await assertSandboxPath({
+  if (options.sandbox) {
+    const resolved = options.sandbox.bridge.resolvePath({
       filePath,
       cwd: options.cwd,
-      root: options.sandboxRoot,
     });
     return {
-      resolved: resolved.resolved,
-      display: resolved.relative || resolved.resolved,
+      resolved: resolved.hostPath,
+      display: resolved.relativePath || resolved.hostPath,
     };
   }
 

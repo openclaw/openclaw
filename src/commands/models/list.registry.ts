@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import type { ModelRegistry } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelRow } from "./list.types.js";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
@@ -9,27 +10,27 @@ import {
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
+import {
+  ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
+  resolveForwardCompatModel,
+} from "../../agents/model-forward-compat.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
-import { modelKey } from "./shared.js";
+import {
+  formatErrorWithStack,
+  MODEL_AVAILABILITY_UNAVAILABLE_CODE,
+  shouldFallbackToAuthHeuristics,
+} from "./list.errors.js";
+import { isLocalBaseUrl, modelKey } from "./shared.js";
 
-const isLocalBaseUrl = (baseUrl: string) => {
-  try {
-    const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host.endsWith(".local")
-    );
-  } catch {
+const hasAuthForProvider = (
+  provider: string,
+  cfg?: OpenClawConfig,
+  authStore?: AuthProfileStore,
+) => {
+  if (!cfg || !authStore) {
     return false;
   }
-};
-
-const hasAuthForProvider = (provider: string, cfg: OpenClawConfig, authStore: AuthProfileStore) => {
   if (listProfilesForProvider(authStore, provider).length > 0) {
     return true;
   }
@@ -45,15 +46,136 @@ const hasAuthForProvider = (provider: string, cfg: OpenClawConfig, authStore: Au
   return false;
 };
 
+function createAvailabilityUnavailableError(message: string): Error {
+  const err = new Error(message);
+  (err as { code?: string }).code = MODEL_AVAILABILITY_UNAVAILABLE_CODE;
+  return err;
+}
+
+function normalizeAvailabilityError(err: unknown): Error {
+  if (shouldFallbackToAuthHeuristics(err) && err instanceof Error) {
+    return err;
+  }
+  return createAvailabilityUnavailableError(
+    `Model availability unavailable: getAvailable() failed.\n${formatErrorWithStack(err)}`,
+  );
+}
+
+function validateAvailableModels(availableModels: unknown): Model<Api>[] {
+  if (!Array.isArray(availableModels)) {
+    throw createAvailabilityUnavailableError(
+      "Model availability unavailable: getAvailable() returned a non-array value.",
+    );
+  }
+
+  for (const model of availableModels) {
+    if (
+      !model ||
+      typeof model !== "object" ||
+      typeof (model as { provider?: unknown }).provider !== "string" ||
+      typeof (model as { id?: unknown }).id !== "string"
+    ) {
+      throw createAvailabilityUnavailableError(
+        "Model availability unavailable: getAvailable() returned invalid model entries.",
+      );
+    }
+  }
+
+  return availableModels as Model<Api>[];
+}
+
+function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
+  let availableModels: unknown;
+  try {
+    availableModels = registry.getAvailable();
+  } catch (err) {
+    throw normalizeAvailabilityError(err);
+  }
+  try {
+    return validateAvailableModels(availableModels);
+  } catch (err) {
+    throw normalizeAvailabilityError(err);
+  }
+}
+
 export async function loadModelRegistry(cfg: OpenClawConfig) {
   await ensureOpenClawModelsJson(cfg);
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
-  const models = registry.getAll();
-  const availableModels = registry.getAvailable();
-  const availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
-  return { registry, models, availableKeys };
+  const appended = appendAntigravityForwardCompatModels(registry.getAll(), registry);
+  const models = appended.models;
+  const synthesizedForwardCompat = appended.synthesizedForwardCompat;
+  let availableKeys: Set<string> | undefined;
+  let availabilityErrorMessage: string | undefined;
+
+  try {
+    const availableModels = loadAvailableModels(registry);
+    availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
+    for (const synthesized of synthesizedForwardCompat) {
+      if (hasAvailableTemplate(availableKeys, synthesized.templatePrefixes)) {
+        availableKeys.add(synthesized.key);
+      }
+    }
+  } catch (err) {
+    if (!shouldFallbackToAuthHeuristics(err)) {
+      throw err;
+    }
+
+    // Some providers can report model-level availability as unavailable.
+    // Fall back to provider-level auth heuristics when availability is undefined.
+    availableKeys = undefined;
+    if (!availabilityErrorMessage) {
+      availabilityErrorMessage = formatErrorWithStack(err);
+    }
+  }
+  return { registry, models, availableKeys, availabilityErrorMessage };
+}
+
+type SynthesizedForwardCompat = {
+  key: string;
+  templatePrefixes: readonly string[];
+};
+
+function appendAntigravityForwardCompatModels(
+  models: Model<Api>[],
+  modelRegistry: ModelRegistry,
+): { models: Model<Api>[]; synthesizedForwardCompat: SynthesizedForwardCompat[] } {
+  const nextModels = [...models];
+  const synthesizedForwardCompat: SynthesizedForwardCompat[] = [];
+
+  for (const candidate of ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES) {
+    const key = modelKey("google-antigravity", candidate.id);
+    const hasForwardCompat = nextModels.some((model) => modelKey(model.provider, model.id) === key);
+    if (hasForwardCompat) {
+      continue;
+    }
+
+    const fallback = resolveForwardCompatModel("google-antigravity", candidate.id, modelRegistry);
+    if (!fallback) {
+      continue;
+    }
+
+    nextModels.push(fallback);
+    synthesizedForwardCompat.push({
+      key,
+      templatePrefixes: candidate.templatePrefixes,
+    });
+  }
+
+  return { models: nextModels, synthesizedForwardCompat };
+}
+
+function hasAvailableTemplate(
+  availableKeys: Set<string>,
+  templatePrefixes: readonly string[],
+): boolean {
+  for (const key of availableKeys) {
+    if (templatePrefixes.some((prefix) => key.startsWith(prefix))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function toModelRow(params: {
@@ -81,10 +203,14 @@ export function toModelRow(params: {
 
   const input = model.input.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl);
+  // Prefer model-level registry availability when present.
+  // Fall back to provider-level auth heuristics only if registry availability isn't available.
   const available =
-    cfg && authStore
-      ? hasAuthForProvider(model.provider, cfg, authStore)
-      : (availableKeys?.has(modelKey(model.provider, model.id)) ?? false);
+    availableKeys !== undefined
+      ? availableKeys.has(modelKey(model.provider, model.id))
+      : cfg && authStore
+        ? hasAuthForProvider(model.provider, cfg, authStore)
+        : false;
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {

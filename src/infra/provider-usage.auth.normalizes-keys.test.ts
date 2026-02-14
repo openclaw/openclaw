@@ -1,15 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import { resolveProviderAuths } from "./provider-usage.auth.js";
 
 describe("resolveProviderAuths key normalization", () => {
   it("strips embedded CR/LF from env keys", async () => {
     await withTempHome(
       async () => {
-        vi.resetModules();
-        const { resolveProviderAuths } = await import("./provider-usage.auth.js");
-
         const auths = await resolveProviderAuths({
           providers: ["zai", "minimax", "xiaomi"],
         });
@@ -49,9 +47,6 @@ describe("resolveProviderAuths key normalization", () => {
           )}\n`,
           "utf8",
         );
-
-        vi.resetModules();
-        const { resolveProviderAuths } = await import("./provider-usage.auth.js");
 
         const auths = await resolveProviderAuths({
           providers: ["minimax", "xiaomi"],

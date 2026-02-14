@@ -92,14 +92,3 @@ export function humanize(raw: string) {
     .replace(/\s+/g, " ")
     .replace(/^./, (m) => m.toUpperCase());
 }
-
-export function isSensitivePath(path: Array<string | number>): boolean {
-  const key = pathKey(path).toLowerCase();
-  return (
-    key.includes("token") ||
-    key.includes("password") ||
-    key.includes("secret") ||
-    key.includes("apikey") ||
-    key.endsWith("key")
-  );
-}

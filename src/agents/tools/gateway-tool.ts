@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadConfig, resolveConfigSnapshotHash } from "../../config/io.js";
-import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
+import { resolveConfigSnapshotHash } from "../../config/io.js";
+import { extractDeliveryInfo } from "../../config/sessions.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -69,7 +69,7 @@ export function createGatewayTool(opts?: {
     label: "Gateway",
     name: "gateway",
     description:
-      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing.",
+      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -93,34 +93,8 @@ export function createGatewayTool(opts?: {
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         // Extract channel + threadId for routing after restart
-        let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
-        let threadId: string | undefined;
-        if (sessionKey) {
-          const threadMarker = ":thread:";
-          const threadIndex = sessionKey.lastIndexOf(threadMarker);
-          const baseSessionKey = threadIndex === -1 ? sessionKey : sessionKey.slice(0, threadIndex);
-          const threadIdRaw =
-            threadIndex === -1 ? undefined : sessionKey.slice(threadIndex + threadMarker.length);
-          threadId = threadIdRaw?.trim() || undefined;
-          try {
-            const cfg = loadConfig();
-            const storePath = resolveStorePath(cfg.session?.store);
-            const store = loadSessionStore(storePath);
-            let entry = store[sessionKey];
-            if (!entry?.deliveryContext && threadIndex !== -1 && baseSessionKey) {
-              entry = store[baseSessionKey];
-            }
-            if (entry?.deliveryContext) {
-              deliveryContext = {
-                channel: entry.deliveryContext.channel,
-                to: entry.deliveryContext.to,
-                accountId: entry.deliveryContext.accountId,
-              };
-            }
-          } catch {
-            // ignore: best-effort
-          }
-        }
+        // Supports both :thread: (most channels) and :topic: (Telegram)
+        const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
         const payload: RestartSentinelPayload = {
           kind: "restart",
           status: "ok",

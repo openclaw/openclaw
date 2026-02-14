@@ -2,6 +2,12 @@ import { afterAll, afterEach, beforeEach, vi } from "vitest";
 
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
+// Vitest vm forks can load transitive lockfile helpers many times per worker.
+// Raise listener budget to avoid noisy MaxListeners warnings and warning-stack overhead.
+const TEST_PROCESS_MAX_LISTENERS = 128;
+if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MAX_LISTENERS) {
+  process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
+}
 
 import type {
   ChannelId,
@@ -162,7 +168,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setActivePluginRegistry(createDefaultRegistry());
   // Guard against leaked fake timers across test files/workers.
   vi.useRealTimers();
 });

@@ -1,5 +1,10 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  type RuntimeEnv,
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+} from "openclaw/plugin-sdk";
 import type {
   CoreConfig,
   NextcloudTalkInboundMessage,
@@ -14,6 +19,8 @@ import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./sig
 const DEFAULT_WEBHOOK_PORT = 8788;
 const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
 const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
+const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
+const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const HEALTH_PATH = "/healthz";
 
 function formatError(err: unknown): string {
@@ -62,12 +69,13 @@ function payloadToInboundMessage(
   };
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
+export function readNextcloudTalkWebhookBody(
+  req: IncomingMessage,
+  maxBodyBytes: number,
+): Promise<string> {
+  return readRequestBodyWithLimit(req, {
+    maxBytes: maxBodyBytes,
+    timeoutMs: DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
   });
 }
 
@@ -77,6 +85,12 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   stop: () => void;
 } {
   const { port, host, path, secret, onMessage, onError, abortSignal } = opts;
+  const maxBodyBytes =
+    typeof opts.maxBodyBytes === "number" &&
+    Number.isFinite(opts.maxBodyBytes) &&
+    opts.maxBodyBytes > 0
+      ? Math.floor(opts.maxBodyBytes)
+      : DEFAULT_WEBHOOK_MAX_BODY_BYTES;
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (req.url === HEALTH_PATH) {
@@ -92,7 +106,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     }
 
     try {
-      const body = await readBody(req);
+      const body = await readNextcloudTalkWebhookBody(req, maxBodyBytes);
 
       const headers = extractNextcloudTalkHeaders(
         req.headers as Record<string, string | string[] | undefined>,
@@ -140,6 +154,20 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         onError?.(err instanceof Error ? err : new Error(formatError(err)));
       }
     } catch (err) {
+      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+        if (!res.headersSent) {
+          res.writeHead(413, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Payload too large" }));
+        }
+        return;
+      }
+      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+        if (!res.headersSent) {
+          res.writeHead(408, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
+        }
+        return;
+      }
       const error = err instanceof Error ? err : new Error(formatError(err));
       onError?.(error);
       if (!res.headersSent) {

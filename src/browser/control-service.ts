@@ -1,8 +1,13 @@
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
+import { ensureBrowserControlAuth } from "./control-auth.js";
 import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
-import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
+import {
+  type BrowserServerState,
+  createBrowserRouteContext,
+  listKnownProfileNames,
+} from "./server-context.js";
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -15,6 +20,7 @@ export function getBrowserControlState(): BrowserServerState | null {
 export function createBrowserControlContext() {
   return createBrowserRouteContext({
     getState: () => state,
+    refreshConfigFromDisk: true,
   });
 }
 
@@ -27,6 +33,14 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   if (!resolved.enabled) {
     return null;
+  }
+  try {
+    const ensured = await ensureBrowserControlAuth({ cfg });
+    if (ensured.generatedToken) {
+      logService.info("No browser auth configured; generated gateway.auth.token automatically.");
+    }
+  } catch (err) {
+    logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
   }
 
   state = {
@@ -62,10 +76,11 @@ export async function stopBrowserControlService(): Promise<void> {
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
+    refreshConfigFromDisk: true,
   });
 
   try {
-    for (const name of Object.keys(current.resolved.profiles)) {
+    for (const name of listKnownProfileNames(current)) {
       try {
         await ctx.forProfile(name).stopRunningBrowser();
       } catch {

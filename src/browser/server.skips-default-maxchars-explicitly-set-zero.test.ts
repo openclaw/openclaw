@@ -274,30 +274,86 @@ describe("browser control server", () => {
     await stopBrowserControlServer();
   });
 
-  it("skips default maxChars when explicitly set to zero", async () => {
+  it("covers primary control routes, validation, and profile compatibility", async () => {
     const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
+    const started = await startBrowserControlServerFromConfig();
+    expect(started?.port).toBe(testPort);
+
     const base = `http://127.0.0.1:${testPort}`;
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+    const s1 = (await realFetch(`${base}/`).then((r) => r.json())) as {
+      running: boolean;
+      pid: number | null;
+    };
+    expect(s1.running).toBe(false);
+    expect(s1.pid).toBe(null);
+    expect(s1.profile).toBe("openclaw");
 
-    const snapAi = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
-      r.json(),
-    )) as { ok: boolean; format?: string };
-    expect(snapAi.ok).toBe(true);
-    expect(snapAi.format).toBe("ai");
+    const tabsWhenStopped = (await realFetch(`${base}/tabs`).then((r) => r.json())) as {
+      running: boolean;
+      tabs: unknown[];
+    };
+    expect(tabsWhenStopped.running).toBe(false);
+    expect(Array.isArray(tabsWhenStopped.tabs)).toBe(true);
 
-    const [call] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
-    expect(call).toEqual({
-      cdpUrl: cdpBaseUrl,
-      targetId: "abcd1234",
+    const focusStopped = await realFetch(`${base}/tabs/focus`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: "abcd" }),
     });
-  });
+    expect(focusStopped.status).toBe(409);
 
-  it("validates agent inputs (agent routes)", async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+    const startedPayload = (await realFetch(`${base}/start`, { method: "POST" }).then((r) =>
+      r.json(),
+    )) as { ok: boolean; profile?: string };
+    expect(startedPayload.ok).toBe(true);
+    expect(startedPayload.profile).toBe("openclaw");
+
+    const s2 = (await realFetch(`${base}/`).then((r) => r.json())) as {
+      running: boolean;
+      pid: number | null;
+      chosenBrowser: string | null;
+    };
+    expect(s2.running).toBe(true);
+    expect(s2.pid).toBe(123);
+    expect(s2.chosenBrowser).toBe("chrome");
+    expect(launchCalls.length).toBeGreaterThan(0);
+
+    const tabs = (await realFetch(`${base}/tabs`).then((r) => r.json())) as {
+      running: boolean;
+      tabs: Array<{ targetId: string }>;
+    };
+    expect(tabs.running).toBe(true);
+    expect(tabs.tabs.length).toBeGreaterThan(0);
+
+    const openedDefault = (await realFetch(`${base}/tabs/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(openedDefault.targetId).toBe("newtab1");
+
+    createTargetId = "abcd1234";
+    const openedViaCdp = (await realFetch(`${base}/tabs/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(openedViaCdp.targetId).toBe("abcd1234");
+    createTargetId = null;
+
+    const focusAmbiguous = await realFetch(`${base}/tabs/focus`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: "abc" }),
+    });
+    expect(focusAmbiguous.status).toBe(409);
+
+    const focusMissing = await realFetch(`${base}/tabs/focus`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: "zzz" }),
+    });
+    expect(focusMissing.status).toBe(404);
 
     const navMissing = await realFetch(`${base}/navigate`, {
       method: "POST",
@@ -376,12 +432,61 @@ describe("browser control server", () => {
     expect(snapDefault.ok).toBe(true);
     expect(snapDefault.format).toBe("ai");
 
+    const snapAi = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
+      r.json(),
+    )) as { ok: boolean; format?: string };
+    expect(snapAi.ok).toBe(true);
+    expect(snapAi.format).toBe("ai");
+    const [call] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
+    expect(call).toEqual({
+      cdpUrl: cdpBaseUrl,
+      targetId: "abcd1234",
+    });
+
+    const snapAmbiguous = await realFetch(`${base}/snapshot?format=aria&targetId=abc`);
+    expect(snapAmbiguous.status).toBe(409);
+
     const screenshotBadCombo = await realFetch(`${base}/screenshot`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ fullPage: true, element: "body" }),
     });
     expect(screenshotBadCombo.status).toBe(400);
+    const delAmbiguous = await realFetch(`${base}/tabs/abc`, { method: "DELETE" });
+    expect(delAmbiguous.status).toBe(409);
+
+    const profiles = (await realFetch(`${base}/profiles`).then((r) => r.json())) as {
+      profiles: Array<{ name: string }>;
+    };
+    expect(profiles.profiles.some((profile) => profile.name === "openclaw")).toBe(true);
+
+    const tabsByProfile = (await realFetch(`${base}/tabs?profile=openclaw`).then((r) =>
+      r.json(),
+    )) as {
+      running: boolean;
+      tabs: unknown[];
+    };
+    expect(tabsByProfile.running).toBe(true);
+    expect(Array.isArray(tabsByProfile.tabs)).toBe(true);
+
+    const openByProfile = (await realFetch(`${base}/tabs/open?profile=openclaw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(openByProfile.targetId).toBe("newtab1");
+
+    const unknownProfile = await realFetch(`${base}/tabs?profile=unknown`);
+    expect(unknownProfile.status).toBe(404);
+    const unknownPayload = (await unknownProfile.json()) as { error: string };
+    expect(unknownPayload.error).toContain("not found");
+
+    const stopped = (await realFetch(`${base}/stop`, { method: "POST" }).then((r) => r.json())) as {
+      ok: boolean;
+      profile?: string;
+    };
+    expect(stopped.ok).toBe(true);
+    expect(stopped.profile).toBe("openclaw");
   });
 
   it("covers common error branches", async () => {
@@ -444,20 +549,5 @@ describe("browser control server", () => {
     expect(ensured).toHaveBeenCalledTimes(1);
 
     await new Promise<void>((resolve) => bridge.server.close(() => resolve()));
-  });
-
-  it("opens tabs via CDP createTarget path", async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
-
-    createTargetId = "abcd1234";
-    const opened = (await realFetch(`${base}/tabs/open`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: "https://example.com" }),
-    }).then((r) => r.json())) as { targetId?: string };
-    expect(opened.targetId).toBe("abcd1234");
   });
 });
