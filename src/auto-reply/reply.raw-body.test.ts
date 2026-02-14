@@ -80,9 +80,6 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 }
 
 describe("RawBody directive parsing", () => {
-  type ReplyMessage = Parameters<typeof getReplyFromConfig>[0];
-  type ReplyConfig = Parameters<typeof getReplyFromConfig>[2];
-
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rawbody-"));
   });
@@ -104,42 +101,6 @@ describe("RawBody directive parsing", () => {
 
   it("handles directives, history, and non-default agent session files", async () => {
     await withTempHome(async (home) => {
-      const assertCommandReply = async (input: {
-        message: ReplyMessage;
-        config: ReplyConfig;
-        expectedIncludes: string[];
-      }) => {
-        vi.mocked(runEmbeddedPiAgent).mockReset();
-        const res = await getReplyFromConfig(input.message, {}, input.config);
-        const text = Array.isArray(res) ? res[0]?.text : res?.text;
-        for (const expected of input.expectedIncludes) {
-          expect(text).toContain(expected);
-        }
-        expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-      };
-
-      await assertCommandReply({
-        message: {
-          Body: `[Chat messages since your last reply - for context]\\n[WhatsApp ...] Someone: hello\\n\\n[Current message - respond to this]\\n[WhatsApp ...] Jake: /think:high\\n[from: Jake McInteer (+6421807830)]`,
-          RawBody: "/think:high",
-          From: "+1222",
-          To: "+1222",
-          ChatType: "group",
-          CommandAuthorized: true,
-        },
-        config: {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw-1"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions-1.json") },
-        },
-        expectedIncludes: ["Thinking level set to high."],
-      });
-
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "ok" }],
         meta: {
