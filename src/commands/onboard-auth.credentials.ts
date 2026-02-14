@@ -50,13 +50,18 @@ export async function setGeminiApiKey(key: string, agentDir?: string) {
   });
 }
 
-export async function setMinimaxApiKey(key: string, agentDir?: string) {
+export async function setMinimaxApiKey(
+  key: string,
+  agentDir?: string,
+  profileId: string = "minimax:default",
+) {
+  const provider = profileId.split(":")[0] ?? "minimax";
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
-    profileId: "minimax:default",
+    profileId,
     credential: {
       type: "api_key",
-      provider: "minimax",
+      provider,
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),

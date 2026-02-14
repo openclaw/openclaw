@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
 import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
 type RuntimeMock = {
@@ -178,7 +179,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["minimax:default"]?.provider).toBe("minimax");
       expect(cfg.auth?.profiles?.["minimax:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
+      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_API_BASE_URL);
       expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
       await expectApiKeyProfile({
         profileId: "minimax:default",
@@ -209,13 +210,13 @@ describe("onboard (non-interactive): provider auth", () => {
         models?: { providers?: Record<string, { baseUrl?: string }> };
       }>(configPath);
 
-      expect(cfg.auth?.profiles?.["minimax:default"]?.provider).toBe("minimax");
-      expect(cfg.auth?.profiles?.["minimax:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
+      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.provider).toBe("minimax-cn");
+      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.["minimax-cn"]?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
+      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax-cn/MiniMax-M2.5");
       await expectApiKeyProfile({
-        profileId: "minimax:default",
-        provider: "minimax",
+        profileId: "minimax-cn:default",
+        provider: "minimax-cn",
         key: "sk-minimax-test",
       });
     });
