@@ -972,7 +972,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (command === "query") {
       return ["query", query, "--json", "-n", String(limit)];
     }
-    return [command, query, "--json"];
+    return [command, query, "--json", "-n", String(limit)];
   }
 }
 
