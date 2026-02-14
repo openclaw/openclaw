@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateCheckResult } from "./update-check.js";
 
 vi.mock("./openclaw-root.js", () => ({
@@ -24,15 +24,36 @@ vi.mock("../version.js", () => ({
 
 describe("update-startup", () => {
   const originalEnv = { ...process.env };
+  let suiteRoot = "";
+  let suiteCase = 0;
   let tempDir: string;
+
+  let resolveOpenClawPackageRoot: (typeof import("./openclaw-root.js"))["resolveOpenClawPackageRoot"];
+  let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
+  let resolveNpmChannelTag: (typeof import("./update-check.js"))["resolveNpmChannelTag"];
+  let runGatewayUpdateCheck: (typeof import("./update-startup.js"))["runGatewayUpdateCheck"];
+  let loaded = false;
+
+  beforeAll(async () => {
+    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-suite-"));
+  });
 
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-"));
+    tempDir = path.join(suiteRoot, `case-${++suiteCase}`);
+    await fs.mkdir(tempDir, { recursive: true });
     process.env.OPENCLAW_STATE_DIR = tempDir;
     delete process.env.VITEST;
     process.env.NODE_ENV = "test";
+
+    // Perf: load mocked modules once (after timers/env are set up).
+    if (!loaded) {
+      ({ resolveOpenClawPackageRoot } = await import("./openclaw-root.js"));
+      ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
+      ({ runGatewayUpdateCheck } = await import("./update-startup.js"));
+      loaded = true;
+    }
   });
 
   afterEach(async () => {
@@ -41,11 +62,15 @@ describe("update-startup", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("logs update hint for npm installs when newer tag exists", async () => {
-    const { resolveOpenClawPackageRoot } = await import("./openclaw-root.js");
-    const { checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js");
-    const { runGatewayUpdateCheck } = await import("./update-startup.js");
+  afterAll(async () => {
+    if (suiteRoot) {
+      await fs.rm(suiteRoot, { recursive: true, force: true });
+    }
+    suiteRoot = "";
+    suiteCase = 0;
+  });
 
+  it("logs update hint for npm installs when newer tag exists", async () => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/opt/openclaw",
@@ -76,10 +101,6 @@ describe("update-startup", () => {
   });
 
   it("uses latest when beta tag is older than release", async () => {
-    const { resolveOpenClawPackageRoot } = await import("./openclaw-root.js");
-    const { checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js");
-    const { runGatewayUpdateCheck } = await import("./update-startup.js");
-
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/opt/openclaw",
@@ -110,7 +131,6 @@ describe("update-startup", () => {
   });
 
   it("skips update check when disabled in config", async () => {
-    const { runGatewayUpdateCheck } = await import("./update-startup.js");
     const log = { info: vi.fn() };
 
     await runGatewayUpdateCheck({

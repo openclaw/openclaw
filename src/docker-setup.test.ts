@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 
@@ -85,8 +85,24 @@ function resolveBashForCompatCheck(): string | null {
 }
 
 describe("docker-setup.sh", () => {
+  let sandbox: DockerSetupSandbox | null = null;
+
+  beforeAll(async () => {
+    sandbox = await createDockerSetupSandbox();
+  });
+
+  afterAll(async () => {
+    if (!sandbox) {
+      return;
+    }
+    await rm(sandbox.rootDir, { recursive: true, force: true });
+    sandbox = null;
+  });
+
   it("handles env defaults, home-volume mounts, and apt build args", async () => {
-    const sandbox = await createDockerSetupSandbox();
+    if (!sandbox) {
+      throw new Error("sandbox missing");
+    }
 
     const result = spawnSync("bash", [sandbox.scriptPath], {
       cwd: sandbox.rootDir,
