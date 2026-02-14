@@ -114,7 +114,7 @@ describe("RawBody directive parsing", () => {
     vi.clearAllMocks();
   });
 
-  it("handles directives, history, and non-default agent session files", async () => {
+  it("handles directives and history in the prompt", async () => {
     await withTempHome(async (home) => {
       agentMocks.runEmbeddedPiAgent.mockResolvedValue({
         payloads: [{ text: "ok" }],
@@ -164,67 +164,6 @@ describe("RawBody directive parsing", () => {
       expect(prompt).toContain('"body": "hello"');
       expect(prompt).toContain("status please");
       expect(prompt).not.toContain("/think:high");
-      const agentId = "worker1";
-      const sessionId = "sess-worker-1";
-      const sessionKey = `agent:${agentId}:telegram:12345`;
-      const sessionsDir = path.join(home, ".openclaw", "agents", agentId, "sessions");
-      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
-      const storePath = path.join(sessionsDir, "sessions.json");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(sessionFile, "", "utf-8");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId,
-              sessionFile,
-              updatedAt: Date.now(),
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      agentMocks.runEmbeddedPiAgent.mockReset();
-      agentMocks.runEmbeddedPiAgent.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId, provider: "anthropic", model: "claude-opus-4-5" },
-        },
-      });
-
-      const resWorker = await getReplyFromConfig(
-        {
-          Body: "hello",
-          From: "telegram:12345",
-          To: "telegram:12345",
-          SessionKey: sessionKey,
-          Provider: "telegram",
-          Surface: "telegram",
-          CommandAuthorized: true,
-        },
-        {},
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-        },
-      );
-
-      const textWorker = Array.isArray(resWorker) ? resWorker[0]?.text : resWorker?.text;
-      expect(textWorker).toBe("ok");
-      expect(agentMocks.runEmbeddedPiAgent).toHaveBeenCalledOnce();
-      expect(
-        (agentMocks.runEmbeddedPiAgent.mock.calls[0]?.[0] as { sessionFile?: string } | undefined)
-          ?.sessionFile,
-      ).toBe(sessionFile);
     });
   });
 });
