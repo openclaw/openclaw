@@ -468,12 +468,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .map((entry) => entry.bodyText)
         .filter(Boolean)
         .join("\\n");
+      const combinedTextPlain = entries
+        .map((entry) => entry.bodyTextPlain)
+        .filter(Boolean)
+        .join("\\n");
       if (!combinedText.trim()) {
         return;
       }
       await handleSignalInboundMessage({
         ...last,
         bodyText: combinedText,
+        bodyTextPlain: combinedTextPlain,
         mediaPath: undefined,
         mediaType: undefined,
         mediaCaption: undefined,
@@ -553,27 +558,29 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     // to reference the expanded message (after @uuid replacements)
     const adjustedTextStyles =
       dataMessage?.textStyles && mentionResult.offsetShifts.size > 0
-        ? dataMessage.textStyles.map((style) => {
-            if (typeof style.start !== "number") {
-              return style;
-            }
-            // Calculate cumulative shift up to this style's start position
-            let cumulativeShift = 0;
+        ? (() => {
             const sortedShiftPositions = Array.from(mentionResult.offsetShifts.keys()).toSorted(
               (a, b) => a - b,
             );
-            for (const shiftPos of sortedShiftPositions) {
-              if (shiftPos <= style.start) {
-                cumulativeShift += mentionResult.offsetShifts.get(shiftPos) ?? 0;
-              } else {
-                break;
+            return dataMessage.textStyles.map((style) => {
+              if (typeof style.start !== "number") {
+                return style;
               }
-            }
-            return {
-              ...style,
-              start: style.start + cumulativeShift,
-            };
-          })
+              // Calculate cumulative shift up to this style's start position
+              let cumulativeShift = 0;
+              for (const shiftPos of sortedShiftPositions) {
+                if (shiftPos <= style.start) {
+                  cumulativeShift += mentionResult.offsetShifts.get(shiftPos) ?? 0;
+                } else {
+                  break;
+                }
+              }
+              return {
+                ...style,
+                start: style.start + cumulativeShift,
+              };
+            });
+          })()
         : dataMessage?.textStyles;
 
     const styledMessage =
