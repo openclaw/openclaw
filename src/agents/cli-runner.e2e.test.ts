@@ -36,7 +36,8 @@ describe("runCliAgent resume cleanup", () => {
         ].join("\n"),
         stderr: "",
       }) // cleanupResumeProcesses (ps)
-      .mockResolvedValueOnce({ stdout: "", stderr: "" }); // cleanupResumeProcesses (kill)
+      .mockResolvedValueOnce({ stdout: "", stderr: "" }) // cleanupResumeProcesses (kill -TERM)
+      .mockResolvedValueOnce({ stdout: "", stderr: "" }); // cleanupResumeProcesses (kill -9)
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       stdout: "ok",
       stderr: "",
@@ -62,19 +63,23 @@ describe("runCliAgent resume cleanup", () => {
       return;
     }
 
-    expect(runExecMock).toHaveBeenCalledTimes(3);
+    expect(runExecMock).toHaveBeenCalledTimes(4);
 
     // Second call: cleanupResumeProcesses ps
     const psCall = runExecMock.mock.calls[1] ?? [];
     expect(psCall[0]).toBe("ps");
 
-    // Third call: kill with only the child PID
-    const killCall = runExecMock.mock.calls[2] ?? [];
+    // Third call: TERM, only the child PID
+    const termCall = runExecMock.mock.calls[2] ?? [];
+    expect(termCall[0]).toBe("kill");
+    const termArgs = termCall[1] as string[];
+    expect(termArgs).toEqual(["-TERM", String(selfPid + 1)]);
+
+    // Fourth call: KILL, only the child PID
+    const killCall = runExecMock.mock.calls[3] ?? [];
     expect(killCall[0]).toBe("kill");
     const killArgs = killCall[1] as string[];
-    expect(killArgs[0]).toBe("-9");
-    expect(killArgs[1]).toBe(String(selfPid + 1));
-    expect(killArgs).toHaveLength(2); // only -9 + one PID
+    expect(killArgs).toEqual(["-9", String(selfPid + 1)]);
   });
 
   it("falls back to per-agent workspace when workspaceDir is missing", async () => {
@@ -318,6 +323,7 @@ describe("cleanupResumeProcesses", () => {
         ].join("\n"),
         stderr: "",
       })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
       .mockResolvedValueOnce({ stdout: "", stderr: "" });
 
     await cleanupResumeProcesses(
@@ -333,8 +339,13 @@ describe("cleanupResumeProcesses", () => {
       return;
     }
 
-    expect(runExecMock).toHaveBeenCalledTimes(2);
-    const killCall = runExecMock.mock.calls[1] ?? [];
+    expect(runExecMock).toHaveBeenCalledTimes(3);
+
+    const termCall = runExecMock.mock.calls[1] ?? [];
+    expect(termCall[0]).toBe("kill");
+    expect(termCall[1]).toEqual(["-TERM", String(selfPid + 1)]);
+
+    const killCall = runExecMock.mock.calls[2] ?? [];
     expect(killCall[0]).toBe("kill");
     expect(killCall[1]).toEqual(["-9", String(selfPid + 1)]);
   });

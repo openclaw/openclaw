@@ -18,6 +18,31 @@ import { buildAgentSystemPrompt } from "../system-prompt.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
 
+function buildLooseArgOrderRegex(tokens: string[]): RegExp {
+  // Scan `ps` output lines. Keep matching flexible, but require whitespace arg boundaries
+  // to avoid substring matches like `codexx` or `/path/to/codexx`.
+  const [head, ...rest] = tokens.map((t) => String(t ?? "").trim()).filter(Boolean);
+  if (!head) {
+    return /$^/;
+  }
+
+  const headEscaped = escapeRegExp(head);
+  const headFragment = `(?:^|\\s)(?:${headEscaped}|\\S+\\/${headEscaped})(?=\\s|$)`;
+  const restFragments = rest.map((t) => `(?:^|\\s)${escapeRegExp(t)}(?=\\s|$)`);
+  return new RegExp([headFragment, ...restFragments].join(".*"));
+}
+
+async function psWithFallback(argsA: string[], argsB: string[]): Promise<string> {
+  try {
+    const { stdout } = await runExec("ps", argsA);
+    return stdout;
+  } catch {
+    // fallthrough
+  }
+  const { stdout } = await runExec("ps", argsB);
+  return stdout;
+}
+
 export async function cleanupResumeProcesses(
   backend: CliBackendConfig,
   sessionId: string,
@@ -47,9 +72,11 @@ export async function cleanupResumeProcesses(
   }
 
   try {
-    // Use wide output to reduce false negatives from argv truncation.
-    const { stdout } = await runExec("ps", ["-axww", "-o", "pid=,ppid=,command="]);
-    const patternRegex = new RegExp(pattern);
+    const stdout = await psWithFallback(
+      ["-axww", "-o", "pid=,ppid=,command="],
+      ["-ax", "-o", "pid=,ppid=,command="],
+    );
+    const patternRegex = buildLooseArgOrderRegex([commandToken, ...resumeTokens]);
     const toKill: number[] = [];
 
     for (const line of stdout.split("\n")) {
@@ -77,7 +104,18 @@ export async function cleanupResumeProcesses(
     }
 
     if (toKill.length > 0) {
-      await runExec("kill", ["-9", ...toKill.map((pid) => String(pid))]);
+      const pidArgs = toKill.map((pid) => String(pid));
+      try {
+        await runExec("kill", ["-TERM", ...pidArgs]);
+      } catch {
+        // ignore
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      try {
+        await runExec("kill", ["-9", ...pidArgs]);
+      } catch {
+        // ignore
+      }
     }
   } catch {
     // ignore errors - best effort cleanup
@@ -146,8 +184,10 @@ export async function cleanupSuspendedCliProcesses(
   }
 
   try {
-    // Use wide output to reduce false negatives from argv truncation.
-    const { stdout } = await runExec("ps", ["-axww", "-o", "pid=,ppid=,stat=,command="]);
+    const stdout = await psWithFallback(
+      ["-axww", "-o", "pid=,ppid=,stat=,command="],
+      ["-ax", "-o", "pid=,ppid=,stat=,command="],
+    );
     const suspended: number[] = [];
     for (const line of stdout.split("\n")) {
       const trimmed = line.trim();
