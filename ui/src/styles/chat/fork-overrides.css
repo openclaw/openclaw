@@ -57,25 +57,53 @@
   max-width: 100%;
 }
 
-/* System messages: compact, collapsed, muted */
+/* System messages: collapsed by default */
 .chat-group.system .chat-bubble,
 .chat-group.other .chat-bubble {
   padding: 1px 0;
   font-size: 11px;
   color: var(--muted);
-  max-height: 1.6em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: max-height 200ms ease-out;
 }
 
-/* Expand on click (toggled via JS or hover for now) */
-.chat-group.system .chat-bubble:hover,
-.chat-group.other .chat-bubble:hover {
-  max-height: 500px;
-  white-space: normal;
+/* System message summary line (always visible) */
+.sys-summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+}
+
+.sys-summary__chevron {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 150ms ease-out;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.sys-summary.expanded .sys-summary__chevron {
+  transform: rotate(90deg);
+}
+
+/* System message detail (hidden by default) */
+.sys-detail {
+  display: none;
+  margin-top: 2px;
+  margin-left: 16px;
+  padding: 4px 8px;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
+  border-left: 2px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.sys-detail.visible {
+  display: block;
 }
 
 /* Chat thread: tighter padding */

@@ -240,3 +240,101 @@ export function renderCompactToolRow(card: ToolCard, onOpenSidebar?: (content: s
     </div>
   `;
 }
+
+/* ── Collapsible System Messages ── */
+
+/** Extract a one-line summary from a system message */
+function summarizeSystemMessage(text: string): { summary: string; detail: string | null } {
+  const trimmed = text.trim();
+
+  // GatewayRestart JSON
+  const restartMatch = trimmed.match(/^(System:.*?GatewayRestart:)\s*\{/s);
+  if (restartMatch) {
+    // Extract reason from JSON if possible
+    const reasonMatch = trimmed.match(/"reason"\s*:\s*"([^"]+)"/);
+    const reason = reasonMatch ? reasonMatch[1] : "restarting";
+    const tsMatch = trimmed.match(/\[(.*?)\]/);
+    const ts = tsMatch ? tsMatch[1] : "";
+    return {
+      summary: `🔄 Gateway restart: ${reason}${ts ? ` (${ts})` : ""}`,
+      detail: trimmed,
+    };
+  }
+
+  // Config apply
+  if (trimmed.includes('"kind": "config-apply"') || trimmed.includes('"kind":"config-apply"')) {
+    const tsMatch = trimmed.match(/\[(.*?)\]/);
+    const ts = tsMatch ? tsMatch[1] : "";
+    return {
+      summary: `⚙️ Config applied${ts ? ` (${ts})` : ""}`,
+      detail: trimmed,
+    };
+  }
+
+  // Exec completed
+  const execMatch = trimmed.match(
+    /^(System:.*?Exec completed \(([^,]+), code (\d+)\))\s*::\s*(.*)/s,
+  );
+  if (execMatch) {
+    const session = execMatch[2];
+    const code = execMatch[3];
+    const icon = code === "0" ? "✓" : "✗";
+    const tsMatch = trimmed.match(/\[(.*?)\]/);
+    const ts = tsMatch ? tsMatch[1] : "";
+    return {
+      summary: `${icon} Exec completed (${session}, code ${code})${ts ? ` — ${ts}` : ""}`,
+      detail: execMatch[4]?.trim() || null,
+    };
+  }
+
+  // WhatsApp connected
+  if (trimmed.includes("WhatsApp gateway connected")) {
+    const tsMatch = trimmed.match(/\[(.*?)\]/);
+    const ts = tsMatch ? tsMatch[1] : "";
+    return {
+      summary: `📱 WhatsApp connected${ts ? ` (${ts})` : ""}`,
+      detail: null,
+    };
+  }
+
+  // Short messages — no collapsing needed
+  if (trimmed.length < 120) {
+    return { summary: trimmed, detail: null };
+  }
+
+  // Fallback: first line as summary
+  const firstLine = trimmed.split("\n")[0].slice(0, 100);
+  return {
+    summary: firstLine + (trimmed.length > 100 ? "…" : ""),
+    detail: trimmed,
+  };
+}
+
+/** Render a collapsible system message */
+export function renderCollapsibleSystem(text: string) {
+  const { summary, detail } = summarizeSystemMessage(text);
+
+  if (!detail) {
+    return html`<span class="sys-line">${summary}</span>`;
+  }
+
+  const handleClick = (e: Event) => {
+    const target = e.currentTarget as HTMLElement;
+    const summaryEl = target.querySelector(".sys-summary");
+    const detailEl = target.querySelector(".sys-detail");
+    if (summaryEl && detailEl) {
+      summaryEl.classList.toggle("expanded");
+      detailEl.classList.toggle("visible");
+    }
+  };
+
+  return html`
+    <div @click=${handleClick} style="cursor:pointer">
+      <div class="sys-summary">
+        <span class="sys-summary__chevron">▶</span>
+        <span>${summary}</span>
+      </div>
+      <div class="sys-detail">${detail}</div>
+    </div>
+  `;
+}

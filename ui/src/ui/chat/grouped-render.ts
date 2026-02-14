@@ -11,6 +11,7 @@ import {
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
+import { renderCollapsibleSystem } from "./tool-compact.ts"; // fork: collapsible system msgs
 
 type ImageBlock = {
   url: string;
@@ -259,6 +260,11 @@ function renderGroupedMessage(
 
   if (!markdown && !hasToolCards && !hasImages) {
     return nothing;
+  }
+
+  // fork: collapsible system messages
+  if (role === "system" && markdown) {
+    return html`<div class="chat-bubble">${renderCollapsibleSystem(markdown)}</div>`;
   }
 
   return html`
