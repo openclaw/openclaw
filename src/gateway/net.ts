@@ -180,7 +180,7 @@ function ipMatchesCIDR(ip: string, cidr: string): boolean {
     (subnetParts[0] << 24) | (subnetParts[1] << 16) | (subnetParts[2] << 8) | subnetParts[3];
 
   // Create mask and compare
-  const mask = prefixLen === 0 ? 0 : 0xffffffff << (32 - prefixLen);
+  const mask = prefixLen === 0 ? 0 : (-1 >>> (32 - prefixLen)) << (32 - prefixLen);
   return (ipInt & mask) === (subnetInt & mask);
 }
 
