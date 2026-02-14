@@ -1,7 +1,4 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
 import {
@@ -9,8 +6,7 @@ import {
   listNativeCommandSpecsForConfig,
 } from "../auto-reply/commands-registry.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
-import { resolveTelegramFetch } from "./fetch.js";
+import { createTelegramBot } from "./bot.js";
 
 let replyModule: typeof import("../auto-reply/reply.js");
 const { listSkillCommandsForAgents } = vi.hoisted(() => ({
@@ -23,13 +19,6 @@ vi.mock("../auto-reply/skill-commands.js", () => ({
 const { sessionStorePath } = vi.hoisted(() => ({
   sessionStorePath: `/tmp/openclaw-telegram-bot-${Math.random().toString(16).slice(2)}.json`,
 }));
-const tempDirs: string[] = [];
-
-function createTempDir(prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
   return listSkillCommandsForAgents({ cfg: config });
@@ -149,10 +138,8 @@ vi.mock("grammy", () => ({
 
 const sequentializeMiddleware = vi.fn();
 const sequentializeSpy = vi.fn(() => sequentializeMiddleware);
-let sequentializeKey: ((ctx: unknown) => string) | undefined;
 vi.mock("@grammyjs/runner", () => ({
-  sequentialize: (keyFn: (ctx: unknown) => string) => {
-    sequentializeKey = keyFn;
+  sequentialize: (_keyFn: (ctx: unknown) => string) => {
     return sequentializeSpy();
   },
 }));
@@ -209,17 +196,9 @@ describe("createTelegramBot", () => {
     middlewareUseSpy.mockReset();
     sequentializeSpy.mockReset();
     botCtorSpy.mockReset();
-    sequentializeKey = undefined;
   });
   afterEach(() => {
     process.env.TZ = ORIGINAL_TZ;
-  });
-
-  afterAll(() => {
-    for (const dir of tempDirs) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-    tempDirs.length = 0;
   });
 
   it("merges custom commands with native commands", () => {
