@@ -16,7 +16,7 @@ export type MessagingTargetParseOptions = {
 };
 
 export function normalizeTargetId(kind: MessagingTargetKind, id: string): string {
-  return `${kind}:${id}`.toLowerCase();
+  return `${kind}:${id}`;
 }
 
 export function buildMessagingTarget(
