@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
+  DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
+  ensureAgentWorkspace,
   loadWorkspaceBootstrapFiles,
   resolveDefaultAgentWorkspaceDir,
 } from "./workspace.js";
@@ -16,6 +19,17 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
     } as NodeJS.ProcessEnv);
 
     expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
+  });
+});
+
+describe("ensureAgentWorkspace", () => {
+  it("creates BOOTSTRAP.md even when workspace already has other bootstrap files", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: "AGENTS.md", content: "existing" });
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).resolves.toBeUndefined();
   });
 });
 
