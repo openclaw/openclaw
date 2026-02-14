@@ -741,7 +741,7 @@ describe("runCronIsolatedAgentTurn", () => {
       const cfg = makeCfg(home, storePath);
       const job = makeJob({ kind: "agentTurn", message: "ping", deliver: false });
 
-      await runCronIsolatedAgentTurn({
+      const first = await runCronIsolatedAgentTurn({
         cfg,
         deps,
         job,
@@ -749,9 +749,8 @@ describe("runCronIsolatedAgentTurn", () => {
         sessionKey: "cron:job-1",
         lane: "cron",
       });
-      const first = await readSessionEntry(storePath, "agent:main:cron:job-1");
 
-      await runCronIsolatedAgentTurn({
+      const second = await runCronIsolatedAgentTurn({
         cfg,
         deps,
         job,
@@ -759,13 +758,13 @@ describe("runCronIsolatedAgentTurn", () => {
         sessionKey: "cron:job-1",
         lane: "cron",
       });
-      const second = await readSessionEntry(storePath, "agent:main:cron:job-1");
 
-      expect(first?.sessionId).toBeDefined();
-      expect(second?.sessionId).toBeDefined();
-      expect(second?.sessionId).not.toBe(first?.sessionId);
-      expect(first?.label).toBe("Cron: job-1");
-      expect(second?.label).toBe("Cron: job-1");
+      expect(first.sessionId).toBeDefined();
+      expect(second.sessionId).toBeDefined();
+      expect(second.sessionId).not.toBe(first.sessionId);
+      expect(first.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+      expect(second.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+      expect(second.sessionKey).not.toBe(first.sessionKey);
     });
   });
 
