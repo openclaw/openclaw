@@ -330,6 +330,111 @@ export interface TwilioVerificationResult {
   isNgrokFreeTier?: boolean;
 }
 
+export interface TelnyxVerificationResult {
+  ok: boolean;
+  reason?: string;
+}
+
+function decodeBase64OrBase64Url(input: string): Buffer {
+  // Telnyx docs say Base64; some tooling emits Base64URL. Accept both.
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padLen = (4 - (normalized.length % 4)) % 4;
+  const padded = normalized + "=".repeat(padLen);
+  return Buffer.from(padded, "base64");
+}
+
+function base64UrlEncode(buf: Buffer): string {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function importEd25519PublicKey(publicKey: string): crypto.KeyObject | string {
+  const trimmed = publicKey.trim();
+
+  // PEM (spki) support.
+  if (trimmed.startsWith("-----BEGIN")) {
+    return trimmed;
+  }
+
+  // Base64-encoded raw Ed25519 key (32 bytes) or Base64-encoded DER SPKI key.
+  const decoded = decodeBase64OrBase64Url(trimmed);
+  if (decoded.length === 32) {
+    // JWK is the easiest portable way to import raw Ed25519 keys in Node crypto.
+    return crypto.createPublicKey({
+      key: { kty: "OKP", crv: "Ed25519", x: base64UrlEncode(decoded) },
+      format: "jwk",
+    });
+  }
+
+  return crypto.createPublicKey({
+    key: decoded,
+    format: "der",
+    type: "spki",
+  });
+}
+
+/**
+ * Verify Telnyx webhook signature using Ed25519.
+ *
+ * Telnyx signs `timestamp|payload` and provides:
+ * - `telnyx-signature-ed25519` (Base64 signature)
+ * - `telnyx-timestamp` (Unix seconds)
+ */
+export function verifyTelnyxWebhook(
+  ctx: WebhookContext,
+  publicKey: string | undefined,
+  options?: {
+    /** Skip verification entirely (only for development) */
+    skipVerification?: boolean;
+    /** Maximum allowed clock skew (ms). Defaults to 5 minutes. */
+    maxSkewMs?: number;
+  },
+): TelnyxVerificationResult {
+  if (options?.skipVerification) {
+    return { ok: true, reason: "verification skipped (dev mode)" };
+  }
+
+  if (!publicKey) {
+    return { ok: false, reason: "Missing telnyx.publicKey (configure to verify webhooks)" };
+  }
+
+  const signature = getHeader(ctx.headers, "telnyx-signature-ed25519");
+  const timestamp = getHeader(ctx.headers, "telnyx-timestamp");
+
+  if (!signature || !timestamp) {
+    return { ok: false, reason: "Missing signature or timestamp header" };
+  }
+
+  const eventTimeSec = parseInt(timestamp, 10);
+  if (!Number.isFinite(eventTimeSec)) {
+    return { ok: false, reason: "Invalid timestamp header" };
+  }
+
+  try {
+    const signedPayload = `${timestamp}|${ctx.rawBody}`;
+    const signatureBuffer = decodeBase64OrBase64Url(signature);
+    const key = importEd25519PublicKey(publicKey);
+
+    const isValid = crypto.verify(null, Buffer.from(signedPayload), key, signatureBuffer);
+    if (!isValid) {
+      return { ok: false, reason: "Invalid signature" };
+    }
+
+    const maxSkewMs = options?.maxSkewMs ?? 5 * 60 * 1000;
+    const eventTimeMs = eventTimeSec * 1000;
+    const now = Date.now();
+    if (Math.abs(now - eventTimeMs) > maxSkewMs) {
+      return { ok: false, reason: "Timestamp too old" };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `Verification error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 /**
  * Verify Twilio webhook with full context and detailed result.
  */
