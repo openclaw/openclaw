@@ -118,6 +118,29 @@ export function extractToolResultText(result: unknown): string | undefined {
   return texts.join("\n");
 }
 
+export function extractToolResultMediaPaths(result: unknown): string[] | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  const content = Array.isArray(record.content) ? record.content : null;
+  if (!content) {
+    return undefined;
+  }
+
+  const hasImage = content.some(
+    (item) =>
+      item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
+  );
+  if (!hasImage) {
+    return undefined;
+  }
+
+  const details = record.details as Record<string, unknown> | undefined;
+  const path = typeof details?.path === "string" ? details.path.trim() : "";
+  return path ? [path] : undefined;
+}
+
 export function isToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
     return false;

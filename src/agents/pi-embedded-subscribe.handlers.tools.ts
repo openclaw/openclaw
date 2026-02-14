@@ -5,6 +5,7 @@ import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
   extractToolErrorMessage,
+  extractToolResultMediaPaths,
   extractToolResultText,
   extractMessagingToolSend,
   isToolResultError,
@@ -224,6 +225,18 @@ export function handleToolExecutionEnd(
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
+    }
+  }
+
+  // Emit media from tool image results regardless of verbose level.
+  if (ctx.params.onToolResult && !isToolError) {
+    const mediaPaths = extractToolResultMediaPaths(result);
+    if (mediaPaths && mediaPaths.length > 0) {
+      try {
+        void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+      } catch {
+        /* ignore */
+      }
     }
   }
 }

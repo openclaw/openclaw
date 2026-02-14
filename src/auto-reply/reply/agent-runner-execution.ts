@@ -125,7 +125,10 @@ export async function runAgentTurnWithFallback(params: {
           return { skip: true };
         }
         if (!text) {
-          return { skip: true };
+          if ((payload.mediaUrls?.length ?? 0) === 0) {
+            return { skip: true };
+          }
+          return { text: undefined, skip: false };
         }
         const sanitized = sanitizeUserFacingText(text, {
           errorContext: Boolean(payload.isError),
