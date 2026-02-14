@@ -45,6 +45,14 @@ Put under `plugins.entries.voice-call.config`:
     authToken: "your_token",
   },
 
+  telnyx: {
+    apiKey: "KEYxxxx",
+    connectionId: "CONNxxxx",
+    // Telnyx webhook public key from the Telnyx Mission Control Portal
+    // (Base64 string; can also be set via TELNYX_PUBLIC_KEY).
+    publicKey: "...",
+  },
+
   plivo: {
     authId: "MAxxxxxxxxxxxxxxxxxxxx",
     authToken: "your_token",
