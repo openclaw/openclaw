@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -232,7 +232,7 @@ function scopesAllow(requested: string[], allowed: string[]): boolean {
 }
 
 function newToken() {
-  return randomUUID().replaceAll("-", "");
+  return randomBytes(32).toString("base64url");
 }
 
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
@@ -431,7 +431,10 @@ export async function verifyDeviceToken(params: {
     if (entry.revokedAtMs) {
       return { ok: false, reason: "token-revoked" };
     }
-    if (entry.token !== params.token) {
+    if (
+      entry.token.length !== params.token.length ||
+      !timingSafeEqual(Buffer.from(entry.token), Buffer.from(params.token))
+    ) {
       return { ok: false, reason: "token-mismatch" };
     }
     const requestedScopes = normalizeScopes(params.scopes);
