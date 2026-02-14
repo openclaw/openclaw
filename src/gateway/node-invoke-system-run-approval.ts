@@ -85,6 +85,28 @@ function approvalMatchesRequest(params: SystemRunParamsLike, record: ExecApprova
   return true;
 }
 
+function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unknown> {
+  // Defensive allowlist: only forward fields that the node-host `system.run` handler understands.
+  // This prevents future internal control fields from being smuggled through the gateway.
+  const next: Record<string, unknown> = {};
+  for (const key of [
+    "command",
+    "rawCommand",
+    "cwd",
+    "env",
+    "timeoutMs",
+    "needsScreenRecording",
+    "agentId",
+    "sessionKey",
+    "runId",
+  ]) {
+    if (key in raw) {
+      next[key] = raw[key];
+    }
+  }
+  return next;
+}
+
 /**
  * Gate `system.run` approval flags (`approved`, `approvalDecision`) behind a real
  * `exec.approval.*` record. This prevents users with only `operator.write` from
@@ -110,9 +132,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
 
   // Always strip control fields from user input. If the override is allowed,
   // we re-add trusted fields based on the gateway approval record.
-  const next: Record<string, unknown> = { ...obj };
-  delete next.approved;
-  delete next.approvalDecision;
+  const next: Record<string, unknown> = pickSystemRunParams(obj);
 
   if (!wantsApprovalOverride) {
     return { ok: true, params: next };
