@@ -101,6 +101,14 @@ export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
   return DEFAULT_BOOTSTRAP_MAX_CHARS;
 }
 
+export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
+  const raw = cfg?.agents?.defaults?.bootstrapTotalMaxChars;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+}
+
 function trimBootstrapContent(
   content: string,
   fileName: string,
