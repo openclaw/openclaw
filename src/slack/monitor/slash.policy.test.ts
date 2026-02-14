@@ -267,6 +267,45 @@ describe("slack slash commands access groups", () => {
     expect(respond).not.toHaveBeenCalledWith(
       expect.objectContaining({ text: "You are not authorized to use this command." }),
     );
+    const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
+      ctx?: { CommandAuthorized?: boolean };
+    };
+    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
+  });
+
+  it("computes CommandAuthorized for DM slash commands when dmPolicy is open", async () => {
+    const { commands, ctx, account } = createHarness({
+      allowFrom: ["U_OWNER"],
+      channelId: "D999",
+      channelName: "directmessage",
+      resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
+    });
+    registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+
+    const handler = [...commands.values()][0];
+    if (!handler) {
+      throw new Error("Missing slash handler");
+    }
+
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      command: {
+        user_id: "U_ATTACKER",
+        user_name: "Mallory",
+        channel_id: "D999",
+        channel_name: "directmessage",
+        text: "hello",
+        trigger_id: "t1",
+      },
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond,
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
+      ctx?: { CommandAuthorized?: boolean };
+    };
+    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
   });
 
   it("enforces access-group gating when lookup fails for private channels", async () => {
