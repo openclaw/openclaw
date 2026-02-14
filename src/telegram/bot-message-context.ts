@@ -491,13 +491,6 @@ export const buildTelegramMessageContext = async ({
           : null,
       });
 
-      // Prepare sender/conversation labels early for Silent Ingest
-      const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
-      const senderName = buildSenderName(msg);
-      const conversationLabel = isGroup
-        ? (groupLabel ?? `group:${chatId}`)
-        : buildSenderLabel(msg, senderId || chatId);
-
       // Silent ingest: run hooks on non-mentioned messages
       const ingestEnabled = topicConfig?.ingest ?? groupConfig?.ingest;
       if (ingestEnabled && rawBody && rawBody.trim().length > 0) {
@@ -505,13 +498,16 @@ export const buildTelegramMessageContext = async ({
         if (hookRunner) {
           const { sanitizeUserText } = await import("../utils/sanitize.js");
 
+          const groupLabelForHook = isGroup
+            ? buildGroupLabel(msg, chatId, resolvedThreadId)
+            : undefined;
+          const senderNameForHook = buildSenderName(msg);
+          const conversationLabelForHook = isGroup
+            ? (groupLabelForHook ?? `group:${chatId}`)
+            : buildSenderLabel(msg, senderId || chatId);
+
           const messageIdForHook =
             typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
-          const hookSenderName = buildSenderName(msg);
-          const hookConversationLabel = isGroup
-            ? (msg.chat.title ? buildGroupLabel(msg, chatId, resolvedThreadId) : null) ??
-              `group:${chatId}`
-            : buildSenderLabel(msg, senderId || chatId);
           const sanitizedMetadata = {
             to: String(chatId),
             provider: "telegram",
@@ -521,7 +517,7 @@ export const buildTelegramMessageContext = async ({
             originatingTo: String(chatId),
             messageId: messageIdForHook,
             senderId: senderId || undefined,
-            senderName: sanitizeUserText(hookSenderName),
+            senderName: sanitizeUserText(senderNameForHook),
             senderUsername: sanitizeUserText(senderUsername),
           };
 
@@ -533,7 +529,7 @@ export const buildTelegramMessageContext = async ({
           void Promise.race([
             hookRunner.runMessageIngest(
               {
-                from: hookConversationLabel,
+                from: conversationLabelForHook,
                 content: rawBody,
                 timestamp: msg.date ? msg.date * 1000 : undefined,
                 metadata: sanitizedMetadata,
@@ -615,6 +611,11 @@ export const buildTelegramMessageContext = async ({
         forwardOrigin.date ? ` at ${new Date(forwardOrigin.date * 1000).toISOString()}` : ""
       }]\n`
     : "";
+  const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
+  const senderName = buildSenderName(msg);
+  const conversationLabel = isGroup
+    ? (groupLabel ?? `group:${chatId}`)
+    : buildSenderLabel(msg, senderId || chatId);
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
   });

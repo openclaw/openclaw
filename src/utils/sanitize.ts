@@ -8,11 +8,19 @@ export function sanitizeUserText(text: string | undefined, maxLength = 256): str
   }
 
   // Remove control characters (including newlines, tabs, etc.)
-  // Keep only printable ASCII + common Unicode
-  let sanitized = text.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
+  // Avoid regex here because lint rules flag control-character ranges.
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    // C0 controls + DEL, plus C1 controls.
+    if (code < 0x20 || (code >= 0x7f && code < 0xa0)) {
+      continue;
+    }
+    out += text[i];
+  }
 
   // Trim whitespace
-  sanitized = sanitized.trim();
+  let sanitized = out.trim();
 
   // Limit length to prevent memory exhaustion
   if (sanitized.length > maxLength) {
