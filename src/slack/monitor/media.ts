@@ -132,17 +132,28 @@ function resolveSlackMediaMimetype(
   return mime;
 }
 
+export type SlackMediaResult = {
+  path: string;
+  contentType?: string;
+  placeholder: string;
+};
+
+const MAX_SLACK_MEDIA_FILES = 8;
+
+/**
+ * Downloads all files attached to a Slack message and returns them as an array.
+ * Returns `null` when no files could be downloaded.
+ */
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
   maxBytes: number;
-}): Promise<{
-  path: string;
-  contentType?: string;
-  placeholder: string;
-} | null> {
+}): Promise<SlackMediaResult[] | null> {
   const files = params.files ?? [];
-  for (const file of files) {
+  const limitedFiles =
+    files.length > MAX_SLACK_MEDIA_FILES ? files.slice(0, MAX_SLACK_MEDIA_FILES) : files;
+  const results: SlackMediaResult[] = [];
+  for (const file of limitedFiles) {
     const url = file.url_private_download ?? file.url_private;
     if (!url) {
       continue;
@@ -169,16 +180,16 @@ export async function resolveSlackMedia(params: {
         params.maxBytes,
       );
       const label = fetched.fileName ?? file.name;
-      return {
+      results.push({
         path: saved.path,
         contentType: effectiveMime ?? saved.contentType,
         placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
-      };
+      });
     } catch {
-      // Ignore download failures and fall through to the next file.
+      // Ignore download failures and try the next file.
     }
   }
-  return null;
+  return results.length > 0 ? results : null;
 }
 
 export type SlackThreadStarter = {
