@@ -3,6 +3,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveLinqAccount, type ResolvedLinqAccount } from "./accounts.js";
 
 const LINQ_API_BASE = "https://api.linqapp.com/api/partner/v3";
+const UA = "OpenClaw/1.0";
 
 export type LinqSendOpts = {
   accountId?: string;
@@ -55,6 +56,7 @@ export async function sendMessageLinq(
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
+      "User-Agent": UA,
     },
     body: JSON.stringify({ message }),
   });
@@ -79,7 +81,7 @@ export async function startTypingLinq(chatId: string, token: string): Promise<vo
   const url = `${LINQ_API_BASE}/chats/${encodeURIComponent(chatId)}/typing`;
   await fetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${token}`, "User-Agent": UA },
   });
 }
 
@@ -88,7 +90,7 @@ export async function stopTypingLinq(chatId: string, token: string): Promise<voi
   const url = `${LINQ_API_BASE}/chats/${encodeURIComponent(chatId)}/typing`;
   await fetch(url, {
     method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${token}`, "User-Agent": UA },
   });
 }
 
@@ -97,7 +99,7 @@ export async function markAsReadLinq(chatId: string, token: string): Promise<voi
   const url = `${LINQ_API_BASE}/chats/${encodeURIComponent(chatId)}/read`;
   await fetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${token}`, "User-Agent": UA },
   });
 }
 
@@ -114,6 +116,7 @@ export async function sendReactionLinq(
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
+      "User-Agent": UA,
     },
     body: JSON.stringify({ operation, type }),
   });

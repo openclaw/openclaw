@@ -34,7 +34,7 @@ import {
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { resolveLinqAccount } from "./accounts.js";
-import { sendMessageLinq } from "./send.js";
+import { markAsReadLinq, sendMessageLinq, startTypingLinq } from "./send.js";
 
 export type MonitorLinqOpts = {
   accountId?: string;
@@ -198,6 +198,10 @@ export async function monitorLinqProvider(opts: MonitorLinqOpts = {}): Promise<v
       return;
     }
 
+    // Send read receipt and typing indicator immediately (fire-and-forget).
+    markAsReadLinq(chatId, token).catch(() => {});
+    startTypingLinq(chatId, token).catch(() => {});
+
     const storeAllowFrom = await readChannelAllowFromStore("linq").catch(() => []);
     const effectiveDmAllowFrom = Array.from(new Set([...allowFrom, ...storeAllowFrom]))
       .map((v) => String(v).trim())
@@ -342,8 +346,7 @@ export async function monitorLinqProvider(opts: MonitorLinqOpts = {}): Promise<v
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       deliver: async (payload) => {
-        const replyText =
-          typeof payload === "string" ? payload : ((payload as { body?: string }).body ?? "");
+        const replyText = typeof payload === "string" ? payload : (payload.text ?? "");
         if (replyText) {
           await sendMessageLinq(chatId, replyText, {
             token,
