@@ -1,5 +1,6 @@
 import type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hashText } from "./internal.js";
 
@@ -134,18 +135,38 @@ async function submitGeminiBatch(params: {
     baseUrl,
     requests: params.requests.length,
   });
-  const fileRes = await fetch(uploadUrl, {
-    method: "POST",
-    headers: {
-      ...getGeminiHeaders(params.gemini, { json: false }),
-      "Content-Type": uploadPayload.contentType,
+  const fileRes = await retryAsync(
+    async () => {
+      const res = await fetch(uploadUrl, {
+        method: "POST",
+        headers: {
+          ...getGeminiHeaders(params.gemini, { json: false }),
+          "Content-Type": uploadPayload.contentType,
+        },
+        body: uploadPayload.body,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        const err = new Error(`gemini batch file upload failed: ${res.status} ${text}`) as Error & {
+          status?: number;
+        };
+        err.status = res.status;
+        throw err;
+      }
+      return res;
     },
-    body: uploadPayload.body,
-  });
-  if (!fileRes.ok) {
-    const text = await fileRes.text();
-    throw new Error(`gemini batch file upload failed: ${fileRes.status} ${text}`);
-  }
+    {
+      attempts: 3,
+      minDelayMs: 300,
+      maxDelayMs: 2000,
+      jitter: 0.2,
+      shouldRetry: (err) => {
+        const status = (err as { status?: number }).status;
+        // Retry on network errors (no status), 429, or 5xx
+        return !status || status === 429 || (typeof status === "number" && status >= 500);
+      },
+    },
+  );
   const filePayload = (await fileRes.json()) as { name?: string; file?: { name?: string } };
   const fileId = filePayload.name ?? filePayload.file?.name;
   if (!fileId) {
@@ -166,21 +187,43 @@ async function submitGeminiBatch(params: {
     batchEndpoint,
     fileId,
   });
-  const batchRes = await fetch(batchEndpoint, {
-    method: "POST",
-    headers: getGeminiHeaders(params.gemini, { json: true }),
-    body: JSON.stringify(batchBody),
-  });
-  if (batchRes.ok) {
-    return (await batchRes.json()) as GeminiBatchStatus;
-  }
-  const text = await batchRes.text();
-  if (batchRes.status === 404) {
-    throw new Error(
-      "gemini batch create failed: 404 (asyncBatchEmbedContent not available for this model/baseUrl). Disable remote.batch.enabled or switch providers.",
-    );
-  }
-  throw new Error(`gemini batch create failed: ${batchRes.status} ${text}`);
+  const batchRes = await retryAsync(
+    async () => {
+      const res = await fetch(batchEndpoint, {
+        method: "POST",
+        headers: getGeminiHeaders(params.gemini, { json: true }),
+        body: JSON.stringify(batchBody),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        if (res.status === 404) {
+          const err = new Error(
+            "gemini batch create failed: 404 (asyncBatchEmbedContent not available for this model/baseUrl). Disable remote.batch.enabled or switch providers.",
+          ) as Error & { status?: number };
+          err.status = res.status;
+          throw err;
+        }
+        const err = new Error(`gemini batch create failed: ${res.status} ${text}`) as Error & {
+          status?: number;
+        };
+        err.status = res.status;
+        throw err;
+      }
+      return res;
+    },
+    {
+      attempts: 3,
+      minDelayMs: 300,
+      maxDelayMs: 2000,
+      jitter: 0.2,
+      shouldRetry: (err) => {
+        const status = (err as { status?: number }).status;
+        // Retry on network errors (no status), 429, or 5xx
+        return !status || status === 429 || (typeof status === "number" && status >= 500);
+      },
+    },
+  );
+  return (await batchRes.json()) as GeminiBatchStatus;
 }
 
 async function fetchGeminiBatchStatus(params: {
@@ -193,13 +236,33 @@ async function fetchGeminiBatchStatus(params: {
     : `batches/${params.batchName}`;
   const statusUrl = `${baseUrl}/${name}`;
   debugLog("memory embeddings: gemini batch status", { statusUrl });
-  const res = await fetch(statusUrl, {
-    headers: getGeminiHeaders(params.gemini, { json: true }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`gemini batch status failed: ${res.status} ${text}`);
-  }
+  const res = await retryAsync(
+    async () => {
+      const res = await fetch(statusUrl, {
+        headers: getGeminiHeaders(params.gemini, { json: true }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        const err = new Error(`gemini batch status failed: ${res.status} ${text}`) as Error & {
+          status?: number;
+        };
+        err.status = res.status;
+        throw err;
+      }
+      return res;
+    },
+    {
+      attempts: 3,
+      minDelayMs: 300,
+      maxDelayMs: 2000,
+      jitter: 0.2,
+      shouldRetry: (err) => {
+        const status = (err as { status?: number }).status;
+        // Retry on network errors (no status), 429, or 5xx
+        return !status || status === 429 || (typeof status === "number" && status >= 500);
+      },
+    },
+  );
   return (await res.json()) as GeminiBatchStatus;
 }
 
@@ -211,13 +274,35 @@ async function fetchGeminiFileContent(params: {
   const file = params.fileId.startsWith("files/") ? params.fileId : `files/${params.fileId}`;
   const downloadUrl = `${baseUrl}/${file}:download`;
   debugLog("memory embeddings: gemini batch download", { downloadUrl });
-  const res = await fetch(downloadUrl, {
-    headers: getGeminiHeaders(params.gemini, { json: true }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`gemini batch file content failed: ${res.status} ${text}`);
-  }
+  const res = await retryAsync(
+    async () => {
+      const res = await fetch(downloadUrl, {
+        headers: getGeminiHeaders(params.gemini, { json: true }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        const err = new Error(
+          `gemini batch file content failed: ${res.status} ${text}`,
+        ) as Error & {
+          status?: number;
+        };
+        err.status = res.status;
+        throw err;
+      }
+      return res;
+    },
+    {
+      attempts: 3,
+      minDelayMs: 300,
+      maxDelayMs: 2000,
+      jitter: 0.2,
+      shouldRetry: (err) => {
+        const status = (err as { status?: number }).status;
+        // Retry on network errors (no status), 429, or 5xx
+        return !status || status === 429 || (typeof status === "number" && status >= 500);
+      },
+    },
+  );
   return await res.text();
 }
 
