@@ -25,10 +25,13 @@ import {
   parseFallbackList,
   resolveAgentConfig,
   resolveAgentEmoji,
+  resolveConfiguredModels,
   resolveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
 } from "./agents-utils.ts";
+
+let showFallbackSuggestions = false;
 
 export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
 
@@ -468,18 +471,51 @@ function renderAgentOverview(params: {
               ${buildModelOptions(configForm, effectivePrimary ?? undefined)}
             </select>
           </label>
-          <label class="field" style="min-width: 260px; flex: 1;">
+          <label class="field" style="min-width: 260px; flex: 1; position: relative;">
             <span>Fallbacks (comma-separated)</span>
             <input
               .value=${fallbackText}
               ?disabled=${!configForm || configLoading || configSaving}
               placeholder="provider/model, provider/model"
-              @input=${(e: Event) =>
+              autocomplete="off"
+              @input=${(e: Event) => {
+                showFallbackSuggestions = true;
                 onModelFallbacksChange(
                   agent.id,
                   parseFallbackList((e.target as HTMLInputElement).value),
-                )}
+                );
+              }}
+              @focus=${() => { showFallbackSuggestions = true; }}
+              @blur=${() => { setTimeout(() => { showFallbackSuggestions = false; }, 150); }}
             />
+            ${showFallbackSuggestions ? (() => {
+              const allModels = resolveConfiguredModels(configForm);
+              const currentFallbacks = fallbackText.split(",").map((s: string) => s.trim()).filter(Boolean);
+              const lastSegment = fallbackText.includes(",")
+                ? fallbackText.split(",").pop()?.trim() ?? ""
+                : fallbackText.trim();
+              const needle = lastSegment.toLowerCase();
+              const matches = allModels.filter((m) =>
+                (!needle || m.value.toLowerCase().includes(needle) || m.label.toLowerCase().includes(needle))
+                && !currentFallbacks.slice(0, -1).includes(m.value)
+              ).slice(0, 8);
+              return matches.length > 0 ? html`
+                <div class="rpc-suggestions">
+                  ${matches.map((m) => html`
+                    <div class="rpc-suggestion" @mousedown=${(e: Event) => {
+                      e.preventDefault();
+                      const prefix = currentFallbacks.slice(0, -1);
+                      const newList = [...prefix, m.value];
+                      onModelFallbacksChange(agent.id, newList);
+                      showFallbackSuggestions = false;
+                    }}>
+                      <div class="rpc-suggestion-method mono">${m.value}</div>
+                      ${m.label !== m.value ? html`<div class="rpc-suggestion-desc">${m.label}</div>` : nothing}
+                    </div>
+                  `)}
+                </div>
+              ` : nothing;
+            })() : nothing}
           </label>
         </div>
         <div class="row" style="justify-content: flex-end; gap: 8px;">

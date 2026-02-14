@@ -339,7 +339,7 @@ type ConfiguredModelOption = {
   label: string;
 };
 
-function resolveConfiguredModels(
+export function resolveConfiguredModels(
   configForm: Record<string, unknown> | null,
 ): ConfiguredModelOption[] {
   const cfg = configForm as ConfigSnapshot | null;
