@@ -506,7 +506,10 @@ export async function processMessage(
       ? `${rawBody} ${replyTag}`
       : `${replyTag} ${rawBody}`
     : rawBody;
-  const fromLabel = isGroup ? undefined : message.senderName || `user:${message.senderId}`;
+  // Build fromLabel the same way as iMessage/Signal: group label for groups, sender for DMs.
+  // The sender identity is included in the envelope body via formatInboundEnvelope.
+  const senderLabel = message.senderName || `user:${message.senderId}`;
+  const fromLabel = isGroup ? message.chatName?.trim() || `group:${peerId}` : senderLabel;
   const groupSubject = isGroup ? message.chatName?.trim() || undefined : undefined;
   const groupMembers = isGroup
     ? formatGroupMembers({
@@ -522,13 +525,15 @@ export async function processMessage(
     storePath,
     sessionKey: route.sessionKey,
   });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const body = core.channel.reply.formatInboundEnvelope({
     channel: "BlueBubbles",
     from: fromLabel,
     timestamp: message.timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
     body: baseBody,
+    chatType: isGroup ? "group" : "direct",
+    sender: { name: message.senderName || undefined, id: message.senderId },
   });
   let chatGuidForActions = chatGuid;
   if (!chatGuidForActions && baseUrl && password) {
