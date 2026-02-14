@@ -279,6 +279,68 @@ describe("POST /tools/invoke", () => {
     expect(res.status).toBe(404);
   });
 
+  it("allows gateway tool via HTTP when explicitly enabled in gateway.tools.allow", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main", tools: { allow: ["gateway"] } }],
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: { tools: { allow: ["gateway"] } },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    const token = resolveGatewayToken();
+
+    try {
+      const res = await invokeTool({
+        port: sharedPort,
+        tool: "gateway",
+        headers: { authorization: `Bearer ${token}` },
+        sessionKey: "main",
+      });
+
+      // Ensure we didn't hit the HTTP deny list (404). Invalid args should map to 400.
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.error?.type).toBe("tool_error");
+    } finally {
+      await writeConfigFile({
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any);
+    }
+  });
+
+  it("treats gateway.tools.deny as higher priority than gateway.tools.allow", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main", tools: { allow: ["gateway"] } }],
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: { tools: { allow: ["gateway"], deny: ["gateway"] } },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    const token = resolveGatewayToken();
+
+    try {
+      const res = await invokeTool({
+        port: sharedPort,
+        tool: "gateway",
+        headers: { authorization: `Bearer ${token}` },
+        sessionKey: "main",
+      });
+
+      expect(res.status).toBe(404);
+    } finally {
+      await writeConfigFile({
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any);
+    }
+  });
+
   it("uses the configured main session key when sessionKey is missing or main", async () => {
     testState.agentsConfig = {
       list: [
