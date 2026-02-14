@@ -156,7 +156,7 @@ export async function ensureSessionHeader(params: {
     timestamp: new Date().toISOString(),
     cwd: params.cwd,
   };
-  await fs.writeFile(file, `${JSON.stringify(entry)}\n`, "utf-8");
+  await fs.writeFile(file, `${JSON.stringify(entry)}\n`, { encoding: "utf-8", mode: 0o600 });
 }
 
 export function buildBootstrapContextFiles(

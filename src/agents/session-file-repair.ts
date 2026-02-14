@@ -74,14 +74,11 @@ export async function repairSessionFileIfNeeded(params: {
   const tmpPath = `${sessionFile}.repair-${process.pid}-${Date.now()}.tmp`;
   try {
     const stat = await fs.stat(sessionFile).catch(() => null);
-    await fs.writeFile(backupPath, content, "utf-8");
-    if (stat) {
-      await fs.chmod(backupPath, stat.mode);
-    }
-    await fs.writeFile(tmpPath, cleaned, "utf-8");
-    if (stat) {
-      await fs.chmod(tmpPath, stat.mode);
-    }
+    const mode = stat ? stat.mode : 0o600;
+    await fs.writeFile(backupPath, content, { encoding: "utf-8", mode: 0o600 });
+    await fs.chmod(backupPath, mode);
+    await fs.writeFile(tmpPath, cleaned, { encoding: "utf-8", mode: 0o600 });
+    await fs.chmod(tmpPath, mode);
     await fs.rename(tmpPath, sessionFile);
   } catch (err) {
     try {
