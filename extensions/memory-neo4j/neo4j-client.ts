@@ -2022,4 +2022,108 @@ export class Neo4jMemoryClient {
       }
     });
   }
+
+  /**
+   * Delete non-core, non-pinned memories matching a regex pattern.
+   * Used by the sleep cycle noise pattern cleanup.
+   *
+   * @returns Number of memories deleted
+   */
+  async deleteMemoriesByPattern(pattern: string, agentId?: string, limit = 100): Promise<number> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.text =~ $pattern
+           AND coalesce(m.userPinned, false) = false
+           AND m.category <> 'core'
+           ${agentFilter}
+         WITH m LIMIT ${limit}
+         DETACH DELETE m
+         RETURN count(*) AS removed`,
+        { pattern, agentId },
+      );
+      return (result.records[0]?.get("removed") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Fetch all non-core memories (id + text) for a given agent, or all agents.
+   * Used by the sleep cycle credential scanner.
+   */
+  async fetchNonCoreMemories(agentId?: string): Promise<Array<{ id: string; text: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.category <> 'core'
+           ${agentFilter}
+         RETURN m.id AS id, m.text AS text`,
+        agentId ? { agentId } : {},
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Delete memories by IDs (DETACH DELETE).
+   * Used by the sleep cycle credential scanner.
+   *
+   * @returns Number of memories deleted
+   */
+  async deleteMemoriesByIds(ids: string[]): Promise<number> {
+    if (ids.length === 0) {
+      return 0;
+    }
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `UNWIND $ids AS id
+         MATCH (m:Memory {id: id})
+         DETACH DELETE m
+         RETURN count(*) AS removed`,
+        { ids },
+      );
+      return (result.records[0]?.get("removed") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Reconcile mentionCount for all entities by counting actual MENTIONS relationships.
+   * Fixes entities with NULL or stale mentionCount values (e.g., entities created
+   * before mentionCount tracking was added).
+   *
+   * @returns Number of entities updated
+   */
+  async reconcileEntityMentionCounts(): Promise<number> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `MATCH (e:Entity)
+         WHERE e.mentionCount IS NULL
+         OPTIONAL MATCH (m:Memory)-[:MENTIONS]->(e)
+         WITH e, count(m) AS actual
+         SET e.mentionCount = actual
+         RETURN count(e) AS updated`,
+      );
+      return (result.records[0]?.get("updated") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
 }

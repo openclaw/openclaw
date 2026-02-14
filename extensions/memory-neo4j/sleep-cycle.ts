@@ -1,18 +1,22 @@
 /**
- * Eight-phase sleep cycle for memory consolidation.
+ * Multi-phase sleep cycle for memory consolidation.
  *
  * Implements a Pareto-based memory ecosystem where core memory
  * is bounded to the top 20% of memories by effective score.
  *
  * Phases:
- * 1. DEDUPLICATION - Merge near-duplicate memories (reduce redundancy)
+ * 1.  DEDUPLICATION - Merge near-duplicate memories (reduce redundancy)
+ * 1b. SEMANTIC DEDUP - LLM-based paraphrase detection
+ * 1c. CONFLICT DETECTION - Resolve contradictory memories
  * 1d. ENTITY DEDUP - Merge near-duplicate entities (reduce entity bloat)
- * 2. PARETO SCORING - Calculate effective scores for all memories
- * 3. CORE PROMOTION - Regular memories above threshold -> core
- * 4. EXTRACTION - Form entity relationships (strengthen connections)
- * 5. DECAY/PRUNING - Remove old, low-importance memories (forgetting curve)
- * 6. CLEANUP - Remove orphaned entities/tags (garbage collection)
- * 7. NOISE CLEANUP - Remove dangerous pattern memories
+ * 2.  PARETO SCORING - Calculate effective scores for all memories
+ * 3.  CORE PROMOTION - Regular memories above threshold -> core
+ * 4.  EXTRACTION - Form entity relationships (strengthen connections)
+ * 5.  DECAY/PRUNING - Remove old, low-importance memories (forgetting curve)
+ * 6.  CLEANUP - Remove orphaned entities/tags (garbage collection)
+ * 7.  NOISE CLEANUP - Remove dangerous pattern memories
+ * 7b. CREDENTIAL SCAN - Remove memories containing leaked credentials
+ * 8.  TASK LEDGER - Archive stale tasks in TASKS.md
  *
  * Research basis:
  * - Pareto principle (20/80 rule) for memory tiering
@@ -27,6 +31,7 @@ import type { Neo4jMemoryClient } from "./neo4j-client.js";
 import type { Logger } from "./schema.js";
 import { isSemanticDuplicate, resolveConflict, runBackgroundExtraction } from "./extractor.js";
 import { makePairKey } from "./schema.js";
+import { reviewAndArchiveStaleTasks, type StaleTaskResult } from "./task-ledger.js";
 
 /**
  * Sleep Cycle Result - aggregated stats from all phases.
@@ -82,6 +87,18 @@ export type SleepCycleResult = {
     tagsRemoved: number;
     singleUseTagsRemoved: number;
   };
+  // Phase 7b: Credential Scanning
+  credentialScan: {
+    memoriesScanned: number;
+    credentialsFound: number;
+    memoriesRemoved: number;
+  };
+  // Phase 8: Task Ledger Cleanup
+  taskLedger: {
+    staleCount: number;
+    archivedCount: number;
+    archivedIds: string[];
+  };
   // Overall
   durationMs: number;
   aborted: boolean;
@@ -120,6 +137,10 @@ export type SleepCycleOptions = {
   decayImportanceMultiplier?: number; // How much importance extends half-life (default: 2)
   decayCurves?: Record<string, { halfLifeDays: number }>; // Per-category decay curve overrides
 
+  // Phase 8: Task Ledger
+  workspaceDir?: string; // Workspace dir for TASKS.md (default: resolved from env)
+  staleTaskMaxAgeMs?: number; // Max age before task is stale (default: 24h)
+
   // Progress callback
   onPhaseStart?: (
     phase:
@@ -131,10 +152,75 @@ export type SleepCycleOptions = {
       | "promotion"
       | "decay"
       | "extraction"
-      | "cleanup",
+      | "cleanup"
+      | "noiseCleanup"
+      | "credentialScan"
+      | "taskLedger",
   ) => void;
   onProgress?: (phase: string, message: string) => void;
 };
+
+// ============================================================================
+// Credential Detection Patterns
+// ============================================================================
+
+/**
+ * Regex patterns that match credential-like content in memory text.
+ * Used by the credential scanning phase to find and remove memories
+ * that accidentally stored secrets, passwords, API keys, or tokens.
+ *
+ * These are JavaScript RegExp patterns (case-insensitive).
+ */
+export const CREDENTIAL_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  // API keys: sk-..., api_key_..., api_key_live_..., apikey-..., etc.
+  { pattern: /\b(?:sk|api[_-]?key(?:[_-]\w+)?)[_-][a-z0-9]{16,}/i, label: "API key" },
+
+  // Bearer tokens
+  { pattern: /bearer\s+[a-z0-9_\-.]{20,}/i, label: "Bearer token" },
+
+  // JWT tokens (three base64 segments separated by dots) — check before generic token pattern
+  { pattern: /\beyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}/i, label: "JWT" },
+
+  // Generic long tokens/secrets (hex or base64, 32+ chars)
+  {
+    pattern: /\b(?:token|secret|key)\s*[:=]\s*["']?[a-z0-9+/=_\-]{32,}["']?/i,
+    label: "Token/secret",
+  },
+
+  // Password patterns: password: X, password=X, password X, passwd=X, pwd=X
+  {
+    pattern: /\b(?:password|passwd|pwd)\s*[:=]\s*["']?\S{4,}["']?/i,
+    label: "Password assignment",
+  },
+
+  // Credentials in "creds user/pass" format: "login with X creds user/pass"
+  { pattern: /\bcreds?\s+\S+[/\\]\S+/i, label: "Credentials (user/pass)" },
+
+  // URL-embedded credentials: https://user:pass@host
+  { pattern: /\/\/[^/\s:]+:[^/\s@]+@/i, label: "URL credentials" },
+
+  // Private keys
+  { pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/i, label: "Private key" },
+
+  // AWS-style keys
+  { pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/, label: "AWS key" },
+
+  // GitHub/GitLab tokens
+  { pattern: /\b(?:ghp|gho|ghu|ghs|ghr|glpat)[_-][a-zA-Z0-9]{16,}/i, label: "GitHub/GitLab token" },
+];
+
+/**
+ * Check if a text contains credential-like content.
+ * Returns the first matching pattern label, or null if clean.
+ */
+export function detectCredential(text: string): string | null {
+  for (const { pattern, label } of CREDENTIAL_PATTERNS) {
+    if (pattern.test(text)) {
+      return label;
+    }
+  }
+  return null;
+}
 
 // ============================================================================
 // Sleep Cycle Implementation
@@ -180,6 +266,8 @@ export async function runSleepCycle(
     extractionBatchSize = 50,
     extractionDelayMs = 1000,
     singleUseTagMinAgeDays = 14,
+    workspaceDir,
+    staleTaskMaxAgeMs,
     onPhaseStart,
     onProgress,
   } = options;
@@ -199,6 +287,8 @@ export async function runSleepCycle(
     decay: { memoriesPruned: 0 },
     extraction: { total: 0, processed: 0, succeeded: 0, failed: 0 },
     cleanup: { entitiesRemoved: 0, tagsRemoved: 0, singleUseTagsRemoved: 0 },
+    credentialScan: { memoriesScanned: 0, credentialsFound: 0, memoriesRemoved: 0 },
+    taskLedger: { staleCount: 0, archivedCount: 0, archivedIds: [] },
     durationMs: 0,
     aborted: false,
   };
@@ -443,6 +533,15 @@ export async function runSleepCycle(
     logger.info("memory-neo4j: [sleep] Phase 1d: Entity Deduplication");
 
     try {
+      // Reconcile NULL mentionCounts before dedup so decisions are based on accurate counts
+      const reconciled = await db.reconcileEntityMentionCounts();
+      if (reconciled > 0) {
+        logger.info(
+          `memory-neo4j: [sleep] Phase 1d: Reconciled mentionCount for ${reconciled} entities`,
+        );
+        onProgress?.("entityDedup", `Reconciled ${reconciled} entity mention counts`);
+      }
+
       const pairs = await db.findDuplicateEntityPairs(agentId);
       result.entityDedup.pairsFound = pairs.length;
 
@@ -749,6 +848,7 @@ export async function runSleepCycle(
   // stored (open proposals, action items that trigger rogue sessions).
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted) {
+    onPhaseStart?.("noiseCleanup");
     logger.info("memory-neo4j: [sleep] Phase 7: Noise Pattern Cleanup");
 
     try {
@@ -763,29 +863,11 @@ export async function runSleepCycle(
       ];
 
       let noiseRemoved = 0;
-      const noiseSession = (db as any).driver!.session();
-      try {
-        for (const pattern of noisePatterns) {
-          if (abortSignal?.aborted) {
-            break;
-          }
-
-          const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
-          const result = await noiseSession.run(
-            `MATCH (m:Memory)
-             WHERE m.text =~ $pattern
-               AND coalesce(m.userPinned, false) = false
-               AND m.category <> 'core'
-               ${agentFilter}
-             WITH m LIMIT 100
-             DETACH DELETE m
-             RETURN count(*) AS removed`,
-            { pattern: `.*${pattern}.*`, agentId },
-          );
-          noiseRemoved += (result.records[0]?.get("removed") as number) ?? 0;
+      for (const pattern of noisePatterns) {
+        if (abortSignal?.aborted) {
+          break;
         }
-      } finally {
-        await noiseSession.close();
+        noiseRemoved += await db.deleteMemoriesByPattern(`.*${pattern}.*`, agentId);
       }
 
       if (noiseRemoved > 0) {
@@ -798,6 +880,90 @@ export async function runSleepCycle(
     } catch (err) {
       logger.warn(`memory-neo4j: [sleep] Phase 7 error: ${String(err)}`);
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 7b: Credential Scanning
+  // Scans all memories for accidentally stored credentials (API keys,
+  // passwords, tokens) and removes them. This is a security measure
+  // to prevent credential leaks in the memory store.
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted) {
+    onPhaseStart?.("credentialScan");
+    logger.info("memory-neo4j: [sleep] Phase 7b: Credential Scanning");
+
+    try {
+      const allMemories = await db.fetchNonCoreMemories(agentId);
+      result.credentialScan.memoriesScanned = allMemories.length;
+
+      const toRemove: string[] = [];
+      for (const { id, text } of allMemories) {
+        if (abortSignal?.aborted) {
+          break;
+        }
+        const matched = detectCredential(text);
+        if (matched) {
+          toRemove.push(id);
+          result.credentialScan.credentialsFound++;
+          onProgress?.(
+            "credentialScan",
+            `Found ${matched} in memory ${id.slice(0, 8)}...: "${text.slice(0, 40)}..."`,
+          );
+          logger.warn(
+            `memory-neo4j: [sleep] Credential detected (${matched}) in memory ${id} — removing`,
+          );
+        }
+      }
+
+      if (toRemove.length > 0) {
+        result.credentialScan.memoriesRemoved = await db.deleteMemoriesByIds(toRemove);
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 7b complete — ${result.credentialScan.memoriesScanned} scanned, ${result.credentialScan.credentialsFound} credentials found, ${result.credentialScan.memoriesRemoved} removed`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 7b error: ${String(err)}`);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 8: Task Ledger Cleanup
+  // Reviews TASKS.md for stale tasks (>24h with no activity) and archives them.
+  // Requires workspaceDir to be provided (otherwise skipped).
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted && workspaceDir) {
+    onPhaseStart?.("taskLedger");
+    logger.info("memory-neo4j: [sleep] Phase 8: Task Ledger Cleanup");
+
+    try {
+      const staleResult = await reviewAndArchiveStaleTasks(workspaceDir, staleTaskMaxAgeMs);
+
+      if (staleResult) {
+        result.taskLedger.staleCount = staleResult.staleCount;
+        result.taskLedger.archivedCount = staleResult.archivedCount;
+        result.taskLedger.archivedIds = staleResult.archivedIds;
+
+        if (staleResult.archivedCount > 0) {
+          onProgress?.(
+            "taskLedger",
+            `Archived ${staleResult.archivedCount} stale tasks: ${staleResult.archivedIds.join(", ")}`,
+          );
+        } else {
+          onProgress?.("taskLedger", "No stale tasks found");
+        }
+      } else {
+        onProgress?.("taskLedger", "TASKS.md not found — skipped");
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 8 complete — ${result.taskLedger.archivedCount} stale tasks archived`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 8 error: ${String(err)}`);
+    }
+  } else if (!workspaceDir) {
+    logger.info("memory-neo4j: [sleep] Phase 8: Task Ledger Cleanup — SKIPPED (no workspace dir)");
   }
 
   result.durationMs = Date.now() - startTime;
