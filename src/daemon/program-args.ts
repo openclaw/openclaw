@@ -244,8 +244,12 @@ export async function resolveGatewayProgramArguments(params: {
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
+  profile?: string;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway", "--port", String(params.port)];
+  if (params.profile?.trim()) {
+    gatewayArgs.push("--profile", params.profile.trim());
+  }
   return resolveCliProgramArguments({
     args: gatewayArgs,
     dev: params.dev,

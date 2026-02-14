@@ -48,6 +48,7 @@ export async function buildGatewayInstallPlan(params: {
     dev: devMode,
     runtime: params.runtime,
     nodePath,
+    profile: params.env.OPENCLAW_PROFILE,
   });
   if (params.runtime === "node") {
     const systemNode = await resolveSystemNodeInfo({ env: params.env });
