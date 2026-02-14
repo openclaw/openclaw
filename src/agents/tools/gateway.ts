@@ -67,9 +67,9 @@ function validateGatewayUrlOverrideForAgentTools(urlOverride: string): string {
   if (!allowed.has(parsed.key)) {
     throw new Error(
       [
-        "gatewayUrl override blocked (SSRF hardening).",
+        "gatewayUrl override rejected.",
         `Allowed: ws(s) loopback on port ${port} (127.0.0.1/localhost/[::1])`,
-        "Or: configure gateway.remote.url and omit gatewayUrl.",
+        "Or: configure gateway.remote.url and omit gatewayUrl to use the configured remote gateway.",
       ].join(" "),
     );
   }

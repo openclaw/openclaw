@@ -39,9 +39,9 @@ describe("gateway tool defaults", () => {
   it("rejects non-allowlisted overrides (SSRF hardening)", async () => {
     await expect(
       callGatewayTool("health", { gatewayUrl: "ws://127.0.0.1:8080", gatewayToken: "t" }, {}),
-    ).rejects.toThrow(/gatewayUrl override blocked/i);
+    ).rejects.toThrow(/gatewayUrl override rejected/i);
     await expect(
       callGatewayTool("health", { gatewayUrl: "ws://169.254.169.254", gatewayToken: "t" }, {}),
-    ).rejects.toThrow(/gatewayUrl override blocked/i);
+    ).rejects.toThrow(/gatewayUrl override rejected/i);
   });
 });
