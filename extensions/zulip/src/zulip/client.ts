@@ -278,12 +278,14 @@ export async function registerZulipQueue(
   const eventTypes = params.eventTypes ?? ["message"];
   body.set("event_types", JSON.stringify(eventTypes));
   body.set("event_queue_longpoll_timeout_seconds", "90");
-  if (params.streams && params.streams.length > 0 && !params.streams.includes("*")) {
-    // Zulip expects legacy array format for narrow filters.
-    const narrow = params.streams.map((stream) => ["stream", stream]);
+  // Zulip ANDs narrow terms, so multiple ["stream","x"] filters match nothing.
+  // For single stream, use narrow. For multiple streams or "*", use all_public_streams
+  // and filter client-side. Uses array format [op, operand] per Zulip API v11+.
+  if (params.streams && params.streams.length === 1 && !params.streams.includes("*")) {
+    const narrow = [["stream", params.streams[0]]];
     body.set("narrow", JSON.stringify(narrow));
-  }
-  if (params.streams?.includes("*")) {
+  } else {
+    // For multiple streams or "*", get all public stream messages and filter client-side
     body.set("all_public_streams", "true");
   }
 
