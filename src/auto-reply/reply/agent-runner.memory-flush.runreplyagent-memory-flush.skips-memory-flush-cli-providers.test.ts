@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { runReplyAgent } from "./agent-runner.js";
 import {
   createBaseRun,
   getRunCliAgentMock,
@@ -13,6 +12,7 @@ import {
 
 describe("runReplyAgent memory flush", () => {
   it("skips memory flush for CLI providers", async () => {
+    const { runReplyAgent } = await import("./agent-runner.js");
     const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
     const runCliAgentMock = getRunCliAgentMock();
     runEmbeddedPiAgentMock.mockReset();
