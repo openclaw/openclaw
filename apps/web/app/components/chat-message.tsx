@@ -56,8 +56,17 @@ function groupParts(parts: UIMessage["parts"]): MessageSegment[] {
 	const segments: MessageSegment[] = [];
 	let chain: ChainPart[] = [];
 
-	const flush = () => {
+	const flush = (textFollows?: boolean) => {
 		if (chain.length > 0) {
+			// If text content follows this chain, all tools must have
+			// completed — force any stuck "running" tools to "done".
+			if (textFollows) {
+				for (const cp of chain) {
+					if (cp.kind === "tool" && cp.status === "running") {
+						cp.status = "done";
+					}
+				}
+			}
 			segments.push({ type: "chain", parts: [...chain] });
 			chain = [];
 		}
@@ -65,7 +74,7 @@ function groupParts(parts: UIMessage["parts"]): MessageSegment[] {
 
 	for (const part of parts) {
 		if (part.type === "text") {
-			flush();
+			flush(true);
 			const text = (part as { type: "text"; text: string }).text;
 			if (hasReportBlocks(text)) {
 				segments.push(
@@ -504,7 +513,7 @@ const mdComponents: Components = {
 
 /* ─── Chat message ─── */
 
-export function ChatMessage({ message }: { message: UIMessage }) {
+export function ChatMessage({ message, isStreaming }: { message: UIMessage; isStreaming?: boolean }) {
 	const isUser = message.role === "user";
 	const segments = groupParts(message.parts);
 
@@ -649,6 +658,7 @@ export function ChatMessage({ message }: { message: UIMessage }) {
 					<ChainOfThought
 						key={index}
 						parts={segment.parts}
+						isStreaming={isStreaming}
 					/>
 				);
 			})}

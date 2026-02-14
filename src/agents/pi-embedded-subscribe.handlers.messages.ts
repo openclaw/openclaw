@@ -64,6 +64,28 @@ export function handleMessageUpdate(
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
+  // Handle native extended thinking events (Anthropic API thinking blocks).
+  // These arrive as thinking_delta / thinking_start / thinking_end from the
+  // provider adapter and must be forwarded to the agent event bus so that
+  // active-runs.ts (web UI) and other consumers receive them.
+  if (evtType === "thinking_delta" || evtType === "thinking_start" || evtType === "thinking_end") {
+    if (evtType === "thinking_delta") {
+      const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
+      if (thinkingDelta) {
+        emitAgentEvent({
+          runId: ctx.params.runId,
+          stream: "thinking",
+          data: { delta: thinkingDelta },
+        });
+        void ctx.params.onAgentEvent?.({
+          stream: "thinking",
+          data: { delta: thinkingDelta },
+        });
+      }
+    }
+    return;
+  }
+
   if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
     return;
   }

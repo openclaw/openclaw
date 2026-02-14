@@ -1315,10 +1315,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						<div
 							className={`${compact ? "" : "max-w-3xl mx-auto"} py-3`}
 						>
-							{messages.map((message) => (
+							{messages.map((message, i) => (
 								<ChatMessage
 									key={message.id}
 									message={message}
+									isStreaming={isStreaming && i === messages.length - 1}
 								/>
 							))}
 							<div ref={messagesEndRef} />

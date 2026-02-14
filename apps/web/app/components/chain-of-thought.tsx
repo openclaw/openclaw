@@ -516,9 +516,8 @@ function groupToolSteps(tools: ToolPart[]): VisualItem[] {
 
 /* ─── Main component ─── */
 
-export function ChainOfThought({ parts }: { parts: ChainPart[] }) {
+export function ChainOfThought({ parts, isStreaming }: { parts: ChainPart[]; isStreaming?: boolean }) {
 	const [isOpen, setIsOpen] = useState(true);
-	const prevActiveRef = useRef(true);
 
 	const isActive = parts.some(
 		(p) =>
@@ -556,12 +555,17 @@ export function ChainOfThought({ parts }: { parts: ChainPart[] }) {
 		return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
 	}, []);
 
+	// Collapse only when the parent stream truly ends — not on intermediate
+	// isActive flickers (e.g. gap between reasoning end and tool start).
+	const wasStreamingRef = useRef(false);
 	useEffect(() => {
-		if (prevActiveRef.current && !isActive && parts.length > 0) {
+		if (isStreaming) {
+			wasStreamingRef.current = true;
+		} else if (wasStreamingRef.current && parts.length > 0) {
+			wasStreamingRef.current = false;
 			setIsOpen(false);
 		}
-		prevActiveRef.current = isActive;
-	}, [isActive, parts.length]);
+	}, [isStreaming, parts.length]);
 
 	const statusParts = parts.filter(
 		(p): p is Extract<ChainPart, { kind: "status" }> =>
