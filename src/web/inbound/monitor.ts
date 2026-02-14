@@ -36,6 +36,10 @@ export async function monitorWebInbox(options: {
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
   /** Request full history sync from WhatsApp (OPT-IN, default false). */
   syncFullHistory?: boolean;
+  /** Max age (ms) for recovering messages received while offline. Append-type messages
+   *  newer than this window are processed on reconnect instead of being discarded.
+   *  Default: 6 hours. Set to 0 to disable offline recovery. */
+  offlineRecoveryMs?: number;
   /** Callback for history sync events. */
   onHistorySync?: (data: {
     chats: number;
@@ -258,9 +262,24 @@ export async function monitorWebInbox(options: {
         logVerbose(`Self-chat mode: skipping read receipt for ${id}`);
       }
 
-      // If this is history/offline catch-up, mark read above but skip auto-reply.
+      // Offline message recovery: "append" messages are history/catch-up delivered on
+      // reconnect. Instead of discarding them all, recover messages that arrived while
+      // the gateway was down (within the configured recovery window).
       if (upsert.type === "append") {
-        continue;
+        const DEFAULT_RECOVERY_MS = 6 * 60 * 60 * 1000; // 6 hours
+        const recoveryMs = options.offlineRecoveryMs ?? DEFAULT_RECOVERY_MS;
+        if (recoveryMs <= 0) {
+          continue; // recovery disabled
+        }
+        const ageMs = messageTimestampMs != null ? Date.now() - messageTimestampMs : Infinity;
+        if (ageMs > recoveryMs) {
+          continue; // too old, skip
+        }
+        const ageMin = Math.round(ageMs / 60_000);
+        inboundLogger.info(
+          { from, messageTimestampMs, ageMinutes: ageMin },
+          "Recovering offline message (append)",
+        );
       }
 
       const location = extractLocationData(msg.message ?? undefined);
