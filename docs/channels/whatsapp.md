@@ -144,6 +144,8 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 
     `allowFrom` accepts E.164-style numbers (normalized internally).
 
+    Multi-account override: `channels.whatsapp.accounts.<id>.dmPolicy` (and `allowFrom`) take precedence over channel-level defaults for that account.
+
     Runtime behavior details:
 
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`
