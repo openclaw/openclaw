@@ -20,6 +20,9 @@ let showSlashMenu = false;
 let showAtMenu = false;
 let menuFilter = "";
 
+// Module-level state for queue
+let queueExpanded = false;
+
 // Slash commands
 const SLASH_COMMANDS = [
   { cmd: "/status", desc: "Show session status" },
@@ -96,19 +99,20 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
 
 function renderSessionTabs(props: ChatProps) {
   const sessions = props.sessions?.sessions ?? [];
-  
+
   if (sessions.length === 0) {
     return nothing;
   }
 
   // Find main session
-  const mainSession = sessions.find((s) => s.key === "agent:main:main" || !s.key.includes(":")) 
-    ?? sessions.find((s) => !s.key.includes("subagent:"));
-  
+  const mainSession =
+    sessions.find((s) => s.key === "agent:main:main" || !s.key.includes(":")) ??
+    sessions.find((s) => !s.key.includes("subagent:"));
+
   // Get all other sessions, sorted by updatedAt descending
   const otherSessions = sessions
     .filter((s) => s.key !== mainSession?.key)
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       const aTime = typeof a.updatedAt === "number" ? a.updatedAt : 0;
       const bTime = typeof b.updatedAt === "number" ? b.updatedAt : 0;
       return bTime - aTime;
@@ -122,33 +126,41 @@ function renderSessionTabs(props: ChatProps) {
 
   const getSessionDisplayName = (session: any): string => {
     // Use label or displayName if available
-    if (session.label?.trim()) return session.label.trim();
-    if (session.displayName?.trim()) return session.displayName.trim();
-    
+    if (session.label?.trim()) {
+      return session.label.trim();
+    }
+    if (session.displayName?.trim()) {
+      return session.displayName.trim();
+    }
+
     // Extract last meaningful segment from key
     const key = session.key ?? "";
     const parts = key.split(":");
     const lastPart = parts[parts.length - 1];
-    
+
     // If it's a subagent UUID, truncate to first 8 chars
     if (lastPart.length > 20) {
       return lastPart.substring(0, 8);
     }
-    
+
     return lastPart || key;
   };
 
   return html`
     <div class="chat-session-tabs">
       <div class="chat-session-tabs__label">Recent</div>
-      ${mainSession ? html`
+      ${
+        mainSession
+          ? html`
         <button
           class="chat-session-chip ${props.sessionKey === mainSession.key ? "active" : ""}"
           @click=${() => props.onSessionKeyChange(mainSession.key)}
         >
           main
         </button>
-      ` : nothing}
+      `
+          : nothing
+      }
       ${otherSessions.map((session) => {
         const displayName = getSessionDisplayName(session);
         const isActive = props.sessionKey === session.key;
@@ -173,7 +185,7 @@ function renderAutosuggestMenu(props: ChatProps, textareaEl: HTMLTextAreaElement
 
   if (showSlashMenu) {
     const filtered = SLASH_COMMANDS.filter((cmd) =>
-      cmd.cmd.toLowerCase().includes(menuFilter.toLowerCase())
+      cmd.cmd.toLowerCase().includes(menuFilter.toLowerCase()),
     );
 
     if (filtered.length === 0) {
@@ -182,7 +194,8 @@ function renderAutosuggestMenu(props: ChatProps, textareaEl: HTMLTextAreaElement
 
     return html`
       <div class="rpc-suggestions">
-        ${filtered.map((cmd) => html`
+        ${filtered.map(
+          (cmd) => html`
           <div
             class="rpc-suggestion"
             @click=${() => {
@@ -197,7 +210,8 @@ function renderAutosuggestMenu(props: ChatProps, textareaEl: HTMLTextAreaElement
             <div class="rpc-suggestion__name">${cmd.cmd}</div>
             <div class="rpc-suggestion__desc">${cmd.desc}</div>
           </div>
-        `)}
+        `,
+        )}
       </div>
     `;
   }
@@ -205,13 +219,13 @@ function renderAutosuggestMenu(props: ChatProps, textareaEl: HTMLTextAreaElement
   if (showAtMenu) {
     const sessions = props.sessions?.sessions ?? [];
     const subAgents = sessions.filter((s) => s.key.includes("subagent:"));
-    
+
     if (subAgents.length === 0) {
       return nothing;
     }
 
     const filtered = subAgents.filter((s) =>
-      s.key.toLowerCase().includes(menuFilter.toLowerCase())
+      s.key.toLowerCase().includes(menuFilter.toLowerCase()),
     );
 
     return html`
@@ -226,7 +240,8 @@ function renderAutosuggestMenu(props: ChatProps, textareaEl: HTMLTextAreaElement
                   const cursorPos = textareaEl.selectionStart;
                   const text = props.draft;
                   const beforeAt = text.lastIndexOf("@", cursorPos - 1);
-                  const newText = text.substring(0, beforeAt) + `@${shortName} ` + text.substring(cursorPos);
+                  const newText =
+                    text.substring(0, beforeAt) + `@${shortName} ` + text.substring(cursorPos);
                   props.onDraftChange(newText);
                   showAtMenu = false;
                   menuFilter = "";
@@ -489,38 +504,6 @@ export function renderChat(props: ChatProps) {
         }
       </div>
 
-      ${
-        props.queue.length
-          ? html`
-            <div class="chat-queue" role="status" aria-live="polite">
-              <div class="chat-queue__title">Queued (${props.queue.length})</div>
-              <div class="chat-queue__list">
-                ${props.queue.map(
-                  (item) => html`
-                    <div class="chat-queue__item">
-                      <div class="chat-queue__text">
-                        ${
-                          item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")
-                        }
-                      </div>
-                      <button
-                        class="btn chat-queue__remove"
-                        type="button"
-                        aria-label="Remove queued message"
-                        @click=${() => props.onQueueRemove(item.id)}
-                      >
-                        ${icons.x}
-                      </button>
-                    </div>
-                  `,
-                )}
-              </div>
-            </div>
-          `
-          : nothing
-      }
-
       ${renderCompactionIndicator(props.compactionStatus)}
 
       ${
@@ -533,6 +516,42 @@ export function renderChat(props: ChatProps) {
             >
               New messages ${icons.arrowDown}
             </button>
+          `
+          : nothing
+      }
+
+      ${
+        props.queue.length
+          ? html`
+            <div class="chat-queue-tab" @click=${() => {
+              queueExpanded = !queueExpanded;
+            }}>
+              <span>Queued (${props.queue.length})</span>
+              <span class="icon-sm" style="width:10px;height:10px;">${queueExpanded ? icons.arrowDown : icons.arrowDown}</span>
+            </div>
+            ${
+              queueExpanded
+                ? html`
+                  <div class="chat-queue-panel">
+                    ${props.queue.map(
+                      (item) => html`
+                        <div class="chat-queue-item">
+                          <div class="chat-queue-text mono">
+                            ${item.text || (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                          </div>
+                          <button
+                            class="btn btn--sm"
+                            @click=${() => props.onQueueRemove(item.id)}
+                          >
+                            <span class="icon-sm" style="width:10px;height:10px;">${icons.x}</span>
+                          </button>
+                        </div>
+                      `,
+                    )}
+                  </div>
+                `
+                : nothing
+            }
           `
           : nothing
       }
@@ -554,12 +573,14 @@ export function renderChat(props: ChatProps) {
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
                 const target = e.target as HTMLTextAreaElement;
-                
+
                 // Tab completion for autosuggest
                 if (e.key === "Tab" && (showSlashMenu || showAtMenu)) {
                   e.preventDefault();
-                  const firstSuggestion = showSlashMenu 
-                    ? SLASH_COMMANDS.filter((cmd) => cmd.cmd.toLowerCase().includes(menuFilter.toLowerCase()))[0]
+                  const firstSuggestion = showSlashMenu
+                    ? SLASH_COMMANDS.filter((cmd) =>
+                        cmd.cmd.toLowerCase().includes(menuFilter.toLowerCase()),
+                      )[0]
                     : null;
                   if (firstSuggestion && showSlashMenu) {
                     props.onDraftChange(firstSuggestion.cmd + " ");
@@ -613,7 +634,7 @@ export function renderChat(props: ChatProps) {
                 const cursorPos = target.selectionStart;
                 const textBeforeCursor = newValue.substring(0, cursorPos);
                 const lastAtIndex = textBeforeCursor.lastIndexOf("@");
-                
+
                 if (lastAtIndex !== -1) {
                   const afterAt = textBeforeCursor.substring(lastAtIndex + 1);
                   if (!afterAt.includes(" ")) {
@@ -630,7 +651,7 @@ export function renderChat(props: ChatProps) {
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
-            ${renderAutosuggestMenu(props, (document.querySelector(".chat-compose__field textarea") as HTMLTextAreaElement))}
+            ${renderAutosuggestMenu(props, document.querySelector(".chat-compose__field textarea") as HTMLTextAreaElement)}
           </label>
           <div class="chat-compose__actions">
             <button
