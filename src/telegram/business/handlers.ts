@@ -6,7 +6,12 @@ import type { StoredBusinessConnection, StoredBusinessMessage } from "./types.js
 import { danger, logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveBusinessStorageDir, saveBusinessConnection } from "./connection-store.js";
-import { appendBusinessMessage, appendDeletionMarker, updateChatMeta } from "./message-store.js";
+import {
+  appendBusinessMessage,
+  appendDeletionMarker,
+  maybePruneChatMessages,
+  updateChatMeta,
+} from "./message-store.js";
 
 const log = createSubsystemLogger("telegram/business");
 
@@ -124,6 +129,13 @@ export function registerTelegramBusinessHandlers(params: {
         username: msg.chat.username,
         lastMessageAt: Date.now(),
         incrementCount: true,
+      });
+
+      // Enforce maxMessagesPerChat / maxAgeDays limits.
+      const bizCfg = cfg.channels?.telegram?.business;
+      maybePruneChatMessages(baseDir, chatId, {
+        maxMessages: bizCfg?.maxMessagesPerChat,
+        maxAgeDays: bizCfg?.maxAgeDays,
       });
 
       logVerbose(

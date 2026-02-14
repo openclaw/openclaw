@@ -15,6 +15,7 @@ export {
   appendDeletionMarker,
   listBusinessChats,
   loadChatMessages,
+  maybePruneChatMessages,
   searchBusinessMessages,
   updateChatMeta,
 } from "./message-store.js";

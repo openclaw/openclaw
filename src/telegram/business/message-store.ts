@@ -184,6 +184,67 @@ export function listBusinessChats(baseDir: string): StoredChatMeta[] {
 }
 
 // ---------------------------------------------------------------------------
+// Pruning
+// ---------------------------------------------------------------------------
+
+/**
+ * Compact the JSONL file for a chat, enforcing `maxMessages` and `maxAgeDays`
+ * limits. Deduplicates edits/deletions, drops expired messages, and caps the
+ * retained count. Only rewrites the file when records are actually removed.
+ */
+export function maybePruneChatMessages(
+  baseDir: string,
+  chatId: number,
+  opts: { maxMessages?: number; maxAgeDays?: number },
+): void {
+  const maxMessages = opts.maxMessages || 0;
+  const maxAgeDays = opts.maxAgeDays || 0;
+  if (maxMessages <= 0 && maxAgeDays <= 0) {
+    return;
+  }
+
+  const filePath = path.join(chatDir(baseDir, chatId), MESSAGES_FILE);
+  const raw = readJsonl(filePath);
+  if (raw.length === 0) {
+    return;
+  }
+
+  // Skip if raw count is within the message limit and no age filter applies.
+  if (maxMessages > 0 && raw.length <= maxMessages && maxAgeDays <= 0) {
+    return;
+  }
+
+  let messages = deduplicateMessages(raw);
+
+  if (maxAgeDays > 0) {
+    const cutoffSec = Math.floor(Date.now() / 1000) - maxAgeDays * 86400;
+    messages = messages.filter((m) => m.date >= cutoffSec);
+  }
+
+  if (maxMessages > 0 && messages.length > maxMessages) {
+    messages = messages.slice(-maxMessages);
+  }
+
+  // Only rewrite if compaction actually removed records.
+  if (messages.length >= raw.length) {
+    return;
+  }
+
+  fs.writeFileSync(filePath, messages.map((m) => JSON.stringify(m)).join("\n") + "\n", "utf-8");
+
+  // Sync meta message count to match retained messages.
+  const metaPath = path.join(chatDir(baseDir, chatId), META_FILE);
+  try {
+    const metaRaw = fs.readFileSync(metaPath, "utf-8");
+    const meta = JSON.parse(metaRaw) as StoredChatMeta;
+    meta.messageCount = messages.length;
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), "utf-8");
+  } catch {
+    // Meta file may not exist yet.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
 
