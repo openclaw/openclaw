@@ -79,6 +79,7 @@ describe("memory indexing with OpenAI batches", () => {
   });
 
   it("uses OpenAI batch uploads when enabled", async () => {
+    const restoreTimeouts = useFastShortTimeouts();
     const content = ["hello", "from", "batch"].join("\n\n");
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-07.md"), content);
 
@@ -162,27 +163,31 @@ describe("memory indexing with OpenAI batches", () => {
       },
     };
 
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-    const labels: string[] = [];
-    await manager.sync({
-      force: true,
-      progress: (update) => {
-        if (update.label) {
-          labels.push(update.label);
-        }
-      },
-    });
+    try {
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      expect(result.manager).not.toBeNull();
+      if (!result.manager) {
+        throw new Error("manager missing");
+      }
+      manager = result.manager;
+      const labels: string[] = [];
+      await manager.sync({
+        force: true,
+        progress: (update) => {
+          if (update.label) {
+            labels.push(update.label);
+          }
+        },
+      });
 
-    const status = manager.status();
-    expect(status.chunks).toBeGreaterThan(0);
-    expect(embedBatch).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalled();
-    expect(labels.some((label) => label.toLowerCase().includes("batch"))).toBe(true);
+      const status = manager.status();
+      expect(status.chunks).toBeGreaterThan(0);
+      expect(embedBatch).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalled();
+      expect(labels.some((label) => label.toLowerCase().includes("batch"))).toBe(true);
+    } finally {
+      restoreTimeouts();
+    }
   });
 
   it("retries OpenAI batch create on transient failures", async () => {
