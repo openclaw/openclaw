@@ -85,8 +85,6 @@ function resolveBashForCompatCheck(): string | null {
   return null;
 }
 
-describe("docker-setup.sh", () => {
-  it("handles unset optional env vars under strict mode", async () => {
 describe.skipIf(isWindows)("docker-setup.sh", () => {
   it("handles unset optional env vars under strict mode", async () => {
     const sandbox = await createDockerSetupSandbox();

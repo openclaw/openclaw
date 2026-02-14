@@ -262,20 +262,6 @@ describe("POST /tools/invoke", () => {
     await server.close();
   });
 
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      tools: { profile: "minimal" },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-
-    const profileRes = await invokeAgentsList({
-      port: sharedPort,
-      headers: { authorization: `Bearer ${token}` },
-      sessionKey: "main",
-    });
-    expect(profileRes.status).toBe(404);
-  });
-
   it("denies sessions_spawn via HTTP even when agent policy allows", async () => {
     testState.agentsConfig = {
       list: [
