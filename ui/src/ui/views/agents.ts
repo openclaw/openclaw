@@ -8,6 +8,7 @@ import type {
   CronStatus,
   SkillStatusReport,
 } from "../types.ts";
+import type { AppMode } from "../navigation.ts";
 import {
   renderAgentFiles,
   renderAgentChannels,
@@ -31,6 +32,7 @@ import {
 export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
 
 export type AgentsProps = {
+  mode: AppMode;
   loading: boolean;
   error: string | null;
   agentsList: AgentsListResult | null;
@@ -102,6 +104,7 @@ export function renderAgents(props: AgentsProps) {
   const selectedAgent = selectedId
     ? (agents.find((agent) => agent.id === selectedId) ?? null)
     : null;
+  const isBasic = props.mode === "basic";
 
   return html`
     <div class="agents-layout">
@@ -162,7 +165,7 @@ export function renderAgents(props: AgentsProps) {
                   defaultId,
                   props.agentIdentityById[selectedAgent.id] ?? null,
                 )}
-                ${renderAgentTabs(props.activePanel, (panel) => props.onSelectPanel(panel))}
+                ${renderAgentTabs(props.activePanel, (panel) => props.onSelectPanel(panel), isBasic)}
                 ${
                   props.activePanel === "overview"
                     ? renderAgentOverview({
@@ -311,8 +314,12 @@ function renderAgentHeader(
   `;
 }
 
-function renderAgentTabs(active: AgentsPanel, onSelect: (panel: AgentsPanel) => void) {
-  const tabs: Array<{ id: AgentsPanel; label: string }> = [
+function renderAgentTabs(
+  active: AgentsPanel,
+  onSelect: (panel: AgentsPanel) => void,
+  isBasic: boolean,
+) {
+  const allTabs: Array<{ id: AgentsPanel; label: string }> = [
     { id: "overview", label: "Overview" },
     { id: "files", label: "Files" },
     { id: "tools", label: "Tools" },
@@ -320,6 +327,9 @@ function renderAgentTabs(active: AgentsPanel, onSelect: (panel: AgentsPanel) => 
     { id: "channels", label: "Channels" },
     { id: "cron", label: "Cron Jobs" },
   ];
+
+  // Basic mode shows only overview and files tabs
+  const tabs = isBasic ? allTabs.filter((t) => t.id === "overview" || t.id === "files") : allTabs;
   return html`
     <div class="agent-tabs">
       ${tabs.map(
