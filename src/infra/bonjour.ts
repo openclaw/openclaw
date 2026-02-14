@@ -96,7 +96,7 @@ export async function startGatewayBonjourAdvertiser(
   // Keep only the first label and normalize away a trailing `.local`.
   const hostnameRaw =
     process.env.OPENCLAW_MDNS_HOSTNAME?.trim() ||
-    process.env.CLAWDBOT_MDNS_HOSTNAME?.trim() ||
+    process.env.OPENCLAW_MDNS_HOSTNAME?.trim() ||
     "openclaw";
   const hostname =
     hostnameRaw

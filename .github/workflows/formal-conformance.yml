@@ -24,9 +24,9 @@ jobs:
       - name: Checkout formal models
         uses: actions/checkout@v4
         with:
-          repository: vignesh07/clawdbot-formal-models
+          repository: vignesh07/openclaw-formal-models
           ref: main
-          path: clawdbot-formal-models
+          path: openclaw-formal-models
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -36,7 +36,7 @@ jobs:
       - name: Regenerate extracted constants from openclaw
         run: |
           set -euo pipefail
-          cd clawdbot-formal-models
+          cd openclaw-formal-models
           export OPENCLAW_REPO_DIR="${GITHUB_WORKSPACE}/openclaw"
           node scripts/extract-tool-groups.mjs
           node scripts/check-tool-group-alias.mjs
@@ -47,7 +47,7 @@ jobs:
         id: drift
         run: |
           set -euo pipefail
-          cd clawdbot-formal-models
+          cd openclaw-formal-models
 
           if git diff --quiet -- generated; then
             echo "drift=false" >> "$GITHUB_OUTPUT"
@@ -60,7 +60,7 @@ jobs:
       - name: Model check (green suite)
         run: |
           set -euo pipefail
-          cd clawdbot-formal-models
+          cd openclaw-formal-models
           make \
             precedence groups elevated nodes-policy \
             attacker approvals approvals-token nodes-pipeline \
@@ -81,7 +81,7 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          cd clawdbot-formal-models
+          cd openclaw-formal-models
           make -k \
             precedence-negative groups-negative elevated-negative nodes-policy-negative \
             attacker-negative attacker-nodes-negative attacker-nodes-allowlist-negative attacker-nodes-allowlist-negative \

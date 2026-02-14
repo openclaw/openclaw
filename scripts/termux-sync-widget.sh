@@ -6,7 +6,7 @@
 termux-toast "Syncing OpenClaw auth..."
 
 # Run sync on l36 server
-SERVER="${OPENCLAW_SERVER:-${CLAWDBOT_SERVER:-l36}}"
+SERVER="${OPENCLAW_SERVER:-${OPENCLAW_SERVER:-l36}}"
 RESULT=$(ssh "$SERVER" '/home/admin/openclaw/scripts/sync-claude-code-auth.sh' 2>&1)
 EXIT_CODE=$?
 

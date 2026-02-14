@@ -43,3 +43,50 @@ describe("extractThinkingCached", () => {
     expect(extractThinkingCached(message)).toBe("Plan A");
   });
 });
+
+describe("stripInboundMetadata", () => {
+  it("removes Conversation info metadata block", () => {
+    const message = {
+      role: "user",
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "conversation_label": "openclaw-tui"
+}
+\`\`\`
+
+Hello, how are you?`,
+    };
+    expect(extractText(message)).toBe("Hello, how are you?");
+  });
+
+  it("removes multiple metadata blocks", () => {
+    const message = {
+      role: "user",
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "conversation_label": "test"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "John"
+}
+\`\`\`
+
+This is the actual message`,
+    };
+    expect(extractText(message)).toBe("This is the actual message");
+  });
+
+  it("keeps regular message content", () => {
+    const message = {
+      role: "user",
+      content: "Just a normal message",
+    };
+    expect(extractText(message)).toBe("Just a normal message");
+  });
+});

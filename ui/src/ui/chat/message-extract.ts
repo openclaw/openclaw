@@ -29,16 +29,27 @@ function looksLikeEnvelopeHeader(header: string): boolean {
   return ENVELOPE_CHANNELS.some((label) => header.startsWith(`${label} `));
 }
 
+function stripInboundMetadata(text: string): string {
+  // Filter out system metadata blocks that shouldn't be shown to users in webchat
+  // These blocks match patterns like:
+  // "Conversation info (untrusted metadata):\n```json\n{...}\n```"
+  // "Sender (untrusted metadata):\n```json\n{...}\n```"
+  // etc.
+  const metadataPattern =
+    /^(?:Conversation info|Sender|Thread starter|Replied message|Forwarded message context|Chat history since last reply) \(untrusted[^)]*\):[\s\S]*?```json[\s\S]*?```\s*/gm;
+  return text.replace(metadataPattern, "").trim();
+}
+
 export function stripEnvelope(text: string): string {
   const match = text.match(ENVELOPE_PREFIX);
   if (!match) {
-    return text;
+    return stripInboundMetadata(text);
   }
   const header = match[1] ?? "";
   if (!looksLikeEnvelopeHeader(header)) {
-    return text;
+    return stripInboundMetadata(text);
   }
-  return text.slice(match[0].length);
+  return stripInboundMetadata(text.slice(match[0].length));
 }
 
 export function extractText(message: unknown): string | null {

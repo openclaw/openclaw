@@ -12,7 +12,7 @@ const streamMock = vi.hoisted(() => vi.fn());
 const signalCheckMock = vi.hoisted(() => vi.fn());
 const signalRpcRequestMock = vi.hoisted(() => vi.fn());
 
-export function getSignalToolResultTestMocks() {
+export function getSignalToolResultTestMocks(): unknown {
   return {
     waitForTransportReadyMock,
     sendMock,
