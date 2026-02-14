@@ -144,9 +144,9 @@ function renderSessionDetail(row: GatewaySessionRow, props: SessionsProps) {
           <div class="log-detail-label">Updated</div>
           <div class="log-detail-value">${row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a"}</div>
         </div>
-        <div class="log-detail-field">
+        <label class="field">
           <div class="log-detail-label">Label</div>
-          <input style="font-size: 12px;"
+          <input
             .value=${row.label ?? ""}
             ?disabled=${props.loading}
             placeholder="(optional)"
@@ -155,39 +155,39 @@ function renderSessionDetail(row: GatewaySessionRow, props: SessionsProps) {
               props.onPatch(row.key, { label: value || null });
             }}
           />
-        </div>
+        </label>
         <div class="log-detail-row-inline">
-          <div class="log-detail-field" style="flex: 1;">
+          <label class="field" style="flex: 1;">
             <div class="log-detail-label">Thinking</div>
-            <select style="font-size: 12px;" ?disabled=${props.loading}
+            <select ?disabled=${props.loading}
               @change=${(e: Event) => {
                 const value = (e.target as HTMLSelectElement).value;
                 props.onPatch(row.key, { thinkingLevel: resolveThinkLevelPatchValue(value, isBinaryThinking) });
               }}>
               ${thinkLevels.map((level) => html`<option value=${level} ?selected=${thinking === level}>${level || "inherit"}</option>`)}
             </select>
-          </div>
-          <div class="log-detail-field" style="flex: 1;">
+          </label>
+          <label class="field" style="flex: 1;">
             <div class="log-detail-label">Reasoning</div>
-            <select style="font-size: 12px;" ?disabled=${props.loading}
+            <select ?disabled=${props.loading}
               @change=${(e: Event) => {
                 const value = (e.target as HTMLSelectElement).value;
                 props.onPatch(row.key, { reasoningLevel: value || null });
               }}>
               ${reasoningLevels.map((level) => html`<option value=${level} ?selected=${reasoning === level}>${level || "inherit"}</option>`)}
             </select>
-          </div>
+          </label>
         </div>
-        <div class="log-detail-field">
+        <label class="field">
           <div class="log-detail-label">Verbose</div>
-          <select style="font-size: 12px;" ?disabled=${props.loading}
+          <select ?disabled=${props.loading}
             @change=${(e: Event) => {
               const value = (e.target as HTMLSelectElement).value;
               props.onPatch(row.key, { verboseLevel: value || null });
             }}>
             ${verboseLevels.map((level) => html`<option value=${level.value} ?selected=${verbose === level.value}>${level.label}</option>`)}
           </select>
-        </div>
+        </label>
         <div class="row" style="gap: 8px; margin-top: 8px;">
           ${chatUrl ? html`<a href=${chatUrl} class="btn btn--sm">Open Chat</a>` : nothing}
           <button class="btn btn--sm danger" ?disabled=${props.loading} @click=${() => props.onDelete(row.key)}>Delete</button>
@@ -218,22 +218,26 @@ export function renderSessions(props: SessionsProps) {
           <div class="card-sub">${rows.length} active</div>
         </div>
         <div class="row" style="gap: 8px; flex-wrap: wrap;">
-          <input type="text" style="width: 80px; font-size: 12px;" placeholder="Minutes"
-            .value=${props.activeMinutes}
-            @input=${(e: Event) => props.onFiltersChange({
-              activeMinutes: (e.target as HTMLInputElement).value,
-              limit: props.limit,
-              includeGlobal: props.includeGlobal,
-              includeUnknown: props.includeUnknown,
-            })} />
-          <input type="text" style="width: 60px; font-size: 12px;" placeholder="Limit"
-            .value=${props.limit}
-            @input=${(e: Event) => props.onFiltersChange({
-              activeMinutes: props.activeMinutes,
-              limit: (e.target as HTMLInputElement).value,
-              includeGlobal: props.includeGlobal,
-              includeUnknown: props.includeUnknown,
-            })} />
+          <label class="field" style="margin: 0;">
+            <input style="width: 80px;" placeholder="Minutes"
+              .value=${props.activeMinutes}
+              @input=${(e: Event) => props.onFiltersChange({
+                activeMinutes: (e.target as HTMLInputElement).value,
+                limit: props.limit,
+                includeGlobal: props.includeGlobal,
+                includeUnknown: props.includeUnknown,
+              })} />
+          </label>
+          <label class="field" style="margin: 0;">
+            <input style="width: 60px;" placeholder="Limit"
+              .value=${props.limit}
+              @input=${(e: Event) => props.onFiltersChange({
+                activeMinutes: props.activeMinutes,
+                limit: (e.target as HTMLInputElement).value,
+                includeGlobal: props.includeGlobal,
+                includeUnknown: props.includeUnknown,
+              })} />
+          </label>
           ${!isBasic ? html`
             <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted);">
               <input type="checkbox" .checked=${props.includeGlobal}
