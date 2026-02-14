@@ -47,7 +47,7 @@ describe("runInteractiveOnboarding", () => {
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.restoreTerminalState).toHaveBeenCalledWith("onboarding finish", {
-      resumeStdin: false,
+      resumeStdinIfPaused: false,
     });
   });
 
@@ -59,7 +59,7 @@ describe("runInteractiveOnboarding", () => {
 
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(mocks.restoreTerminalState).toHaveBeenCalledWith("onboarding finish", {
-      resumeStdin: false,
+      resumeStdinIfPaused: false,
     });
   });
 });
