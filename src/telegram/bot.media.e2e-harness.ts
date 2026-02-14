@@ -4,8 +4,8 @@ import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 export const useSpy: Mock = vi.fn();
 export const middlewareUseSpy: Mock = vi.fn();
 export const onSpy: Mock = vi.fn();
-export const stopSpy: Mock = vi.fn();
-export const sendChatActionSpy: Mock = vi.fn();
+export const stopSpy: Mock<any, any> = vi.fn();
+export const sendChatActionSpy: Mock<any, any> = vi.fn();
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };

@@ -286,16 +286,28 @@ export async function sendMessageTelegram(
       throw err;
     });
   const wrapChatNotFound = (err: unknown) => {
-    if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) {
+    const msg = formatErrorMessage(err);
+    if (!/400: Bad Request: chat not found/i.test(msg)) {
       return err;
     }
-    return new Error(
-      [
-        `Telegram send failed: chat not found (chat_id=${chatId}).`,
-        "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
-        `Input was: ${JSON.stringify(to)}.`,
-      ].join(" "),
-    );
+    const isUsername = chatId.startsWith("@");
+    const hints = [
+      `Telegram send failed: chat not found (chat_id=${chatId}).`,
+      "Likely causes:",
+      "- Bot has not been started by the user in DM.",
+      "- Bot was removed from the group/channel.",
+      "- Group was migrated to a supergroup (changing ID).",
+      "- Invalid bot token.",
+    ];
+
+    if (isUsername) {
+      hints.push(
+        "- CAUTION: Telegram Bot API does NOT support sending messages to private users by @username. You MUST use a numeric chat_id.",
+      );
+    }
+
+    hints.push(`Input was: ${JSON.stringify(to)}.`);
+    return new Error(hints.join(" "));
   };
 
   const sendWithThreadFallback = async <T>(
