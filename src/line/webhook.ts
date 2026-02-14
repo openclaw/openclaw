@@ -38,6 +38,16 @@ export function createLineWebhookMiddleware(
 
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
     try {
+      const rawBody = readRawBody(req);
+      const body = rawBody ? parseWebhookBody(req, rawBody) : null;
+
+      // LINE sends {"events":[]} without a signature for webhook URL verification.
+      // Respond 200 immediately so the LINE Developers Console check succeeds.
+      if (body && Array.isArray(body.events) && body.events.length === 0) {
+        res.status(200).json({ status: "ok" });
+        return;
+      }
+
       const signature = req.headers["x-line-signature"];
 
       if (!signature || typeof signature !== "string") {
@@ -45,7 +55,6 @@ export function createLineWebhookMiddleware(
         return;
       }
 
-      const rawBody = readRawBody(req);
       if (!rawBody) {
         res.status(400).json({ error: "Missing raw request body for signature verification" });
         return;
@@ -57,7 +66,6 @@ export function createLineWebhookMiddleware(
         return;
       }
 
-      const body = parseWebhookBody(req, rawBody);
       if (!body) {
         res.status(400).json({ error: "Invalid webhook payload" });
         return;

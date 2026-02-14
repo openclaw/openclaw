@@ -58,6 +58,46 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).toHaveBeenCalledWith(expect.objectContaining({ events: expect.any(Array) }));
   });
 
+  it("returns 200 for LINE verification request (empty events, no signature)", async () => {
+    const onEvents = vi.fn(async () => {});
+    const secret = "secret";
+    const middleware = createLineWebhookMiddleware({ channelSecret: secret, onEvents });
+
+    const req = {
+      headers: {},
+      body: JSON.stringify({ events: [] }),
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const res = createRes();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+    expect(onEvents).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 for empty events with pre-parsed body object", async () => {
+    const onEvents = vi.fn(async () => {});
+    const secret = "secret";
+    const middleware = createLineWebhookMiddleware({ channelSecret: secret, onEvents });
+
+    const req = {
+      headers: {},
+      body: { events: [] },
+      rawBody: JSON.stringify({ events: [] }),
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const res = createRes();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(onEvents).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid JSON payloads", async () => {
     const onEvents = vi.fn(async () => {});
     const secret = "secret";
