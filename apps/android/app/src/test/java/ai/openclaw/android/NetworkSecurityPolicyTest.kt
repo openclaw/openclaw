@@ -19,6 +19,7 @@ class NetworkSecurityPolicyTest {
   @Test
   fun mainNetworkSecurityConfigDeniesCleartextByDefault() {
     val config = readAppFile("src/main/res/xml/network_security_config.xml")
+    assertTrue(config.contains("<network-security-config"))
     assertTrue(config.contains("<base-config cleartextTrafficPermitted=\"false\""))
     assertFalse(config.contains("cleartextTrafficPermitted=\"true\""))
   }

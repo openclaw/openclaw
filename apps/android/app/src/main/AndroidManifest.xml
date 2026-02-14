@@ -23,6 +23,7 @@
         android:name="android.hardware.telephony"
         android:required="false" />
 
+    <!-- Production network policy: cleartext disabled; config wired via networkSecurityConfig. -->
     <application
         android:name=".NodeApp"
         android:allowBackup="true"
