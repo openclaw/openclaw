@@ -303,14 +303,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
-
       ctx.setStatus({
         accountId: account.accountId,
         baseUrl: account.baseUrl,
       });
-
       ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
-
+      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
       return getSignalRuntime().channel.signal.monitorSignalProvider({
         accountId: account.accountId,
         config: ctx.cfg,
@@ -318,9 +316,6 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         abortSignal: ctx.abortSignal,
         mediaMaxMb: account.config.mediaMaxMb,
       });
-    },
-    stopAccount: async (_ctx) => {
-      // No special cleanup needed for native mode
     },
   },
 };
