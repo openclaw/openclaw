@@ -1,11 +1,19 @@
 import { Command } from "commander";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
 import {
   getCoreCliCommandNames,
   registerCoreCliByName,
   registerCoreCliCommands,
 } from "./command-registry.js";
+
+vi.mock("./register.status-health-sessions.js", () => ({
+  registerStatusHealthSessionsCommands: (program: Command) => {
+    program.command("status");
+    program.command("health");
+    program.command("sessions");
+  },
+}));
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",
@@ -56,5 +64,24 @@ describe("command-registry", () => {
     expect(names).toContain("reset");
     expect(names).toContain("uninstall");
     expect(names).not.toContain("maintenance");
+  });
+
+  it("registers grouped core entry placeholders without duplicate command errors", async () => {
+    const program = new Command();
+    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "vitest"]);
+
+    const prevArgv = process.argv;
+    process.argv = ["node", "openclaw", "status"];
+    try {
+      program.exitOverride();
+      await program.parseAsync(["node", "openclaw", "status"]);
+    } finally {
+      process.argv = prevArgv;
+    }
+
+    const names = program.commands.map((command) => command.name());
+    expect(names).toContain("status");
+    expect(names).toContain("health");
+    expect(names).toContain("sessions");
   });
 });
