@@ -1,4 +1,5 @@
 import type { Action, FlexBox, FlexBubble, FlexComponent, FlexText } from "./types.js";
+import { attachFooterText } from "./common.js";
 
 /**
  * Create a receipt/summary card (for orders, transactions, data tables)
@@ -135,22 +136,7 @@ export function createReceiptCard(params: {
   };
 
   if (footer) {
-    bubble.footer = {
-      type: "box",
-      layout: "vertical",
-      contents: [
-        {
-          type: "text",
-          text: footer,
-          size: "xs",
-          color: "#AAAAAA",
-          wrap: true,
-          align: "center",
-        } as FlexText,
-      ],
-      paddingAll: "lg",
-      backgroundColor: "#FAFAFA",
-    };
+    attachFooterText(bubble, footer);
   }
 
   return bubble;
@@ -499,22 +485,7 @@ export function createAgendaCard(params: {
   };
 
   if (footer) {
-    bubble.footer = {
-      type: "box",
-      layout: "vertical",
-      contents: [
-        {
-          type: "text",
-          text: footer,
-          size: "xs",
-          color: "#AAAAAA",
-          align: "center",
-          wrap: true,
-        } as FlexText,
-      ],
-      paddingAll: "lg",
-      backgroundColor: "#FAFAFA",
-    };
+    attachFooterText(bubble, footer);
   }
 
   return bubble;
