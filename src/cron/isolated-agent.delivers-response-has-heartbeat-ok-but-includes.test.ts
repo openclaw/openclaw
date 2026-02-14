@@ -102,6 +102,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.mocked(runEmbeddedPiAgent).mockReset();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
     vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue(true);
