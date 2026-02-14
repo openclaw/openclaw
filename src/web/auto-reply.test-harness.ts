@@ -180,3 +180,29 @@ export async function sendWebGroupInboundMessage(params: {
     sendMedia: params.spies.sendMedia,
   } as WebInboundMessage);
 }
+
+export async function sendWebDirectInboundMessage(params: {
+  onMessage: (msg: WebInboundMessage) => Promise<void>;
+  body: string;
+  id: string;
+  from: string;
+  to: string;
+  spies: ReturnType<typeof createWebInboundDeliverySpies>;
+  accountId?: string;
+}) {
+  const accountId = params.accountId ?? "default";
+  await params.onMessage({
+    accountId,
+    id: params.id,
+    from: params.from,
+    conversationId: params.from,
+    to: params.to,
+    body: params.body,
+    timestamp: Date.now(),
+    chatType: "direct",
+    chatId: `direct:${params.from}`,
+    sendComposing: params.spies.sendComposing,
+    reply: params.spies.reply,
+    sendMedia: params.spies.sendMedia,
+  } as WebInboundMessage);
+}
