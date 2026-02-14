@@ -141,7 +141,7 @@ async function completeOkWithRetry(params: {
   apiKey: string;
   timeoutMs: number;
 }) {
-  const runOnce = async () => {
+  const runOnce = async (maxTokens: number) => {
     const res = await completeSimpleWithTimeout(
       params.model,
       {
@@ -156,7 +156,7 @@ async function completeOkWithRetry(params: {
       {
         apiKey: params.apiKey,
         reasoning: resolveTestReasoning(params.model),
-        maxTokens: 64,
+        maxTokens,
       },
       params.timeoutMs,
     );
@@ -167,11 +167,13 @@ async function completeOkWithRetry(params: {
     return { res, text };
   };
 
-  const first = await runOnce();
+  const first = await runOnce(64);
   if (first.text.length > 0) {
     return first;
   }
-  return await runOnce();
+  // Some providers (for example Moonshot Kimi and MiniMax M2.5) may emit
+  // reasoning blocks first and only return text once token budget is higher.
+  return await runOnce(256);
 }
 
 describeLive("live models (profile keys)", () => {
