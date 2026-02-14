@@ -20,7 +20,6 @@ const unitIsolatedFiles = [
   "src/browser/server.post-tabs-open-profile-unknown-returns-404.test.ts",
   "src/browser/server.agent-contract-snapshot-endpoints.test.ts",
   "src/browser/server.agent-contract-form-layout-act-commands.test.ts",
-  "src/browser/server.serves-status-starts-browser-requested.test.ts",
   "src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts",
   "src/browser/server.auth-token-gates-http.test.ts",
   "src/browser/server-context.remote-tab-ops.test.ts",
