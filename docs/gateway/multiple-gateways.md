@@ -79,7 +79,7 @@ openclaw --profile rescue gateway install
 Base port = `gateway.port` (or `OPENCLAW_GATEWAY_PORT` / `--port`).
 
 - browser control service port = base + 2 (loopback only)
-- `canvasHost.port = base + 4`
+- canvas host is served on the Gateway HTTP server (same port as `gateway.port`)
 - Browser profile CDP ports auto-allocate from `browser.controlPort + 9 .. + 108`
 
 If you override any of these in config or env, you must keep them unique per instance.

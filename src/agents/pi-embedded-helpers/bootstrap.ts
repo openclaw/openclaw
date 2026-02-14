@@ -4,6 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
+import { truncateUtf16Safe } from "../../utils.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;
@@ -82,6 +83,8 @@ export function stripThoughtSignatures<T>(
 }
 
 export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
+export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 24_000;
+const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 const BOOTSTRAP_HEAD_RATIO = 0.7;
 const BOOTSTRAP_TAIL_RATIO = 0.2;
 
@@ -98,6 +101,14 @@ export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
     return Math.floor(raw);
   }
   return DEFAULT_BOOTSTRAP_MAX_CHARS;
+}
+
+export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
+  const raw = cfg?.agents?.defaults?.bootstrapTotalMaxChars;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
 }
 
 function trimBootstrapContent(
@@ -135,6 +146,20 @@ function trimBootstrapContent(
   };
 }
 
+function clampToBudget(content: string, budget: number): string {
+  if (budget <= 0) {
+    return "";
+  }
+  if (content.length <= budget) {
+    return content;
+  }
+  if (budget <= 3) {
+    return truncateUtf16Safe(content, budget);
+  }
+  const safe = Math.max(1, budget - 1);
+  return `${truncateUtf16Safe(content, safe)}…`;
+}
+
 export async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
@@ -161,30 +186,53 @@ export async function ensureSessionHeader(params: {
 
 export function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
-  opts?: { warn?: (message: string) => void; maxChars?: number },
+  opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
+  const totalMaxChars = Math.max(
+    1,
+    Math.floor(opts?.totalMaxChars ?? Math.max(maxChars, DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS)),
+  );
+  let remainingTotalChars = totalMaxChars;
   const result: EmbeddedContextFile[] = [];
   for (const file of files) {
+    if (remainingTotalChars <= 0) {
+      break;
+    }
     if (file.missing) {
+      const missingText = `[MISSING] Expected at: ${file.path}`;
+      const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
+      if (!cappedMissingText) {
+        break;
+      }
+      remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
       result.push({
-        path: file.name,
-        content: `[MISSING] Expected at: ${file.path}`,
+        path: file.path,
+        content: cappedMissingText,
       });
       continue;
     }
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, maxChars);
-    if (!trimmed.content) {
+    if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
+      opts?.warn?.(
+        `remaining bootstrap budget is ${remainingTotalChars} chars (<${MIN_BOOTSTRAP_FILE_BUDGET_CHARS}); skipping additional bootstrap files`,
+      );
+      break;
+    }
+    const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
+    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
+    const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
+    if (!contentWithinBudget) {
       continue;
     }
-    if (trimmed.truncated) {
+    if (trimmed.truncated || contentWithinBudget.length < trimmed.content.length) {
       opts?.warn?.(
         `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
       );
     }
+    remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
     result.push({
-      path: file.name,
-      content: trimmed.content,
+      path: file.path,
+      content: contentWithinBudget,
     });
   }
   return result;

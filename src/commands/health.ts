@@ -17,7 +17,8 @@ import {
 } from "../infra/heartbeat-runner.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { theme } from "../terminal/theme.js";
+import { styleHealthChannelLine } from "../terminal/health-style.js";
+import { isRich } from "../terminal/theme.js";
 
 export type ChannelAccountHealthSummary = {
   accountId: string;
@@ -248,44 +249,6 @@ const isProbeFailure = (summary: ChannelAccountHealthSummary): boolean => {
   return ok === false;
 };
 
-function styleHealthChannelLine(line: string): string {
-  const colon = line.indexOf(":");
-  if (colon === -1) {
-    return line;
-  }
-
-  const label = line.slice(0, colon + 1);
-  const detail = line.slice(colon + 1).trimStart();
-  const normalized = detail.toLowerCase();
-
-  const applyPrefix = (prefix: string, color: (value: string) => string) =>
-    `${label} ${color(detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;
-
-  if (normalized.startsWith("failed")) {
-    return applyPrefix("failed", theme.error);
-  }
-  if (normalized.startsWith("ok")) {
-    return applyPrefix("ok", theme.success);
-  }
-  if (normalized.startsWith("linked")) {
-    return applyPrefix("linked", theme.success);
-  }
-  if (normalized.startsWith("configured")) {
-    return applyPrefix("configured", theme.success);
-  }
-  if (normalized.startsWith("not linked")) {
-    return applyPrefix("not linked", theme.warn);
-  }
-  if (normalized.startsWith("not configured")) {
-    return applyPrefix("not configured", theme.muted);
-  }
-  if (normalized.startsWith("unknown")) {
-    return applyPrefix("unknown", theme.warn);
-  }
-
-  return line;
-}
-
 export const formatHealthChannelLines = (
   summary: HealthSummary,
   opts: {
@@ -412,7 +375,7 @@ export async function getHealthSnapshot(params?: {
     buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }));
 
   const start = Date.now();
-  const cappedTimeout = Math.max(1000, timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
   const doProbe = params?.probe !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
   const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
@@ -586,6 +549,7 @@ export async function healthCommand(
     runtime.log(JSON.stringify(summary, null, 2));
   } else {
     const debugEnabled = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH);
+    const rich = isRich();
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails({ config: cfg });
       runtime.log(info("Gateway connection:"));
@@ -705,7 +669,7 @@ export async function healthCommand(
             accountMode: opts.verbose ? "all" : "default",
           });
     for (const line of channelLines) {
-      runtime.log(styleHealthChannelLine(line));
+      runtime.log(styleHealthChannelLine(line, rich));
     }
     for (const plugin of listChannelPlugins()) {
       const channelSummary = summary.channels?.[plugin.id];

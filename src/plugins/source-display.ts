@@ -23,7 +23,8 @@ function tryRelative(root: string, filePath: string): string | null {
   if (path.isAbsolute(rel)) {
     return null;
   }
-  return rel;
+  // Normalize to forward slashes for display (path.relative uses backslashes on Windows)
+  return rel.replaceAll("\\", "/");
 }
 
 export function resolvePluginSourceRoots(params: { workspaceDir?: string }): PluginSourceRoots {

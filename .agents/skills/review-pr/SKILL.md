@@ -1,228 +1,142 @@
 ---
 name: review-pr
-description: Review-only GitHub pull request analysis with the gh CLI. Use when asked to review a PR, provide structured feedback, or assess readiness to land. Do not merge, push, or make code changes you intend to keep.
+description: Script-first review-only GitHub pull request analysis. Use for deterministic PR review with structured findings handoff to /prepare-pr.
 ---
 
 # Review PR
 
 ## Overview
 
-Perform a thorough review-only PR assessment and return a structured recommendation on readiness for /preparepr.
+Perform a read-only review and produce both human and machine-readable outputs.
 
 ## Inputs
 
 - Ask for PR number or URL.
-- If missing, always ask. Never auto-detect from conversation.
-- If ambiguous, ask.
+- If missing, always ask.
 
 ## Safety
 
-- Never push to `main` or `origin/main`, not during review, not ever.
-- Do not run `git push` at all during review. Treat review as read only.
-- Do not stop or kill the gateway. Do not run gateway stop commands. Do not kill processes on port 18792.
+- Never push, merge, or modify code intended to keep.
+- Work only in `.worktrees/pr-<PR>`.
+- Wrapper commands are cwd-agnostic; you can run them from repo root or inside the PR worktree.
 
-## Execution Rule
+## Execution Contract
 
-- Execute the workflow. Do not stop after printing the TODO checklist.
-- If delegating, require the delegate to run commands and capture outputs, not a plan.
-
-## Known Failure Modes
-
-- If you see "fatal: not a git repository", you are in the wrong directory. Use `~/dev/openclaw` if available; otherwise ask user.
-- Do not stop after printing the checklist. That is not completion.
-
-## Writing Style for Output
-
-- Write casual and direct.
-- Avoid em dashes and en dashes. Use commas or separate sentences.
-
-## Completion Criteria
-
-- Run the commands in the worktree and inspect the PR directly.
-- Produce the structured review sections A through J.
-- Save the full review to `.local/review.md` inside the worktree.
-
-## First: Create a TODO Checklist
-
-Create a checklist of all review steps, print it, then continue and execute the commands.
-
-## Setup: Use a Worktree
-
-Use an isolated worktree for all review work.
+1. Run wrapper setup:
 
 ```sh
-cd ~/dev/openclaw
-# Sanity: confirm you are in the repo
-git rev-parse --show-toplevel
-
-WORKTREE_DIR=".worktrees/pr-<PR>"
-git fetch origin main
-
-# Reuse existing worktree if it exists, otherwise create new
-if [ -d "$WORKTREE_DIR" ]; then
-  cd "$WORKTREE_DIR"
-  git checkout temp/pr-<PR> 2>/dev/null || git checkout -b temp/pr-<PR>
-  git fetch origin main
-  git reset --hard origin/main
-else
-  git worktree add "$WORKTREE_DIR" -b temp/pr-<PR> origin/main
-  cd "$WORKTREE_DIR"
-fi
-
-# Create local scratch space that persists across /reviewpr to /preparepr to /mergepr
-mkdir -p .local
+scripts/pr-review <PR>
 ```
 
-Run all commands inside the worktree directory.
-Start on `origin/main` so you can check for existing implementations before looking at PR code.
+2. Use explicit branch mode switches:
+
+- Main baseline mode: `scripts/pr review-checkout-main <PR>`
+- PR-head mode: `scripts/pr review-checkout-pr <PR>`
+
+3. Before writing review outputs, run branch guard:
+
+```sh
+scripts/pr review-guard <PR>
+```
+
+4. Write both outputs:
+
+- `.local/review.md` with sections A through J.
+- `.local/review.json` with structured findings.
+
+5. Validate artifacts semantically:
+
+```sh
+scripts/pr review-validate-artifacts <PR>
+```
 
 ## Steps
 
-1. Identify PR meta and context
+1. Setup and metadata
 
 ```sh
-gh pr view <PR> --json number,title,state,isDraft,author,baseRefName,headRefName,headRepository,url,body,labels,assignees,reviewRequests,files,additions,deletions --jq '{number,title,url,state,isDraft,author:.author.login,base:.baseRefName,head:.headRefName,headRepo:.headRepository.nameWithOwner,additions,deletions,files:.files|length,body}'
+scripts/pr-review <PR>
+ls -la .local/pr-meta.json .local/pr-meta.env .local/review-context.env .local/review-mode.env
 ```
 
-2. Check if this already exists in main before looking at the PR branch
-
-- Identify the core feature or fix from the PR title and description.
-- Search for existing implementations using keywords from the PR title, changed file paths, and function or component names from the diff.
+2. Existing implementation check on main
 
 ```sh
-# Use keywords from the PR title and changed files
-rg -n "<keyword_from_pr_title>" -S src packages apps ui || true
-rg -n "<function_or_component_name>" -S src packages apps ui || true
-
-git log --oneline --all --grep="<keyword_from_pr_title>" | head -20
+scripts/pr review-checkout-main <PR>
+rg -n "<keyword>" -S src extensions apps || true
+git log --oneline --all --grep "<keyword>" | head -20
 ```
 
-If it already exists, call it out as a BLOCKER or at least IMPORTANT.
-
-3. Claim the PR
-
-Assign yourself so others know someone is reviewing. Skip if the PR looks like spam or is a draft you plan to recommend closing.
+3. Claim PR
 
 ```sh
 gh_user=$(gh api user --jq .login)
-gh pr edit <PR> --add-assignee "$gh_user"
+gh pr edit <PR> --add-assignee "$gh_user" || echo "Could not assign reviewer, continuing"
 ```
 
-4. Read the PR description carefully
-
-Use the body from step 1. Summarize goal, scope, and missing context.
-
-5. Read the diff thoroughly
-
-Minimum:
+4. Read PR description and diff
 
 ```sh
+scripts/pr review-checkout-pr <PR>
 gh pr diff <PR>
+
+source .local/review-context.env
+git diff --stat "$MERGE_BASE"..pr-<PR>
+git diff "$MERGE_BASE"..pr-<PR>
 ```
 
-If you need full code context locally, fetch the PR head to a local ref and diff it. Do not create a merge commit.
+5. Optional local tests
+
+Use the wrapper for target validation and executed-test verification:
 
 ```sh
-git fetch origin pull/<PR>/head:pr-<PR>
-# Show changes without modifying the working tree
-
-git diff --stat origin/main..pr-<PR>
-git diff origin/main..pr-<PR>
+scripts/pr review-tests <PR> <test-file> [<test-file> ...]
 ```
 
-If you want to browse the PR version of files directly, temporarily check out `pr-<PR>` in the worktree. Do not commit or push. Return to `temp/pr-<PR>` and reset to `origin/main` afterward.
+6. Initialize review artifact templates
 
 ```sh
-# Use only if needed
-# git checkout pr-<PR>
-# ...inspect files...
-
-git checkout temp/pr-<PR>
-git reset --hard origin/main
+scripts/pr review-artifacts-init <PR>
 ```
 
-6. Validate the change is needed and valuable
+7. Produce review outputs
 
-Be honest. Call out low value AI slop.
+- Fill `.local/review.md` sections A through J.
+- Fill `.local/review.json`.
 
-7. Evaluate implementation quality
+Minimum JSON shape:
 
-Review correctness, design, performance, and ergonomics.
+```json
+{
+  "recommendation": "READY FOR /prepare-pr",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "IMPORTANT",
+      "title": "...",
+      "area": "path/or/component",
+      "fix": "Actionable fix"
+    }
+  ],
+  "tests": {
+    "ran": [],
+    "gaps": [],
+    "result": "pass"
+  },
+  "docs": "up_to_date|missing|not_applicable",
+  "changelog": "required"
+}
+```
 
-8. Perform a security review
-
-Assume OpenClaw subagents run with full disk access, including git, gh, and shell. Check auth, input validation, secrets, dependencies, tool safety, and privacy.
-
-9. Review tests and verification
-
-Identify what exists, what is missing, and what would be a minimal regression test.
-
-10. Check docs
-
-Check if the PR touches code with related documentation such as README, docs, inline API docs, or config examples.
-
-- If docs exist for the changed area and the PR does not update them, flag as IMPORTANT.
-- If the PR adds a new feature or config option with no docs, flag as IMPORTANT.
-- If the change is purely internal with no user-facing impact, skip this.
-
-11. Check changelog
-
-Check if `CHANGELOG.md` exists and whether the PR warrants an entry.
-
-- If the project has a changelog and the PR is user-facing, flag missing entry as IMPORTANT.
-- Leave the change for /preparepr, only flag it here.
-
-12. Answer the key question
-
-Decide if /preparepr can fix issues or the contributor must update the PR.
-
-13. Save findings to the worktree
-
-Write the full structured review sections A through J to `.local/review.md`.
-Create or overwrite the file and verify it exists and is non-empty.
+8. Guard + validate before final output
 
 ```sh
-ls -la .local/review.md
-wc -l .local/review.md
+scripts/pr review-guard <PR>
+scripts/pr review-validate-artifacts <PR>
 ```
-
-14. Output the structured review
-
-Produce a review that matches what you saved to `.local/review.md`.
-
-A) TL;DR recommendation
-
-- One of: READY FOR /preparepr | NEEDS WORK | NEEDS DISCUSSION | NOT USEFUL (CLOSE)
-- 1 to 3 sentences.
-
-B) What changed
-
-C) What is good
-
-D) Security findings
-
-E) Concerns or questions (actionable)
-
-- Numbered list.
-- Mark each item as BLOCKER, IMPORTANT, or NIT.
-- For each, point to file or area and propose a concrete fix.
-
-F) Tests
-
-G) Docs status
-
-- State if related docs are up to date, missing, or not applicable.
-
-H) Changelog
-
-- State if `CHANGELOG.md` needs an entry and which category.
-
-I) Follow ups (optional)
-
-J) Suggested PR comment (optional)
 
 ## Guardrails
 
-- Worktree only.
-- Do not delete the worktree after review.
-- Review only, do not merge, do not push.
+- Keep review read-only.
+- Do not delete worktree.
+- Use merge-base scoped diff for local context to avoid stale branch drift.

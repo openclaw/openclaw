@@ -31,7 +31,9 @@ describe("monitorSlackProvider tool results", () => {
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          dm: { enabled: true },
           replyToMode: "off",
         },
       },

@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { SubagentRunRecord } from "./subagent-registry.js";
-import { STATE_DIR } from "../config/paths.js";
+import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 
@@ -30,7 +30,7 @@ type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
 };
 
 export function resolveSubagentRegistryPath(): string {
-  return path.join(STATE_DIR, "subagents", "runs.json");
+  return path.join(resolveStateDir(), "subagents", "runs.json");
 }
 
 export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {

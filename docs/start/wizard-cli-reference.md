@@ -175,6 +175,18 @@ What you set:
     Moonshot (Kimi K2) and Kimi Coding configs are auto-written.
     More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
+  <Accordion title="Custom provider">
+    Works with OpenAI-compatible and Anthropic-compatible endpoints.
+
+    Non-interactive flags:
+    - `--auth-choice custom-api-key`
+    - `--custom-base-url`
+    - `--custom-model-id`
+    - `--custom-api-key` (optional; falls back to `CUSTOM_API_KEY`)
+    - `--custom-provider-id` (optional)
+    - `--custom-compatibility <openai|anthropic>` (optional; default `openai`)
+
+  </Accordion>
   <Accordion title="Skip">
     Leaves auth unconfigured.
   </Accordion>

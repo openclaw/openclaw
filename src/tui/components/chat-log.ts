@@ -56,6 +56,16 @@ export class ChatLog extends Container {
     this.addChild(new AssistantMessageComponent(text));
   }
 
+  dropAssistant(runId?: string) {
+    const effectiveRunId = this.resolveRunId(runId);
+    const existing = this.streamingRuns.get(effectiveRunId);
+    if (!existing) {
+      return;
+    }
+    this.removeChild(existing);
+    this.streamingRuns.delete(effectiveRunId);
+  }
+
   startTool(toolCallId: string, toolName: string, args: unknown) {
     const existing = this.toolById.get(toolCallId);
     if (existing) {

@@ -1,4 +1,4 @@
-import type { ChannelId } from "../../channels/plugins/types.js";
+import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
@@ -18,38 +18,10 @@ import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 export type ChannelsAddOptions = {
   channel?: string;
   account?: string;
-  name?: string;
-  token?: string;
-  tokenFile?: string;
-  botToken?: string;
-  appToken?: string;
-  signalNumber?: string;
-  cliPath?: string;
-  dbPath?: string;
-  service?: "imessage" | "sms" | "auto";
-  region?: string;
-  authDir?: string;
-  httpUrl?: string;
-  httpHost?: string;
-  httpPort?: string;
-  webhookPath?: string;
-  webhookUrl?: string;
-  audienceType?: string;
-  audience?: string;
-  useEnv?: boolean;
-  homeserver?: string;
-  userId?: string;
-  accessToken?: string;
-  password?: string;
-  deviceName?: string;
   initialSyncLimit?: number | string;
-  ship?: string;
-  url?: string;
-  code?: string;
   groupChannels?: string;
   dmAllowlist?: string;
-  autoDiscoverChannels?: boolean;
-};
+} & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
 
 function parseList(value: string | undefined): string[] | undefined {
   if (!value?.trim()) {
@@ -192,53 +164,7 @@ export async function channelsAddCommand(
   const groupChannels = parseList(opts.groupChannels);
   const dmAllowlist = parseList(opts.dmAllowlist);
 
-  const validationError = plugin.setup.validateInput?.({
-    cfg: nextConfig,
-    accountId,
-    input: {
-      name: opts.name,
-      token: opts.token,
-      tokenFile: opts.tokenFile,
-      botToken: opts.botToken,
-      appToken: opts.appToken,
-      signalNumber: opts.signalNumber,
-      cliPath: opts.cliPath,
-      dbPath: opts.dbPath,
-      service: opts.service,
-      region: opts.region,
-      authDir: opts.authDir,
-      httpUrl: opts.httpUrl,
-      httpHost: opts.httpHost,
-      httpPort: opts.httpPort,
-      webhookPath: opts.webhookPath,
-      webhookUrl: opts.webhookUrl,
-      audienceType: opts.audienceType,
-      audience: opts.audience,
-      homeserver: opts.homeserver,
-      userId: opts.userId,
-      accessToken: opts.accessToken,
-      password: opts.password,
-      deviceName: opts.deviceName,
-      initialSyncLimit,
-      useEnv,
-      ship: opts.ship,
-      url: opts.url,
-      code: opts.code,
-      groupChannels,
-      dmAllowlist,
-      autoDiscoverChannels: opts.autoDiscoverChannels,
-    },
-  });
-  if (validationError) {
-    runtime.error(validationError);
-    runtime.exit(1);
-    return;
-  }
-
-  nextConfig = applyChannelAccountConfig({
-    cfg: nextConfig,
-    channel,
-    accountId,
+  const input: ChannelSetupInput = {
     name: opts.name,
     token: opts.token,
     tokenFile: opts.tokenFile,
@@ -270,6 +196,24 @@ export async function channelsAddCommand(
     groupChannels,
     dmAllowlist,
     autoDiscoverChannels: opts.autoDiscoverChannels,
+  };
+
+  const validationError = plugin.setup.validateInput?.({
+    cfg: nextConfig,
+    accountId,
+    input,
+  });
+  if (validationError) {
+    runtime.error(validationError);
+    runtime.exit(1);
+    return;
+  }
+
+  nextConfig = applyChannelAccountConfig({
+    cfg: nextConfig,
+    channel,
+    accountId,
+    input,
   });
 
   await writeConfigFile(nextConfig);

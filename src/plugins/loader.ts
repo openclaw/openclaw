@@ -14,6 +14,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
 import {
+  applyTestPluginDefaults,
   normalizePluginsConfig,
   resolveEnableState,
   resolveMemorySlotDecision,
@@ -51,6 +52,37 @@ const resolvePluginSdkAlias = (): string | null => {
     for (let i = 0; i < 6; i += 1) {
       const srcCandidate = path.join(cursor, "src", "plugin-sdk", "index.ts");
       const distCandidate = path.join(cursor, "dist", "plugin-sdk", "index.js");
+      const orderedCandidates = isProduction
+        ? isTest
+          ? [distCandidate, srcCandidate]
+          : [distCandidate]
+        : [srcCandidate, distCandidate];
+      for (const candidate of orderedCandidates) {
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        break;
+      }
+      cursor = parent;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
+const resolvePluginSdkAccountIdAlias = (): string | null => {
+  try {
+    const modulePath = fileURLToPath(import.meta.url);
+    const isProduction = process.env.NODE_ENV === "production";
+    const isTest = process.env.VITEST || process.env.NODE_ENV === "test";
+    let cursor = path.dirname(modulePath);
+    for (let i = 0; i < 6; i += 1) {
+      const srcCandidate = path.join(cursor, "src", "plugin-sdk", "account-id.ts");
+      const distCandidate = path.join(cursor, "dist", "plugin-sdk", "account-id.js");
       const orderedCandidates = isProduction
         ? isTest
           ? [distCandidate, srcCandidate]
@@ -167,7 +199,9 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
-  const cfg = options.config ?? {};
+  // Test env: default-disable plugins unless explicitly configured.
+  // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
+  const cfg = applyTestPluginDefaults(options.config ?? {}, process.env);
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
   const normalized = normalizePluginsConfig(cfg.plugins);
@@ -208,12 +242,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
 
   const pluginSdkAlias = resolvePluginSdkAlias();
+  const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
   const jiti = createJiti(import.meta.url, {
     interopDefault: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-    ...(pluginSdkAlias
+    ...(pluginSdkAlias || pluginSdkAccountIdAlias
       ? {
-          alias: { "openclaw/plugin-sdk": pluginSdkAlias },
+          alias: {
+            ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+            ...(pluginSdkAccountIdAlias
+              ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
+              : {}),
+          },
         }
       : {}),
   });

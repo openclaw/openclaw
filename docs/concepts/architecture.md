@@ -19,7 +19,10 @@ Last updated: 2026-01-22
 - **Nodes** (macOS/iOS/Android/headless) also connect over **WebSocket**, but
   declare `role: node` with explicit caps/commands.
 - One Gateway per host; it is the only place that opens a WhatsApp session.
-- A **canvas host** (default `18793`) serves agent‑editable HTML and A2UI.
+- The **canvas host** is served by the Gateway HTTP server under:
+  - `/__openclaw__/canvas/` (agent-editable HTML/CSS/JS)
+  - `/__openclaw__/a2ui/` (A2UI host)
+    It uses the same port as the Gateway (default `18789`).
 
 ## Components and flows
 
@@ -56,22 +59,6 @@ Protocol details:
 ## Connection lifecycle (single client)
 
 ```mermaid
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#ffffff',
-    'primaryTextColor': '#000000',
-    'primaryBorderColor': '#000000',
-    'lineColor': '#000000',
-    'secondaryColor': '#f9f9fb',
-    'tertiaryColor': '#ffffff',
-    'clusterBkg': '#f9f9fb',
-    'clusterBorder': '#000000',
-    'nodeBorder': '#000000',
-    'mainBkg': '#ffffff',
-    'edgeLabelBackground': '#ffffff'
-  }
-}}%%
 sequenceDiagram
     participant Client
     participant Gateway

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
+import { deleteStaleIndexedPaths } from "./sync-stale.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -74,29 +75,14 @@ export async function syncMemoryFiles(params: {
   });
 
   await params.runWithConcurrency(tasks, params.concurrency);
-
-  const staleRows = params.db
-    .prepare(`SELECT path FROM files WHERE source = ?`)
-    .all("memory") as Array<{ path: string }>;
-  for (const stale of staleRows) {
-    if (activePaths.has(stale.path)) {
-      continue;
-    }
-    params.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stale.path, "memory");
-    try {
-      params.db
-        .prepare(
-          `DELETE FROM ${params.vectorTable} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
-        )
-        .run(stale.path, "memory");
-    } catch {}
-    params.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
-    if (params.ftsEnabled && params.ftsAvailable) {
-      try {
-        params.db
-          .prepare(`DELETE FROM ${params.ftsTable} WHERE path = ? AND source = ? AND model = ?`)
-          .run(stale.path, "memory", params.model);
-      } catch {}
-    }
-  }
+  deleteStaleIndexedPaths({
+    db: params.db,
+    source: "memory",
+    activePaths,
+    vectorTable: params.vectorTable,
+    ftsTable: params.ftsTable,
+    ftsEnabled: params.ftsEnabled,
+    ftsAvailable: params.ftsAvailable,
+    model: params.model,
+  });
 }

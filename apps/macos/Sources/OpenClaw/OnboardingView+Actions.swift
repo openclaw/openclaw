@@ -35,7 +35,9 @@ extension OnboardingView {
                 user: user,
                 host: host,
                 port: gateway.sshPort)
-            OpenClawConfigFile.setRemoteGatewayUrl(host: host, port: gateway.gatewayPort)
+            OpenClawConfigFile.setRemoteGatewayUrl(
+                host: gateway.serviceHost ?? host,
+                port: gateway.servicePort ?? gateway.gatewayPort)
         }
         self.state.remoteCliPath = gateway.cliPath ?? ""
 

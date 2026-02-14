@@ -109,6 +109,20 @@ export function createEventHandlers(context: EventHandlerContext) {
       setActivityStatus("streaming");
     }
     if (evt.state === "final") {
+      if (!evt.message) {
+        if (isLocalRunId?.(evt.runId)) {
+          forgetLocalRunId?.(evt.runId);
+        } else {
+          void loadHistory?.();
+        }
+        chatLog.dropAssistant(evt.runId);
+        noteFinalizedRun(evt.runId);
+        state.activeChatRunId = null;
+        setActivityStatus("idle");
+        void refreshSessionInfo?.();
+        tui.requestRender();
+        return;
+      }
       if (isCommandMessage(evt.message)) {
         if (isLocalRunId?.(evt.runId)) {
           forgetLocalRunId?.(evt.runId);

@@ -62,16 +62,21 @@ function parseDiscordUserInput(raw: string): {
 }
 
 async function listGuilds(token: string, fetcher: typeof fetch): Promise<DiscordGuildSummary[]> {
-  const raw = await fetchDiscord<Array<{ id: string; name: string }>>(
+  const raw = await fetchDiscord<Array<{ id?: string; name?: string }>>(
     "/users/@me/guilds",
     token,
     fetcher,
   );
-  return raw.map((guild) => ({
-    id: guild.id,
-    name: guild.name,
-    slug: normalizeDiscordSlug(guild.name),
-  }));
+  return raw
+    .filter(
+      (guild): guild is { id: string; name: string } =>
+        typeof guild.id === "string" && typeof guild.name === "string",
+    )
+    .map((guild) => ({
+      id: guild.id,
+      name: guild.name,
+      slug: normalizeDiscordSlug(guild.name),
+    }));
 }
 
 function scoreDiscordMember(member: DiscordMember, query: string): number {

@@ -207,8 +207,10 @@ export const VoiceCallTunnelConfigSchema = z
     ngrokDomain: z.string().min(1).optional(),
     /**
      * Allow ngrok free tier compatibility mode.
-     * When true, signature verification failures on ngrok-free.app URLs
-     * will be allowed only for loopback requests (ngrok local agent).
+     * When true, forwarded headers may be trusted for loopback requests
+     * to reconstruct the public ngrok URL used for signing.
+     *
+     * IMPORTANT: This does NOT bypass signature verification.
      */
     allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
   })
@@ -483,12 +485,9 @@ export function validateProviderConfig(config: VoiceCallConfig): {
         "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
       );
     }
-    if (
-      (config.inboundPolicy === "allowlist" || config.inboundPolicy === "pairing") &&
-      !config.telnyx?.publicKey
-    ) {
+    if (!config.skipSignatureVerification && !config.telnyx?.publicKey) {
       errors.push(
-        "plugins.entries.voice-call.config.telnyx.publicKey is required for inboundPolicy allowlist/pairing",
+        "plugins.entries.voice-call.config.telnyx.publicKey is required (or set TELNYX_PUBLIC_KEY env)",
       );
     }
   }

@@ -8,8 +8,26 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { loadSessionEntry } from "./session-utils.js";
+import {
+  loadSessionEntry,
+  pruneLegacyStoreKeys,
+  resolveGatewaySessionStoreTarget,
+} from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
+
+const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
+
+function compactExecEventOutput(raw: string) {
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= MAX_EXEC_EVENT_OUTPUT_CHARS) {
+    return normalized;
+  }
+  const safe = Math.max(1, MAX_EXEC_EVENT_OUTPUT_CHARS - 1);
+  return `${normalized.slice(0, safe)}…`;
+}
 
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
@@ -41,6 +59,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const sessionId = entry?.sessionId ?? randomUUID();
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
+          const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey, store });
+          pruneLegacyStoreKeys({
+            store,
+            canonicalKey: target.canonicalKey,
+            candidates: target.storeKeys,
+          });
           store[canonicalKey] = {
             sessionId,
             updatedAt: now,
@@ -58,7 +82,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
       // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
       ctx.addChatRun(sessionId, {
-        sessionKey,
+        sessionKey: canonicalKey,
         clientRunId: `voice-${randomUUID()}`,
       });
 
@@ -66,7 +90,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         {
           message: text,
           sessionId,
-          sessionKey,
+          sessionKey: canonicalKey,
           thinking: "low",
           deliver: false,
           messageChannel: "node",
@@ -113,11 +137,18 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
+      const cfg = loadConfig();
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
+          const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey, store });
+          pruneLegacyStoreKeys({
+            store,
+            canonicalKey: target.canonicalKey,
+            candidates: target.storeKeys,
+          });
           store[canonicalKey] = {
             sessionId,
             updatedAt: now,
@@ -136,7 +167,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         {
           message,
           sessionId,
-          sessionKey,
+          sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,
           deliver,
           to,
@@ -227,9 +258,14 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         }
       } else if (evt.event === "exec.finished") {
         const exitLabel = timedOut ? "timeout" : `code ${exitCode ?? "?"}`;
+        const compactOutput = compactExecEventOutput(output);
+        const shouldNotify = timedOut || exitCode !== 0 || compactOutput.length > 0;
+        if (!shouldNotify) {
+          return;
+        }
         text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
-        if (output) {
-          text += `\n${output}`;
+        if (compactOutput) {
+          text += `\n${compactOutput}`;
         }
       } else {
         text = `Exec denied (node=${nodeId}${runId ? ` id=${runId}` : ""}${reason ? `, ${reason}` : ""})`;

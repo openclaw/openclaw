@@ -170,12 +170,15 @@ installGatewayTestHooks({ scope: "suite" });
 describe("gateway hot reload", () => {
   let prevSkipChannels: string | undefined;
   let prevSkipGmail: string | undefined;
+  let prevSkipProviders: string | undefined;
 
   beforeEach(() => {
     prevSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     prevSkipGmail = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+    prevSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
   });
 
   afterEach(() => {
@@ -188,6 +191,11 @@ describe("gateway hot reload", () => {
       delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     } else {
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prevSkipGmail;
+    }
+    if (prevSkipProviders === undefined) {
+      delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    } else {
+      process.env.OPENCLAW_SKIP_PROVIDERS = prevSkipProviders;
     }
   });
 

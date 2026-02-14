@@ -1,3 +1,5 @@
+import { isLoopbackHost } from "./net.js";
+
 type OriginCheckResult = { ok: true } | { ok: false; reason: string };
 
 function normalizeHostHeader(hostHeader?: string): string {
@@ -36,22 +38,6 @@ function parseOrigin(
   } catch {
     return null;
   }
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  if (!hostname) {
-    return false;
-  }
-  if (hostname === "localhost") {
-    return true;
-  }
-  if (hostname === "::1") {
-    return true;
-  }
-  if (hostname === "127.0.0.1" || hostname.startsWith("127.")) {
-    return true;
-  }
-  return false;
 }
 
 export function checkBrowserOrigin(params: {

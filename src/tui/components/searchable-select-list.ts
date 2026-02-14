@@ -33,6 +33,12 @@ export class SearchableSelectList implements Component {
   onCancel?: () => void;
   onSelectionChange?: (item: SelectItem) => void;
 
+  private static readonly DESCRIPTION_LAYOUT_MIN_WIDTH = 40;
+  private static readonly DESCRIPTION_MIN_WIDTH = 12;
+  private static readonly DESCRIPTION_SPACING_WIDTH = 2;
+  // Keep a small right margin so we don't risk wrapping due to styling/terminal quirks.
+  private static readonly RIGHT_MARGIN_WIDTH = 2;
+
   constructor(items: SelectItem[], maxVisible: number, theme: SearchableSelectListTheme) {
     this.items = items;
     this.filteredItems = items;
@@ -218,21 +224,26 @@ export class SearchableSelectList implements Component {
     const prefixWidth = prefix.length;
     const displayValue = this.getItemLabel(item);
 
-    if (item.description && width > 40) {
-      const maxValueWidth = Math.min(30, width - prefixWidth - 4);
-      const truncatedValue = truncateToWidth(displayValue, maxValueWidth, "");
-      const valueText = this.highlightMatch(truncatedValue, query);
-      const spacingWidth = Math.max(1, 32 - visibleWidth(valueText));
-      const spacing = " ".repeat(spacingWidth);
-      const descriptionStart = prefixWidth + visibleWidth(valueText) + spacing.length;
-      const remainingWidth = width - descriptionStart - 2;
-      if (remainingWidth > 10) {
-        const truncatedDesc = truncateToWidth(item.description, remainingWidth, "");
-        // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
-        const highlightedDesc = this.highlightMatch(truncatedDesc, query);
-        const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
-        const line = `${prefix}${valueText}${spacing}${descText}`;
-        return isSelected ? this.theme.selectedText(line) : line;
+    const description = item.description;
+    if (description) {
+      const descriptionLayout = this.getDescriptionLayout(width, prefixWidth);
+      if (descriptionLayout) {
+        const truncatedValue = truncateToWidth(displayValue, descriptionLayout.maxValueWidth, "");
+        const valueText = this.highlightMatch(truncatedValue, query);
+
+        const usedByValue = visibleWidth(valueText);
+        const remainingWidth = descriptionLayout.availableWidth - usedByValue;
+        const descriptionWidth = remainingWidth - descriptionLayout.spacingWidth;
+
+        if (descriptionWidth >= SearchableSelectList.DESCRIPTION_MIN_WIDTH) {
+          const spacing = " ".repeat(descriptionLayout.spacingWidth);
+          const truncatedDesc = truncateToWidth(description, descriptionWidth, "");
+          // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
+          const highlightedDesc = this.highlightMatch(truncatedDesc, query);
+          const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
+          const line = `${prefix}${valueText}${spacing}${descText}`;
+          return isSelected ? this.theme.selectedText(line) : line;
+        }
       }
     }
 
@@ -241,6 +252,34 @@ export class SearchableSelectList implements Component {
     const valueText = this.highlightMatch(truncatedValue, query);
     const line = `${prefix}${valueText}`;
     return isSelected ? this.theme.selectedText(line) : line;
+  }
+
+  private getDescriptionLayout(
+    width: number,
+    prefixWidth: number,
+  ): { availableWidth: number; maxValueWidth: number; spacingWidth: number } | null {
+    if (width <= SearchableSelectList.DESCRIPTION_LAYOUT_MIN_WIDTH) {
+      return null;
+    }
+
+    const availableWidth = Math.max(
+      1,
+      width - prefixWidth - SearchableSelectList.RIGHT_MARGIN_WIDTH,
+    );
+    const maxValueWidth =
+      availableWidth -
+      SearchableSelectList.DESCRIPTION_MIN_WIDTH -
+      SearchableSelectList.DESCRIPTION_SPACING_WIDTH;
+
+    if (maxValueWidth < 1) {
+      return null;
+    }
+
+    return {
+      availableWidth,
+      maxValueWidth,
+      spacingWidth: SearchableSelectList.DESCRIPTION_SPACING_WIDTH,
+    };
   }
 
   handleInput(keyData: string): void {

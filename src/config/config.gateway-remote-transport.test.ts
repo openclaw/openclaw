@@ -1,9 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { validateConfigObject } from "./config.js";
 
 describe("gateway.remote.transport", () => {
-  it("accepts direct transport", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
+  it("accepts direct transport", () => {
     const res = validateConfigObject({
       gateway: {
         remote: {
@@ -15,9 +14,7 @@ describe("gateway.remote.transport", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects unknown transport", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
+  it("rejects unknown transport", () => {
     const res = validateConfigObject({
       gateway: {
         remote: {

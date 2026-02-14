@@ -23,7 +23,7 @@ jobs:
 
       - name: Detect docs-only changes
         id: check
-        uses: ./.github/actions/detect-docs-only
+        uses: ./.github/actions/detect-docs-changes
 
   install-smoke:
     needs: [docs-scope]

@@ -219,14 +219,17 @@ function resolveMainSessionKey(
   return null;
 }
 
-function resolveSessionDisplayName(key: string, row?: SessionsListResult["sessions"][number]) {
-  const label = row?.label?.trim() || "";
+export function resolveSessionDisplayName(
+  key: string,
+  row?: SessionsListResult["sessions"][number],
+) {
   const displayName = row?.displayName?.trim() || "";
+  const label = row?.label?.trim() || "";
+  if (displayName && displayName !== key) {
+    return `${displayName} (${key})`;
+  }
   if (label && label !== key) {
     return `${label} (${key})`;
-  }
-  if (displayName && displayName !== key) {
-    return `${key} (${displayName})`;
   }
   return key;
 }

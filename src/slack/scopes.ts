@@ -1,4 +1,5 @@
 import type { WebClient } from "@slack/web-api";
+import { isRecord } from "../utils.js";
 import { createSlackWebClient } from "./client.js";
 
 export type SlackScopesResult = {
@@ -9,10 +10,6 @@ export type SlackScopesResult = {
 };
 
 type SlackScopesSource = "auth.scopes" | "apps.permissions.info";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function collectScopes(value: unknown, into: string[]) {
   if (!value) {

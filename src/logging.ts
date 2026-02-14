@@ -8,6 +8,7 @@ import {
   getResolvedConsoleSettings,
   routeLogsToStderr,
   setConsoleSubsystemFilter,
+  setConsoleConfigLoaderForTests,
   setConsoleTimestampPrefix,
   shouldLogSubsystemToConsole,
 } from "./logging/console.js";
@@ -36,6 +37,7 @@ export {
   getResolvedConsoleSettings,
   routeLogsToStderr,
   setConsoleSubsystemFilter,
+  setConsoleConfigLoaderForTests,
   setConsoleTimestampPrefix,
   shouldLogSubsystemToConsole,
   ALLOWED_LOG_LEVELS,

@@ -35,6 +35,7 @@ export const BindingsSchema = z
               .optional(),
             guildId: z.string().optional(),
             teamId: z.string().optional(),
+            roles: z.array(z.string()).optional(),
           })
           .strict(),
       })

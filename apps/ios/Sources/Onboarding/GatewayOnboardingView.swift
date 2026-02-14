@@ -21,6 +21,7 @@ struct GatewayOnboardingView: View {
             }
             .navigationTitle("Connect Gateway")
         }
+        .gatewayTrustPromptAlert()
     }
 }
 

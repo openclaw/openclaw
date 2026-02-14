@@ -1,49 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext } from "../templating.js";
 import { extractMessageText } from "./commands-subagents.js";
-import { buildCommandContext, handleCommands } from "./commands.js";
+import { handleCommands } from "./commands.js";
+import { buildCommandTestParams } from "./commands.test-harness.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
-import { parseInlineDirectives } from "./directive-handling.js";
-
-function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
-  const ctx = {
-    Body: commandBody,
-    CommandBody: commandBody,
-    CommandSource: "text",
-    CommandAuthorized: true,
-    Provider: "whatsapp",
-    Surface: "whatsapp",
-    ...ctxOverrides,
-  } as MsgContext;
-
-  const command = buildCommandContext({
-    ctx,
-    cfg,
-    isGroup: false,
-    triggerBodyNormalized: commandBody.trim().toLowerCase(),
-    commandAuthorized: true,
-  });
-
-  return {
-    ctx,
-    cfg,
-    command,
-    directives: parseInlineDirectives(commandBody),
-    elevated: { enabled: true, allowed: true, failures: [] },
-    sessionKey: "agent:main:main",
-    workspaceDir: "/tmp",
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off" as const,
-    resolvedReasoningLevel: "off" as const,
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: "whatsapp",
-    model: "test-model",
-    contextTokens: 0,
-    isGroup: false,
-  };
-}
 
 describe("parseConfigCommand", () => {
   it("parses show/unset", () => {
@@ -116,7 +77,7 @@ describe("handleCommands /config configWrites gating", () => {
       commands: { config: true, text: true },
       channels: { whatsapp: { allowFrom: ["*"], configWrites: false } },
     } as OpenClawConfig;
-    const params = buildParams('/config set messages.ackReaction=":)"', cfg);
+    const params = buildCommandTestParams('/config set messages.ackReaction=":)"', cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Config writes are disabled");

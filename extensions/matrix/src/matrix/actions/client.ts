@@ -1,3 +1,4 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixActionClient, MatrixActionClientOpts } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -22,7 +23,9 @@ export async function resolveActionClient(
   if (opts.client) {
     return { client: opts.client, stopOnDone: false };
   }
-  const active = getActiveMatrixClient();
+  // Normalize accountId early to ensure consistent keying across all lookups
+  const accountId = normalizeAccountId(opts.accountId);
+  const active = getActiveMatrixClient(accountId);
   if (active) {
     return { client: active, stopOnDone: false };
   }
@@ -31,11 +34,13 @@ export async function resolveActionClient(
     const client = await resolveSharedMatrixClient({
       cfg: getMatrixRuntime().config.loadConfig() as CoreConfig,
       timeoutMs: opts.timeoutMs,
+      accountId,
     });
     return { client, stopOnDone: false };
   }
   const auth = await resolveMatrixAuth({
     cfg: getMatrixRuntime().config.loadConfig() as CoreConfig,
+    accountId,
   });
   const client = await createMatrixClient({
     homeserver: auth.homeserver,
@@ -43,6 +48,7 @@ export async function resolveActionClient(
     accessToken: auth.accessToken,
     encryption: auth.encryption,
     localTimeoutMs: opts.timeoutMs,
+    accountId,
   });
   if (auth.encryption && client.crypto) {
     try {

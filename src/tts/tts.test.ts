@@ -6,6 +6,9 @@ import * as tts from "./tts.js";
 
 vi.mock("@mariozechner/pi-ai", () => ({
   completeSimple: vi.fn(),
+  // Some auth helpers import oauth provider metadata at module load time.
+  getOAuthProviders: () => [],
+  getOAuthApiKey: vi.fn(async () => null),
 }));
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
@@ -95,6 +98,14 @@ describe("tts", () => {
       for (const voice of OPENAI_TTS_VOICES) {
         expect(isValidOpenAIVoice(voice)).toBe(true);
       }
+    });
+
+    it("includes newer OpenAI voices (ballad, cedar, juniper, marin, verse) (#2393)", () => {
+      expect(isValidOpenAIVoice("ballad")).toBe(true);
+      expect(isValidOpenAIVoice("cedar")).toBe(true);
+      expect(isValidOpenAIVoice("juniper")).toBe(true);
+      expect(isValidOpenAIVoice("marin")).toBe(true);
+      expect(isValidOpenAIVoice("verse")).toBe(true);
     });
 
     it("rejects invalid voice names", () => {
@@ -462,6 +473,31 @@ describe("tts", () => {
         cfg: baseCfg,
         kind: "final",
         inboundAudio: false,
+      });
+
+      expect(result).toBe(payload);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      globalThis.fetch = originalFetch;
+      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+    });
+
+    it("skips auto-TTS when markdown stripping leaves text too short", async () => {
+      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
+      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const payload = { text: "### **bold**" };
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg: baseCfg,
+        kind: "final",
+        inboundAudio: true,
       });
 
       expect(result).toBe(payload);

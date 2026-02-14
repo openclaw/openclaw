@@ -4,6 +4,7 @@ import type { PortListener, PortListenerKind, PortUsage, PortUsageStatus } from 
 import { danger, info, shouldLogVerbose, warn } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
+import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { inspectPortUsage } from "./ports-inspect.js";
 
@@ -17,10 +18,6 @@ class PortInUseError extends Error {
     this.port = port;
     this.details = details;
   }
-}
-
-function isErrno(err: unknown): err is NodeJS.ErrnoException {
-  return Boolean(err && typeof err === "object" && "code" in err);
 }
 
 export async function describePortOwner(port: number): Promise<string | undefined> {
@@ -45,8 +42,7 @@ export async function ensurePortAvailable(port: number): Promise<void> {
     });
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
-      const details = await describePortOwner(port);
-      throw new PortInUseError(port, details);
+      throw new PortInUseError(port);
     }
     throw err;
   }
@@ -60,7 +56,10 @@ export async function handlePortError(
 ): Promise<never> {
   // Uniform messaging for EADDRINUSE with optional owner details.
   if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
-    const details = err instanceof PortInUseError ? err.details : await describePortOwner(port);
+    const details =
+      err instanceof PortInUseError
+        ? (err.details ?? (await describePortOwner(port)))
+        : await describePortOwner(port);
     runtime.error(danger(`${context} failed: port ${port} is already in use.`));
     if (details) {
       runtime.error(info("Port listener details:"));

@@ -5,9 +5,14 @@ import { findTailscaleBinary } from "../infra/tailscale.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
-import { guardCancel, normalizeGatewayTokenInput, randomToken } from "./onboard-helpers.js";
+import {
+  guardCancel,
+  normalizeGatewayTokenInput,
+  randomToken,
+  validateGatewayPasswordInput,
+} from "./onboard-helpers.js";
 
-type GatewayAuthChoice = "token" | "password";
+type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 
 export async function promptGatewayConfig(
   cfg: OpenClawConfig,
@@ -98,13 +103,18 @@ export async function promptGatewayConfig(
       options: [
         { value: "token", label: "Token", hint: "Recommended default" },
         { value: "password", label: "Password" },
+        {
+          value: "trusted-proxy",
+          label: "Trusted Proxy",
+          hint: "Behind reverse proxy (Pomerium, Caddy, Traefik, etc.)",
+        },
       ],
       initialValue: "token",
     }),
     runtime,
   ) as GatewayAuthChoice;
 
-  const tailscaleMode = guardCancel(
+  let tailscaleMode = guardCancel(
     await select({
       message: "Tailscale exposure",
       options: [
@@ -170,8 +180,25 @@ export async function promptGatewayConfig(
     authMode = "password";
   }
 
+  if (authMode === "trusted-proxy" && bind === "loopback") {
+    note("Trusted proxy auth requires network bind. Adjusting bind to lan.", "Note");
+    bind = "lan";
+  }
+  if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
+    note(
+      "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",
+      "Note",
+    );
+    tailscaleMode = "off";
+    tailscaleResetOnExit = false;
+  }
+
   let gatewayToken: string | undefined;
   let gatewayPassword: string | undefined;
+  let trustedProxyConfig:
+    | { userHeader: string; requiredHeaders?: string[]; allowUsers?: string[] }
+    | undefined;
+  let trustedProxies: string[] | undefined;
   let next = cfg;
 
   if (authMode === "token") {
@@ -189,11 +216,87 @@ export async function promptGatewayConfig(
     const password = guardCancel(
       await text({
         message: "Gateway password",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateGatewayPasswordInput,
       }),
       runtime,
     );
-    gatewayPassword = String(password).trim();
+    gatewayPassword = String(password ?? "").trim();
+  }
+
+  if (authMode === "trusted-proxy") {
+    note(
+      [
+        "Trusted proxy mode: OpenClaw trusts user identity from a reverse proxy.",
+        "The proxy must authenticate users and pass identity via headers.",
+        "Only requests from specified proxy IPs will be trusted.",
+        "",
+        "Common use cases: Pomerium, Caddy + OAuth, Traefik + forward auth",
+        "Docs: https://docs.openclaw.ai/gateway/trusted-proxy-auth",
+      ].join("\n"),
+      "Trusted Proxy Auth",
+    );
+
+    const userHeader = guardCancel(
+      await text({
+        message: "Header containing user identity",
+        placeholder: "x-forwarded-user",
+        initialValue: "x-forwarded-user",
+        validate: (value) => (value?.trim() ? undefined : "User header is required"),
+      }),
+      runtime,
+    );
+
+    const requiredHeadersRaw = guardCancel(
+      await text({
+        message: "Required headers (comma-separated, optional)",
+        placeholder: "x-forwarded-proto,x-forwarded-host",
+      }),
+      runtime,
+    );
+    const requiredHeaders = requiredHeadersRaw
+      ? String(requiredHeadersRaw)
+          .split(",")
+          .map((h) => h.trim())
+          .filter(Boolean)
+      : [];
+
+    const allowUsersRaw = guardCancel(
+      await text({
+        message: "Allowed users (comma-separated, blank = all authenticated users)",
+        placeholder: "nick@example.com,admin@company.com",
+      }),
+      runtime,
+    );
+    const allowUsers = allowUsersRaw
+      ? String(allowUsersRaw)
+          .split(",")
+          .map((u) => u.trim())
+          .filter(Boolean)
+      : [];
+
+    const trustedProxiesRaw = guardCancel(
+      await text({
+        message: "Trusted proxy IPs (comma-separated)",
+        placeholder: "10.0.1.10,192.168.1.5",
+        validate: (value) => {
+          if (!value || String(value).trim() === "") {
+            return "At least one trusted proxy IP is required";
+          }
+          return undefined;
+        },
+      }),
+      runtime,
+    );
+    trustedProxies = String(trustedProxiesRaw)
+      .split(",")
+      .map((ip) => ip.trim())
+      .filter(Boolean);
+
+    trustedProxyConfig = {
+      userHeader: String(userHeader).trim(),
+      requiredHeaders: requiredHeaders.length > 0 ? requiredHeaders : undefined,
+      allowUsers: allowUsers.length > 0 ? allowUsers : undefined,
+    };
   }
 
   const authConfig = buildGatewayAuthConfig({
@@ -201,6 +304,7 @@ export async function promptGatewayConfig(
     mode: authMode,
     token: gatewayToken,
     password: gatewayPassword,
+    trustedProxy: trustedProxyConfig,
   });
 
   next = {
@@ -212,6 +316,7 @@ export async function promptGatewayConfig(
       bind,
       auth: authConfig,
       ...(customBindHost && { customBindHost }),
+      ...(trustedProxies && { trustedProxies }),
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,

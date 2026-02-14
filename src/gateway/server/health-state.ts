@@ -5,6 +5,7 @@ import { CONFIG_PATH, STATE_DIR, loadConfig } from "../../config/config.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { resolveGatewayAuth } from "../auth.js";
 
 let presenceVersion = 1;
 let healthVersion = 1;
@@ -20,6 +21,7 @@ export function buildGatewaySnapshot(): Snapshot {
   const scope = cfg.session?.scope ?? "per-sender";
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
+  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
   // Health is async; caller should await getHealthSnapshot and replace later if needed.
   const emptyHealth: unknown = {};
   return {
@@ -36,6 +38,7 @@ export function buildGatewaySnapshot(): Snapshot {
       mainSessionKey,
       scope,
     },
+    authMode: auth.mode,
   };
 }
 

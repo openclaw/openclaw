@@ -1,3 +1,4 @@
+import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoreFile } from "../types.js";
 
@@ -26,9 +27,17 @@ export type CronServiceDeps = {
   log: Logger;
   storePath: string;
   cronEnabled: boolean;
+  /** CronConfig for session retention settings. */
+  cronConfig?: CronConfig;
+  /** Default agent id for jobs without an agent id. */
+  defaultAgentId?: string;
+  /** Resolve session store path for a given agent id. */
+  resolveSessionStorePath?: (agentId?: string) => string;
+  /** Path to the session store (sessions.json) for reaper use. */
+  sessionStorePath?: string;
   enqueueSystemEvent: (text: string, opts?: { agentId?: string }) => void;
   requestHeartbeatNow: (opts?: { reason?: string }) => void;
-  runHeartbeatOnce?: (opts?: { reason?: string }) => Promise<HeartbeatRunResult>;
+  runHeartbeatOnce?: (opts?: { reason?: string; agentId?: string }) => Promise<HeartbeatRunResult>;
   runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{
     status: "ok" | "error" | "skipped";
     summary?: string;
@@ -37,6 +46,12 @@ export type CronServiceDeps = {
     error?: string;
     sessionId?: string;
     sessionKey?: string;
+    /**
+     * `true` when the isolated run already delivered its output to the target
+     * channel (including matching messaging-tool sends). See:
+     * https://github.com/openclaw/openclaw/issues/15692
+     */
+    delivered?: boolean;
   }>;
   onEvent?: (evt: CronEvent) => void;
 };

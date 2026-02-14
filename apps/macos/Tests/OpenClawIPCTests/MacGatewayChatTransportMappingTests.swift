@@ -12,7 +12,8 @@ import Testing
             uptimems: 123,
             configpath: nil,
             statedir: nil,
-            sessiondefaults: nil)
+            sessiondefaults: nil,
+            authmode: nil)
 
         let hello = HelloOk(
             type: "hello",

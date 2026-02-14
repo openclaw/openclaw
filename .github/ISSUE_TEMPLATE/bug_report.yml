@@ -1,0 +1,95 @@
+name: Bug report
+description: Report a defect or unexpected behavior in OpenClaw.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing this report. Keep it concise, reproducible, and evidence-based.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One-sentence statement of what is broken.
+      placeholder: After upgrading to 2026.2.13, Telegram thread replies fail with "reply target not found".
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Provide the shortest deterministic repro path.
+      placeholder: |
+        1. Configure channel X.
+        2. Send message Y.
+        3. Run command Z.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen if the bug does not exist.
+      placeholder: Agent posts a reply in the same thread.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead, including user-visible errors.
+      placeholder: No reply is posted; gateway logs "reply target not found".
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenClaw version
+      description: Exact version/build tested.
+      placeholder: 2026.2.13
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: OS and version where this occurs.
+      placeholder: macOS 15.4 / Ubuntu 24.04 / Windows 11
+    validations:
+      required: true
+  - type: input
+    id: install_method
+    attributes:
+      label: Install method
+      description: How OpenClaw was installed or launched.
+      placeholder: npm global / pnpm dev / docker / mac app
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshots, and evidence
+      description: Include redacted logs/screenshots/recordings that prove the behavior.
+      render: shell
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and severity
+      description: |
+        Explain who is affected, how severe it is, how often it happens, and the practical consequence.
+        Include:
+        - Affected users/systems/channels
+        - Severity (annoying, blocks workflow, data risk, etc.)
+        - Frequency (always/intermittent/edge case)
+        - Consequence (missed messages, failed onboarding, extra cost, etc.)
+      placeholder: |
+        Affected: Telegram group users on 2026.2.13
+        Severity: High (blocks replies)
+        Frequency: 100% repro
+        Consequence: Agents cannot respond in threads
+  - type: textarea
+    id: additional_information
+    attributes:
+      label: Additional information
+      description: Add any context that helps triage but does not fit above.
+      placeholder: Regression started after upgrade from 2026.2.12; temporary workaround is restarting gateway every 30m.

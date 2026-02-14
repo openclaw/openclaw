@@ -17,19 +17,19 @@ import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 const channel = "slack" as const;
 
 function setSlackDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.slack?.dm?.allowFrom) : undefined;
+  const existingAllowFrom = cfg.channels?.slack?.allowFrom ?? cfg.channels?.slack?.dm?.allowFrom;
+  const allowFrom = dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
   return {
     ...cfg,
     channels: {
       ...cfg.channels,
       slack: {
         ...cfg.channels?.slack,
+        dmPolicy,
+        ...(allowFrom ? { allowFrom } : {}),
         dm: {
           ...cfg.channels?.slack?.dm,
           enabled: cfg.channels?.slack?.dm?.enabled ?? true,
-          policy: dmPolicy,
-          ...(allowFrom ? { allowFrom } : {}),
         },
       },
     },
@@ -208,10 +208,10 @@ function setSlackAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawCo
       ...cfg.channels,
       slack: {
         ...cfg.channels?.slack,
+        allowFrom,
         dm: {
           ...cfg.channels?.slack?.dm,
           enabled: cfg.channels?.slack?.dm?.enabled ?? true,
-          allowFrom,
         },
       },
     },
@@ -236,7 +236,8 @@ async function promptSlackAllowFrom(params: {
       : resolveDefaultSlackAccountId(params.cfg);
   const resolved = resolveSlackAccount({ cfg: params.cfg, accountId });
   const token = resolved.config.userToken ?? resolved.config.botToken ?? "";
-  const existing = params.cfg.channels?.slack?.dm?.allowFrom ?? [];
+  const existing =
+    params.cfg.channels?.slack?.allowFrom ?? params.cfg.channels?.slack?.dm?.allowFrom ?? [];
   await params.prompter.note(
     [
       "Allowlist Slack DMs by username (we resolve to user ids).",
@@ -313,9 +314,10 @@ async function promptSlackAllowFrom(params: {
 const dmPolicy: ChannelOnboardingDmPolicy = {
   label: "Slack",
   channel,
-  policyKey: "channels.slack.dm.policy",
-  allowFromKey: "channels.slack.dm.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.slack?.dm?.policy ?? "pairing",
+  policyKey: "channels.slack.dmPolicy",
+  allowFromKey: "channels.slack.allowFrom",
+  getCurrent: (cfg) =>
+    cfg.channels?.slack?.dmPolicy ?? cfg.channels?.slack?.dm?.policy ?? "pairing",
   setPolicy: (cfg, policy) => setSlackDmPolicy(cfg, policy),
   promptAllowFrom: promptSlackAllowFrom,
 };

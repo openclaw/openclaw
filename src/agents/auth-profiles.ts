@@ -9,6 +9,7 @@ export {
   markAuthProfileGood,
   setAuthProfileOrder,
   upsertAuthProfile,
+  upsertAuthProfileWithLock,
 } from "./auth-profiles/profiles.js";
 export {
   repairOAuthProfileIdMismatch,

@@ -309,11 +309,7 @@ export async function handleDirectiveOnly(params: {
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (directives.hasThinkDirective && directives.thinkLevel) {
-    if (directives.thinkLevel === "off") {
-      delete sessionEntry.thinkingLevel;
-    } else {
-      sessionEntry.thinkingLevel = directives.thinkLevel;
-    }
+    sessionEntry.thinkingLevel = directives.thinkLevel;
   }
   if (shouldDowngradeXHigh) {
     sessionEntry.thinkingLevel = "high";
