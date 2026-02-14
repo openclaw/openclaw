@@ -40,8 +40,16 @@ function shouldUseCard(text: string): boolean {
   return false;
 }
 
+function stripSummarySpecialTags(text: string): string {
+  return text
+    .replace(/<at\b[^>]*\/>/gi, " ")
+    .replace(/<at\b[^>]*>([\s\S]*?)<\/at>/gi, "$1")
+    .replace(/<at\b[^>]*>/gi, " ")
+    .replace(/<\/at>/gi, " ");
+}
+
 function firstSentence(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const normalized = stripSummarySpecialTags(text).replace(/\s+/g, " ").trim();
   if (!normalized) {
     return "Generating ...";
   }

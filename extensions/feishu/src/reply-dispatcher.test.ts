@@ -9,6 +9,8 @@ const createCardEntityFeishu = vi.fn();
 const sendCardByCardIdFeishu = vi.fn();
 const updateCardElementContentFeishu = vi.fn();
 const updateCardSummaryFeishu = vi.fn();
+const closeStreamingModeFeishu = vi.fn();
+const deleteMessageFeishu = vi.fn();
 
 vi.mock("openclaw/plugin-sdk", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk")>("openclaw/plugin-sdk");
@@ -37,6 +39,8 @@ vi.mock("./send.js", () => ({
   sendCardByCardIdFeishu: (...args: unknown[]) => sendCardByCardIdFeishu(...args),
   updateCardElementContentFeishu: (...args: unknown[]) => updateCardElementContentFeishu(...args),
   updateCardSummaryFeishu: (...args: unknown[]) => updateCardSummaryFeishu(...args),
+  closeStreamingModeFeishu: (...args: unknown[]) => closeStreamingModeFeishu(...args),
+  deleteMessageFeishu: (...args: unknown[]) => deleteMessageFeishu(...args),
 }));
 
 const { createFeishuReplyDispatcher } = await import("./reply-dispatcher.js");
@@ -105,6 +109,8 @@ beforeEach(() => {
   sendCardByCardIdFeishu.mockReset();
   updateCardElementContentFeishu.mockReset();
   updateCardSummaryFeishu.mockReset();
+  closeStreamingModeFeishu.mockReset();
+  deleteMessageFeishu.mockReset();
 });
 
 describe("createFeishuReplyDispatcher message_sent hooks", () => {
@@ -193,5 +199,87 @@ describe("createFeishuReplyDispatcher message_sent hooks", () => {
       },
     );
     expect(updateCardElementContentFeishu).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createFeishuReplyDispatcher summary sanitization", () => {
+  it("filters <at ...> tags from card.summary while keeping card content unchanged", async () => {
+    setFeishuRuntime(createRuntime() as never);
+    createCardEntityFeishu.mockResolvedValue({ cardId: "card_1" });
+    sendCardByCardIdFeishu.mockResolvedValue({ messageId: "om_card", chatId: "oc_chat" });
+    updateCardElementContentFeishu.mockResolvedValue(undefined);
+    updateCardSummaryFeishu.mockResolvedValue(undefined);
+    closeStreamingModeFeishu.mockResolvedValue(undefined);
+
+    const { dispatcher, replyOptions } = createFeishuReplyDispatcher({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "app",
+            appSecret: "secret",
+            renderMode: "card",
+            streaming: true,
+            blockStreaming: false,
+          },
+        },
+      } as never,
+      agentId: "agent-main",
+      runtime: { log: () => {}, error: () => {} } as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+    });
+
+    await replyOptions.onModelSelected?.({} as never);
+
+    const text =
+      '<at id=ou_emma></at> <at user_id="ou_eric"/> 第2轮：先声夺人（人）\n到你了，接"人"！';
+    dispatcher.sendFinalReply({ text });
+    await dispatcher.waitForIdle();
+
+    expect(updateCardSummaryFeishu).toHaveBeenCalledTimes(1);
+    const summaryPayload = updateCardSummaryFeishu.mock.calls[0]?.[0] as {
+      summaryText: string;
+      content: string;
+    };
+    expect(summaryPayload.summaryText).not.toContain("<at");
+    expect(summaryPayload.summaryText).toContain("第2轮：先声夺人");
+    expect(summaryPayload.content).toContain("<at id=ou_emma></at>");
+  });
+
+  it("keeps inner mention text when stripping paired at-tags", async () => {
+    setFeishuRuntime(createRuntime() as never);
+    createCardEntityFeishu.mockResolvedValue({ cardId: "card_2" });
+    sendCardByCardIdFeishu.mockResolvedValue({ messageId: "om_card_2", chatId: "oc_chat" });
+    updateCardElementContentFeishu.mockResolvedValue(undefined);
+    updateCardSummaryFeishu.mockResolvedValue(undefined);
+    closeStreamingModeFeishu.mockResolvedValue(undefined);
+
+    const { dispatcher, replyOptions } = createFeishuReplyDispatcher({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "app",
+            appSecret: "secret",
+            renderMode: "card",
+            streaming: true,
+            blockStreaming: false,
+          },
+        },
+      } as never,
+      agentId: "agent-main",
+      runtime: { log: () => {}, error: () => {} } as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+    });
+
+    await replyOptions.onModelSelected?.({} as never);
+
+    dispatcher.sendFinalReply({ text: '<at id="ou_emma">Emma</at> 开始吧。' });
+    await dispatcher.waitForIdle();
+
+    const summaryPayload = updateCardSummaryFeishu.mock.calls[0]?.[0] as {
+      summaryText: string;
+    };
+    expect(summaryPayload.summaryText).toBe("Emma 开始吧。");
   });
 });
