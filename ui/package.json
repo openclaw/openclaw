@@ -11,6 +11,7 @@
   "dependencies": {
     "@noble/ed25519": "3.0.0",
     "dompurify": "^3.3.1",
+    "katex": "^0.16.28",
     "lit": "^3.3.2",
     "marked": "^17.0.2",
     "vite": "7.3.1"
