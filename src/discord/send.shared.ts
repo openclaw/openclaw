@@ -232,7 +232,7 @@ async function resolveChannelId(
 }
 
 // Discord message flag for silent/suppress notifications
-const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
+export const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 
 export function buildDiscordTextChunks(
   text: string,

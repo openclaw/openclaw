@@ -29,4 +29,15 @@ describe("polls", () => {
     expect(normalizePollDurationHours(999, { defaultHours: 24, maxHours: 48 })).toBe(48);
     expect(normalizePollDurationHours(1, { defaultHours: 24, maxHours: 48 })).toBe(1);
   });
+
+  it("rejects both durationSeconds and durationHours", () => {
+    expect(() =>
+      normalizePollInput({
+        question: "Q",
+        options: ["A", "B"],
+        durationSeconds: 60,
+        durationHours: 1,
+      }),
+    ).toThrow(/mutually exclusive/);
+  });
 });

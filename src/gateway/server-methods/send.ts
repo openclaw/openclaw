@@ -303,6 +303,25 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const channel = normalizedChannel ?? DEFAULT_CHAT_CHANNEL;
+    if (typeof request.durationSeconds === "number" && channel !== "telegram") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "durationSeconds is only supported for Telegram polls",
+        ),
+      );
+      return;
+    }
+    if (typeof request.isAnonymous === "boolean" && channel !== "telegram") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "isAnonymous is only supported for Telegram polls"),
+      );
+      return;
+    }
     const poll = {
       question: request.question,
       options: request.options,
