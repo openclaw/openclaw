@@ -317,4 +317,43 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads[0]?.text).toBe("");
     expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
+
+  it("emits lifecycle:error event on agent_end when last assistant message was an error", async () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-error",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "429 Rate limit exceeded",
+    } as AssistantMessage;
+
+    // Simulate message update to set lastAssistant
+    handler?.({ type: "message_update", message: assistantMessage });
+
+    // Trigger agent_end
+    handler?.({ type: "agent_end" });
+
+    // Look for lifecycle:error event
+    const lifecycleError = onAgentEvent.mock.calls.find(
+      (call) => call[0]?.stream === "lifecycle" && call[0]?.data?.phase === "error",
+    );
+
+    expect(lifecycleError).toBeDefined();
+    expect(lifecycleError[0].data.error).toContain("API rate limit reached");
+  });
 });

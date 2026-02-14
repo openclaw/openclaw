@@ -13,6 +13,8 @@ export function formatBillingErrorMessage(provider?: string): string {
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
+const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -461,6 +463,10 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
+  if (isRateLimitErrorMessage(raw)) {
+    return RATE_LIMIT_ERROR_USER_MESSAGE;
+  }
+
   if (isOverloadedErrorMessage(raw)) {
     return "The AI service is temporarily overloaded. Please try again in a moment.";
   }
@@ -517,7 +523,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
 
     if (ERROR_PREFIX_RE.test(trimmed)) {
-      if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
+      if (isRateLimitErrorMessage(trimmed)) {
+        return RATE_LIMIT_ERROR_USER_MESSAGE;
+      }
+      if (isOverloadedErrorMessage(trimmed)) {
         return "The AI service is temporarily overloaded. Please try again in a moment.";
       }
       if (isTimeoutErrorMessage(trimmed)) {
