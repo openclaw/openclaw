@@ -91,11 +91,11 @@ Token resolution is account-aware. Config token values win over env fallback. `D
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.discord.dm.policy` controls DM access:
+    `channels.discord.dmPolicy` controls DM access (legacy: `channels.discord.dm.policy`):
 
     - `pairing` (default)
     - `allowlist`
-    - `open` (requires `channels.discord.dm.allowFrom` to include `"*"`)
+    - `open` (requires `channels.discord.allowFrom` to include `"*"`; legacy: `channels.discord.dm.allowFrom`)
     - `disabled`
 
     If DM policy is not open, unknown users are blocked (or prompted for pairing in `pairing` mode).
@@ -545,7 +545,7 @@ openclaw logs --follow
   <Accordion title="DM and pairing issues">
 
     - DM disabled: `channels.discord.dm.enabled=false`
-    - DM policy disabled: `channels.discord.dm.policy="disabled"`
+    - DM policy disabled: `channels.discord.dmPolicy="disabled"` (legacy: `channels.discord.dm.policy`)
     - awaiting pairing approval in `pairing` mode
 
   </Accordion>
