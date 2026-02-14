@@ -2,19 +2,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
-  filterToolsByPolicy,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
 } from "../agents/pi-tools.policy.js";
-import {
-  buildPluginToolGroups,
-  collectExplicitAllowlist,
-  expandPolicyWithPluginGroups,
-  normalizeToolName,
-  resolveToolProfilePolicy,
-  stripPluginOnlyAllowlist,
-} from "../agents/tool-policy.js";
+import { applyToolPolicyPipeline } from "../agents/tool-policy-pipeline.js";
+import { collectExplicitAllowlist, resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -259,74 +252,47 @@ export async function handleToolsInvokeHttpRequest(
     ]),
   });
 
-  const coreToolNames = new Set(
-    allTools
-      // oxlint-disable-next-line typescript/no-explicit-any
-      .filter((tool) => !getPluginToolMeta(tool as any))
-      .map((tool) => normalizeToolName(tool.name))
-      .filter(Boolean),
-  );
-  const pluginGroups = buildPluginToolGroups({
-    tools: allTools,
+  const subagentFiltered = applyToolPolicyPipeline({
+    // oxlint-disable-next-line typescript/no-explicit-any
+    tools: allTools as any,
     // oxlint-disable-next-line typescript/no-explicit-any
     toolMeta: (tool) => getPluginToolMeta(tool as any),
+    warn: logWarn,
+    steps: [
+      {
+        policy: profilePolicyWithAlsoAllow,
+        label: profile ? `tools.profile (${profile})` : "tools.profile",
+        stripPluginOnlyAllowlist: true,
+      },
+      {
+        policy: providerProfilePolicyWithAlsoAllow,
+        label: providerProfile
+          ? `tools.byProvider.profile (${providerProfile})`
+          : "tools.byProvider.profile",
+        stripPluginOnlyAllowlist: true,
+      },
+      { policy: globalPolicy, label: "tools.allow", stripPluginOnlyAllowlist: true },
+      {
+        policy: globalProviderPolicy,
+        label: "tools.byProvider.allow",
+        stripPluginOnlyAllowlist: true,
+      },
+      {
+        policy: agentPolicy,
+        label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
+        stripPluginOnlyAllowlist: true,
+      },
+      {
+        policy: agentProviderPolicy,
+        label: agentId
+          ? `agents.${agentId}.tools.byProvider.allow`
+          : "agent tools.byProvider.allow",
+        stripPluginOnlyAllowlist: true,
+      },
+      { policy: groupPolicy, label: "group tools.allow", stripPluginOnlyAllowlist: true },
+      { policy: subagentPolicy, label: "subagent tools.allow" },
+    ],
   });
-  const resolvePolicy = (policy: typeof profilePolicy, label: string) => {
-    const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
-    if (resolved.unknownAllowlist.length > 0) {
-      const entries = resolved.unknownAllowlist.join(", ");
-      const suffix = resolved.strippedAllowlist
-        ? "Ignoring allowlist so core tools remain available. Use tools.alsoAllow for additive plugin tool enablement."
-        : "These entries won't match any tool unless the plugin is enabled.";
-      logWarn(`tools: ${label} allowlist contains unknown entries (${entries}). ${suffix}`);
-    }
-    return expandPolicyWithPluginGroups(resolved.policy, pluginGroups);
-  };
-  const profilePolicyExpanded = resolvePolicy(
-    profilePolicyWithAlsoAllow,
-    profile ? `tools.profile (${profile})` : "tools.profile",
-  );
-  const providerProfileExpanded = resolvePolicy(
-    providerProfilePolicyWithAlsoAllow,
-    providerProfile ? `tools.byProvider.profile (${providerProfile})` : "tools.byProvider.profile",
-  );
-  const globalPolicyExpanded = resolvePolicy(globalPolicy, "tools.allow");
-  const globalProviderExpanded = resolvePolicy(globalProviderPolicy, "tools.byProvider.allow");
-  const agentPolicyExpanded = resolvePolicy(
-    agentPolicy,
-    agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-  );
-  const agentProviderExpanded = resolvePolicy(
-    agentProviderPolicy,
-    agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
-  );
-  const groupPolicyExpanded = resolvePolicy(groupPolicy, "group tools.allow");
-  const subagentPolicyExpanded = expandPolicyWithPluginGroups(subagentPolicy, pluginGroups);
-
-  const toolsFiltered = profilePolicyExpanded
-    ? filterToolsByPolicy(allTools, profilePolicyExpanded)
-    : allTools;
-  const providerProfileFiltered = providerProfileExpanded
-    ? filterToolsByPolicy(toolsFiltered, providerProfileExpanded)
-    : toolsFiltered;
-  const globalFiltered = globalPolicyExpanded
-    ? filterToolsByPolicy(providerProfileFiltered, globalPolicyExpanded)
-    : providerProfileFiltered;
-  const globalProviderFiltered = globalProviderExpanded
-    ? filterToolsByPolicy(globalFiltered, globalProviderExpanded)
-    : globalFiltered;
-  const agentFiltered = agentPolicyExpanded
-    ? filterToolsByPolicy(globalProviderFiltered, agentPolicyExpanded)
-    : globalProviderFiltered;
-  const agentProviderFiltered = agentProviderExpanded
-    ? filterToolsByPolicy(agentFiltered, agentProviderExpanded)
-    : agentFiltered;
-  const groupFiltered = groupPolicyExpanded
-    ? filterToolsByPolicy(agentProviderFiltered, groupPolicyExpanded)
-    : agentProviderFiltered;
-  const subagentFiltered = subagentPolicyExpanded
-    ? filterToolsByPolicy(groupFiltered, subagentPolicyExpanded)
-    : groupFiltered;
 
   // Gateway HTTP-specific deny list — applies to ALL sessions via HTTP.
   const gatewayToolsCfg = cfg.gateway?.tools;
