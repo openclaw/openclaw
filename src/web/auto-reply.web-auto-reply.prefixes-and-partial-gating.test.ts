@@ -1,11 +1,9 @@
 import "./test-helpers.js";
-import fs from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
-  makeSessionStore,
   resetLoadConfigMock,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
