@@ -1,10 +1,16 @@
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
-import { createActionGate, jsonResult, readStringParam } from "../../../agents/tools/common.js";
+import {
+  createActionGate,
+  jsonResult,
+  readStringArrayParam,
+  readStringParam,
+} from "../../../agents/tools/common.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "../../../signal/accounts.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { sendReactionSignal, removeReactionSignal } from "../../../signal/send-reactions.js";
 import {
   sendRemoteDeleteSignal,
+  sendPollCreateSignal,
   sendPollVoteSignal,
   sendPollTerminateSignal,
 } from "../../../signal/send.js";
@@ -68,6 +74,13 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     );
     if (unsendEnabled) {
       actions.add("unsend");
+    }
+
+    const pollEnabled = configuredAccounts.some((account) =>
+      createActionGate(account.config.actions)("poll"),
+    );
+    if (pollEnabled) {
+      actions.add("poll");
     }
 
     const pollVoteEnabled = configuredAccounts.some((account) =>
@@ -204,6 +217,49 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       return jsonResult({ ok: true, deleted: messageId });
     }
 
+    if (action === "poll") {
+      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
+      const isActionEnabled = createActionGate(actionConfig);
+      if (!isActionEnabled("poll")) {
+        throw new Error("Signal poll creation is disabled via actions.poll.");
+      }
+
+      const recipientRaw =
+        readStringParam(params, "recipient") ??
+        readStringParam(params, "to", {
+          required: true,
+          label: "recipient (UUID, phone number, or group)",
+        });
+      const target = resolveSignalReactionTarget(recipientRaw);
+      if (!target.recipient && !target.groupId) {
+        throw new Error("recipient or group required");
+      }
+
+      const question = readStringParam(params, "pollQuestion", {
+        required: true,
+      });
+      const options =
+        readStringArrayParam(params, "pollOption", {
+          required: true,
+        }) ?? [];
+      const allowMultiple = typeof params.pollMulti === "boolean" ? params.pollMulti : true;
+
+      const result = await sendPollCreateSignal(recipientRaw, {
+        question,
+        options,
+        allowMultiple,
+        accountId: accountId ?? undefined,
+      });
+
+      return jsonResult({
+        ok: true,
+        messageId: result.messageId,
+        question,
+        options,
+        allowMultiple,
+      });
+    }
+
     if (action === "pollVote") {
       const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
       const isActionEnabled = createActionGate(actionConfig);
@@ -240,15 +296,15 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       }
 
       const optionIndexes = pollOptions.map((opt) => {
-        const idx = Number(opt);
-        if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
+        const idx = typeof opt === "number" ? opt : parseInt(String(opt), 10);
+        if (!Number.isFinite(idx) || idx < 0) {
           throw new Error(`Invalid poll option index: ${opt}`);
         }
         return idx;
       });
 
-      const timestamp = Number(messageId);
-      if (!Number.isFinite(timestamp) || !Number.isInteger(timestamp) || timestamp <= 0) {
+      const timestamp = parseInt(messageId, 10);
+      if (!Number.isFinite(timestamp) || timestamp <= 0) {
         throw new Error(`Invalid messageId: ${messageId}. Expected positive numeric timestamp.`);
       }
 

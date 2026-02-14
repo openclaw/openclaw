@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sendRemoteDeleteSignal, sendPollVoteSignal, sendPollTerminateSignal } from "./send.js";
+import {
+  sendRemoteDeleteSignal,
+  sendPollCreateSignal,
+  sendPollVoteSignal,
+  sendPollTerminateSignal,
+} from "./send.js";
 
 const rpcMock = vi.fn();
 
@@ -75,6 +80,70 @@ describe("sendRemoteDeleteSignal", () => {
   it("returns true on successful delete", async () => {
     const result = await sendRemoteDeleteSignal("+15551234567", 1234567890);
     expect(result).toBe(true);
+  });
+});
+
+describe("sendPollCreateSignal", () => {
+  beforeEach(() => {
+    rpcMock.mockReset().mockResolvedValue({ timestamp: 9999999999 });
+  });
+
+  it("sends poll create with correct RPC params for recipient target", async () => {
+    await sendPollCreateSignal("+15551234567", {
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "sendPollCreate",
+      expect.objectContaining({
+        recipient: ["+15551234567"],
+        question: "Lunch?",
+        option: ["Pizza", "Sushi"],
+        noMulti: false,
+        account: "+15550001111",
+      }),
+      expect.objectContaining({
+        baseUrl: "http://signal.local",
+      }),
+    );
+  });
+
+  it("sends poll create for group target", async () => {
+    await sendPollCreateSignal("group:abc123", {
+      question: "Lunch?",
+      options: ["Pizza", "Sushi", "Tacos"],
+      allowMultiple: false,
+    });
+
+    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(params.groupId).toBe("abc123");
+    expect(params.question).toBe("Lunch?");
+    expect(params.option).toEqual(["Pizza", "Sushi", "Tacos"]);
+    expect(params.noMulti).toBe(true);
+    expect(params.recipient).toBeUndefined();
+  });
+
+  it("rejects poll create with empty question", async () => {
+    await expect(
+      sendPollCreateSignal("+15551234567", {
+        question: "   ",
+        options: ["Pizza", "Sushi"],
+      }),
+    ).rejects.toThrow("Poll question is required");
+
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects poll create with fewer than two options", async () => {
+    await expect(
+      sendPollCreateSignal("+15551234567", {
+        question: "Lunch?",
+        options: ["Pizza"],
+      }),
+    ).rejects.toThrow("At least two poll options are required");
+
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 });
 

@@ -64,11 +64,12 @@ Name lookup:
   - WhatsApp only: `--gif-playback`
 
 - `poll`
-  - Channels: WhatsApp/Telegram/Discord/Matrix/MS Teams
+  - Channels: WhatsApp/Telegram/Discord/Matrix/MS Teams/Signal
   - Required: `--target`, `--poll-question`, `--poll-option` (repeat)
   - Optional: `--poll-multi`
   - Discord only: `--poll-duration-hours`, `--silent`, `--message`
   - Telegram only: `--poll-duration-seconds` (5-600), `--silent`, `--poll-anonymous` / `--poll-public`, `--thread-id`
+  - Signal: creates a poll via `sendPollCreate` RPC
 
 - `react`
   - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp/Signal
@@ -240,6 +241,16 @@ openclaw message poll --channel msteams \
   --target conversation:19:abc@thread.tacv2 \
   --poll-question "Lunch?" \
   --poll-option Pizza --poll-option Sushi
+```
+
+Create a Signal poll:
+
+```
+openclaw message poll --channel signal \
+  --target +15551234567 \
+  --poll-question "Lunch?" \
+  --poll-option Pizza --poll-option Sushi \
+  --poll-multi
 ```
 
 React in Slack:

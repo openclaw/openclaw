@@ -5,6 +5,7 @@ import { signalMessageActions } from "./signal.js";
 const sendReactionSignal = vi.fn(async () => ({ ok: true }));
 const removeReactionSignal = vi.fn(async () => ({ ok: true }));
 const sendRemoteDeleteSignal = vi.fn(async () => true);
+const sendPollCreateSignal = vi.fn(async () => ({ messageId: "999", timestamp: 999 }));
 const sendPollVoteSignal = vi.fn(async () => ({ messageId: "999", timestamp: 999 }));
 const sendPollTerminateSignal = vi.fn(async () => ({ messageId: "999", timestamp: 999 }));
 
@@ -15,6 +16,7 @@ vi.mock("../../../signal/send-reactions.js", () => ({
 
 vi.mock("../../../signal/send.js", () => ({
   sendRemoteDeleteSignal: (...args: unknown[]) => sendRemoteDeleteSignal(...args),
+  sendPollCreateSignal: (...args: unknown[]) => sendPollCreateSignal(...args),
   sendPollVoteSignal: (...args: unknown[]) => sendPollVoteSignal(...args),
   sendPollTerminateSignal: (...args: unknown[]) => sendPollTerminateSignal(...args),
 }));
@@ -32,6 +34,7 @@ describe("signalMessageActions", () => {
     expect(signalMessageActions.listActions({ cfg })).toEqual([
       "send",
       "unsend",
+      "poll",
       "pollVote",
       "pollClose",
     ]);
@@ -52,6 +55,7 @@ describe("signalMessageActions", () => {
       "send",
       "react",
       "unsend",
+      "poll",
       "pollVote",
       "pollClose",
     ]);
@@ -269,13 +273,99 @@ describe("signalMessageActions", () => {
     ).rejects.toThrow(/Failed to delete/);
   });
 
-  it("enables pollVote and pollClose by default", () => {
+  it("enables poll, pollVote, and pollClose by default", () => {
     const cfg = {
       channels: { signal: { account: "+15550001111" } },
     } as OpenClawConfig;
     const actions = signalMessageActions.listActions({ cfg });
+    expect(actions).toContain("poll");
     expect(actions).toContain("pollVote");
     expect(actions).toContain("pollClose");
+  });
+
+  it("hides poll when disabled", () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111", actions: { poll: false } } },
+    } as OpenClawConfig;
+    const actions = signalMessageActions.listActions({ cfg });
+    expect(actions).not.toContain("poll");
+  });
+
+  it("handles poll action", async () => {
+    sendPollCreateSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    const result = await signalMessageActions.handleAction({
+      action: "poll",
+      params: {
+        to: "+15551234567",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+        pollMulti: false,
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendPollCreateSignal).toHaveBeenCalledWith("+15551234567", {
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      allowMultiple: false,
+      accountId: undefined,
+    });
+    expect(result.details).toMatchObject({
+      ok: true,
+      messageId: "999",
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      allowMultiple: false,
+    });
+  });
+
+  it("defaults poll action to allow multiple selections", async () => {
+    sendPollCreateSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    await signalMessageActions.handleAction({
+      action: "poll",
+      params: {
+        to: "+15551234567",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendPollCreateSignal).toHaveBeenCalledWith("+15551234567", {
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      allowMultiple: true,
+      accountId: undefined,
+    });
+  });
+
+  it("rejects poll when action is disabled", async () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111", actions: { poll: false } } },
+    } as OpenClawConfig;
+
+    await expect(
+      signalMessageActions.handleAction({
+        action: "poll",
+        params: {
+          to: "+15551234567",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza", "Sushi"],
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).rejects.toThrow(/actions\.poll/);
   });
 
   it("hides pollVote when disabled", () => {

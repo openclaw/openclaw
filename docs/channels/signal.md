@@ -260,10 +260,17 @@ Config:
 - `channels.signal.actions.unsend`: enable/disable unsend actions (default true).
 - Per-account override: `channels.signal.accounts.<id>.actions.unsend`.
 
-## Poll vote/close (message tool)
+## Poll create/vote/close (message tool)
 
+- Use `message action=poll` to create a poll.
 - Use `message action=pollVote` to vote in a poll.
 - Use `message action=pollClose` to close a poll (only the poll creator can close).
+
+**Poll create requirements:**
+
+- `pollQuestion`: poll question text.
+- `pollOption`: array of 2+ option strings.
+- `pollMulti` (optional): `true` to allow multiple selections (default true), `false` for single-select.
 
 **Poll vote requirements:**
 
@@ -279,6 +286,8 @@ Config:
 Examples:
 
 ```
+message action=poll channel=signal target=+15551234567 pollQuestion="Lunch?" pollOption=["Pizza","Sushi"] pollMulti=true
+message action=poll channel=signal target=signal:group:<groupId> pollQuestion="Where to meet?" pollOption=["Cafe","Office"] pollMulti=false
 message action=pollVote channel=signal target=+15551234567 messageId=1737630212345 targetAuthor=+15559999999 pollOption=[0,2]
 message action=pollVote channel=signal target=signal:group:<groupId> messageId=1737630212345 targetAuthor=uuid:<creator-uuid> pollOption=[1]
 message action=pollClose channel=signal target=+15551234567 messageId=1737630212345
@@ -287,9 +296,10 @@ message action=pollClose channel=signal target=signal:group:<groupId> messageId=
 
 Config:
 
+- `channels.signal.actions.poll`: enable/disable poll create actions (default true).
 - `channels.signal.actions.pollVote`: enable/disable poll vote actions (default true).
 - `channels.signal.actions.pollClose`: enable/disable poll close actions (default true).
-- Per-account overrides: `channels.signal.accounts.<id>.actions.pollVote`, `channels.signal.accounts.<id>.actions.pollClose`.
+- Per-account overrides: `channels.signal.accounts.<id>.actions.poll`, `channels.signal.accounts.<id>.actions.pollVote`, `channels.signal.accounts.<id>.actions.pollClose`.
 
 ## Delivery targets (CLI/cron)
 

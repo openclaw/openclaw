@@ -278,6 +278,51 @@ export async function sendRemoteDeleteSignal(
   return true;
 }
 
+export type PollCreateOpts = SignalRpcOpts & {
+  question: string;
+  options: string[];
+  allowMultiple?: boolean;
+};
+
+export async function sendPollCreateSignal(
+  to: string,
+  opts: PollCreateOpts,
+): Promise<SignalSendResult> {
+  if (!opts.question?.trim()) {
+    throw new Error("Poll question is required");
+  }
+  if (!opts.options || opts.options.length < 2) {
+    throw new Error("At least two poll options are required");
+  }
+  const { baseUrl, account } = resolveSignalRpcContext(opts);
+  const targetParams = buildTargetParams(parseTarget(to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Invalid poll create target");
+  }
+  const params: Record<string, unknown> = {
+    ...targetParams,
+    question: opts.question,
+    option: opts.options,
+    noMulti: !(opts.allowMultiple ?? true),
+  };
+  if (account) {
+    params.account = account;
+  }
+  const result = await signalRpcRequest<{ timestamp?: number }>("sendPollCreate", params, {
+    baseUrl,
+    timeoutMs: opts.timeoutMs,
+  });
+  const timestamp = result?.timestamp;
+  return {
+    messageId: timestamp ? String(timestamp) : "unknown",
+    timestamp,
+  };
+}
+
 export type PollVoteOpts = SignalRpcOpts & {
   pollAuthor: string;
   pollTimestamp: number;
