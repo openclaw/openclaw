@@ -207,8 +207,10 @@ export const VoiceCallTunnelConfigSchema = z
     ngrokDomain: z.string().min(1).optional(),
     /**
      * Allow ngrok free tier compatibility mode.
-     * When true, signature verification failures on ngrok-free.app URLs
-     * will be allowed only for loopback requests (ngrok local agent).
+     * When true, forwarded headers may be trusted for loopback requests
+     * to reconstruct the public ngrok URL used for signing.
+     *
+     * IMPORTANT: This does NOT bypass signature verification.
      */
     allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
   })
