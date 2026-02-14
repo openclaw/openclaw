@@ -78,6 +78,22 @@ describe("runMessageAction", () => {
     expect(exitMock).not.toHaveBeenCalledWith(0);
   });
 
+  it("does not call exit(0) if the error path returns", async () => {
+    messageCommandMock.mockRejectedValueOnce(new Error("boom"));
+    exitMock.mockReset().mockImplementation(() => undefined as never);
+    const fakeCommand = { help: vi.fn() } as never;
+    const { runMessageAction } = createMessageCliHelpers(fakeCommand, "discord");
+
+    await expect(
+      runMessageAction("send", { channel: "discord", target: "123", message: "hi" }),
+    ).resolves.toBeUndefined();
+
+    expect(errorMock).toHaveBeenCalledWith("Error: boom");
+    expect(exitMock).toHaveBeenCalledOnce();
+    expect(exitMock).toHaveBeenCalledWith(1);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
+  });
+
   it("passes action and maps account to accountId", async () => {
     const fakeCommand = { help: vi.fn() } as never;
     const { runMessageAction } = createMessageCliHelpers(fakeCommand, "discord");
