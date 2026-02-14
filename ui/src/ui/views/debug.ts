@@ -29,6 +29,7 @@ type SnapshotEntry = {
 };
 
 let selectedSnapshot: string | null = null;
+let selectedEventIndex: number | null = null;
 
 function countKeys(data: unknown): number {
   if (!data || typeof data !== "object") return 0;
@@ -149,30 +150,59 @@ export function renderDebug(props: DebugProps) {
       </div>
     </section>
 
-    <section class="card" style="margin-top: 18px; padding: 0;">
-      <div style="padding: 12px 14px; border-bottom: 1px solid var(--border);">
-        <div class="card-title">Event Log</div>
-        <div class="card-sub">Latest gateway events.</div>
+    <section class="card" style="margin-top: 12px; padding: 0;">
+      <div style="padding: 12px 14px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <div class="card-title">Event Log</div>
+          <div class="card-sub">Latest gateway events.</div>
+        </div>
       </div>
       ${
         props.eventLog.length === 0
           ? html`<div class="muted" style="padding: 12px 14px;">No events yet.</div>`
           : html`
-            <div class="debug-snapshot-header">
-              <div class="debug-snapshot-cell" style="flex: 0 0 90px;">Time</div>
-              <div class="debug-snapshot-cell" style="flex: 1;">Event</div>
-            </div>
-            ${props.eventLog.map(
-              (evt) => html`
-                <div class="debug-snapshot-row" style="cursor: default;">
-                  <div class="mono" style="flex: 0 0 90px; color: var(--muted); font-size: 11px;">${new Date(evt.ts).toLocaleTimeString()}</div>
-                  <div style="flex: 1;">
-                    <div style="font-weight: 500; font-size: 12px;">${evt.event}</div>
-                    <div style="margin-top: 4px;">${renderJsonBlock(evt.payload)}</div>
+            <div class="logs-split ${selectedEventIndex !== null ? "logs-split--open" : ""}">
+              <div style="flex: 1; min-width: 0; overflow: hidden;">
+                <div class="log-stream" style="max-height: 400px;">
+                  <div class="log-header" style="grid-template-columns: 90px minmax(120px, 200px) minmax(0, 1fr);">
+                    <div class="log-header-cell">Time</div>
+                    <div class="log-header-cell">Event</div>
+                    <div class="log-header-cell">Payload</div>
+                  </div>
+                  ${props.eventLog.map((evt, i) => html`
+                    <div class="log-row ${selectedEventIndex === i ? "selected" : ""}"
+                      style="grid-template-columns: 90px minmax(120px, 200px) minmax(0, 1fr);"
+                      @click=${() => { selectedEventIndex = i; requestUpdate(); }}>
+                      <div class="log-time mono">${new Date(evt.ts).toLocaleTimeString()}</div>
+                      <div class="mono" style="font-weight: 500; font-size: 12px;">${evt.event}</div>
+                      <div class="log-message mono">${formatEventPayload(evt.payload)}</div>
+                    </div>
+                  `)}
+                </div>
+              </div>
+              ${selectedEventIndex !== null && props.eventLog[selectedEventIndex] ? html`
+                <div class="log-detail">
+                  <div class="log-detail-header">
+                    <div class="card-title" style="font-size: 13px;">${props.eventLog[selectedEventIndex].event}</div>
+                    <button class="btn btn--sm" @click=${() => { selectedEventIndex = null; requestUpdate(); }}>✕</button>
+                  </div>
+                  <div class="log-detail-fields">
+                    <div class="log-detail-field">
+                      <div class="log-detail-label">Time</div>
+                      <div class="log-detail-value mono">${new Date(props.eventLog[selectedEventIndex].ts).toISOString()}</div>
+                    </div>
+                    <div class="log-detail-field">
+                      <div class="log-detail-label">Event</div>
+                      <div class="log-detail-value mono">${props.eventLog[selectedEventIndex].event}</div>
+                    </div>
+                    <div class="log-detail-field">
+                      <div class="log-detail-label">Payload</div>
+                      ${renderJsonBlock(props.eventLog[selectedEventIndex].payload)}
+                    </div>
                   </div>
                 </div>
-              `,
-            )}
+              ` : nothing}
+            </div>
           `
       }
     </section>
