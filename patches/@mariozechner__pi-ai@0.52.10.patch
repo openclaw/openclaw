@@ -1,0 +1,48 @@
+diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
+index 8886935a1258586a4ccd06ff6a9e0587d4aa4c11..e79d1eaff7de2a1deacf1e372b3a4d847119dd6e 100644
+--- a/dist/providers/google-shared.js
++++ b/dist/providers/google-shared.js
+@@ -118,15 +118,23 @@ export function convertMessages(model, context) {
+                     // Skip empty thinking blocks
+                     if (!block.thinking || block.thinking.trim() === "")
+                         continue;
+-                    // Only keep as thinking block if same provider AND same model
+-                    // Otherwise convert to plain text (no tags to avoid model mimicking them)
++                    // Only keep as thinking block if same provider AND same model AND has valid signature.
++                    // Without a valid signature, convert to plain text to prevent API errors
++                    // (e.g. Anthropic requires 'signature' field on thinking blocks via Antigravity proxy).
+                     if (isSameProviderAndModel) {
+                         const thoughtSignature = resolveThoughtSignature(isSameProviderAndModel, block.thinkingSignature);
+-                        parts.push({
+-                            thought: true,
+-                            text: sanitizeSurrogates(block.thinking),
+-                            ...(thoughtSignature && { thoughtSignature }),
+-                        });
++                        if (thoughtSignature) {
++                            parts.push({
++                                thought: true,
++                                text: sanitizeSurrogates(block.thinking),
++                                thoughtSignature,
++                            });
++                        }
++                        else {
++                            parts.push({
++                                text: sanitizeSurrogates(block.thinking),
++                            });
++                        }
+                     }
+                     else {
+                         parts.push({
+diff --git a/dist/providers/transform-messages.js b/dist/providers/transform-messages.js
+index 3d29acb1eea69db48ab6f60517b738087697b3d4..d59fc6cd3dc50fc2ad64ed32578b413a7d2bf741 100644
+--- a/dist/providers/transform-messages.js
++++ b/dist/providers/transform-messages.js
+@@ -35,8 +35,6 @@ export function transformMessages(messages, model, normalizeToolCallId) {
+                     // Skip empty thinking blocks, convert others to plain text
+                     if (!block.thinking || block.thinking.trim() === "")
+                         return [];
+-                    if (isSameModel)
+-                        return block;
+                     return {
+                         type: "text",
+                         text: block.thinking,
