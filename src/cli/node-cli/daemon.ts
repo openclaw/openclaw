@@ -12,13 +12,16 @@ import {
 } from "../../daemon/constants.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
-import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
-import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
-import { isWSL } from "../../infra/wsl.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
+import {
+  runServiceRestart,
+  runServiceStart,
+  runServiceStop,
+  runServiceUninstall,
+} from "../daemon-cli/lifecycle-core.js";
 import {
   buildDaemonServiceSnapshot,
   createNullWriter,
@@ -228,290 +231,38 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 }
 
 export async function runNodeDaemonUninstall(opts: NodeDaemonLifecycleOptions = {}) {
-  const json = Boolean(opts.json);
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "uninstall", ...payload });
-  };
-  const fail = (message: string) => {
-    if (json) {
-      emit({ ok: false, error: message });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
-
-  if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; service uninstall is disabled.");
-    return;
-  }
-
-  const service = resolveNodeService();
-  try {
-    await service.uninstall({ env: process.env, stdout });
-  } catch (err) {
-    fail(`Node uninstall failed: ${String(err)}`);
-    return;
-  }
-
-  let loaded = false;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  emit({
-    ok: true,
-    result: "uninstalled",
-    service: buildDaemonServiceSnapshot(service, loaded),
+  return await runServiceUninstall({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    opts,
+    stopBeforeUninstall: false,
+    assertNotLoadedAfterUninstall: false,
   });
 }
 
 export async function runNodeDaemonStart(opts: NodeDaemonLifecycleOptions = {}) {
-  const json = Boolean(opts.json);
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    hints?: string[];
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "start", ...payload });
-  };
-  const fail = (message: string, hints?: string[]) => {
-    if (json) {
-      emit({ ok: false, error: message, hints });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
-
-  const service = resolveNodeService();
-  let loaded = false;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
-    return;
-  }
-  if (!loaded) {
-    let hints = renderNodeServiceStartHints();
-    if (process.platform === "linux") {
-      const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
-      if (!systemdAvailable) {
-        hints = [...hints, ...renderSystemdUnavailableHints({ wsl: await isWSL() })];
-      }
-    }
-    emit({
-      ok: true,
-      result: "not-loaded",
-      message: `Node service ${service.notLoadedText}.`,
-      hints,
-      service: buildDaemonServiceSnapshot(service, loaded),
-    });
-    if (!json) {
-      defaultRuntime.log(`Node service ${service.notLoadedText}.`);
-      for (const hint of hints) {
-        defaultRuntime.log(`Start with: ${hint}`);
-      }
-    }
-    return;
-  }
-  try {
-    await service.restart({ env: process.env, stdout });
-  } catch (err) {
-    const hints = renderNodeServiceStartHints();
-    fail(`Node start failed: ${String(err)}`, hints);
-    return;
-  }
-
-  let started = true;
-  try {
-    started = await service.isLoaded({ env: process.env });
-  } catch {
-    started = true;
-  }
-  emit({
-    ok: true,
-    result: "started",
-    service: buildDaemonServiceSnapshot(service, started),
+  return await runServiceStart({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    renderStartHints: renderNodeServiceStartHints,
+    opts,
   });
 }
 
 export async function runNodeDaemonRestart(opts: NodeDaemonLifecycleOptions = {}) {
-  const json = Boolean(opts.json);
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    hints?: string[];
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "restart", ...payload });
-  };
-  const fail = (message: string, hints?: string[]) => {
-    if (json) {
-      emit({ ok: false, error: message, hints });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
-
-  const service = resolveNodeService();
-  let loaded = false;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
-    return;
-  }
-  if (!loaded) {
-    let hints = renderNodeServiceStartHints();
-    if (process.platform === "linux") {
-      const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
-      if (!systemdAvailable) {
-        hints = [...hints, ...renderSystemdUnavailableHints({ wsl: await isWSL() })];
-      }
-    }
-    emit({
-      ok: true,
-      result: "not-loaded",
-      message: `Node service ${service.notLoadedText}.`,
-      hints,
-      service: buildDaemonServiceSnapshot(service, loaded),
-    });
-    if (!json) {
-      defaultRuntime.log(`Node service ${service.notLoadedText}.`);
-      for (const hint of hints) {
-        defaultRuntime.log(`Start with: ${hint}`);
-      }
-    }
-    return;
-  }
-  try {
-    await service.restart({ env: process.env, stdout });
-  } catch (err) {
-    const hints = renderNodeServiceStartHints();
-    fail(`Node restart failed: ${String(err)}`, hints);
-    return;
-  }
-
-  let restarted = true;
-  try {
-    restarted = await service.isLoaded({ env: process.env });
-  } catch {
-    restarted = true;
-  }
-  emit({
-    ok: true,
-    result: "restarted",
-    service: buildDaemonServiceSnapshot(service, restarted),
+  await runServiceRestart({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    renderStartHints: renderNodeServiceStartHints,
+    opts,
   });
 }
 
 export async function runNodeDaemonStop(opts: NodeDaemonLifecycleOptions = {}) {
-  const json = Boolean(opts.json);
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "stop", ...payload });
-  };
-  const fail = (message: string) => {
-    if (json) {
-      emit({ ok: false, error: message });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
-
-  const service = resolveNodeService();
-  let loaded = false;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
-    return;
-  }
-  if (!loaded) {
-    emit({
-      ok: true,
-      result: "not-loaded",
-      message: `Node service ${service.notLoadedText}.`,
-      service: buildDaemonServiceSnapshot(service, loaded),
-    });
-    if (!json) {
-      defaultRuntime.log(`Node service ${service.notLoadedText}.`);
-    }
-    return;
-  }
-  try {
-    await service.stop({ env: process.env, stdout });
-  } catch (err) {
-    fail(`Node stop failed: ${String(err)}`);
-    return;
-  }
-
-  let stopped = false;
-  try {
-    stopped = await service.isLoaded({ env: process.env });
-  } catch {
-    stopped = false;
-  }
-  emit({
-    ok: true,
-    result: "stopped",
-    service: buildDaemonServiceSnapshot(service, stopped),
+  return await runServiceStop({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    opts,
   });
 }
 
