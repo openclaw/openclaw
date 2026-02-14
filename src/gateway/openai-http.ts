@@ -4,8 +4,16 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
+import type { ImageContent } from "../commands/agent/types.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
+import {
+  DEFAULT_INPUT_IMAGE_MAX_BYTES,
+  DEFAULT_INPUT_IMAGE_MIMES,
+  DEFAULT_INPUT_MAX_REDIRECTS,
+  DEFAULT_INPUT_TIMEOUT_MS,
+  extractImageContentFromSource,
+} from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -171,6 +179,67 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
   return val as OpenAiChatCompletionRequest;
 }
 
+const IMAGE_LIMITS = {
+  allowUrl: true,
+  urlAllowlist: undefined,
+  allowedMimes: new Set(DEFAULT_INPUT_IMAGE_MIMES),
+  maxBytes: DEFAULT_INPUT_IMAGE_MAX_BYTES,
+  maxRedirects: DEFAULT_INPUT_MAX_REDIRECTS,
+  timeoutMs: DEFAULT_INPUT_TIMEOUT_MS,
+};
+
+/**
+ * Extract image content from the last user message in an OpenAI-format messages array.
+ * Handles both `data:` URIs (inline base64) and `https://` URLs.
+ */
+async function extractImagesFromOpenAiMessages(
+  messages: OpenAiChatMessage[],
+): Promise<ImageContent[]> {
+  const images: ImageContent[] = [];
+
+  // Find the last user message (the one being responded to).
+  let lastUserMsg: OpenAiChatMessage | null = null;
+  for (const msg of messages) {
+    if (msg && typeof msg === "object" && msg.role === "user") {
+      lastUserMsg = msg;
+    }
+  }
+  if (!lastUserMsg || !Array.isArray(lastUserMsg.content)) {
+    return images;
+  }
+
+  for (const part of lastUserMsg.content as Array<Record<string, unknown>>) {
+    if (!part || typeof part !== "object" || part.type !== "image_url") {
+      continue;
+    }
+    const imageUrl = part.image_url;
+    if (!imageUrl || typeof imageUrl !== "object") {
+      continue;
+    }
+    const url = (imageUrl as { url?: unknown }).url;
+    if (typeof url !== "string") {
+      continue;
+    }
+
+    const dataUriMatch = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
+    if (dataUriMatch) {
+      images.push({ type: "image", data: dataUriMatch[2]!, mimeType: dataUriMatch[1]! });
+    } else if (url.startsWith("http://") || url.startsWith("https://")) {
+      try {
+        const image = await extractImageContentFromSource(
+          { type: "url", url },
+          IMAGE_LIMITS,
+        );
+        images.push(image);
+      } catch {
+        // Skip images that fail to fetch — don't block the request.
+      }
+    }
+  }
+
+  return images;
+}
+
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -199,7 +268,7 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
-  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? 1024 * 1024);
+  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? 20 * 1024 * 1024);
   if (body === undefined) {
     return true;
   }
@@ -211,7 +280,8 @@ export async function handleOpenAiHttpRequest(
 
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
-  const prompt = buildAgentPrompt(payload.messages);
+  const messages = asMessages(payload.messages);
+  const prompt = buildAgentPrompt(messages);
   if (!prompt.message) {
     sendJson(res, 400, {
       error: {
@@ -222,6 +292,8 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
+  const images = await extractImagesFromOpenAiMessages(messages);
+
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
 
@@ -230,6 +302,7 @@ export async function handleOpenAiHttpRequest(
       const result = await agentCommand(
         {
           message: prompt.message,
+          images: images.length > 0 ? images : undefined,
           extraSystemPrompt: prompt.extraSystemPrompt,
           sessionKey,
           runId,
@@ -344,6 +417,7 @@ export async function handleOpenAiHttpRequest(
       const result = await agentCommand(
         {
           message: prompt.message,
+          images: images.length > 0 ? images : undefined,
           extraSystemPrompt: prompt.extraSystemPrompt,
           sessionKey,
           runId,
