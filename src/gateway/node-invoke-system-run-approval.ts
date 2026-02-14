@@ -1,5 +1,9 @@
 import type { ExecApprovalManager, ExecApprovalRecord } from "./exec-approval-manager.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import {
+  formatExecCommand,
+  validateSystemRunCommandConsistency,
+} from "../infra/system-run-command.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -48,7 +52,7 @@ function getCmdText(params: SystemRunParamsLike): string {
   if (Array.isArray(params.command)) {
     const parts = params.command.map((v) => String(v));
     if (parts.length > 0) {
-      return parts.join(" ");
+      return formatExecCommand(parts);
     }
   }
   return "";
@@ -126,6 +130,26 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   }
 
   const p = obj as SystemRunParamsLike;
+  const argv = Array.isArray(p.command) ? p.command.map((v) => String(v)) : [];
+  const raw = normalizeString(p.rawCommand);
+  if (raw) {
+    if (!Array.isArray(p.command) || argv.length === 0) {
+      return {
+        ok: false,
+        message: "rawCommand requires params.command",
+        details: { code: "MISSING_COMMAND" },
+      };
+    }
+    const validation = validateSystemRunCommandConsistency({ argv, rawCommand: raw });
+    if (!validation.ok) {
+      return {
+        ok: false,
+        message: validation.message,
+        details: validation.details ?? { code: "RAW_COMMAND_MISMATCH" },
+      };
+    }
+  }
+
   const approved = p.approved === true;
   const requestedDecision = normalizeApprovalDecision(p.approvalDecision);
   const wantsApprovalOverride = approved || requestedDecision !== null;
