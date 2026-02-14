@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { resolveThemeMode, type ThemeMode } from "../tui/theme/theme.js";
 import { runTui } from "../tui/tui.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 
@@ -15,6 +16,7 @@ export function registerTuiCli(program: Command) {
     .option("--session <key>", 'Session key (default: "main", or "global" when scope is global)')
     .option("--deliver", "Deliver assistant replies", false)
     .option("--thinking <level>", "Thinking level override")
+    .option("--theme <mode>", 'Color theme: "dark", "light", or "auto" (default: "auto")', "auto")
     .option("--message <text>", "Send an initial message after connecting")
     .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
     .option("--history-limit <n>", "History entries to load", "200")
@@ -24,6 +26,15 @@ export function registerTuiCli(program: Command) {
     )
     .action(async (opts) => {
       try {
+        // Resolve theme mode before anything renders
+        const themeMode = (opts.theme as string) ?? "auto";
+        if (themeMode !== "dark" && themeMode !== "light" && themeMode !== "auto") {
+          defaultRuntime.error(
+            `warning: invalid --theme "${themeMode}"; using "auto"`,
+          );
+        }
+        resolveThemeMode(themeMode as ThemeMode);
+
         const timeoutMs = parseTimeoutMs(opts.timeoutMs);
         if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
           defaultRuntime.error(
