@@ -112,7 +112,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredCommands).toHaveLength(100);
     expect(registeredCommands).toEqual(customCommands.slice(0, 100));
     expect(runtimeLog).toHaveBeenCalledWith(
-      "telegram: truncating 120 commands to 100 (Telegram Bot API limit)",
+      "Telegram limits bots to 100 commands. 120 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce skill/custom commands.",
     );
   });
 });
