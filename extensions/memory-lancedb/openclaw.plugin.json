@@ -30,7 +30,7 @@
       "label": "Capture Max Chars",
       "help": "Maximum message length eligible for auto-capture",
       "advanced": true,
-      "placeholder": "1500"
+      "placeholder": "500"
     }
   },
   "configSchema": {
