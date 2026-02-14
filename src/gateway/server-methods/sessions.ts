@@ -278,6 +278,30 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const cfg = loadConfig();
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    const { entry } = loadSessionEntry(key);
+    const sessionId = entry?.sessionId;
+    const queueKeys = new Set<string>(target.storeKeys);
+    queueKeys.add(target.canonicalKey);
+    if (sessionId) {
+      queueKeys.add(sessionId);
+    }
+    clearSessionQueues([...queueKeys]);
+    stopSubagentsForRequester({ cfg, requesterSessionKey: target.canonicalKey });
+    if (sessionId) {
+      abortEmbeddedPiRun(sessionId);
+      const ended = await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+      if (!ended) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Session ${key} is still active; try again in a moment.`,
+          ),
+        );
+        return;
+      }
+    }
     const storePath = target.storePath;
     let oldSessionId: string | undefined;
     let oldSessionFile: string | undefined;
