@@ -5,7 +5,7 @@ import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from "./state.js";
 
 function defaultQueueModeForChannel(_channel?: string): QueueMode {
-  return "collect";
+  return "steer";
 }
 
 /** Resolve per-channel debounce override from debounceMsByChannel map. */
