@@ -3,7 +3,11 @@ import { createActionGate, jsonResult, readStringParam } from "../../../agents/t
 import { listEnabledSignalAccounts, resolveSignalAccount } from "../../../signal/accounts.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { sendReactionSignal, removeReactionSignal } from "../../../signal/send-reactions.js";
-import { sendRemoteDeleteSignal } from "../../../signal/send.js";
+import {
+  sendRemoteDeleteSignal,
+  sendPollVoteSignal,
+  sendPollTerminateSignal,
+} from "../../../signal/send.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";
@@ -64,6 +68,20 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     );
     if (unsendEnabled) {
       actions.add("unsend");
+    }
+
+    const pollVoteEnabled = configuredAccounts.some((account) =>
+      createActionGate(account.config.actions)("pollVote"),
+    );
+    if (pollVoteEnabled) {
+      actions.add("pollVote");
+    }
+
+    const pollCloseEnabled = configuredAccounts.some((account) =>
+      createActionGate(account.config.actions)("pollClose"),
+    );
+    if (pollCloseEnabled) {
+      actions.add("pollClose");
     }
 
     return Array.from(actions);
@@ -184,6 +202,100 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error(`Failed to delete message ${messageId}.`);
       }
       return jsonResult({ ok: true, deleted: messageId });
+    }
+
+    if (action === "pollVote") {
+      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
+      const isActionEnabled = createActionGate(actionConfig);
+      if (!isActionEnabled("pollVote")) {
+        throw new Error("Signal poll voting is disabled via actions.pollVote.");
+      }
+
+      const recipientRaw =
+        readStringParam(params, "recipient") ??
+        readStringParam(params, "to", {
+          required: true,
+          label: "recipient (UUID, phone number, or group)",
+        });
+      const target = resolveSignalReactionTarget(recipientRaw);
+      if (!target.recipient && !target.groupId) {
+        throw new Error("recipient or group required");
+      }
+
+      const messageId = readStringParam(params, "messageId", {
+        required: true,
+        label: "messageId (poll timestamp)",
+      });
+
+      const pollAuthor =
+        readStringParam(params, "targetAuthorUuid") ??
+        readStringParam(params, "targetAuthor");
+      if (!pollAuthor) {
+        throw new Error("targetAuthor or targetAuthorUuid required for poll voting (poll creator's identifier).");
+      }
+
+      const pollOptions = params.pollOption ?? params.pollOptions;
+      if (!Array.isArray(pollOptions) || pollOptions.length === 0) {
+        throw new Error("pollOptions (array of option indexes) is required");
+      }
+
+      const optionIndexes = pollOptions.map((opt) => {
+        const idx = typeof opt === "number" ? opt : parseInt(String(opt), 10);
+        if (!Number.isFinite(idx) || idx < 0) {
+          throw new Error(`Invalid poll option index: ${opt}`);
+        }
+        return idx;
+      });
+
+      const timestamp = parseInt(messageId, 10);
+      if (!Number.isFinite(timestamp) || timestamp <= 0) {
+        throw new Error(`Invalid messageId: ${messageId}. Expected positive numeric timestamp.`);
+      }
+
+      const result = await sendPollVoteSignal(recipientRaw, {
+        pollAuthor,
+        pollTimestamp: timestamp,
+        optionIndexes,
+        accountId: accountId ?? undefined,
+      });
+
+      return jsonResult({ ok: true, messageId: result.messageId, voted: optionIndexes });
+    }
+
+    if (action === "pollClose") {
+      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
+      const isActionEnabled = createActionGate(actionConfig);
+      if (!isActionEnabled("pollClose")) {
+        throw new Error("Signal poll closing is disabled via actions.pollClose.");
+      }
+
+      const recipientRaw =
+        readStringParam(params, "recipient") ??
+        readStringParam(params, "to", {
+          required: true,
+          label: "recipient (UUID, phone number, or group)",
+        });
+      const target = resolveSignalReactionTarget(recipientRaw);
+      if (!target.recipient && !target.groupId) {
+        throw new Error("recipient or group required");
+      }
+
+      const messageId = readStringParam(params, "messageId", {
+        required: true,
+        label: "messageId (poll timestamp)",
+      });
+
+      const timestamp = parseInt(messageId, 10);
+      if (!Number.isFinite(timestamp) || timestamp <= 0) {
+        throw new Error(`Invalid messageId: ${messageId}. Expected positive numeric timestamp.`);
+      }
+
+      const result = await sendPollTerminateSignal(recipientRaw, {
+        pollTimestamp: timestamp,
+        accountId: accountId ?? undefined,
+      });
+
+      return jsonResult({ ok: true, messageId: result.messageId, closed: messageId });
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

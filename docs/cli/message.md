@@ -102,6 +102,16 @@ Name lookup:
   - Required: `--message-id`, `--target` (recipient E.164, UUID, or group)
   - Note: Deletes a message you sent (remote delete)
 
+- `pollVote`
+  - Channels: Signal
+  - Required: `--message-id`, `--target`, `--target-author` (poll creator's E.164 or UUID), `--poll-option` (repeat; 0-indexed option numbers)
+  - Note: Vote in a Signal poll; `--poll-option` accepts multiple values for multi-select polls
+
+- `pollClose`
+  - Channels: Signal
+  - Required: `--message-id`, `--target`
+  - Note: Close a Signal poll (only the poll creator can close)
+
 - `pin` / `unpin`
   - Channels: Discord/Slack
   - Required: `--message-id`, `--target`

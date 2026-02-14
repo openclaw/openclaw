@@ -75,6 +75,10 @@ export type SignalAccountConfig = {
     reactions?: boolean;
     /** Enable/disable unsending messages via message tool (default: true). */
     unsend?: boolean;
+    /** Enable/disable voting on polls via message tool (default: true). */
+    pollVote?: boolean;
+    /** Enable/disable closing polls via message tool (default: true). */
+    pollClose?: boolean;
   };
   /**
    * Controls agent reaction behavior:

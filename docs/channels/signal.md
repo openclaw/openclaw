@@ -260,6 +260,37 @@ Config:
 - `channels.signal.actions.unsend`: enable/disable unsend actions (default true).
 - Per-account override: `channels.signal.accounts.<id>.actions.unsend`.
 
+## Poll vote/close (message tool)
+
+- Use `message action=pollVote` to vote in a poll.
+- Use `message action=pollClose` to close a poll (only the poll creator can close).
+
+**Poll vote requirements:**
+
+- `messageId`: poll timestamp (from the poll message).
+- `targetAuthor`: poll creator's E.164 or UUID.
+- `pollOption`: array of 0-indexed option numbers to vote for.
+
+**Poll close requirements:**
+
+- `messageId`: poll timestamp.
+- Only the poll creator can close the poll.
+
+Examples:
+
+```
+message action=pollVote channel=signal target=+15551234567 messageId=1737630212345 targetAuthor=+15559999999 pollOption=[0,2]
+message action=pollVote channel=signal target=signal:group:<groupId> messageId=1737630212345 targetAuthor=uuid:<creator-uuid> pollOption=[1]
+message action=pollClose channel=signal target=+15551234567 messageId=1737630212345
+message action=pollClose channel=signal target=signal:group:<groupId> messageId=1737630212345
+```
+
+Config:
+
+- `channels.signal.actions.pollVote`: enable/disable poll vote actions (default true).
+- `channels.signal.actions.pollClose`: enable/disable poll close actions (default true).
+- Per-account overrides: `channels.signal.accounts.<id>.actions.pollVote`, `channels.signal.accounts.<id>.actions.pollClose`.
+
 ## Delivery targets (CLI/cron)
 
 - DMs: `signal:+15551234567` (or plain E.164).

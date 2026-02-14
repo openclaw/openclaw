@@ -277,3 +277,92 @@ export async function sendRemoteDeleteSignal(
   });
   return true;
 }
+
+export type PollVoteOpts = SignalRpcOpts & {
+  pollAuthor: string;
+  pollTimestamp: number;
+  optionIndexes: number[];
+  voteCount?: number;
+};
+
+export async function sendPollVoteSignal(
+  to: string,
+  opts: PollVoteOpts,
+): Promise<SignalSendResult> {
+  if (!opts.pollAuthor?.trim()) {
+    throw new Error("Poll author is required");
+  }
+  if (!Number.isFinite(opts.pollTimestamp) || opts.pollTimestamp <= 0) {
+    throw new Error("Invalid poll timestamp");
+  }
+  if (!opts.optionIndexes || opts.optionIndexes.length === 0) {
+    throw new Error("At least one poll option must be selected");
+  }
+  const { baseUrl, account } = resolveSignalRpcContext(opts);
+  const targetParams = buildTargetParams(parseTarget(to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Invalid poll vote target");
+  }
+  const params: Record<string, unknown> = {
+    ...targetParams,
+    pollAuthor: opts.pollAuthor,
+    pollTimestamp: opts.pollTimestamp,
+    option: opts.optionIndexes,
+    voteCount: opts.voteCount ?? 1,
+  };
+  if (account) {
+    params.account = account;
+  }
+  const result = await signalRpcRequest<{ timestamp?: number }>("sendPollVote", params, {
+    baseUrl,
+    timeoutMs: opts.timeoutMs,
+  });
+  const timestamp = result?.timestamp;
+  return {
+    messageId: timestamp ? String(timestamp) : "unknown",
+    timestamp,
+  };
+}
+
+export type PollTerminateOpts = SignalRpcOpts & {
+  pollTimestamp: number;
+};
+
+export async function sendPollTerminateSignal(
+  to: string,
+  opts: PollTerminateOpts,
+): Promise<SignalSendResult> {
+  if (!Number.isFinite(opts.pollTimestamp) || opts.pollTimestamp <= 0) {
+    throw new Error("Invalid poll timestamp");
+  }
+  const { baseUrl, account } = resolveSignalRpcContext(opts);
+  const targetParams = buildTargetParams(parseTarget(to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Invalid poll terminate target");
+  }
+  const params: Record<string, unknown> = {
+    ...targetParams,
+    pollTimestamp: opts.pollTimestamp,
+    notifySelf: false,
+  };
+  if (account) {
+    params.account = account;
+  }
+  const result = await signalRpcRequest<{ timestamp?: number }>("sendPollTerminate", params, {
+    baseUrl,
+    timeoutMs: opts.timeoutMs,
+  });
+  const timestamp = result?.timestamp;
+  return {
+    messageId: timestamp ? String(timestamp) : "unknown",
+    timestamp,
+  };
+}
