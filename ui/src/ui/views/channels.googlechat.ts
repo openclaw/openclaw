@@ -4,6 +4,7 @@ import type { ChannelsProps } from "./channels.types.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import { icons } from "../icons.ts";
+import { statusChip } from "./channels.shared.ts";
 
 export function renderGoogleChatCard(params: {
   props: ChannelsProps;
@@ -11,7 +12,6 @@ export function renderGoogleChatCard(params: {
   accountCountLabel: unknown;
 }) {
   const { props, googleChat, accountCountLabel } = params;
-  const isRunning = googleChat?.running ?? false;
 
   return html`
     <div class="card" style="padding: 0;">
@@ -28,13 +28,11 @@ export function renderGoogleChatCard(params: {
         <div class="status-list">
           <div>
             <span class="label">Configured</span>
-            <span>${googleChat ? (googleChat.configured ? "Yes" : "No") : "n/a"}</span>
+            ${statusChip(googleChat?.configured)}
           </div>
           <div>
             <span class="label">Running</span>
-            <span class="log-level ${isRunning ? "info" : "warn"}">
-              ${googleChat ? (isRunning ? "Yes" : "No") : "n/a"}
-            </span>
+            ${statusChip(googleChat?.running)}
           </div>
           <div>
             <span class="label">Credential</span>

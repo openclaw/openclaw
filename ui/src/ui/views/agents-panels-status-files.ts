@@ -15,6 +15,7 @@ import {
   formatNextRun,
 } from "../presenter.ts";
 import { formatBytes, type AgentContext } from "./agents-utils.ts";
+import { statusChip } from "./channels.shared.ts";
 
 function renderAgentContextCard(context: AgentContext, subtitle: string) {
   return html`
@@ -291,7 +292,7 @@ export function renderAgentCron(params: {
           <div class="stat">
             <div class="stat-label">Enabled</div>
             <div class="stat-value">
-              ${params.status ? (params.status.enabled ? "Yes" : "No") : "n/a"}
+              ${statusChip(params.status?.enabled)}
             </div>
           </div>
           <div class="stat">

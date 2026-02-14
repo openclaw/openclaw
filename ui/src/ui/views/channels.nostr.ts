@@ -9,6 +9,7 @@ import {
   type NostrProfileFormState,
   type NostrProfileFormCallbacks,
 } from "./channels.nostr-profile-form.ts";
+import { statusChip } from "./channels.shared.ts";
 
 /**
  * Truncate a pubkey for display (shows first and last 8 chars)
@@ -68,13 +69,11 @@ export function renderNostrCard(params: {
         <div class="status-list account-card-status">
           <div>
             <span class="label">Running</span>
-            <span class="log-level ${account.running ? "info" : "warn"}">
-              ${account.running ? "Yes" : "No"}
-            </span>
+            ${statusChip(account.running)}
           </div>
           <div>
             <span class="label">Configured</span>
-            <span>${account.configured ? "Yes" : "No"}</span>
+            ${statusChip(account.configured)}
           </div>
           <div>
             <span class="label">Public Key</span>
@@ -208,13 +207,11 @@ export function renderNostrCard(params: {
               <div class="status-list">
                 <div>
                   <span class="label">Configured</span>
-                  <span>${summaryConfigured ? "Yes" : "No"}</span>
+                  ${statusChip(summaryConfigured)}
                 </div>
                 <div>
                   <span class="label">Running</span>
-                  <span class="log-level ${summaryRunning ? "info" : "warn"}">
-                    ${summaryRunning ? "Yes" : "No"}
-                  </span>
+                  ${statusChip(summaryRunning)}
                 </div>
                 <div>
                   <span class="label">Public Key</span>

@@ -4,6 +4,7 @@ import type { ChannelsProps } from "./channels.types.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import { icons } from "../icons.ts";
+import { statusChip } from "./channels.shared.ts";
 
 export function renderIMessageCard(params: {
   props: ChannelsProps;
@@ -11,7 +12,6 @@ export function renderIMessageCard(params: {
   accountCountLabel: unknown;
 }) {
   const { props, imessage, accountCountLabel } = params;
-  const isRunning = imessage?.running ?? false;
 
   return html`
     <div class="card" style="padding: 0;">
@@ -28,13 +28,11 @@ export function renderIMessageCard(params: {
         <div class="status-list">
           <div>
             <span class="label">Configured</span>
-            <span>${imessage?.configured ? "Yes" : "No"}</span>
+            ${statusChip(imessage?.configured)}
           </div>
           <div>
             <span class="label">Running</span>
-            <span class="log-level ${isRunning ? "info" : "warn"}">
-              ${isRunning ? "Yes" : "No"}
-            </span>
+            ${statusChip(imessage?.running)}
           </div>
           <div>
             <span class="label">Last start</span>
