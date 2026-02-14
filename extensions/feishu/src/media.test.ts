@@ -4,6 +4,7 @@ const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
+const loadWebMediaMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
 const messageCreateMock = vi.hoisted(() => vi.fn());
@@ -22,6 +23,14 @@ vi.mock("./targets.js", () => ({
   resolveReceiveIdType: resolveReceiveIdTypeMock,
 }));
 
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => ({
+    media: {
+      loadWebMedia: loadWebMediaMock,
+    },
+  }),
+}));
+
 import { sendMediaFeishu } from "./media.js";
 
 describe("sendMediaFeishu msg_type routing", () => {
@@ -31,6 +40,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     resolveFeishuAccountMock.mockReturnValue({
       configured: true,
       accountId: "main",
+      config: {},
       appId: "app_id",
       appSecret: "app_secret",
       domain: "feishu",
@@ -64,6 +74,13 @@ describe("sendMediaFeishu msg_type routing", () => {
     messageReplyMock.mockResolvedValue({
       code: 0,
       data: { message_id: "reply_1" },
+    });
+
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("remote-audio"),
+      fileName: "remote.opus",
+      kind: "audio",
+      contentType: "audio/ogg",
     });
   });
 
@@ -147,5 +164,24 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
 
     expect(messageCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when media URL fetch is blocked", async () => {
+    loadWebMediaMock.mockRejectedValueOnce(
+      new Error("Blocked: resolves to private/internal IP address"),
+    );
+
+    await expect(
+      sendMediaFeishu({
+        cfg: {} as any,
+        to: "user:ou_target",
+        mediaUrl: "https://x/img",
+        fileName: "voice.opus",
+      }),
+    ).rejects.toThrow(/private\/internal/i);
+
+    expect(fileCreateMock).not.toHaveBeenCalled();
+    expect(messageCreateMock).not.toHaveBeenCalled();
+    expect(messageReplyMock).not.toHaveBeenCalled();
   });
 });
