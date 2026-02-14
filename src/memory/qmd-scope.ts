@@ -1,13 +1,20 @@
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 
+type ParsedQmdSessionScope = {
+  channel?: string;
+  chatType?: "channel" | "group" | "direct";
+  normalizedKey?: string;
+};
+
 export function isQmdScopeAllowed(scope: ResolvedQmdConfig["scope"], sessionKey?: string): boolean {
   if (!scope) {
     return true;
   }
-  const channel = deriveQmdScopeChannel(sessionKey);
-  const chatType = deriveQmdScopeChatType(sessionKey);
-  const normalizedKey = sessionKey ?? "";
+  const parsed = parseQmdSessionScope(sessionKey);
+  const channel = parsed.channel;
+  const chatType = parsed.chatType;
+  const normalizedKey = parsed.normalizedKey ?? "";
   for (const rule of scope.rules ?? []) {
     if (!rule) {
       continue;
@@ -29,38 +36,42 @@ export function isQmdScopeAllowed(scope: ResolvedQmdConfig["scope"], sessionKey?
 }
 
 export function deriveQmdScopeChannel(key?: string): string | undefined {
-  if (!key) {
-    return undefined;
-  }
+  return parseQmdSessionScope(key).channel;
+}
+
+export function deriveQmdScopeChatType(key?: string): "channel" | "group" | "direct" | undefined {
+  return parseQmdSessionScope(key).chatType;
+}
+
+function parseQmdSessionScope(key?: string): ParsedQmdSessionScope {
   const normalized = normalizeQmdSessionKey(key);
   if (!normalized) {
-    return undefined;
+    return {};
   }
   const parts = normalized.split(":").filter(Boolean);
+  let chatType: ParsedQmdSessionScope["chatType"];
   if (
     parts.length >= 2 &&
     (parts[1] === "group" || parts[1] === "channel" || parts[1] === "direct" || parts[1] === "dm")
   ) {
-    return parts[0]?.toLowerCase();
-  }
-  return undefined;
-}
-
-export function deriveQmdScopeChatType(key?: string): "channel" | "group" | "direct" | undefined {
-  if (!key) {
-    return undefined;
-  }
-  const normalized = normalizeQmdSessionKey(key);
-  if (!normalized) {
-    return undefined;
+    if (parts.includes("group")) {
+      chatType = "group";
+    } else if (parts.includes("channel")) {
+      chatType = "channel";
+    }
+    return {
+      normalizedKey: normalized,
+      channel: parts[0]?.toLowerCase(),
+      chatType: chatType ?? "direct",
+    };
   }
   if (normalized.includes(":group:")) {
-    return "group";
+    return { normalizedKey: normalized, chatType: "group" };
   }
   if (normalized.includes(":channel:")) {
-    return "channel";
+    return { normalizedKey: normalized, chatType: "channel" };
   }
-  return "direct";
+  return { normalizedKey: normalized, chatType: "direct" };
 }
 
 function normalizeQmdSessionKey(key: string): string | undefined {
