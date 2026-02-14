@@ -691,4 +691,60 @@ describe("gateway server sessions", () => {
 
     ws.close();
   });
+
+  test("sessions.delete returns unavailable when active run does not stop", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await fs.writeFile(
+      path.join(dir, "sess-active.jsonl"),
+      `${JSON.stringify({ role: "user", content: "active" })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        "discord:group:dev": {
+          sessionId: "sess-active",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    embeddedRunMock.activeIds.add("sess-active");
+    embeddedRunMock.waitResults.set("sess-active", false);
+
+    const { ws } = await openClient();
+
+    const deleted = await rpcReq(ws, "sessions.delete", {
+      key: "discord:group:dev",
+    });
+    expect(deleted.ok).toBe(false);
+    expect(deleted.error?.code).toBe("UNAVAILABLE");
+    expect(deleted.error?.message ?? "").toMatch(/still active/i);
+    expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      requesterSessionKey: "agent:main:discord:group:dev",
+    });
+    expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
+    const clearedKeys = sessionCleanupMocks.clearSessionQueues.mock.calls[0]?.[0] as string[];
+    expect(clearedKeys).toEqual(
+      expect.arrayContaining(["discord:group:dev", "agent:main:discord:group:dev", "sess-active"]),
+    );
+    expect(embeddedRunMock.abortCalls).toEqual(["sess-active"]);
+    expect(embeddedRunMock.waitCalls).toEqual(["sess-active"]);
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { sessionId?: string }
+    >;
+    expect(store["agent:main:discord:group:dev"]?.sessionId).toBe("sess-active");
+    const filesAfterDeleteAttempt = await fs.readdir(dir);
+    expect(filesAfterDeleteAttempt.some((f) => f.startsWith("sess-active.jsonl.deleted."))).toBe(
+      false,
+    );
+
+    ws.close();
+  });
 });
