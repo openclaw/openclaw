@@ -40,8 +40,8 @@ beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
   largeJpegBuffer = await sharp({
     create: {
-      width: 900,
-      height: 900,
+      width: 800,
+      height: 800,
       channels: 3,
       background: "#ff0000",
     },
@@ -63,7 +63,7 @@ beforeAll(async () => {
   })
     .png()
     .toBuffer();
-  const size = 96;
+  const size = 72;
   const raw = buildDeterministicBytes(size * size * 4);
   fallbackPngBuffer = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
     .png()
