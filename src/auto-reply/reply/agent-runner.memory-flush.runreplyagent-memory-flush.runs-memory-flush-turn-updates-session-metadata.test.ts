@@ -182,7 +182,8 @@ describe("runReplyAgent memory flush", () => {
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
-    expect(stored[sessionKey].memoryFlushCompactionCount).toBe(1);
+    // memoryFlushCompactionCount should NOT be updated when compaction did not complete
+    expect(stored[sessionKey].memoryFlushCompactionCount).toBeUndefined();
   });
   it("skips memory flush when disabled in config", async () => {
     runEmbeddedPiAgentMock.mockReset();

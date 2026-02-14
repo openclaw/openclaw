@@ -162,10 +162,7 @@ export async function runMemoryFlushIfNeeded(params: {
         });
       },
     });
-    let memoryFlushCompactionCount =
-      activeSessionEntry?.compactionCount ??
-      (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
-      0;
+    let memoryFlushCompactionCount: number | undefined;
     if (memoryCompactionCompleted) {
       const nextCount = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
@@ -184,7 +181,7 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionKey: params.sessionKey,
           update: async () => ({
             memoryFlushAt: Date.now(),
-            memoryFlushCompactionCount,
+            ...(memoryFlushCompactionCount !== undefined ? { memoryFlushCompactionCount } : {}),
           }),
         });
         if (updatedEntry) {
