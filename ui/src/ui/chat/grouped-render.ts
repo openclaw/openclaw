@@ -229,7 +229,8 @@ function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  if (!markdown && hasToolCards && isToolResult) {
+  if (hasToolCards && isToolResult) {
+    // fork: compact rows handle output via sidebar click — suppress inline text
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
