@@ -68,6 +68,7 @@ Docs: https://docs.openclaw.ai
 - Discord: prefer gateway guild id when logging inbound messages so cached-miss guilds do not appear as `guild=dm`. Thanks @thewilloftheshadow.
 - TUI: refactor searchable select list description layout and add regression coverage for ANSI-highlight width bounds.
 - Memory/QMD: cap QMD command output buffering to prevent memory exhaustion from pathological `qmd` command output.
+- Memory/QMD: parse qmd scope keys once per request to avoid repeated parsing in scope checks.
 - Memory/QMD: query QMD index using exact docid matches before falling back to prefix lookup for better recall correctness and index efficiency.
 - Memory/QMD: make QMD result JSON parsing resilient to noisy command output by extracting the first JSON array from noisy `stdout`.
 - Memory/QMD: pass result limits to `search`/`vsearch` commands so QMD can cap results earlier.
