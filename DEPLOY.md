@@ -243,7 +243,18 @@ https://claw.leot.fun?token=<your-gateway-token>
     "defaults": {
       "model": {
         "primary": "openrouter/anthropic/claude-sonnet-4.5",
-        "fallbacks": ["openrouter/google/gemini-2.5-flash-preview"]
+        "fallbacks": ["openrouter/google/gemini-2.5-flash"]
+      },
+      "models": {
+        "openrouter/auto": { "alias": "OpenRouter Auto" },
+        "openrouter/anthropic/claude-sonnet-4.5": { "alias": "Claude Sonnet 4.5" },
+        "openrouter/anthropic/claude-opus-4.6": { "alias": "Claude Opus 4.6" },
+        "openrouter/google/gemini-2.5-flash": { "alias": "Gemini 2.5 Flash" },
+        "openrouter/google/gemini-3-flash-preview": { "alias": "Gemini 3 Flash" },
+        "openrouter/deepseek/deepseek-v3.2": { "alias": "DeepSeek V3.2" },
+        "openrouter/deepseek/deepseek-r1-0528": { "alias": "DeepSeek R1" },
+        "openrouter/x-ai/grok-4.1-fast": { "alias": "Grok 4.1 Fast" },
+        "openrouter/moonshotai/kimi-k2.5": { "alias": "Kimi K2.5" }
       },
       "subagents": {
         "model": "openrouter/anthropic/claude-sonnet-4.5",
@@ -256,9 +267,24 @@ https://claw.leot.fun?token=<your-gateway-token>
 
 > **选型说明：** Claude Sonnet 4.5 能力强，适合复杂对话和编码。需要境外代理才能使用（见启动命令中的 `HTTPS_PROXY`）。Gemini 2.5 Flash 作为 fallback。需要省钱时在聊天中 `/model deepseek` 切到 DeepSeek V3.2（$0.25/M tokens，Claude 的 1/12）。
 
-> **注意：** OpenRouter 模型 ID 用点号不用横线，如 `claude-sonnet-4.5`（不是 `claude-sonnet-4-5`），`deepseek-v3.2`（不是 `deepseek-v3-0324`）。
+> **注意：** OpenRouter 模型 ID 格式是 `openrouter/vendor/model`（三段式），如 `openrouter/deepseek/deepseek-v3.2`、`openrouter/anthropic/claude-sonnet-4.5`。不要省略 vendor 前缀（如 ~~`openrouter/deepseek-v3.2`~~ 是错的）。
+
+> **注意：** `agents.defaults.models` 一旦配置就会变成**模型允许列表**（代码：`src/agents/model-selection.ts` `buildConfiguredAllowlistKeys`）。只有列在里面的模型才能通过 `/model` 切换。新增模型需要同时加到这个列表里。
 
 修改后重启容器：`podman restart openclaw-gateway`
+
+### 可用模型一览
+
+| `/model` 命令 | 模型 | 输入价格 | 输出价格 | 适合场景 |
+|---|---|---|---|---|
+| `/model claude-sonnet` | Claude Sonnet 4.5 | $3.00/M | $15.00/M | 编码、复杂推理（默认） |
+| `/model claude-opus` | Claude Opus 4.6 | $5.00/M | $25.00/M | 最强，长难任务 |
+| `/model gemini-2.5` | Gemini 2.5 Flash | $0.30/M | $2.50/M | 通用，性价比好 |
+| `/model gemini-3` | Gemini 3 Flash | $0.50/M | $3.00/M | 最新推理模型，1M 上下文 |
+| `/model deepseek` | DeepSeek V3.2 | $0.25/M | $0.38/M | 最便宜，日常对话 |
+| `/model deepseek-r1` | DeepSeek R1 | $0.50/M | $2.18/M | 深度推理 |
+| `/model grok` | Grok 4.1 Fast | $0.20/M | $0.50/M | 超便宜，2M 上下文 |
+| `/model kimi` | Kimi K2.5 | $0.45/M | $2.25/M | 编码能力强 |
 
 ### 聊天中切换模型
 
@@ -266,8 +292,9 @@ https://claw.leot.fun?token=<your-gateway-token>
 |---|---|
 | `/model` | 查看当前模型 |
 | `/model list` | 列出所有可用模型 |
-| `/model claude-sonnet-4` | 临时切到 Claude |
-| `/model deepseek` | 切回 DeepSeek |
+| `/model claude-sonnet` | 切到 Claude Sonnet 4.5 |
+| `/model deepseek` | 切到 DeepSeek V3.2 |
+| `/model grok` | 切到 Grok 4.1 Fast |
 
 > `/model` 切换仅影响当前会话，不改全局配置。
 
