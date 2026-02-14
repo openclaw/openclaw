@@ -893,10 +893,15 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
 /**
  * Check if a tool is available using the proper tool-policy resolution.
  * Uses the same pickToolPolicy/resolveToolPolicies logic as runtime.
+ * Accepts optional pre-resolved policies to avoid redundant resolution.
  */
-function isToolAvailable(cfg: OpenClawConfig, toolName: string): boolean {
-  const policies = resolveToolPolicies({ cfg });
-  return isToolAllowedByPolicies(toolName, policies);
+function isToolAvailable(
+  cfg: OpenClawConfig,
+  toolName: string,
+  policies?: SandboxToolPolicy[],
+): boolean {
+  const resolved = policies ?? resolveToolPolicies({ cfg });
+  return isToolAllowedByPolicies(toolName, resolved);
 }
 
 /**
@@ -990,7 +995,8 @@ export function collectDangerousToolsFindings(cfg: OpenClawConfig): SecurityAudi
   const findings: SecurityAuditFinding[] = [];
 
   // Check which dangerous tools are actually available based on profile + allow/deny
-  const availableDangerous = DANGEROUS_TOOLS.filter((tool) => isToolAvailable(cfg, tool));
+  const policies = resolveToolPolicies({ cfg });
+  const availableDangerous = DANGEROUS_TOOLS.filter((tool) => isToolAvailable(cfg, tool, policies));
 
   if (availableDangerous.length === 0) {
     return findings; // All dangerous tools restricted by profile or deny list
