@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => {
   const printModelTable = vi.fn();
   return {
     loadConfig: vi.fn().mockReturnValue({
-      agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex-spark" } } },
+      agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
       models: { providers: {} },
     }),
     ensureAuthProfileStore: vi.fn().mockReturnValue({ version: 1, profiles: {}, order: {} }),
@@ -14,8 +14,8 @@ const mocks = vi.hoisted(() => {
     resolveConfiguredEntries: vi.fn().mockReturnValue({
       entries: [
         {
-          key: "openai-codex/gpt-5.3-codex-spark",
-          ref: { provider: "openai-codex", model: "gpt-5.3-codex-spark" },
+          key: "openai-codex/gpt-5.3-codex",
+          ref: { provider: "openai-codex", model: "gpt-5.3-codex" },
           tags: new Set(["configured"]),
           aliases: [],
         },
@@ -24,8 +24,8 @@ const mocks = vi.hoisted(() => {
     printModelTable,
     resolveForwardCompatModel: vi.fn().mockReturnValue({
       provider: "openai-codex",
-      id: "gpt-5.3-codex-spark",
-      name: "GPT-5.3 Codex Spark",
+      id: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       input: ["text"],
@@ -76,7 +76,7 @@ vi.mock("../../agents/model-forward-compat.js", async (importOriginal) => {
 import { modelsListCommand } from "./list.list-command.js";
 
 describe("modelsListCommand forward-compat", () => {
-  it("does not mark configured codex spark as missing when forward-compat can build a fallback", async () => {
+  it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
 
     await modelsListCommand({ json: true }, runtime as never);
@@ -88,9 +88,9 @@ describe("modelsListCommand forward-compat", () => {
       missing: boolean;
     }>;
 
-    const spark = rows.find((r) => r.key === "openai-codex/gpt-5.3-codex-spark");
-    expect(spark).toBeTruthy();
-    expect(spark?.missing).toBe(false);
-    expect(spark?.tags).not.toContain("missing");
+    const codex = rows.find((r) => r.key === "openai-codex/gpt-5.3-codex");
+    expect(codex).toBeTruthy();
+    expect(codex?.missing).toBe(false);
+    expect(codex?.tags).not.toContain("missing");
   });
 });
