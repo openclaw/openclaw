@@ -94,7 +94,9 @@ const runs = [
       "run",
       "--config",
       "vitest.gateway.config.ts",
-      ...(useVmForks ? ["--pool=vmForks"] : []),
+      // Gateway tests are sensitive to vmForks behavior (global state + env stubs).
+      // Keep them on process forks for determinism even when other suites use vmForks.
+      "--pool=forks",
     ],
   },
 ];
