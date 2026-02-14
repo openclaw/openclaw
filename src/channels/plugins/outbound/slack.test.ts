@@ -45,16 +45,17 @@ describe("slack outbound hook wiring", () => {
       text: "hello",
       accountId: "default",
       replyToId: "1111.2222",
-      username: "My Agent",
-      icon_url: "https://example.com/avatar.png",
-      icon_emoji: ":should_not_send:",
+      identity: {
+        name: "My Agent",
+        avatarUrl: "https://example.com/avatar.png",
+        emoji: ":should_not_send:",
+      },
     });
 
     expect(sendMessageSlack).toHaveBeenCalledWith("C123", "hello", {
       threadTs: "1111.2222",
       accountId: "default",
-      username: "My Agent",
-      icon_url: "https://example.com/avatar.png",
+      identity: { username: "My Agent", iconUrl: "https://example.com/avatar.png" },
     });
   });
 
@@ -66,13 +67,13 @@ describe("slack outbound hook wiring", () => {
       text: "hello",
       accountId: "default",
       replyToId: "1111.2222",
-      icon_emoji: ":lobster:",
+      identity: { emoji: ":lobster:" },
     });
 
     expect(sendMessageSlack).toHaveBeenCalledWith("C123", "hello", {
       threadTs: "1111.2222",
       accountId: "default",
-      icon_emoji: ":lobster:",
+      identity: { iconEmoji: ":lobster:" },
     });
   });
 
