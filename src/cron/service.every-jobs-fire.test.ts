@@ -1,38 +1,17 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+  installCronTestHooks,
+} from "./service.test-harness.js";
 
-const noopLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
-
-let fixtureRoot = "";
-let caseId = 0;
-
-beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
-});
-
-afterAll(async () => {
-  if (fixtureRoot) {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  }
-});
-
-async function makeStorePath() {
-  const dir = path.join(fixtureRoot, `case-${caseId++}`);
-  await fs.mkdir(dir, { recursive: true });
-  return {
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {},
-  };
-}
+const noopLogger = createNoopLogger();
+const { makeStorePath } = createCronStoreHarness();
+installCronTestHooks({ logger: noopLogger });
 
 function createFinishedBarrier() {
   const resolvers = new Map<string, (evt: CronEvent) => void>();
@@ -56,19 +35,6 @@ function createFinishedBarrier() {
 }
 
 describe("CronService interval/cron jobs fire on time", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
-    noopLogger.debug.mockClear();
-    noopLogger.info.mockClear();
-    noopLogger.warn.mockClear();
-    noopLogger.error.mockClear();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("fires an every-type main job when the timer fires a few ms late", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
