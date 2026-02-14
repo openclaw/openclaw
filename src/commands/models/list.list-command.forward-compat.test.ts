@@ -8,7 +8,9 @@ const mocks = vi.hoisted(() => {
       models: { providers: {} },
     }),
     ensureAuthProfileStore: vi.fn().mockReturnValue({ version: 1, profiles: {}, order: {} }),
-    loadModelRegistry: vi.fn().mockResolvedValue({ models: [], availableKeys: new Set() }),
+    loadModelRegistry: vi
+      .fn()
+      .mockResolvedValue({ models: [], availableKeys: new Set(), registry: {} }),
     resolveConfiguredEntries: vi.fn().mockReturnValue({
       entries: [
         {
@@ -20,21 +22,16 @@ const mocks = vi.hoisted(() => {
       ],
     }),
     printModelTable,
-    resolveModel: vi.fn().mockReturnValue({
-      model: {
-        provider: "openai-codex",
-        id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
-        api: "openai-codex-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        input: ["text"],
-        contextWindow: 272000,
-        maxTokens: 128000,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      error: undefined,
-      authStorage: {} as never,
-      modelRegistry: {} as never,
+    resolveForwardCompatModel: vi.fn().mockReturnValue({
+      provider: "openai-codex",
+      id: "gpt-5.3-codex-spark",
+      name: "GPT-5.3 Codex Spark",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      input: ["text"],
+      contextWindow: 272000,
+      maxTokens: 128000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     }),
   };
 });
@@ -68,14 +65,18 @@ vi.mock("./list.table.js", () => ({
   printModelTable: mocks.printModelTable,
 }));
 
-vi.mock("../../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: mocks.resolveModel,
-}));
+vi.mock("../../agents/model-forward-compat.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-forward-compat.js")>();
+  return {
+    ...actual,
+    resolveForwardCompatModel: mocks.resolveForwardCompatModel,
+  };
+});
 
 import { modelsListCommand } from "./list.list-command.js";
 
 describe("modelsListCommand forward-compat", () => {
-  it("does not mark configured codex spark as missing when resolveModel can build a fallback", async () => {
+  it("does not mark configured codex spark as missing when forward-compat can build a fallback", async () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
 
     await modelsListCommand({ json: true }, runtime as never);
