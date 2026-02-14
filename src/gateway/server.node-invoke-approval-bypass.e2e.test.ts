@@ -197,6 +197,38 @@ describe("node.invoke approval bypass", () => {
     node.stop();
   });
 
+  test("rejects invoking system.execApprovals.set via node.invoke", async () => {
+    let sawInvoke = false;
+    const node = await connectLinuxNode(() => {
+      sawInvoke = true;
+    });
+    const ws = await connectOperator(["operator.write"]);
+
+    const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
+      ws,
+      "node.list",
+      {},
+    );
+    expect(nodes.ok).toBe(true);
+    const nodeId = nodes.payload?.nodes?.find((n) => n.connected)?.nodeId ?? "";
+    expect(nodeId).toBeTruthy();
+
+    const res = await rpcReq(ws, "node.invoke", {
+      nodeId,
+      command: "system.execApprovals.set",
+      params: { file: { version: 1, agents: {} }, baseHash: "nope" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("exec.approvals.node");
+
+    await sleep(50);
+    expect(sawInvoke).toBe(false);
+
+    ws.close();
+    node.stop();
+  });
+
   test("binds system.run approval flags to exec.approval decision (ignores caller escalation)", async () => {
     let lastInvokeParams: Record<string, unknown> | null = null;
     const node = await connectLinuxNode((payload) => {
