@@ -809,6 +809,58 @@ describe("QmdMemoryManager", () => {
     readFileSpy.mockRestore();
   });
 
+  it("reuses exported session markdown files when inputs are unchanged", async () => {
+    const writeFileSpy = vi.spyOn(fs, "writeFile");
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+
+    cfg = {
+      ...cfg,
+      memory: {
+        ...cfg.memory,
+        qmd: {
+          ...cfg.memory.qmd,
+          sessions: {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const reasonCount = writeFileSpy.mock.calls.length;
+    await manager.sync({ reason: "manual" });
+    const firstExportWrites = writeFileSpy.mock.calls.length;
+    expect(firstExportWrites).toBe(reasonCount + 1);
+
+    await manager.sync({ reason: "manual" });
+    expect(writeFileSpy.mock.calls.length).toBe(firstExportWrites);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"follow-up update"}}\n',
+      "utf-8",
+    );
+    await manager.sync({ reason: "manual" });
+    expect(writeFileSpy.mock.calls.length).toBe(firstExportWrites + 1);
+
+    await manager.close();
+    writeFileSpy.mockRestore();
+  });
+
   it("throws when sqlite index is busy", async () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });

@@ -76,6 +76,14 @@ export class QmdMemoryManager implements MemorySearchManager {
     string,
     { rel: string; abs: string; source: MemorySource }
   >();
+  private readonly exportedSessionState = new Map<
+    string,
+    {
+      hash: string;
+      mtimeMs: number;
+      target: string;
+    }
+  >();
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
@@ -662,6 +670,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     await fs.mkdir(exportDir, { recursive: true });
     const files = await listSessionFilesForAgent(this.agentId);
     const keep = new Set<string>();
+    const tracked = new Set<string>();
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
@@ -674,7 +683,16 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       const target = path.join(exportDir, `${path.basename(sessionFile, ".jsonl")}.md`);
-      await fs.writeFile(target, this.renderSessionMarkdown(entry), "utf-8");
+      tracked.add(sessionFile);
+      const state = this.exportedSessionState.get(sessionFile);
+      if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
+        await fs.writeFile(target, this.renderSessionMarkdown(entry), "utf-8");
+      }
+      this.exportedSessionState.set(sessionFile, {
+        hash: entry.hash,
+        mtimeMs: entry.mtimeMs,
+        target,
+      });
       keep.add(target);
     }
     const exported = await fs.readdir(exportDir).catch(() => []);
@@ -685,6 +703,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       const full = path.join(exportDir, name);
       if (!keep.has(full)) {
         await fs.rm(full, { force: true });
+      }
+    }
+    for (const [sessionFile, state] of this.exportedSessionState) {
+      if (!tracked.has(sessionFile) || !state.target.startsWith(exportDir + path.sep)) {
+        this.exportedSessionState.delete(sessionFile);
       }
     }
   }
