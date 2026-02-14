@@ -1,0 +1,6 @@
+apiVersion: v2
+name: openclaw
+version: 0.1.0
+description: Helm chart that deploys the OpenClaw gateway with optional browser sidecars on Kubernetes.
+type: application
+appVersion: "0.1.0"
