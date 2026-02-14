@@ -71,6 +71,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       ackReactionPromise: null,
       reactionApi: null,
       removeAckAfterReply: false,
+      storePath: "/tmp/sessions.json",
     };
 
     const bot = { api: { sendMessageDraft: vi.fn() } } as unknown as Bot;

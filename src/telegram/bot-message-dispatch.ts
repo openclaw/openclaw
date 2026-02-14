@@ -1,5 +1,4 @@
 import type { Bot } from "grammy";
-import { spawn } from "node:child_process";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -24,10 +23,13 @@ import { danger, logVerbose } from "../globals.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import {
+  logTelegramQueueEnqueued,
+  type TelegramInboundSubagentQueue,
+} from "./inbound-subagent-queue.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
-const TELEGRAM_INBOUND_QUEUE_SCRIPT_ENV = "OPENCLAW_TELEGRAM_INBOUND_QUEUE_SCRIPT";
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -56,6 +58,7 @@ type DispatchTelegramMessageParams = {
   telegramCfg: TelegramAccountConfig;
   opts: Pick<TelegramBotOptions, "token">;
   resolveBotTopicsEnabled: ResolveBotTopicsEnabled;
+  inboundQueue?: TelegramInboundSubagentQueue;
 };
 
 export const dispatchTelegramMessage = async ({
@@ -69,6 +72,7 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   opts,
   resolveBotTopicsEnabled,
+  inboundQueue,
 }: DispatchTelegramMessageParams) => {
   const {
     ctxPayload,
@@ -86,47 +90,24 @@ export const dispatchTelegramMessage = async ({
     sendRecordVoice,
   } = context;
 
-  const inboundQueueScript = process.env[TELEGRAM_INBOUND_QUEUE_SCRIPT_ENV]?.trim();
-  const replyMessageId = String(ctxPayload.MessageSid || msg.message_id || "").trim();
-  if (inboundQueueScript && replyMessageId) {
-    const queueText = (msg.text ?? msg.caption ?? ctxPayload.Body ?? "").trim();
-    const queueArgs = [
-      inboundQueueScript,
-      "--chat-id",
-      String(chatId),
-      "--message-id",
-      replyMessageId,
-      "--text",
-      queueText || "(no text)",
-      "--agent",
-      route.agentId,
-    ];
-    const queueResult = await new Promise<{ code: number; stderr: string }>((resolve) => {
-      const proc = spawn("/bin/sh", queueArgs, {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stderr = "";
-      proc.stderr.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-      proc.on("error", (err) => {
-        resolve({ code: -1, stderr: String(err) });
-      });
-      proc.on("close", (code) => {
-        resolve({ code: typeof code === "number" ? code : -1, stderr });
-      });
+  const replyMessageId = Number.parseInt(String(ctxPayload.MessageSid || msg.message_id || ""), 10);
+  if (inboundQueue && Number.isFinite(replyMessageId) && replyMessageId > 0) {
+    const queued = await inboundQueue.enqueue({
+      storePath: context.storePath,
+      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+      chatId,
+      accountId: route.accountId,
+      agentId: route.agentId,
+      messageId: replyMessageId,
+      messageSid: String(ctxPayload.MessageSidFull || ctxPayload.MessageSid || replyMessageId),
+      bodyForAgent: (ctxPayload.BodyForAgent ?? msg.text ?? msg.caption ?? "").trim(),
+      senderLabel: ctxPayload.SenderName,
+      threadSpec,
     });
-    if (queueResult.code === 0) {
-      logVerbose(
-        `telegram inbound queued: chatId=${String(chatId)} messageId=${replyMessageId} script=${inboundQueueScript}`,
-      );
+    if (queued) {
+      logTelegramQueueEnqueued(chatId, replyMessageId);
       return;
     }
-    runtime.error?.(
-      danger(
-        `telegram inbound queue handoff failed: script=${inboundQueueScript} chatId=${String(chatId)} messageId=${replyMessageId} exit=${queueResult.code} stderr=${queueResult.stderr.trim() || "-"}`,
-      ),
-    );
   }
 
   const isPrivateChat = msg.chat.type === "private";

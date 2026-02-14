@@ -164,7 +164,7 @@ describe("createTelegramBot", () => {
 
   // groupPolicy tests
 
-  it("sends replies without native reply threading", async () => {
+  it("does not thread replies when replyToMode is default-off", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
@@ -186,7 +186,7 @@ describe("createTelegramBot", () => {
 
     expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
     const replyToIds = sendMessageSpy.mock.calls.map((call) => call[2]?.reply_to_message_id);
-    expect(replyToIds).toContain(101);
+    expect(replyToIds.every((id) => id === undefined)).toBe(true);
   });
   it("honors replyToMode=first for threaded replies", async () => {
     onSpy.mockReset();

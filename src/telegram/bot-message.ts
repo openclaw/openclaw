@@ -3,6 +3,7 @@ import type { TelegramAccountConfig } from "../config/types.telegram.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramBotOptions } from "./bot.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import type { TelegramInboundSubagentQueue } from "./inbound-subagent-queue.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
@@ -22,6 +23,7 @@ type TelegramMessageProcessorDeps = Omit<
   textLimit: number;
   opts: Pick<TelegramBotOptions, "token">;
   resolveBotTopicsEnabled: (ctx: TelegramContext) => boolean | Promise<boolean>;
+  inboundQueue?: TelegramInboundSubagentQueue;
 };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
@@ -46,6 +48,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     textLimit,
     opts,
     resolveBotTopicsEnabled,
+    inboundQueue,
   } = deps;
 
   return async (
@@ -87,6 +90,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       telegramCfg,
       opts,
       resolveBotTopicsEnabled,
+      inboundQueue,
     });
   };
 };

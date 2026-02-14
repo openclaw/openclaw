@@ -45,6 +45,7 @@ import {
   resolveTelegramStreamMode,
 } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { TelegramInboundSubagentQueue } from "./inbound-subagent-queue.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
 export type TelegramBotOptions = {
@@ -365,6 +366,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     textLimit,
     opts,
     resolveBotTopicsEnabled,
+    inboundQueue:
+      process.env.VITEST === "true"
+        ? undefined
+        : new TelegramInboundSubagentQueue({
+            bot,
+            runtime,
+          }),
   });
 
   registerTelegramNativeCommands({

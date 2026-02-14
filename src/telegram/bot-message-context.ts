@@ -743,6 +743,7 @@ export const buildTelegramMessageContext = async ({
     reactionApi,
     removeAckAfterReply,
     accountId: account.accountId,
+    storePath,
   };
 };
 

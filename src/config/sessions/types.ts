@@ -99,6 +99,19 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  telegramQueueMemory?: Record<
+    string,
+    {
+      compressedHistory: string;
+      recent: Array<{
+        role: "user" | "assistant";
+        text: string;
+        messageId?: string;
+        ts: number;
+      }>;
+      updatedAt: number;
+    }
+  >;
 };
 
 export function mergeSessionEntry(
