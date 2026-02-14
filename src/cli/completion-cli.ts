@@ -5,6 +5,8 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { pathExists } from "../utils.js";
+import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry.js";
+import { getProgramContext } from "./program/program-context.js";
 import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis.js";
 
 const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
@@ -240,6 +242,16 @@ export function registerCompletionCli(program: Command) {
       // the completion script written to stdout.
       routeLogsToStderr();
       const shell = options.shell ?? "zsh";
+
+      // Completion needs the full Commander command tree (including nested subcommands).
+      // Our CLI defaults to lazy registration for perf; force-register core commands here.
+      const ctx = getProgramContext(program);
+      if (ctx) {
+        for (const name of getCoreCliCommandNames()) {
+          await registerCoreCliByName(program, ctx, name);
+        }
+      }
+
       // Eagerly register all subcommands to build the full tree
       const entries = getSubCliEntries();
       for (const entry of entries) {
