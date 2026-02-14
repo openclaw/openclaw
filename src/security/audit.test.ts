@@ -153,6 +153,53 @@ describe("security audit", () => {
     ).toBe(true);
   });
 
+  it("warns when gateway.tools.allow re-enables dangerous HTTP /tools/invoke tools (loopback)", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "loopback",
+        auth: { token: "secret" },
+        tools: { allow: ["sessions_spawn"] },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      res.findings.some(
+        (f) => f.checkId === "gateway.tools_invoke_http.dangerous_allow" && f.severity === "warn",
+      ),
+    ).toBe(true);
+  });
+
+  it("flags dangerous gateway.tools.allow over HTTP as critical when gateway binds beyond loopback", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { token: "secret" },
+        tools: { allow: ["sessions_spawn", "gateway"] },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      res.findings.some(
+        (f) =>
+          f.checkId === "gateway.tools_invoke_http.dangerous_allow" && f.severity === "critical",
+      ),
+    ).toBe(true);
+  });
+
   it("does not warn for auth rate limiting when configured", async () => {
     const cfg: OpenClawConfig = {
       gateway: {

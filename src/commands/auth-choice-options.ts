@@ -50,7 +50,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
     value: "minimax",
     label: "MiniMax",
     hint: "M2.5 (recommended)",
-    choices: ["minimax-portal", "minimax-api", "minimax-api-lightning"],
+    choices: ["minimax-portal", "minimax-api", "minimax-api-key-cn", "minimax-api-lightning"],
   },
   {
     value: "moonshot",
@@ -286,6 +286,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Claude, GPT, Gemini via opencode.ai/zen",
   },
   { value: "minimax-api", label: "MiniMax M2.5" },
+  {
+    value: "minimax-api-key-cn",
+    label: "MiniMax M2.5 (CN)",
+    hint: "China endpoint (api.minimaxi.com)",
+  },
   {
     value: "minimax-api-lightning",
     label: "MiniMax M2.5 Lightning",

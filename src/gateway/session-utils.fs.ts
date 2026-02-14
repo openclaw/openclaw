@@ -175,6 +175,110 @@ type TranscriptMessage = {
   provenance?: unknown;
 };
 
+export function readSessionTitleFieldsFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+  opts?: { includeInterSession?: boolean },
+): { firstUserMessage: string | null; lastMessagePreview: string | null } {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const stat = fs.fstatSync(fd);
+    const size = stat.size;
+    if (size === 0) {
+      return { firstUserMessage: null, lastMessagePreview: null };
+    }
+
+    // Head (first user message)
+    let firstUserMessage: string | null = null;
+    try {
+      const buf = Buffer.alloc(8192);
+      const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+      if (bytesRead > 0) {
+        const chunk = buf.toString("utf-8", 0, bytesRead);
+        const lines = chunk.split(/\r?\n/).slice(0, MAX_LINES_TO_SCAN);
+        for (const line of lines) {
+          if (!line.trim()) {
+            continue;
+          }
+          try {
+            const parsed = JSON.parse(line);
+            const msg = parsed?.message as TranscriptMessage | undefined;
+            if (msg?.role !== "user") {
+              continue;
+            }
+            if (opts?.includeInterSession !== true && hasInterSessionUserProvenance(msg)) {
+              continue;
+            }
+            const text = extractTextFromContent(msg.content);
+            if (text) {
+              firstUserMessage = text;
+              break;
+            }
+          } catch {
+            // skip malformed lines
+          }
+        }
+      }
+    } catch {
+      // ignore head read errors
+    }
+
+    // Tail (last message preview)
+    let lastMessagePreview: string | null = null;
+    try {
+      const readStart = Math.max(0, size - LAST_MSG_MAX_BYTES);
+      const readLen = Math.min(size, LAST_MSG_MAX_BYTES);
+      const buf = Buffer.alloc(readLen);
+      fs.readSync(fd, buf, 0, readLen, readStart);
+
+      const chunk = buf.toString("utf-8");
+      const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+      const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
+
+      for (let i = tailLines.length - 1; i >= 0; i--) {
+        const line = tailLines[i];
+        try {
+          const parsed = JSON.parse(line);
+          const msg = parsed?.message as TranscriptMessage | undefined;
+          if (msg?.role !== "user" && msg?.role !== "assistant") {
+            continue;
+          }
+          const text = extractTextFromContent(msg.content);
+          if (text) {
+            lastMessagePreview = text;
+            break;
+          }
+        } catch {
+          // skip malformed
+        }
+      }
+    } catch {
+      // ignore tail read errors
+    }
+
+    return { firstUserMessage, lastMessagePreview };
+  } catch {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
   if (typeof content === "string") {
     return content.trim() || null;
