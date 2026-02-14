@@ -118,45 +118,30 @@ describe("signal event handler - syncMessage support (Note to Self)", () => {
     }
   });
 
-  it("handles both SSE and WebSocket formats", async () => {
+  it("handles SignalReceivePayload format", async () => {
     const handler = createMockHandler();
 
-    // SSE format: event.data contains JSON string
-    capturedCtx = undefined;
-    await handler({
-      event: "receive",
-      data: JSON.stringify({
-        envelope: {
-          sourceNumber: "+15550001111",
-          timestamp: 1700000000000,
-          dataMessage: {
-            message: "SSE format message",
-          },
-        },
-      }),
-    });
-
-    expect(capturedCtx).toBeTruthy();
-    if (capturedCtx) {
-      expect(String(capturedCtx.Body ?? "")).toContain("SSE format message");
-    }
-
-    // WebSocket format: envelope is directly in event
+    // SignalReceivePayload format: envelope is directly in the payload
     capturedCtx = undefined;
     await handler({
       envelope: {
         sourceNumber: "+15550001111",
         timestamp: 1700000000000,
         dataMessage: {
-          message: "WebSocket format message",
+          message: "payload format message",
         },
       },
     });
 
     expect(capturedCtx).toBeTruthy();
     if (capturedCtx) {
-      expect(String(capturedCtx.Body ?? "")).toContain("WebSocket format message");
+      expect(String(capturedCtx.Body ?? "")).toContain("payload format message");
     }
+
+    // Null payload is ignored
+    capturedCtx = undefined;
+    await handler(null);
+    expect(capturedCtx).toBeUndefined();
   });
 
   it("ignores syncMessage without sentMessage (e.g., read receipts)", async () => {

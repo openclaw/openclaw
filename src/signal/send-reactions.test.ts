@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 
-const sendReactionAdapterMock = vi.fn();
-const removeReactionAdapterMock = vi.fn();
+const adapterRpcRequestMock = vi.fn();
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -23,23 +22,25 @@ vi.mock("./accounts.js", () => ({
 }));
 
 vi.mock("./client-adapter.js", () => ({
-  sendReactionAdapter: (...args: unknown[]) => sendReactionAdapterMock(...args),
-  removeReactionAdapter: (...args: unknown[]) => removeReactionAdapterMock(...args),
+  adapterRpcRequest: (...args: unknown[]) => adapterRpcRequestMock(...args),
 }));
 
 describe("sendReactionSignal", () => {
   beforeEach(() => {
-    sendReactionAdapterMock.mockReset().mockResolvedValue({ timestamp: 123 });
-    removeReactionAdapterMock.mockReset().mockResolvedValue({ timestamp: 456 });
+    adapterRpcRequestMock.mockReset().mockResolvedValue({ timestamp: 123 });
   });
 
   it("uses recipients array and targetAuthor for uuid dms", async () => {
     await sendReactionSignal("uuid:123e4567-e89b-12d3-a456-426614174000", 123, "🔥");
 
-    expect(sendReactionAdapterMock).toHaveBeenCalledOnce();
-    const params = sendReactionAdapterMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(params.recipient).toBe("123e4567-e89b-12d3-a456-426614174000");
-    expect(params.groupId).toBeUndefined();
+    expect(adapterRpcRequestMock).toHaveBeenCalledOnce();
+    const [method, params] = adapterRpcRequestMock.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(method).toBe("sendReaction");
+    expect(params.recipients).toEqual(["123e4567-e89b-12d3-a456-426614174000"]);
+    expect(params.groupIds).toBeUndefined();
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
     expect(params.emoji).toBe("🔥");
     expect(params.targetTimestamp).toBe(123);
@@ -51,21 +52,30 @@ describe("sendReactionSignal", () => {
       targetAuthorUuid: "uuid:123e4567-e89b-12d3-a456-426614174000",
     });
 
-    expect(sendReactionAdapterMock).toHaveBeenCalledOnce();
-    const params = sendReactionAdapterMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(params.recipient).toBe("");
-    expect(params.groupId).toBe("group-id");
+    expect(adapterRpcRequestMock).toHaveBeenCalledOnce();
+    const [method, params] = adapterRpcRequestMock.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(method).toBe("sendReaction");
+    expect(params.groupIds).toEqual(["group-id"]);
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
   });
 
   it("defaults targetAuthor to recipient for removals", async () => {
+    adapterRpcRequestMock.mockReset().mockResolvedValue({ timestamp: 456 });
     await removeReactionSignal("+15551230000", 456, "❌");
 
-    expect(removeReactionAdapterMock).toHaveBeenCalledOnce();
-    const params = removeReactionAdapterMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(params.recipient).toBe("+15551230000");
+    expect(adapterRpcRequestMock).toHaveBeenCalledOnce();
+    const [method, params] = adapterRpcRequestMock.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(method).toBe("sendReaction");
+    expect(params.recipients).toEqual(["+15551230000"]);
     expect(params.targetAuthor).toBe("+15551230000");
     expect(params.emoji).toBe("❌");
     expect(params.targetTimestamp).toBe(456);
+    expect(params.remove).toBe(true);
   });
 });

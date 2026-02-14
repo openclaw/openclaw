@@ -72,17 +72,14 @@ describe("signal event handler typing + read receipts", () => {
     });
 
     await handler({
-      event: "receive",
-      data: JSON.stringify({
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Alice",
-          timestamp: 1700000000000,
-          dataMessage: {
-            message: "hi",
-          },
+      envelope: {
+        sourceNumber: "+15550001111",
+        sourceName: "Alice",
+        timestamp: 1700000000000,
+        dataMessage: {
+          message: "hi",
         },
-      }),
+      },
     });
 
     expect(sendTypingMock).toHaveBeenCalledWith("signal:+15550001111", expect.any(Object));

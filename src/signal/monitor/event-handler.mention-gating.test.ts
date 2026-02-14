@@ -63,21 +63,18 @@ type GroupEventOpts = {
 
 function makeGroupEvent(opts: GroupEventOpts) {
   return {
-    event: "receive",
-    data: JSON.stringify({
-      envelope: {
-        sourceNumber: "+15550001111",
-        sourceName: "Alice",
-        timestamp: 1700000000000,
-        dataMessage: {
-          message: opts.message ?? "",
-          attachments: opts.attachments ?? [],
-          quote: opts.quoteText ? { text: opts.quoteText } : undefined,
-          mentions: opts.mentions ?? undefined,
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-        },
+    envelope: {
+      sourceNumber: "+15550001111",
+      sourceName: "Alice",
+      timestamp: 1700000000000,
+      dataMessage: {
+        message: opts.message ?? "",
+        attachments: opts.attachments ?? [],
+        quote: opts.quoteText ? { text: opts.quoteText } : undefined,
+        mentions: opts.mentions ?? undefined,
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
       },
-    }),
+    },
   };
 }
 

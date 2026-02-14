@@ -526,10 +526,11 @@ describe("streamSignalEventsAdapter", () => {
     expect(mockStreamSignalEvents).not.toHaveBeenCalled();
   });
 
-  it("passes native events directly to onEvent", async () => {
+  it("parses native SSE receive events into SignalReceivePayload", async () => {
+    const payload = { envelope: { sourceNumber: "+1555000111" } };
     mockStreamSignalEvents.mockImplementation(async (params) => {
-      // Simulate receiving an event
-      params.onEvent({ event: "message", data: '{"test": true}' });
+      // Simulate receiving an SSE event with event: "receive"
+      params.onEvent({ event: "receive", data: JSON.stringify(payload) });
     });
 
     const events: unknown[] = [];
@@ -539,7 +540,21 @@ describe("streamSignalEventsAdapter", () => {
     });
 
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({ event: "message", data: '{"test": true}' });
+    expect(events[0]).toEqual(payload);
+  });
+
+  it("skips native SSE events that are not receive", async () => {
+    mockStreamSignalEvents.mockImplementation(async (params) => {
+      params.onEvent({ event: "message", data: '{"test": true}' });
+    });
+
+    const events: unknown[] = [];
+    await streamSignalEventsAdapter({
+      baseUrl: "http://localhost:8080",
+      onEvent: (evt) => events.push(evt),
+    });
+
+    expect(events).toHaveLength(0);
   });
 
   it("passes container events directly to onEvent", async () => {

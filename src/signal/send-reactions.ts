@@ -1,10 +1,10 @@
 /**
- * Signal reactions via adapter (supports both native signal-cli and bbernhard container)
+ * Signal reactions via signal-cli JSON-RPC API
  */
 
 import { loadConfig } from "../config/config.js";
 import { resolveSignalAccount } from "./accounts.js";
-import { sendReactionAdapter, removeReactionAdapter } from "./client-adapter.js";
+import { adapterRpcRequest as signalRpcRequest } from "./client-adapter.js";
 
 export type SignalReactionOpts = {
   baseUrl?: string;
@@ -121,16 +121,25 @@ export async function sendReactionSignal(
     throw new Error("targetAuthor is required for group reactions");
   }
 
-  const result = await sendReactionAdapter({
-    baseUrl,
-    account: account ?? "",
-    accountId: opts.accountId,
-    recipient: normalizedRecipient,
+  const params: Record<string, unknown> = {
     emoji: emoji.trim(),
-    targetAuthor: targetAuthorParams.targetAuthor ?? normalizedRecipient,
     targetTimestamp,
-    groupId,
+    ...targetAuthorParams,
+  };
+  if (normalizedRecipient) {
+    params.recipients = [normalizedRecipient];
+  }
+  if (groupId) {
+    params.groupIds = [groupId];
+  }
+  if (account) {
+    params.account = account;
+  }
+
+  const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", params, {
+    baseUrl,
     timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
 
   return {
@@ -179,16 +188,26 @@ export async function removeReactionSignal(
     throw new Error("targetAuthor is required for group reaction removal");
   }
 
-  const result = await removeReactionAdapter({
-    baseUrl,
-    account: account ?? "",
-    accountId: opts.accountId,
-    recipient: normalizedRecipient,
+  const params: Record<string, unknown> = {
     emoji: emoji.trim(),
-    targetAuthor: targetAuthorParams.targetAuthor ?? normalizedRecipient,
     targetTimestamp,
-    groupId,
+    remove: true,
+    ...targetAuthorParams,
+  };
+  if (normalizedRecipient) {
+    params.recipients = [normalizedRecipient];
+  }
+  if (groupId) {
+    params.groupIds = [groupId];
+  }
+  if (account) {
+    params.account = account;
+  }
+
+  const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", params, {
+    baseUrl,
     timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
 
   return {

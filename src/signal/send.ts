@@ -4,7 +4,7 @@ import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveSignalAccount } from "./accounts.js";
-import { sendMessageAdapter, sendTypingAdapter, sendReceiptAdapter } from "./client-adapter.js";
+import { adapterRpcRequest as signalRpcRequest } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 
 export type SignalSendOpts = {
@@ -190,6 +190,19 @@ export async function sendMessageSignal(
     throw new Error("Signal send requires text or media");
   }
 
+  const params: Record<string, unknown> = { message };
+  if (textStyles.length > 0) {
+    params["text-style"] = textStyles.map(
+      (style) => `${style.start}:${style.length}:${style.style}`,
+    );
+  }
+  if (account) {
+    params.account = account;
+  }
+  if (attachments && attachments.length > 0) {
+    params.attachments = attachments;
+  }
+
   const targetParams = buildTargetParams(target, {
     recipient: true,
     group: true,
@@ -198,22 +211,13 @@ export async function sendMessageSignal(
   if (!targetParams) {
     throw new Error("Signal recipient is required");
   }
+  Object.assign(params, targetParams);
 
-  const recipients = targetParams.recipient ?? [];
-  const groupId = targetParams.groupId;
-
-  const result = await sendMessageAdapter({
+  const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
     baseUrl,
-    account: account ?? "",
-    accountId: opts.accountId,
-    recipients,
-    groupId,
-    message,
-    textStyles,
-    attachments,
     timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
-
   const timestamp = result?.timestamp;
   return {
     messageId: timestamp ? String(timestamp) : "unknown",
@@ -230,24 +234,22 @@ export async function sendTypingSignal(
     recipient: true,
     group: true,
   });
-  if (!targetParams || !account) {
+  if (!targetParams) {
     return false;
   }
-
-  const recipient = targetParams.recipient?.[0] ?? targetParams.groupId;
-  if (!recipient) {
-    return false;
+  const params: Record<string, unknown> = { ...targetParams };
+  if (account) {
+    params.account = account;
   }
-
-  return sendTypingAdapter({
+  if (opts.stop) {
+    params.stop = true;
+  }
+  await signalRpcRequest("sendTyping", params, {
     baseUrl,
-    account,
-    accountId: opts.accountId,
-    recipient,
-    groupId: targetParams.groupId,
-    stop: opts.stop,
     timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
+  return true;
 }
 
 export async function sendReadReceiptSignal(
@@ -262,22 +264,21 @@ export async function sendReadReceiptSignal(
   const targetParams = buildTargetParams(parseTarget(to), {
     recipient: true,
   });
-  if (!targetParams || !account) {
+  if (!targetParams) {
     return false;
   }
-
-  const recipient = targetParams.recipient?.[0];
-  if (!recipient) {
-    return false;
-  }
-
-  return sendReceiptAdapter({
-    baseUrl,
-    account,
-    accountId: opts.accountId,
-    recipient,
+  const params: Record<string, unknown> = {
+    ...targetParams,
     targetTimestamp,
-    type: opts.type,
+    type: opts.type ?? "read",
+  };
+  if (account) {
+    params.account = account;
+  }
+  await signalRpcRequest("sendReceipt", params, {
+    baseUrl,
     timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
+  return true;
 }

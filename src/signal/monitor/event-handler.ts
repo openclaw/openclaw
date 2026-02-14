@@ -313,26 +313,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     },
   });
 
-  return async (
-    event:
-      | { event?: string; data?: string }
-      | { envelope?: unknown; exception?: { message?: string } },
-  ) => {
-    let payload: SignalReceivePayload | null = null;
-
-    // Handle WebSocket format (direct envelope)
-    if ("envelope" in event) {
-      payload = event as SignalReceivePayload;
-    }
-    // Handle SSE format (event.data contains JSON)
-    else if ("event" in event && event.event === "receive" && event.data) {
-      try {
-        payload = JSON.parse(event.data) as SignalReceivePayload;
-      } catch (err) {
-        deps.runtime.error?.(`failed to parse event: ${String(err)}`);
-        return;
-      }
-    } else {
+  return async (payload: SignalReceivePayload | null) => {
+    if (!payload) {
       return;
     }
 

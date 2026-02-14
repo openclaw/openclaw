@@ -7,8 +7,8 @@
  */
 
 import type { SignalApiMode } from "../config/types.signal.js";
-import type { ContainerWebSocketMessage } from "./client-container.js";
-import type { SignalSseEvent } from "./client.js";
+import type { SignalRpcOptions } from "./client.js";
+import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveSignalAccount } from "./accounts.js";
 import {
@@ -68,6 +68,138 @@ function formatGroupIdForContainer(groupId: string): string {
 }
 
 /**
+ * Drop-in replacement for signalRpcRequest that routes to the correct
+ * backend (native JSON-RPC or container REST) based on config.
+ * Native mode is a direct passthrough; container mode translates
+ * the RPC method + params into the equivalent container API call.
+ */
+export async function adapterRpcRequest<T = unknown>(
+  method: string,
+  params: Record<string, unknown> | undefined,
+  opts: SignalRpcOptions & { accountId?: string },
+): Promise<T> {
+  const mode = await resolveApiMode(opts.baseUrl, opts.accountId);
+
+  if (mode === "native") {
+    return signalRpcRequest<T>(method, params, opts);
+  }
+
+  return handleContainerRpc<T>(method, params ?? {}, opts);
+}
+
+async function handleContainerRpc<T>(
+  method: string,
+  params: Record<string, unknown>,
+  opts: SignalRpcOptions,
+): Promise<T> {
+  switch (method) {
+    case "send": {
+      const recipients = (params.recipient as string[] | undefined) ?? [];
+      const groupId = params.groupId as string | undefined;
+      const formattedGroupId = groupId ? formatGroupIdForContainer(groupId) : undefined;
+      const finalRecipients =
+        recipients.length > 0 ? recipients : formattedGroupId ? [formattedGroupId] : [];
+
+      // Convert text-style from native format to container format
+      const textStylesRaw = params["text-style"] as string[] | undefined;
+      const textStyles = textStylesRaw?.map((s) => {
+        const [start, length, style] = s.split(":");
+        return { start: Number(start), length: Number(length), style };
+      });
+
+      const result = await containerSendMessage({
+        baseUrl: opts.baseUrl,
+        account: (params.account as string) ?? "",
+        recipients: finalRecipients,
+        message: (params.message as string) ?? "",
+        textStyles,
+        attachments: params.attachments as string[] | undefined,
+        timeoutMs: opts.timeoutMs,
+      });
+      return result as T;
+    }
+
+    case "sendTyping": {
+      const recipient =
+        (params.recipient as string[] | undefined)?.[0] ??
+        (params.groupId as string | undefined) ??
+        "";
+      await containerSendTyping({
+        baseUrl: opts.baseUrl,
+        account: (params.account as string) ?? "",
+        recipient,
+        stop: params.stop as boolean | undefined,
+        timeoutMs: opts.timeoutMs,
+      });
+      return undefined as T;
+    }
+
+    case "sendReceipt": {
+      const recipient = (params.recipient as string[] | undefined)?.[0] ?? "";
+      await containerSendReceipt({
+        baseUrl: opts.baseUrl,
+        account: (params.account as string) ?? "",
+        recipient,
+        timestamp: params.targetTimestamp as number,
+        type: params.type as "read" | "viewed" | undefined,
+        timeoutMs: opts.timeoutMs,
+      });
+      return undefined as T;
+    }
+
+    case "sendReaction": {
+      const recipient = (params.recipients as string[] | undefined)?.[0] ?? "";
+      const groupId = (params.groupIds as string[] | undefined)?.[0] ?? undefined;
+
+      if (params.remove) {
+        const { containerRemoveReaction } = await import("./client-container.js");
+        const result = await containerRemoveReaction({
+          baseUrl: opts.baseUrl,
+          account: (params.account as string) ?? "",
+          recipient,
+          emoji: (params.emoji as string) ?? "",
+          targetAuthor: (params.targetAuthor as string) ?? recipient,
+          targetTimestamp: params.targetTimestamp as number,
+          groupId,
+          timeoutMs: opts.timeoutMs,
+        });
+        return result as T;
+      }
+
+      const { containerSendReaction } = await import("./client-container.js");
+      const result = await containerSendReaction({
+        baseUrl: opts.baseUrl,
+        account: (params.account as string) ?? "",
+        recipient,
+        emoji: (params.emoji as string) ?? "",
+        targetAuthor: (params.targetAuthor as string) ?? recipient,
+        targetTimestamp: params.targetTimestamp as number,
+        groupId,
+        timeoutMs: opts.timeoutMs,
+      });
+      return result as T;
+    }
+
+    case "getAttachment": {
+      const attachmentId = params.id as string;
+      const buffer = await containerFetchAttachment(attachmentId, {
+        baseUrl: opts.baseUrl,
+        timeoutMs: opts.timeoutMs,
+      });
+      // Native returns { data: base64String }, container returns raw Buffer.
+      // Convert to native format for callers that expect { data: base64 }.
+      if (!buffer) {
+        return { data: undefined } as T;
+      }
+      return { data: buffer.toString("base64") } as T;
+    }
+
+    default:
+      throw new Error(`Unsupported container RPC method: ${method}`);
+  }
+}
+
+/**
  * Detect which Signal API mode is available by probing endpoints.
  * First endpoint to respond OK wins.
  */
@@ -91,19 +223,15 @@ export async function detectSignalApiMode(
 }
 
 /**
- * Unified event type - either SSE event or WebSocket message.
- */
-export type SignalAdapterEvent = SignalSseEvent | ContainerWebSocketMessage;
-
-/**
  * Stream events from Signal, using the appropriate transport based on API mode.
+ * Events are normalized to SignalReceivePayload format.
  */
 export async function streamSignalEventsAdapter(params: {
   baseUrl: string;
   account?: string;
   accountId?: string;
   abortSignal?: AbortSignal;
-  onEvent: (event: SignalAdapterEvent) => void;
+  onEvent: (payload: SignalReceivePayload) => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
   const mode = await resolveApiMode(params.baseUrl, params.accountId);
@@ -113,17 +241,27 @@ export async function streamSignalEventsAdapter(params: {
       baseUrl: params.baseUrl,
       account: params.account,
       abortSignal: params.abortSignal,
-      onEvent: (event) => params.onEvent(event),
+      onEvent: (event) => params.onEvent(event as SignalReceivePayload),
       logger: params.logger,
     });
   }
 
-  // Default: native signal-cli SSE
+  // Native SSE: parse event.data JSON and pass as SignalReceivePayload
   return streamSignalEvents({
     baseUrl: params.baseUrl,
     account: params.account,
     abortSignal: params.abortSignal,
-    onEvent: (event) => params.onEvent(event),
+    onEvent: (event) => {
+      if (event.event !== "receive" || !event.data) {
+        return;
+      }
+      try {
+        const payload = JSON.parse(event.data) as SignalReceivePayload;
+        params.onEvent(payload);
+      } catch {
+        params.logger?.error?.(`failed to parse SSE event: ${event.data?.slice(0, 100)}`);
+      }
+    },
   });
 }
 

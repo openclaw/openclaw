@@ -59,6 +59,7 @@ vi.mock("./client-adapter.js", async (importOriginal) => {
     ...actual,
     detectSignalApiMode: vi.fn().mockResolvedValue("native"),
     fetchAttachmentAdapter: vi.fn().mockResolvedValue(null),
+    adapterRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
   };
 });
 
@@ -237,10 +238,7 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
+      await onEvent(payload);
       abortController.abort();
     });
 
@@ -282,10 +280,7 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
+      await onEvent(payload);
       abortController.abort();
     });
 
@@ -320,10 +315,7 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
+      await onEvent(payload);
       abortController.abort();
     });
 
@@ -359,10 +351,7 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
+      await onEvent(payload);
       abortController.abort();
     });
 
@@ -408,10 +397,7 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
+      await onEvent(payload);
       abortController.abort();
     });
 
@@ -464,10 +450,7 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
+      await onEvent(payload);
       abortController.abort();
     });
 
@@ -509,10 +492,7 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
+      await onEvent(payload);
       abortController.abort();
     });
 
@@ -557,16 +537,10 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
+      await onEvent(payload);
       await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify({
-          ...payload,
-          envelope: { ...payload.envelope, timestamp: 2 },
-        }),
+        ...payload,
+        envelope: { ...payload.envelope, timestamp: 2 },
       });
       abortController.abort();
     });

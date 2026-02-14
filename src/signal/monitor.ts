@@ -9,7 +9,7 @@ import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveSignalAccount } from "./accounts.js";
-import { fetchAttachmentAdapter } from "./client-adapter.js";
+import { adapterRpcRequest as signalRpcRequest } from "./client-adapter.js";
 import { signalCheck } from "./client.js";
 import { spawnSignalDaemon } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
@@ -197,18 +197,27 @@ async function fetchAttachment(params: {
       `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
     );
   }
-
-  const buffer = await fetchAttachmentAdapter({
-    baseUrl: params.baseUrl,
-    account: params.account,
-    attachmentId: attachment.id,
-    sender: params.sender,
-    groupId: params.groupId,
-  });
-
-  if (!buffer) {
+  const rpcParams: Record<string, unknown> = {
+    id: attachment.id,
+  };
+  if (params.account) {
+    rpcParams.account = params.account;
+  }
+  if (params.groupId) {
+    rpcParams.groupId = params.groupId;
+  } else if (params.sender) {
+    rpcParams.recipient = params.sender;
+  } else {
     return null;
   }
+
+  const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
+    baseUrl: params.baseUrl,
+  });
+  if (!result?.data) {
+    return null;
+  }
+  const buffer = Buffer.from(result.data, "base64");
   const saved = await saveMediaBuffer(
     buffer,
     attachment.contentType ?? undefined,
@@ -381,6 +390,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         });
       },
     });
+  } catch (err) {
+    if (opts.abortSignal?.aborted) {
+      return;
+    }
+    throw err;
   } finally {
     opts.abortSignal?.removeEventListener("abort", onAbort);
     daemonHandle?.stop();
