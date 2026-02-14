@@ -658,4 +658,90 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       vi.useRealTimers();
     }
   });
+
+  it("recovers from unhandled uppercase stop_reason prompt errors when assistant content exists", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    try {
+      await writeAuthStore(agentDir);
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          promptError: new Error("Unhandled stop reason: STOP"),
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            stopReason: "error",
+            errorMessage: "Unhandled stop reason: STOP",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:recover-stop-reason",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:recover-stop-reason",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]?.text).toContain("ok");
+      expect(result.payloads?.[0]?.isError).toBeFalsy();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers from unhandled MAX_TOKENS stop_reason prompt errors when assistant content exists", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    try {
+      await writeAuthStore(agentDir);
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          promptError: new Error("Unhandled stop reason: MAX_TOKENS"),
+          assistantTexts: ["token limit hit"],
+          lastAssistant: buildAssistant({
+            stopReason: "error",
+            errorMessage: "Unhandled stop reason: MAX_TOKENS",
+            content: [{ type: "text", text: "token limit hit" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:recover-max-tokens-stop-reason",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:recover-max-tokens-stop-reason",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]?.text).toContain("token limit hit");
+      expect(result.payloads?.[0]?.isError).toBeFalsy();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
 });
