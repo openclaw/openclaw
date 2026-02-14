@@ -58,6 +58,7 @@ export function createMessageCliHelpers(
         defaultRuntime.exit(1);
       },
     );
+    defaultRuntime.exit(0);
   };
 
   // `message` is only used for `message.help({ error: true })`, keep the
