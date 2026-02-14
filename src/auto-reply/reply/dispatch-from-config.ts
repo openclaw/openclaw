@@ -5,6 +5,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   logMessageProcessed,
@@ -196,6 +197,25 @@ export async function dispatchReplyFromConfig(params: {
         logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
       });
   }
+
+  // Bridge message:received to internal (workspace) hooks
+  void triggerInternalHook(
+    createInternalHookEvent("message", "received", ctx.SessionKey ?? "", {
+      from: ctx.From ?? "",
+      content:
+        typeof ctx.BodyForCommands === "string"
+          ? ctx.BodyForCommands
+          : typeof ctx.RawBody === "string"
+            ? ctx.RawBody
+            : typeof ctx.Body === "string"
+              ? ctx.Body
+              : "",
+      channel: (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase(),
+      senderId: ctx.SenderId,
+      senderName: ctx.SenderName,
+      commandSource: (ctx.Surface ?? ctx.Provider ?? "").toLowerCase(),
+    }),
+  ).catch(() => {});
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.

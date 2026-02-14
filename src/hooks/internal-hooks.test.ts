@@ -244,4 +244,71 @@ describe("hooks", () => {
       expect(results).toHaveLength(2);
     });
   });
+
+  describe("triggerInternalHook result merging", () => {
+    it("returns undefined when no handlers are registered", async () => {
+      const event = createInternalHookEvent("message", "before", "sess-1");
+      const result = await triggerInternalHook(event);
+      expect(result).toBeUndefined();
+    });
+
+    it("returns result when handler returns prependContext", async () => {
+      registerInternalHook("message:before", () => ({
+        prependContext: "extra context",
+      }));
+      const event = createInternalHookEvent("message", "before", "sess-1");
+      const result = await triggerInternalHook(event);
+      expect(result).toEqual({ prependContext: "extra context" });
+    });
+
+    it("merges multiple prependContext values with newlines", async () => {
+      registerInternalHook("message:before", () => ({
+        prependContext: "first",
+      }));
+      registerInternalHook("message:before", () => ({
+        prependContext: "second",
+      }));
+      const event = createInternalHookEvent("message", "before", "sess-1");
+      const result = await triggerInternalHook(event);
+      expect(result?.prependContext).toBe("first\n\nsecond");
+    });
+
+    it("last systemPrompt wins", async () => {
+      registerInternalHook("message:before", () => ({
+        systemPrompt: "prompt-a",
+      }));
+      registerInternalHook("message:before", () => ({
+        systemPrompt: "prompt-b",
+      }));
+      const event = createInternalHookEvent("message", "before", "sess-1");
+      const result = await triggerInternalHook(event);
+      expect(result?.systemPrompt).toBe("prompt-b");
+    });
+
+    it("ignores void/undefined returns from handlers", async () => {
+      registerInternalHook("message:before", () => undefined);
+      registerInternalHook("message:before", () => ({
+        prependContext: "only this",
+      }));
+      registerInternalHook("message:before", () => {});
+      const event = createInternalHookEvent("message", "before", "sess-1");
+      const result = await triggerInternalHook(event);
+      expect(result).toEqual({ prependContext: "only this" });
+    });
+
+    it("works with message event type across type and action handlers", async () => {
+      registerInternalHook("message", async () => ({
+        prependContext: "from type handler",
+      }));
+      registerInternalHook("message:received", async () => ({
+        prependContext: "from action handler",
+      }));
+      const event = createInternalHookEvent("message", "received", "sess-1", {
+        from: "user",
+        content: "hello",
+      });
+      const result = await triggerInternalHook(event);
+      expect(result?.prependContext).toBe("from type handler\n\nfrom action handler");
+    });
+  });
 });
