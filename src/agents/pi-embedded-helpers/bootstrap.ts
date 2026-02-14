@@ -249,7 +249,11 @@ export function buildBootstrapContextFiles(
     }
     remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
     result.push({
+<<<<<<< HEAD
       path: pathValue,
+=======
+      path: filePath,
+>>>>>>> 827fc84e0 (fix: guard against undefined path in bootstrap file entries)
       content: contentWithinBudget,
     });
   }

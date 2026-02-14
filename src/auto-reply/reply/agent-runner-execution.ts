@@ -589,7 +589,10 @@ export async function runAgentTurnWithFallback(params: {
         continue;
       }
 
-      defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+      const stack = err instanceof Error ? err.stack : undefined;
+      defaultRuntime.error(
+        `Embedded agent failed before reply: ${message}${stack ? `\n${stack}` : ""}`,
+      );
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
