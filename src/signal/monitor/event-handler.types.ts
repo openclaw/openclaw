@@ -123,8 +123,8 @@ export type SignalEventHandlerDeps = {
   ignoreAttachments: boolean;
   sendReadReceipts: boolean;
   readReceiptsViaDaemon: boolean;
-  injectLinkPreviews: boolean;
-  preserveTextStyles: boolean;
+  injectLinkPreviews?: boolean;
+  preserveTextStyles?: boolean;
   fetchAttachment: (params: {
     baseUrl: string;
     account?: string;

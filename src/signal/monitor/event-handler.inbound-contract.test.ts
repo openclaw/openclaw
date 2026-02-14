@@ -627,4 +627,238 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capturedCtx?.BodyForCommands).not.toContain("**");
     expect(capturedCtx?.BodyForCommands).not.toContain("_");
   });
+
+  it("applies link previews and text styles by default when toggles are undefined", async () => {
+    // Create handler with deps that have undefined toggles (mimicking runtime behavior)
+    const handler = createSignalEventHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      runtime: { log: () => {}, error: () => {} } as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+      baseUrl: "http://localhost",
+      accountId: "default",
+      historyLimit: 0,
+      groupHistories: new Map(),
+      textLimit: 4000,
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: ["*"],
+      groupPolicy: "open",
+      reactionMode: "off",
+      reactionAllowlist: [],
+      mediaMaxBytes: 1024,
+      ignoreAttachments: true,
+      sendReadReceipts: false,
+      readReceiptsViaDaemon: false,
+      // Intentionally pass undefined to test default behavior
+      injectLinkPreviews: undefined as unknown as boolean,
+      preserveTextStyles: undefined as unknown as boolean,
+      fetchAttachment: async () => null,
+      deliverReplies: async () => {},
+      resolveSignalReactionTargets: () => [],
+      // oxlint-disable-next-line typescript/no-explicit-any
+      isSignalReactionMessage: () => false as any,
+      shouldEmitSignalReactionNotification: () => false,
+      buildSignalReactionSystemEventText: () => "reaction",
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "hello world",
+        textStyles: [
+          { style: "BOLD", start: 0, length: 5 },
+          { style: "ITALIC", start: 6, length: 5 },
+        ],
+        previews: [
+          {
+            url: "https://example.com",
+            title: "Example",
+            description: "Test",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // Text styles should be applied (default true)
+    expect(capturedCtx?.BodyForCommands).toBe("**hello** _world_");
+    // Link previews should be in untrusted context (default true)
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).toContain("Link preview: Example - Test (https://example.com)");
+  });
+
+  it("applies link previews and text styles when explicitly set to true", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: true,
+      preserveTextStyles: true,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "hello world",
+        textStyles: [
+          { style: "MONOSPACE", start: 0, length: 5 },
+          { style: "STRIKETHROUGH", start: 6, length: 5 },
+        ],
+        previews: [
+          {
+            url: "https://test.com/page",
+            title: "Test Page",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // Text styles should be applied
+    expect(capturedCtx?.BodyForCommands).toBe("`hello` ~~world~~");
+    // Link previews should be in untrusted context
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).toContain("Link preview: Test Page (https://test.com/page)");
+  });
+
+  it("preserveTextStyles: false does not affect link preview injection", async () => {
+    const handler = createTestHandler({
+      preserveTextStyles: false,
+      injectLinkPreviews: true,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "check this out",
+        textStyles: [{ style: "BOLD", start: 0, length: 5 }],
+        previews: [
+          {
+            url: "https://independent.com",
+            title: "Independent Test",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // Text styles should NOT be applied
+    expect(capturedCtx?.BodyForCommands).toBe("check this out");
+    expect(capturedCtx?.BodyForCommands).not.toContain("**");
+    // Link previews SHOULD still be injected
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).toContain("Link preview: Independent Test (https://independent.com)");
+  });
+
+  it("injectLinkPreviews: false does not affect text style formatting", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: false,
+      preserveTextStyles: true,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "styled text",
+        textStyles: [
+          { style: "BOLD", start: 0, length: 6 },
+          { style: "ITALIC", start: 7, length: 4 },
+        ],
+        previews: [
+          {
+            url: "https://should-not-appear.com",
+            title: "Should Not Appear",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // Text styles SHOULD be applied
+    expect(capturedCtx?.BodyForCommands).toBe("**styled** _text_");
+    // Link previews should NOT be injected
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).not.toContain("Link preview");
+    expect(untrusted).not.toContain("https://should-not-appear.com");
+  });
+
+  it("injectLinkPreviews: false with no previews does not cause errors", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "plain message with no previews",
+        // No previews field at all
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("plain message with no previews");
+    // UntrustedContext should be undefined or not contain link previews
+    expect(capturedCtx?.UntrustedContext).toBeUndefined();
+  });
+
+  it("preserveTextStyles: false with no text styles does not cause errors", async () => {
+    const handler = createTestHandler({
+      preserveTextStyles: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "plain message",
+        // No textStyles field at all
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("plain message");
+  });
+
+  it("both toggles false with no data does not cause errors", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: false,
+      preserveTextStyles: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "completely plain message",
+        // No previews, no textStyles
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("completely plain message");
+    expect(capturedCtx?.UntrustedContext).toBeUndefined();
+  });
+
+  it("both toggles false with data present still processes message correctly", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: false,
+      preserveTextStyles: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "message with both features",
+        textStyles: [
+          { style: "BOLD", start: 0, length: 7 },
+          { style: "SPOILER", start: 13, length: 4 },
+        ],
+        previews: [
+          {
+            url: "https://blocked.com",
+            title: "Blocked",
+            description: "Should not appear",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // Plain text, no formatting
+    expect(capturedCtx?.BodyForCommands).toBe("message with both features");
+    expect(capturedCtx?.BodyForCommands).not.toContain("**");
+    expect(capturedCtx?.BodyForCommands).not.toContain("||");
+    // No link previews in untrusted context
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).not.toContain("Link preview");
+    expect(untrusted).not.toContain("https://blocked.com");
+  });
 });

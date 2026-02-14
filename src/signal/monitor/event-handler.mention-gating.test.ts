@@ -38,6 +38,8 @@ function createBaseDeps(overrides: Record<string, unknown> = {}) {
     ignoreAttachments: true,
     sendReadReceipts: false,
     readReceiptsViaDaemon: false,
+    injectLinkPreviews: true,
+    preserveTextStyles: true,
     fetchAttachment: async () => null,
     deliverReplies: async () => {},
     resolveSignalReactionTargets: () => [],

@@ -545,9 +545,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     // Signal encodes mentions as the object replacement character; hydrate them from metadata first.
     const rawMessage = dataMessage?.message ?? "";
     const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
-    const styledMessage = deps.preserveTextStyles
-      ? applySignalTextStyles(normalizedMessage, dataMessage?.textStyles)
-      : normalizedMessage;
+    const styledMessage =
+      deps.preserveTextStyles !== false
+        ? applySignalTextStyles(normalizedMessage, dataMessage?.textStyles)
+        : normalizedMessage;
     const messageTextPlain = normalizedMessage.trim();
     const messageText = styledMessage.trim();
 
@@ -590,9 +591,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       stickerPackId ? `Signal sticker packId: ${stickerPackId}` : undefined,
       stickerId ? `Signal stickerId: ${stickerId}` : undefined,
     ].filter((entry): entry is string => Boolean(entry));
-    const linkPreviewContext = deps.injectLinkPreviews
-      ? buildSignalLinkPreviewContext(dataMessage?.previews)
-      : [];
+    const linkPreviewContext =
+      deps.injectLinkPreviews !== false ? buildSignalLinkPreviewContext(dataMessage?.previews) : [];
     const attachments = dataMessage?.attachments ?? [];
     const allAttachments = sticker?.attachment ? [...attachments, sticker.attachment] : attachments;
     const voiceNoteIndices = allAttachments.flatMap((attachment, index) =>
