@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import {
@@ -25,6 +25,12 @@ export type ProcessToolDefaults = {
   scopeKey?: string;
 };
 
+type WritableStdin = {
+  write: (data: string, cb?: (err?: Error | null) => void) => void;
+  end: () => void;
+  destroyed?: boolean;
+};
+
 const processSchema = Type.Object({
   action: Type.String({ description: "Process action" }),
   sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
@@ -44,7 +50,7 @@ const processSchema = Type.Object({
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
-): AgentTool<any> {
+): AgentTool<any, unknown> {
   if (defaults?.cleanupMs !== undefined) {
     setJobTtlMs(defaults.cleanupMs);
   }
@@ -58,7 +64,7 @@ export function createProcessTool(
     description:
       "Manage running exec sessions: list, poll, log, write, send-keys, submit, paste, kill.",
     parameters: processSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const params = args as {
         action:
           | "list"
@@ -143,7 +149,7 @@ export function createProcessTool(
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
 
-      const failedResult = (text: string) => ({
+      const failedResult = (text: string): AgentToolResult<unknown> => ({
         content: [{ type: "text", text }],
         details: { status: "failed" },
       });
@@ -168,10 +174,10 @@ export function createProcessTool(
             result: failedResult(`Session ${params.sessionId} stdin is not writable.`),
           };
         }
-        return { ok: true as const, session: scopedSession, stdin };
+        return { ok: true as const, session: scopedSession, stdin: stdin as WritableStdin };
       };
 
-      const writeToStdin = async (stdin: NodeJS.WritableStream, data: string) => {
+      const writeToStdin = async (stdin: WritableStdin, data: string) => {
         await new Promise<void>((resolve, reject) => {
           stdin.write(data, (err) => {
             if (err) {
