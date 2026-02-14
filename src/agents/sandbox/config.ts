@@ -23,6 +23,21 @@ import {
 } from "./constants.js";
 import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
 
+export function resolveSandboxBrowserDockerCreateConfig(params: {
+  docker: SandboxDockerConfig;
+  browser: SandboxBrowserConfig;
+}): SandboxDockerConfig {
+  const base: SandboxDockerConfig = {
+    ...params.docker,
+    // Browser container needs network access for Chrome, downloads, etc.
+    network: "bridge",
+    // For hashing and consistency, treat browser image as the docker image even though we
+    // pass it separately as the final `docker create` argument.
+    image: params.browser.image,
+  };
+  return params.browser.binds !== undefined ? { ...base, binds: params.browser.binds } : base;
+}
+
 export function resolveSandboxScope(params: {
   scope?: SandboxScope;
   perSession?: boolean;
