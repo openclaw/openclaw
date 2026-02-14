@@ -40,6 +40,10 @@ function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
 describe("config io write", () => {
   let fixtureRoot = "";
   let fixtureCount = 0;
+  const silentLogger = {
+    warn: () => {},
+    error: () => {},
+  };
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-io-"));
@@ -86,6 +90,7 @@ describe("config io write", () => {
       const io = createConfigIO({
         env: {} as NodeJS.ProcessEnv,
         homedir: () => home,
+        logger: silentLogger,
       });
 
       const snapshot = await io.readConfigFileSnapshot();
@@ -144,6 +149,7 @@ describe("config io write", () => {
       const io = createConfigIO({
         env: { OPENAI_API_KEY: "sk-secret" } as NodeJS.ProcessEnv,
         homedir: () => home,
+        logger: silentLogger,
       });
 
       const snapshot = await io.readConfigFileSnapshot();
@@ -199,6 +205,7 @@ describe("config io write", () => {
       const io = createConfigIO({
         env: { DISCORD_USER_ID: "999" } as NodeJS.ProcessEnv,
         homedir: () => home,
+        logger: silentLogger,
       });
 
       const snapshot = await io.readConfigFileSnapshot();
