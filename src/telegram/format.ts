@@ -139,22 +139,52 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function wrapFileReferencesInHtml(html: string): string {
-  // Build regex pattern for all tracked extensions (escape metacharacters for safety)
-  const extensionsPattern = Array.from(FILE_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+const FILE_EXTENSIONS_PATTERN = Array.from(FILE_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
+const FILE_REFERENCE_PATTERN = new RegExp(
+  `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${FILE_EXTENSIONS_PATTERN}))(?=$|[^a-zA-Z0-9_\\-/])`,
+  "gi",
+);
+const ORPHANED_TLD_PATTERN = new RegExp(
+  `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${FILE_EXTENSIONS_PATTERN}))(?=[^a-zA-Z0-9/]|$)`,
+  "g",
+);
+const HTML_TAG_PATTERN = /(<\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/gi;
 
+function wrapStandaloneFileRef(match: string, prefix: string, filename: string): string {
+  if (filename.startsWith("//")) {
+    return match;
+  }
+  if (/https?:\/\/$/i.test(prefix)) {
+    return match;
+  }
+  return `${prefix}<code>${escapeHtml(filename)}</code>`;
+}
+
+function wrapSegmentFileRefs(
+  text: string,
+  codeDepth: number,
+  preDepth: number,
+  anchorDepth: number,
+): string {
+  if (!text || codeDepth > 0 || preDepth > 0 || anchorDepth > 0) {
+    return text;
+  }
+  const wrappedStandalone = text.replace(FILE_REFERENCE_PATTERN, wrapStandaloneFileRef);
+  return wrappedStandalone.replace(ORPHANED_TLD_PATTERN, (match, prefix: string, tld: string) =>
+    prefix === ">" ? match : `${prefix}<code>${escapeHtml(tld)}</code>`,
+  );
+}
+
+export function wrapFileReferencesInHtml(html: string): string {
   // Safety-net: de-linkify auto-generated anchors where href="http://<label>" (defense in depth for textMode: "html")
-  const autoLinkedAnchor = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
-  html = html.replace(autoLinkedAnchor, (_match, label: string) => {
+  AUTO_LINKED_ANCHOR_PATTERN.lastIndex = 0;
+  const deLinkified = html.replace(AUTO_LINKED_ANCHOR_PATTERN, (_match, label: string) => {
     if (!isAutoLinkedFileRef(`http://${label}`, label)) {
       return _match;
     }
     return `<code>${escapeHtml(label)}</code>`;
   });
-  const filePattern = new RegExp(
-    `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${extensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
-    "gi",
-  );
 
   // Track nesting depth for tags that should not be modified
   let codeDepth = 0;
@@ -163,38 +193,19 @@ export function wrapFileReferencesInHtml(html: string): string {
   let result = "";
   let lastIndex = 0;
 
-  // Process the HTML token by token to respect tag boundaries
-  const tagPattern = /(<\/?)(code|pre|a)\b[^>]*?>/gi;
+  // Process tags token-by-token so we can skip protected regions while wrapping plain text.
+  HTML_TAG_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  while ((match = tagPattern.exec(html)) !== null) {
+  while ((match = HTML_TAG_PATTERN.exec(deLinkified)) !== null) {
     const tagStart = match.index;
-    const tagEnd = tagPattern.lastIndex;
+    const tagEnd = HTML_TAG_PATTERN.lastIndex;
     const isClosing = match[1] === "</";
     const tagName = match[2].toLowerCase();
 
     // Process text before this tag
-    const textBefore = html.slice(lastIndex, tagStart);
-    result += textBefore.replace(filePattern, (m, prefix, filename, offset, source) => {
-      // Skip if inside protected tags or if it's a URL
-      if (codeDepth > 0 || preDepth > 0 || anchorDepth > 0) {
-        return m;
-      }
-      // Skip if we're inside any HTML tag (e.g., attributes on tags other than code/pre/a)
-      const filenameOffset = Number(offset) + String(prefix).length;
-      const lastOpen = String(source).lastIndexOf("<", filenameOffset);
-      const lastClose = String(source).lastIndexOf(">", filenameOffset);
-      if (lastOpen > lastClose) {
-        return m;
-      }
-      if (filename.startsWith("//")) {
-        return m;
-      }
-      if (/https?:\/\/$/i.test(prefix)) {
-        return m;
-      }
-      return `${prefix}<code>${escapeHtml(filename)}</code>`;
-    });
+    const textBefore = deLinkified.slice(lastIndex, tagStart);
+    result += wrapSegmentFileRefs(textBefore, codeDepth, preDepth, anchorDepth);
 
     // Update tag depth (clamp at 0 for malformed HTML with stray closing tags)
     if (tagName === "code") {
@@ -206,64 +217,13 @@ export function wrapFileReferencesInHtml(html: string): string {
     }
 
     // Add the tag itself
-    result += html.slice(tagStart, tagEnd);
+    result += deLinkified.slice(tagStart, tagEnd);
     lastIndex = tagEnd;
   }
 
   // Process remaining text
-  const remainingText = html.slice(lastIndex);
-  result += remainingText.replace(filePattern, (m, prefix, filename, offset, source) => {
-    if (codeDepth > 0 || preDepth > 0 || anchorDepth > 0) {
-      return m;
-    }
-    const filenameOffset = Number(offset) + String(prefix).length;
-    const lastOpen = String(source).lastIndexOf("<", filenameOffset);
-    const lastClose = String(source).lastIndexOf(">", filenameOffset);
-    if (lastOpen > lastClose) {
-      return m;
-    }
-    if (filename.startsWith("//")) {
-      return m;
-    }
-    if (/https?:\/\/$/i.test(prefix)) {
-      return m;
-    }
-    return `${prefix}<code>${escapeHtml(filename)}</code>`;
-  });
-
-  // Second pass: catch orphaned single-letter TLD patterns (e.g., 'D.md' in 'R&D.md')
-  // These can be auto-linked by Telegram as domains
-  const orphanedTldPattern = new RegExp(
-    `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${extensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
-    "g",
-  );
-  // Snapshot for offset calculations (offset is relative to pre-replacement string)
-  // Note: replace() doesn't mutate, but snapshot makes intent explicit
-  const snapshot = result;
-  result = snapshot.replace(orphanedTldPattern, (m, prefix, tld, offset) => {
-    // Skip if prefix is > (right after a tag close)
-    if (prefix === ">") {
-      return m;
-    }
-    // Skip if we're inside an HTML tag (between < and >)
-    const lastOpen = snapshot.lastIndexOf("<", offset);
-    const lastClose = snapshot.lastIndexOf(">", offset);
-    if (lastOpen > lastClose) {
-      return m; // Inside a tag attribute
-    }
-    // Skip if inside code/pre/anchor tags (count opens vs closes before offset)
-    const textBefore = snapshot.slice(0, offset);
-    const codeOpens = (textBefore.match(/<code/gi) || []).length;
-    const codeCloses = (textBefore.match(/<\/code/gi) || []).length;
-    const preOpens = (textBefore.match(/<pre/gi) || []).length;
-    const preCloses = (textBefore.match(/<\/pre/gi) || []).length;
-    const anchorOpens = (textBefore.match(/<a[\s>]/gi) || []).length;
-    const anchorCloses = (textBefore.match(/<\/a/gi) || []).length;
-    if (codeOpens > codeCloses || preOpens > preCloses || anchorOpens > anchorCloses) {
-      return m; // Inside code/pre/anchor content
-    }
-    return `${prefix}<code>${escapeHtml(tld)}</code>`;
-  });
+  const remainingText = deLinkified.slice(lastIndex);
+  result += wrapSegmentFileRefs(remainingText, codeDepth, preDepth, anchorDepth);
 
   return result;
 }
