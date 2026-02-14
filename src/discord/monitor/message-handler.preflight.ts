@@ -235,7 +235,7 @@ export async function preflightDiscordMessage(
     memberRoleIds,
     peer: {
       kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-      id: isDirectMessage ? author.id : message.channelId,
+      id: isDirectMessage ? author.id : (message.channelId ?? params.data.channel_id ?? ""),
     },
     // Pass parent peer for thread binding inheritance
     parentPeer: earlyThreadParentId ? { kind: "channel", id: earlyThreadParentId } : undefined,

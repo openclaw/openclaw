@@ -62,7 +62,7 @@ function normalizeToken(value: string | undefined | null): string {
 }
 
 function normalizeId(value: string | undefined | null): string {
-  return (value ?? "").trim();
+  return String(value ?? "").trim();
 }
 
 function normalizeAccountId(value: string | undefined | null): string {
