@@ -1,5 +1,4 @@
 import "./isolated-agent.mocks.js";
-import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
