@@ -1,6 +1,10 @@
+import fs from "node:fs/promises";
 import { type AddressInfo, createServer } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { fetch as realFetch } from "undici";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 
 let testPort = 0;
 let cdpBaseUrl = "";
@@ -62,6 +66,16 @@ const pwMocks = vi.hoisted(() => ({
   waitForViaPlaywright: vi.fn(async () => {}),
 }));
 
+const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
+
+beforeAll(async () => {
+  chromeUserDataDir.dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-user-data-"));
+});
+
+afterAll(async () => {
+  await fs.rm(chromeUserDataDir.dir, { recursive: true, force: true });
+});
+
 function makeProc(pid = 123) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
   return {
@@ -116,13 +130,13 @@ vi.mock("./chrome.js", () => ({
     return {
       pid: 123,
       exe: { kind: "chrome", path: "/fake/chrome" },
-      userDataDir: "/tmp/openclaw",
+      userDataDir: chromeUserDataDir.dir,
       cdpPort: profile.cdpPort,
       startedAt: Date.now(),
       proc,
     };
   }),
-  resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw"),
+  resolveOpenClawUserDataDir: vi.fn(() => chromeUserDataDir.dir),
   stopOpenClawChrome: vi.fn(async () => {
     reachable = false;
   }),
@@ -400,31 +414,32 @@ describe("browser control server", () => {
     const base = await startServerAndBase();
 
     const upload = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/a.txt"],
+      paths: ["a.txt"],
       timeoutMs: 1234,
     });
     expect(upload).toMatchObject({ ok: true });
     expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: cdpBaseUrl,
       targetId: "abcd1234",
-      paths: ["/tmp/a.txt"],
+      // The server resolves paths (which adds a drive letter on Windows for `\\tmp\\...` style roots).
+      paths: [path.resolve(DEFAULT_UPLOAD_DIR, "a.txt")],
       timeoutMs: 1234,
     });
 
     const uploadWithRef = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/b.txt"],
+      paths: ["b.txt"],
       ref: "e12",
     });
     expect(uploadWithRef).toMatchObject({ ok: true });
 
     const uploadWithInputRef = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/c.txt"],
+      paths: ["c.txt"],
       inputRef: "e99",
     });
     expect(uploadWithInputRef).toMatchObject({ ok: true });
 
     const uploadWithElement = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/d.txt"],
+      paths: ["d.txt"],
       element: "input[type=file]",
     });
     expect(uploadWithElement).toMatchObject({ ok: true });

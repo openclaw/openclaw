@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { loadDotEnv } from "../infra/dotenv.js";
@@ -12,6 +10,7 @@ import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.
 import { enableConsoleCapture } from "../logging.js";
 import { getCommandPath, getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
 import { tryRouteCli } from "./route.js";
+import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   const index = argv.indexOf("--update");
@@ -63,7 +62,7 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 }
 
 export async function runCli(argv: string[] = process.argv) {
-  const normalizedArgv = stripWindowsNodeExec(argv);
+  const normalizedArgv = normalizeWindowsArgv(argv);
   loadDotEnv({ quiet: true });
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {
@@ -93,9 +92,16 @@ export async function runCli(argv: string[] = process.argv) {
   });
 
   const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
-  // Register the primary subcommand if one exists (for lazy-loading)
+  // Register the primary command (builtin or subcli) so help and command parsing
+  // are correct even with lazy command registration.
   const primary = getPrimaryCommand(parseArgv);
-  if (primary && shouldRegisterPrimarySubcommand(parseArgv)) {
+  if (primary) {
+    const { getProgramContext } = await import("./program/program-context.js");
+    const ctx = getProgramContext(program);
+    if (ctx) {
+      const { registerCoreCliByName } = await import("./program/command-registry.js");
+      await registerCoreCliByName(program, ctx, primary, parseArgv);
+    }
     const { registerSubCliByName } = await import("./program/register.subclis.js");
     await registerSubCliByName(program, primary);
   }
@@ -115,61 +121,6 @@ export async function runCli(argv: string[] = process.argv) {
   }
 
   await program.parseAsync(parseArgv);
-}
-
-function stripWindowsNodeExec(argv: string[]): string[] {
-  if (process.platform !== "win32") {
-    return argv;
-  }
-  const stripControlChars = (value: string): string => {
-    let out = "";
-    for (let i = 0; i < value.length; i += 1) {
-      const code = value.charCodeAt(i);
-      if (code >= 32 && code !== 127) {
-        out += value[i];
-      }
-    }
-    return out;
-  };
-  const normalizeArg = (value: string): string =>
-    stripControlChars(value)
-      .replace(/^['"]+|['"]+$/g, "")
-      .trim();
-  const normalizeCandidate = (value: string): string =>
-    normalizeArg(value).replace(/^\\\\\\?\\/, "");
-  const execPath = normalizeCandidate(process.execPath);
-  const execPathLower = execPath.toLowerCase();
-  const execBase = path.basename(execPath).toLowerCase();
-  const isExecPath = (value: string | undefined): boolean => {
-    if (!value) {
-      return false;
-    }
-    const normalized = normalizeCandidate(value);
-    if (!normalized) {
-      return false;
-    }
-    const lower = normalized.toLowerCase();
-    return (
-      lower === execPathLower ||
-      path.basename(lower) === execBase ||
-      lower.endsWith("\\node.exe") ||
-      lower.endsWith("/node.exe") ||
-      lower.includes("node.exe") ||
-      (path.basename(lower) === "node.exe" && fs.existsSync(normalized))
-    );
-  };
-  const filtered = argv.filter((arg, index) => index === 0 || !isExecPath(arg));
-  if (filtered.length < 3) {
-    return filtered;
-  }
-  const cleaned = [...filtered];
-  if (isExecPath(cleaned[1])) {
-    cleaned.splice(1, 1);
-  }
-  if (isExecPath(cleaned[2])) {
-    cleaned.splice(2, 1);
-  }
-  return cleaned;
 }
 
 export function isCliMainModule(): boolean {

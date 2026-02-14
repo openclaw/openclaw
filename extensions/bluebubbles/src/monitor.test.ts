@@ -557,6 +557,114 @@ describe("BlueBubbles webhook monitor", () => {
       expect(res.statusCode).toBe(401);
     });
 
+    it("rejects ambiguous routing when multiple targets match the same password", async () => {
+      const accountA = createMockAccount({ password: "secret-token" });
+      const accountB = createMockAccount({ password: "secret-token" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      const sinkA = vi.fn();
+      const sinkB = vi.fn();
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook?password=secret-token", {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+        },
+      });
+      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+        remoteAddress: "192.168.1.100",
+      };
+
+      const unregisterA = registerBlueBubblesWebhookTarget({
+        account: accountA,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+        statusSink: sinkA,
+      });
+      const unregisterB = registerBlueBubblesWebhookTarget({
+        account: accountB,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+        statusSink: sinkB,
+      });
+      unregister = () => {
+        unregisterA();
+        unregisterB();
+      };
+
+      const res = createMockResponse();
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(401);
+      expect(sinkA).not.toHaveBeenCalled();
+      expect(sinkB).not.toHaveBeenCalled();
+    });
+
+    it("does not route to passwordless targets when a password-authenticated target matches", async () => {
+      const accountStrict = createMockAccount({ password: "secret-token" });
+      const accountFallback = createMockAccount({ password: undefined });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      const sinkStrict = vi.fn();
+      const sinkFallback = vi.fn();
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook?password=secret-token", {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+        },
+      });
+      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+        remoteAddress: "192.168.1.100",
+      };
+
+      const unregisterStrict = registerBlueBubblesWebhookTarget({
+        account: accountStrict,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+        statusSink: sinkStrict,
+      });
+      const unregisterFallback = registerBlueBubblesWebhookTarget({
+        account: accountFallback,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+        statusSink: sinkFallback,
+      });
+      unregister = () => {
+        unregisterStrict();
+        unregisterFallback();
+      };
+
+      const res = createMockResponse();
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(sinkStrict).toHaveBeenCalledTimes(1);
+      expect(sinkFallback).not.toHaveBeenCalled();
+    });
+
     it("requires authentication for loopback requests when password is configured", async () => {
       const account = createMockAccount({ password: "secret-token" });
       const config: OpenClawConfig = {};

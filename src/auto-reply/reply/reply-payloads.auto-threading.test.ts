@@ -72,4 +72,17 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[0].replyToId).toBe("42");
     expect(result[0].replyToTag).toBe(true);
   });
+
+  it("keeps explicit tags for Telegram when off mode is enabled", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "[[reply_to_current]]A" }],
+      replyToMode: "off",
+      replyToChannel: "telegram",
+      currentMessageId: "42",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("42");
+    expect(result[0].replyToTag).toBe(true);
+  });
 });

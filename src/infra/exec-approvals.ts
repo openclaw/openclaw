@@ -11,6 +11,29 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
+export type ExecApprovalRequest = {
+  id: string;
+  request: {
+    command: string;
+    cwd?: string | null;
+    host?: string | null;
+    security?: string | null;
+    ask?: string | null;
+    agentId?: string | null;
+    resolvedPath?: string | null;
+    sessionKey?: string | null;
+  };
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
+export type ExecApprovalResolved = {
+  id: string;
+  decision: ExecApprovalDecision;
+  resolvedBy?: string | null;
+  ts: number;
+};
+
 export type ExecApprovalsDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;

@@ -13,6 +13,20 @@ export function formatBillingErrorMessage(provider?: string): string {
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
+const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+const OVERLOADED_ERROR_USER_MESSAGE =
+  "The AI service is temporarily overloaded. Please try again in a moment.";
+
+function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
+  if (isRateLimitErrorMessage(raw)) {
+    return RATE_LIMIT_ERROR_USER_MESSAGE;
+  }
+  if (isOverloadedErrorMessage(raw)) {
+    return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  return undefined;
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -461,8 +475,9 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
-  if (isOverloadedErrorMessage(raw)) {
-    return "The AI service is temporarily overloaded. Please try again in a moment.";
+  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
+  if (transientCopy) {
+    return transientCopy;
   }
 
   if (isBillingErrorMessage(raw)) {
@@ -488,7 +503,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   const stripped = stripFinalTagsFromText(text);
   const trimmed = stripped.trim();
   if (!trimmed) {
-    return stripped;
+    return "";
   }
 
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
@@ -517,8 +532,9 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
 
     if (ERROR_PREFIX_RE.test(trimmed)) {
-      if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-        return "The AI service is temporarily overloaded. Please try again in a moment.";
+      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
+      if (prefixedCopy) {
+        return prefixedCopy;
       }
       if (isTimeoutErrorMessage(trimmed)) {
         return "LLM request timed out.";
@@ -527,7 +543,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
   }
 
-  return collapseConsecutiveDuplicateBlocks(stripped);
+  // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
+  // the first content line (e.g. markdown/code blocks).
+  const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
+  return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {

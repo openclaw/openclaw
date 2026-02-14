@@ -7,6 +7,10 @@ import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 const embedBatch = vi.fn(async (texts: string[]) => texts.map(() => [0, 1, 0]));
 const embedQuery = vi.fn(async () => [0, 1, 0]);
 
+vi.mock("./sqlite-vec.js", () => ({
+  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+}));
+
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => ({
     requestedProvider: "openai",
@@ -70,7 +74,7 @@ describe("memory embedding token limits", () => {
       throw new Error("manager missing");
     }
     manager = result.manager;
-    await manager.sync({ force: true });
+    await manager.sync({ reason: "test" });
 
     const inputs = embedBatch.mock.calls.flatMap((call) => call[0] ?? []);
     expect(inputs.length).toBeGreaterThan(1);
@@ -107,7 +111,7 @@ describe("memory embedding token limits", () => {
       throw new Error("manager missing");
     }
     manager = result.manager;
-    await manager.sync({ force: true });
+    await manager.sync({ reason: "test" });
 
     const batchSizes = embedBatch.mock.calls.map(
       (call) => (call[0] as string[] | undefined)?.length ?? 0,

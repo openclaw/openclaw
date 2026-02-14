@@ -347,6 +347,16 @@ The Gateway multiplexes **WebSocket + HTTP** on a single port:
 - Default: `18789`
 - Config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`
 
+This HTTP surface includes the Control UI and the canvas host:
+
+- Control UI (SPA assets) (default base path `/`)
+- Canvas host: `/__openclaw__/canvas/` and `/__openclaw__/a2ui/` (arbitrary HTML/JS; treat as untrusted content)
+
+If you load canvas content in a normal browser, treat it like any other untrusted web page:
+
+- Don't expose the canvas host to untrusted networks/users.
+- Don't make canvas content share the same origin as privileged web surfaces unless you fully understand the implications.
+
 Bind mode controls where the Gateway listens:
 
 - `gateway.bind: "loopback"` (default): only local clients can connect.
@@ -439,6 +449,7 @@ Auth modes:
 
 - `gateway.auth.mode: "token"`: shared bearer token (recommended for most setups).
 - `gateway.auth.mode: "password"`: password auth (prefer setting via env: `OPENCLAW_GATEWAY_PASSWORD`).
+- `gateway.auth.mode: "trusted-proxy"`: trust an identity-aware reverse proxy to authenticate users and pass identity via headers (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 
 Rotation checklist (token/password):
 
@@ -459,7 +470,7 @@ injected by Tailscale.
 
 **Security rule:** do not forward these headers from your own reverse proxy. If
 you terminate TLS or proxy in front of the gateway, disable
-`gateway.auth.allowTailscale` and use token/password auth instead.
+`gateway.auth.allowTailscale` and use token/password auth (or [Trusted Proxy Auth](/gateway/trusted-proxy-auth)) instead.
 
 Trusted proxies:
 
