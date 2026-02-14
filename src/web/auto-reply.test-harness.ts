@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import type { WebInboundMessage } from "./inbound.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as ssrf from "../infra/net/ssrf.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
@@ -116,4 +117,62 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
     setLoggerOverride(null);
     vi.useRealTimers();
   });
+}
+
+export function createWebListenerFactoryCapture() {
+  let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+  const listenerFactory = async (opts: {
+    onMessage: (msg: WebInboundMessage) => Promise<void>;
+  }) => {
+    capturedOnMessage = opts.onMessage;
+    return { close: vi.fn() };
+  };
+
+  return {
+    listenerFactory,
+    getOnMessage: () => capturedOnMessage,
+  };
+}
+
+export function createWebInboundDeliverySpies() {
+  return {
+    sendMedia: vi.fn(),
+    reply: vi.fn().mockResolvedValue(undefined),
+    sendComposing: vi.fn(),
+  };
+}
+
+export async function sendWebGroupInboundMessage(params: {
+  onMessage: (msg: WebInboundMessage) => Promise<void>;
+  body: string;
+  id: string;
+  senderE164: string;
+  senderName: string;
+  mentionedJids?: string[];
+  selfE164?: string;
+  selfJid?: string;
+  spies: ReturnType<typeof createWebInboundDeliverySpies>;
+  conversationId?: string;
+  accountId?: string;
+}) {
+  const conversationId = params.conversationId ?? "123@g.us";
+  const accountId = params.accountId ?? "default";
+  await params.onMessage({
+    body: params.body,
+    from: conversationId,
+    conversationId,
+    chatId: conversationId,
+    chatType: "group",
+    to: "+2",
+    accountId,
+    id: params.id,
+    senderE164: params.senderE164,
+    senderName: params.senderName,
+    mentionedJids: params.mentionedJids,
+    selfE164: params.selfE164,
+    selfJid: params.selfJid,
+    sendComposing: params.spies.sendComposing,
+    reply: params.spies.reply,
+    sendMedia: params.spies.sendMedia,
+  } as WebInboundMessage);
 }
