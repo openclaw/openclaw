@@ -171,13 +171,28 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
-  const answerTexts = (
+  const rawAnswerTexts = (
     params.assistantTexts.length
       ? params.assistantTexts
       : fallbackAnswerText
         ? [fallbackAnswerText]
         : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
+
+  // Merge adjacent text blocks into a single text so that multi-block assistant
+  // responses are delivered as one coherent message instead of multiple bubbles.
+  // The model can produce multiple text content blocks in a single turn (e.g.
+  // Claude with interleaved thinking blocks); when block streaming is off these
+  // would otherwise each become a separate outbound message.
+  const answerTexts =
+    rawAnswerTexts.length > 1
+      ? [
+          rawAnswerTexts
+            .map((t) => t.trim())
+            .filter(Boolean)
+            .join("\n\n"),
+        ]
+      : rawAnswerTexts;
 
   for (const text of answerTexts) {
     const {
