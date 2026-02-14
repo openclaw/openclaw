@@ -461,16 +461,20 @@ describe("resolveHeartbeatIntervalMs", () => {
     }
   });
 
-  it("passes through accountId for telegram heartbeats", async () => {
+  async function expectTelegramHeartbeatAccountId(params: {
+    heartbeat: Record<string, unknown>;
+    telegram: Record<string, unknown>;
+    expectedAccountId: string | undefined;
+  }): Promise<void> {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
-            heartbeat: { every: "5m", target: "telegram" },
+            heartbeat: params.heartbeat as never,
           },
         },
-        channels: { telegram: { botToken: "test-bot-token-123" } },
+        channels: { telegram: params.telegram as never },
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
@@ -500,108 +504,39 @@ describe("resolveHeartbeatIntervalMs", () => {
       expect(sendTelegram).toHaveBeenCalledWith(
         "123456",
         "Hello from heartbeat",
-        expect.objectContaining({ accountId: undefined, verbose: false }),
+        expect.objectContaining({ accountId: params.expectedAccountId, verbose: false }),
       );
     });
-  });
+  }
 
-  it("uses explicit heartbeat accountId for telegram delivery", async () => {
-    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: { every: "5m", target: "telegram", accountId: "work" },
-          },
+  it.each([
+    {
+      title: "passes through accountId for telegram heartbeats",
+      heartbeat: { every: "5m", target: "telegram" },
+      telegram: { botToken: "test-bot-token-123" },
+      expectedAccountId: undefined,
+    },
+    {
+      title: "does not pre-resolve telegram accountId (allows config-only account tokens)",
+      heartbeat: { every: "5m", target: "telegram" },
+      telegram: {
+        accounts: {
+          work: { botToken: "test-bot-token-123" },
         },
-        channels: {
-          telegram: {
-            accounts: {
-              work: { botToken: "test-bot-token-123" },
-            },
-          },
+      },
+      expectedAccountId: undefined,
+    },
+    {
+      title: "uses explicit heartbeat accountId for telegram delivery",
+      heartbeat: { every: "5m", target: "telegram", accountId: "work" },
+      telegram: {
+        accounts: {
+          work: { botToken: "test-bot-token-123" },
         },
-        session: { store: storePath },
-      };
-      const sessionKey = resolveMainSessionKey(cfg);
-
-      await seedSessionStore(storePath, sessionKey, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "123456",
-      });
-
-      replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
-      const sendTelegram = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        chatId: "123456",
-      });
-
-      await runHeartbeatOnce({
-        cfg,
-        deps: {
-          sendTelegram,
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-        },
-      });
-
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "123456",
-        "Hello from heartbeat",
-        expect.objectContaining({ accountId: "work", verbose: false }),
-      );
-    });
-  });
-
-  it("does not pre-resolve telegram accountId (allows config-only account tokens)", async () => {
-    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: { every: "5m", target: "telegram" },
-          },
-        },
-        channels: {
-          telegram: {
-            accounts: {
-              work: { botToken: "test-bot-token-123" },
-            },
-          },
-        },
-        session: { store: storePath },
-      };
-      const sessionKey = resolveMainSessionKey(cfg);
-
-      await seedSessionStore(storePath, sessionKey, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "123456",
-      });
-
-      replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
-      const sendTelegram = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        chatId: "123456",
-      });
-
-      await runHeartbeatOnce({
-        cfg,
-        deps: {
-          sendTelegram,
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-        },
-      });
-
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "123456",
-        "Hello from heartbeat",
-        expect.objectContaining({ accountId: undefined, verbose: false }),
-      );
-    });
+      },
+      expectedAccountId: "work",
+    },
+  ])("$title", async ({ heartbeat, telegram, expectedAccountId }) => {
+    await expectTelegramHeartbeatAccountId({ heartbeat, telegram, expectedAccountId });
   });
 });
