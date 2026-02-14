@@ -107,8 +107,9 @@ const SENSITIVE_KEY_WHITELIST = new Set([
 const SENSITIVE_PATTERNS = [/token$/i, /password/i, /secret/i, /api.?key/i];
 
 export function isSensitiveConfigPath(path: string): boolean {
+  const lowerPath = path.toLowerCase();
   return (
-    !Array.from(SENSITIVE_KEY_WHITELIST).some((suffix) => path.endsWith(suffix)) &&
+    !Array.from(SENSITIVE_KEY_WHITELIST).some((suffix) => lowerPath.endsWith(suffix)) &&
     SENSITIVE_PATTERNS.some((pattern) => pattern.test(path))
   );
 }
