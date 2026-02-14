@@ -45,12 +45,15 @@ const {
 } = tts;
 
 const {
+  detectLanguage,
   isValidVoiceId,
   isValidOpenAIVoice,
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   parseTtsDirectives,
+  resolvePiperBaseUrl,
+  resolvePiperVoice,
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
@@ -212,6 +215,42 @@ describe("tts", () => {
       });
       expect(config.piper.baseUrl).toBe("http://piper-http:5001");
       expect(isTtsProviderConfigured(config, "piper")).toBe(true);
+    });
+  });
+
+  describe("piper language routing", () => {
+    it("detects Hindi text", () => {
+      expect(detectLanguage("यह एक लंबा हिंदी वाक्य है जो भाषा पहचान के लिए पर्याप्त है।")).toBe("hi");
+    });
+
+    it("resolves piper voice by detected language", () => {
+      const voice = resolvePiperVoice({
+        text: "Bonjour tout le monde ceci est une phrase francaise suffisamment longue.",
+        config: {
+          baseUrl: "http://piper-http:5001",
+          voice: "en_US-ryan-medium",
+          voiceByLang: {
+            fr: "fr_FR-siwis-medium",
+          },
+        },
+      });
+      expect(voice).toBe("fr_FR-siwis-medium");
+    });
+
+    it("resolves piper baseUrl by detected language", () => {
+      const baseUrl = resolvePiperBaseUrl({
+        text: "Dies ist ein langer deutscher Satz zur Spracherkennung und Auswahl.",
+        config: {
+          baseUrl: "http://piper-http:5001",
+          baseUrlByLang: {
+            de: "http://piper-http-de:5001",
+          },
+          voiceByLang: {
+            de: "de_DE-thorsten_emotional-medium",
+          },
+        },
+      });
+      expect(baseUrl).toBe("http://piper-http-de:5001");
     });
   });
 

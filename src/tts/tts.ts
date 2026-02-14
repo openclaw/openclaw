@@ -1,3 +1,4 @@
+import { franc } from "franc-min";
 import {
   existsSync,
   mkdirSync,
@@ -130,7 +131,9 @@ export type ResolvedTtsConfig = {
   };
   piper: {
     baseUrl: string;
+    baseUrlByLang?: Record<string, string>;
     voice?: string;
+    voiceByLang?: Record<string, string>;
     timeoutMs?: number;
   };
   prefsPath?: string;
@@ -314,7 +317,9 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       baseUrl: normalizeUrl(
         raw.piper?.baseUrl?.trim() || process.env.PIPER_HTTP_URL?.trim() || DEFAULT_PIPER_BASE_URL,
       ),
+      baseUrlByLang: normalizePiperUrlMap(raw.piper?.baseUrlByLang),
       voice: raw.piper?.voice?.trim() || undefined,
+      voiceByLang: normalizePiperVoiceMap(raw.piper?.voiceByLang),
       timeoutMs: raw.piper?.timeoutMs,
     },
     prefsPath: raw.prefsPath,
@@ -517,18 +522,130 @@ function normalizeUrl(value?: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
+function normalizePiperVoiceMap(
+  value: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const entries = Object.entries(value)
+    .map(([key, voice]) => [normalizeLangKey(key), voice?.trim()] as const)
+    .filter(([key, voice]) => key && voice);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
+}
+
+function normalizePiperUrlMap(
+  value: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const entries = Object.entries(value)
+    .map(([key, url]) => [normalizeLangKey(key), normalizeUrl(url)] as const)
+    .filter(([key, url]) => key && url);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
+}
+
+function normalizeLangKey(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return "";
+  }
+  const split = trimmed.split(/[-_]/)[0];
+  return split.trim();
+}
+
+const ISO3_TO_1: Record<string, string> = {
+  eng: "en",
+  deu: "de",
+  ger: "de",
+  fra: "fr",
+  fre: "fr",
+  hin: "hi",
+};
+
+function detectLanguage(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (trimmed.length < 20) {
+    return undefined;
+  }
+  // Strong Hindi signal: Devanagari script.
+  if (/[\u0900-\u097F]/.test(trimmed)) {
+    return "hi";
+  }
+  const letters = trimmed.replace(/[^A-Za-z\u00C0-\u024F]/g, "");
+  if (letters.length < 10) {
+    return undefined;
+  }
+  const iso3 = franc(trimmed);
+  if (!iso3 || iso3 === "und") {
+    return undefined;
+  }
+  return ISO3_TO_1[iso3] ?? iso3;
+}
+
 function resolvePiperVoice(params: {
+  text: string;
   config: ResolvedTtsConfig["piper"];
   overrideVoice?: string;
 }): string | undefined {
-  const { config, overrideVoice } = params;
+  const { text, config, overrideVoice } = params;
   if (overrideVoice?.trim()) {
     return overrideVoice.trim();
+  }
+  const voiceByLang = config.voiceByLang;
+  if (!voiceByLang || Object.keys(voiceByLang).length === 0) {
+    return config.voice;
+  }
+  const detected = detectLanguage(text);
+  if (detected) {
+    const key = normalizeLangKey(detected);
+    const mapped = voiceByLang[key];
+    if (mapped) {
+      return mapped;
+    }
   }
   return config.voice;
 }
 
-function resolvePiperBaseUrl(config: ResolvedTtsConfig["piper"]): string {
+function resolvePiperBaseUrl(params: {
+  text: string;
+  config: ResolvedTtsConfig["piper"];
+  overrideVoice?: string;
+}): string {
+  const { text, config, overrideVoice } = params;
+  const baseUrlByLang = config.baseUrlByLang;
+  if (!baseUrlByLang || Object.keys(baseUrlByLang).length === 0) {
+    return config.baseUrl;
+  }
+
+  if (overrideVoice) {
+    const normalizedVoice = overrideVoice.trim();
+    const matchedLang = Object.entries(config.voiceByLang ?? {}).find(
+      ([, voice]) => voice === normalizedVoice,
+    );
+    if (matchedLang) {
+      const mapped = baseUrlByLang[matchedLang[0]];
+      if (mapped) {
+        return mapped;
+      }
+    }
+  }
+
+  const detected = detectLanguage(text);
+  if (detected) {
+    const key = normalizeLangKey(detected);
+    const mapped = baseUrlByLang[key];
+    if (mapped) {
+      return mapped;
+    }
+  }
   return config.baseUrl;
 }
 
@@ -697,10 +814,15 @@ export async function textToSpeech(params: {
         const audioPath = path.join(tempDir, `voice-${Date.now()}.wav`);
         const overrideVoice = params.overrides?.piper?.voice;
         const voice = resolvePiperVoice({
+          text: params.text,
           config: config.piper,
           overrideVoice,
         });
-        const baseUrl = resolvePiperBaseUrl(config.piper);
+        const baseUrl = resolvePiperBaseUrl({
+          text: params.text,
+          config: config.piper,
+          overrideVoice,
+        });
         await piperTTS({
           text: params.text,
           outputPath: audioPath,
@@ -1038,12 +1160,15 @@ export async function maybeApplyTtsToPayload(params: {
 }
 
 export const _test = {
+  detectLanguage,
   isValidVoiceId,
   isValidOpenAIVoice,
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   parseTtsDirectives,
+  resolvePiperBaseUrl,
+  resolvePiperVoice,
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,

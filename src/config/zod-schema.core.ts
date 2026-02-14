@@ -235,7 +235,9 @@ export const TtsConfigSchema = z
     piper: z
       .object({
         baseUrl: z.string().optional(),
+        baseUrlByLang: z.record(z.string(), z.string()).optional(),
         voice: z.string().optional(),
+        voiceByLang: z.record(z.string(), z.string()).optional(),
         timeoutMs: z.number().int().min(1000).max(120000).optional(),
       })
       .strict()

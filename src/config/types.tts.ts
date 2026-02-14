@@ -76,7 +76,9 @@ export type TtsConfig = {
   /** Piper (Wyoming HTTP sidecar) configuration. */
   piper?: {
     baseUrl?: string;
+    baseUrlByLang?: Record<string, string>;
     voice?: string;
+    voiceByLang?: Record<string, string>;
     timeoutMs?: number;
   };
   /** Optional path for local TTS user preferences JSON. */
