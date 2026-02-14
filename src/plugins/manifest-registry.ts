@@ -6,6 +6,25 @@ import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-s
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
 
+type SeenIdEntry = {
+  candidate: PluginCandidate;
+  recordIndex: number;
+};
+
+function pluginOriginRank(origin: PluginOrigin): number {
+  // Precedence: config > workspace > global > bundled
+  switch (origin) {
+    case "config":
+      return 0;
+    case "workspace":
+      return 1;
+    case "global":
+      return 2;
+    case "bundled":
+      return 3;
+  }
+}
+
 export type PluginManifestRecord = {
   id: string;
   name?: string;
@@ -138,7 +157,7 @@ export function loadPluginManifestRegistry(params: {
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
-  const seenIds = new Map<string, PluginCandidate>();
+  const seenIds = new Map<string, SeenIdEntry>();
 
   for (const candidate of candidates) {
     const manifestRes = loadPluginManifest(candidate.rootDir);
@@ -161,19 +180,37 @@ export function loadPluginManifestRegistry(params: {
       });
     }
 
-    const existingCandidate = seenIds.get(manifest.id);
-    if (existingCandidate) {
+    const configSchema = manifest.configSchema;
+    const manifestMtime = safeStatMtimeMs(manifestRes.manifestPath);
+    const schemaCacheKey = manifestMtime
+      ? `${manifestRes.manifestPath}:${manifestMtime}`
+      : manifestRes.manifestPath;
+
+    const existing = seenIds.get(manifest.id);
+    if (existing) {
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
       // is a false-positive duplicate and can be silently skipped.
       let samePlugin = false;
       try {
         samePlugin =
-          fs.realpathSync(existingCandidate.rootDir) === fs.realpathSync(candidate.rootDir);
+          fs.realpathSync(existing.candidate.rootDir) === fs.realpathSync(candidate.rootDir);
       } catch {
         // If either path is inaccessible, fall through to duplicate warning
       }
       if (samePlugin) {
+        // Prefer higher-precedence origins even if candidates are passed in
+        // an unexpected order (config > workspace > global > bundled).
+        if (pluginOriginRank(candidate.origin) < pluginOriginRank(existing.candidate.origin)) {
+          records[existing.recordIndex] = buildRecord({
+            manifest,
+            candidate,
+            manifestPath: manifestRes.manifestPath,
+            schemaCacheKey,
+            configSchema,
+          });
+          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        }
         continue;
       }
       diagnostics.push({
@@ -183,14 +220,8 @@ export function loadPluginManifestRegistry(params: {
         message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
       });
     } else {
-      seenIds.set(manifest.id, candidate);
+      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
-
-    const configSchema = manifest.configSchema;
-    const manifestMtime = safeStatMtimeMs(manifestRes.manifestPath);
-    const schemaCacheKey = manifestMtime
-      ? `${manifestRes.manifestPath}:${manifestMtime}`
-      : manifestRes.manifestPath;
 
     records.push(
       buildRecord({

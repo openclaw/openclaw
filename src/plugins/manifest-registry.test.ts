@@ -20,7 +20,11 @@ function writeManifest(dir: string, manifest: Record<string, unknown>) {
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (!dir) {
+      break;
+    }
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch {
@@ -134,5 +138,42 @@ describe("loadPluginManifestRegistry", () => {
       (d) => d.level === "warn" && d.message?.includes("duplicate plugin id"),
     );
     expect(duplicateWarnings.length).toBe(0);
+  });
+
+  it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
+    const dir = makeTempDir();
+    fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+    const manifest = { id: "precedence-plugin", configSchema: { type: "object" } };
+    writeManifest(dir, manifest);
+
+    // Use a different-but-equivalent path representation without requiring symlinks.
+    const altDir = path.join(dir, "sub", "..");
+
+    const candidates: PluginCandidate[] = [
+      {
+        idHint: "precedence-plugin",
+        source: path.join(dir, "index.ts"),
+        rootDir: dir,
+        origin: "bundled",
+      },
+      {
+        idHint: "precedence-plugin",
+        source: path.join(altDir, "index.ts"),
+        rootDir: altDir,
+        origin: "config",
+      },
+    ];
+
+    const registry = loadPluginManifestRegistry({
+      candidates,
+      cache: false,
+    });
+
+    const duplicateWarnings = registry.diagnostics.filter(
+      (d) => d.level === "warn" && d.message?.includes("duplicate plugin id"),
+    );
+    expect(duplicateWarnings.length).toBe(0);
+    expect(registry.plugins.length).toBe(1);
+    expect(registry.plugins[0]?.origin).toBe("config");
   });
 });
