@@ -6,7 +6,8 @@
     "build": "vite build",
     "dev": "vite",
     "preview": "vite preview",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run --config vitest.config.ts",
+    "patch": "bash ../patch-ui.sh"
   },
   "dependencies": {
     "@noble/ed25519": "3.0.0",
