@@ -65,7 +65,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionInFlight: false,
     pendingCompactionRetry: 0,
     compactionRetryResolve: undefined,
+    compactionRetryReject: undefined,
     compactionRetryPromise: null,
+    unsubscribed: false,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -203,8 +205,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const ensureCompactionPromise = () => {
     if (!state.compactionRetryPromise) {
-      state.compactionRetryPromise = new Promise((resolve) => {
+      // Create a single promise that resolves when ALL pending compactions complete
+      // (tracked by pendingCompactionRetry counter, decremented in resolveCompactionRetry)
+      state.compactionRetryPromise = new Promise((resolve, reject) => {
         state.compactionRetryResolve = resolve;
+        state.compactionRetryReject = reject;
+      });
+      // Prevent unhandled rejection if rejected after all consumers have resolved
+      state.compactionRetryPromise.catch((err) => {
+        log.debug(`compaction promise rejected (no waiter): ${String(err)}`);
       });
     }
   };
@@ -222,6 +231,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (state.pendingCompactionRetry === 0 && !state.compactionInFlight) {
       state.compactionRetryResolve?.();
       state.compactionRetryResolve = undefined;
+      state.compactionRetryReject = undefined;
       state.compactionRetryPromise = null;
     }
   };
@@ -230,6 +240,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (state.pendingCompactionRetry === 0 && !state.compactionInFlight) {
       state.compactionRetryResolve?.();
       state.compactionRetryResolve = undefined;
+      state.compactionRetryReject = undefined;
       state.compactionRetryPromise = null;
     }
   };
@@ -608,13 +619,47 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getCompactionCount: () => compactionCount,
   };
 
-  const unsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
+  const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
+
+  const unsubscribe = () => {
+    if (state.unsubscribed) {
+      return;
+    }
+    // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
+    // new un-resolvable promises during teardown.
+    state.unsubscribed = true;
+    // Reject pending compaction wait to unblock awaiting code.
+    // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
+    if (state.compactionRetryPromise) {
+      log.debug(`unsubscribe: rejecting compaction wait runId=${params.runId}`);
+      const reject = state.compactionRetryReject;
+      state.compactionRetryResolve = undefined;
+      state.compactionRetryReject = undefined;
+      state.compactionRetryPromise = null;
+      // Reject with AbortError so it's caught by isAbortError() check in cleanup paths
+      const abortErr = new Error("Unsubscribed during compaction");
+      abortErr.name = "AbortError";
+      reject?.(abortErr);
+    }
+    // Cancel any in-flight compaction to prevent resource leaks when unsubscribing.
+    // Only abort if compaction is actually running to avoid unnecessary work.
+    if (params.session.isCompacting) {
+      log.debug(`unsubscribe: aborting in-flight compaction runId=${params.runId}`);
+      try {
+        params.session.abortCompaction();
+      } catch (err) {
+        log.warn(`unsubscribe: compaction abort failed runId=${params.runId} err=${String(err)}`);
+      }
+    }
+    sessionUnsubscribe();
+  };
 
   return {
     assistantTexts,
     toolMetas,
     unsubscribe,
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
+    isCompactionInFlight: () => state.compactionInFlight,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     // Returns true if any messaging tool successfully sent a message.
@@ -625,15 +670,27 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getUsageTotals,
     getCompactionCount: () => compactionCount,
     waitForCompactionRetry: () => {
+      // Reject after unsubscribe so callers treat it as cancellation, not success
+      if (state.unsubscribed) {
+        const err = new Error("Unsubscribed during compaction wait");
+        err.name = "AbortError";
+        return Promise.reject(err);
+      }
       if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
         ensureCompactionPromise();
         return state.compactionRetryPromise ?? Promise.resolve();
       }
-      return new Promise<void>((resolve) => {
+      return new Promise<void>((resolve, reject) => {
         queueMicrotask(() => {
+          if (state.unsubscribed) {
+            const err = new Error("Unsubscribed during compaction wait");
+            err.name = "AbortError";
+            reject(err);
+            return;
+          }
           if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
             ensureCompactionPromise();
-            void (state.compactionRetryPromise ?? Promise.resolve()).then(resolve);
+            void (state.compactionRetryPromise ?? Promise.resolve()).then(resolve, reject);
           } else {
             resolve();
           }
