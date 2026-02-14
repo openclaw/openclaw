@@ -1,22 +1,27 @@
+import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import { sendMessageSlack } from "../../../slack/send.js";
+import { sendMessageSlack, type SlackSendIdentity } from "../../../slack/send.js";
+
+function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentity | undefined {
+  if (!identity) {
+    return undefined;
+  }
+  const username = identity.name?.trim() || undefined;
+  const iconUrl = identity.avatarUrl?.trim() || undefined;
+  const rawEmoji = identity.emoji?.trim();
+  const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+  if (!username && !iconUrl && !iconEmoji) {
+    return undefined;
+  }
+  return { username, iconUrl, iconEmoji };
+}
 
 export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: 4000,
-  sendText: async ({
-    to,
-    text,
-    accountId,
-    deps,
-    replyToId,
-    threadId,
-    username,
-    icon_url,
-    icon_emoji,
-  }) => {
+  sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity }) => {
     const send = deps?.sendSlack ?? sendMessageSlack;
     // Use threadId fallback so routed tool notifications stay in the Slack thread.
     const threadTs = replyToId ?? (threadId != null ? String(threadId) : undefined);
@@ -42,27 +47,15 @@ export const slackOutbound: ChannelOutboundAdapter = {
       }
     }
 
+    const slackIdentity = resolveSlackSendIdentity(identity);
     const result = await send(to, finalText, {
       threadTs,
       accountId: accountId ?? undefined,
-      ...(username ? { username } : {}),
-      ...(icon_url ? { icon_url } : {}),
-      ...(icon_emoji && !icon_url ? { icon_emoji } : {}),
+      ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
     return { channel: "slack", ...result };
   },
-  sendMedia: async ({
-    to,
-    text,
-    mediaUrl,
-    accountId,
-    deps,
-    replyToId,
-    threadId,
-    username,
-    icon_url,
-    icon_emoji,
-  }) => {
+  sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId, identity }) => {
     const send = deps?.sendSlack ?? sendMessageSlack;
     // Use threadId fallback so routed tool notifications stay in the Slack thread.
     const threadTs = replyToId ?? (threadId != null ? String(threadId) : undefined);
@@ -88,13 +81,12 @@ export const slackOutbound: ChannelOutboundAdapter = {
       }
     }
 
+    const slackIdentity = resolveSlackSendIdentity(identity);
     const result = await send(to, finalText, {
       mediaUrl,
       threadTs,
       accountId: accountId ?? undefined,
-      ...(username ? { username } : {}),
-      ...(icon_url ? { icon_url } : {}),
-      ...(icon_emoji && !icon_url ? { icon_emoji } : {}),
+      ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
     return { channel: "slack", ...result };
   },
