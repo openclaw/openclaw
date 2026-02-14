@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { pathExists } from "../utils.js";
 import { runGatewayUpdate } from "./update-runner.js";
 
@@ -23,15 +23,28 @@ function createRunner(responses: Record<string, CommandResult>) {
 }
 
 describe("runGatewayUpdate", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
   let tempDir: string;
 
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-"));
+  });
+
+  afterAll(async () => {
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-"));
+    tempDir = path.join(fixtureRoot, `case-${caseId++}`);
+    await fs.mkdir(tempDir, { recursive: true });
     await fs.writeFile(path.join(tempDir, "openclaw.mjs"), "export {};\n", "utf-8");
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    // Shared fixtureRoot cleaned up in afterAll.
   });
 
   it("skips git update when worktree is dirty", async () => {
