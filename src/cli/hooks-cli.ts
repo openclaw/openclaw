@@ -576,8 +576,14 @@ export function registerHooksCli(program: Command): void {
 
       type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
 
-      function enableInternalHookEntries(config: OpenClawConfig, hookNames: string[]): OpenClawConfig {
-        const entries = { ...config.hooks?.internal?.entries } as Record<string, HookInternalEntryLike>;
+      function enableInternalHookEntries(
+        config: OpenClawConfig,
+        hookNames: string[],
+      ): OpenClawConfig {
+        const entries = { ...config.hooks?.internal?.entries } as Record<
+          string,
+          HookInternalEntryLike
+        >;
 
         for (const hookName of hookNames) {
           entries[hookName] = {
