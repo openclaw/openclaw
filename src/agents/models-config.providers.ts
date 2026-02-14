@@ -635,8 +635,8 @@ export function buildNvidiaProvider(): ProviderConfig {
         maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
       },
       {
-        id: "nvidia/llama-3.3-70b-instruct",
-        name: "NVIDIA Llama 3.3 70B Instruct",
+        id: "meta/llama-3.3-70b-instruct",
+        name: "Meta Llama 3.3 70B Instruct",
         reasoning: false,
         input: ["text"],
         cost: NVIDIA_DEFAULT_COST,

@@ -59,7 +59,7 @@ describe("NVIDIA provider", () => {
     const provider = buildNvidiaProvider();
     const modelIds = provider.models.map((m) => m.id);
     expect(modelIds).toContain("nvidia/llama-3.1-nemotron-70b-instruct");
-    expect(modelIds).toContain("nvidia/llama-3.3-70b-instruct");
+    expect(modelIds).toContain("meta/llama-3.3-70b-instruct");
     expect(modelIds).toContain("nvidia/mistral-nemo-minitron-8b-8k-instruct");
   });
 });
