@@ -129,7 +129,7 @@ export async function resolveMediaList(
 }
 
 function inferPlaceholder(attachment: APIAttachment): string {
-  const mime = attachment.content_type ?? "";
+  const mime = attachment.content_type?.toLowerCase() ?? "";
   if (mime.startsWith("image/")) {
     return "<media:image>";
   }
@@ -139,19 +139,30 @@ function inferPlaceholder(attachment: APIAttachment): string {
   if (mime.startsWith("audio/")) {
     return "<media:audio>";
   }
+  const filename = attachment.filename?.toLowerCase() ?? "";
+  if (/\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/.test(filename)) {
+    return "<media:image>";
+  }
+  if (/\.(avi|mkv|mov|mp4|mpeg|mpg|webm)$/.test(filename)) {
+    return "<media:video>";
+  }
+  if (/\.(aac|flac|m4a|mp3|oga|ogg|opus|wav|weba)$/.test(filename)) {
+    return "<media:audio>";
+  }
   return "<media:document>";
 }
 
-function isImageAttachment(attachment: APIAttachment): boolean {
-  const mime = attachment.content_type ?? "";
-  if (mime.startsWith("image/")) {
-    return true;
+function resolveAttachmentLabel(tag: string, count: number): string {
+  if (tag === "<media:image>") {
+    return count === 1 ? "image" : "images";
   }
-  const name = attachment.filename?.toLowerCase() ?? "";
-  if (!name) {
-    return false;
+  if (tag === "<media:video>") {
+    return count === 1 ? "video" : "videos";
   }
-  return /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/.test(name);
+  if (tag === "<media:audio>") {
+    return count === 1 ? "audio file" : "audio files";
+  }
+  return count === 1 ? "file" : "files";
 }
 
 function buildDiscordAttachmentPlaceholder(attachments?: APIAttachment[]): string {
@@ -159,11 +170,10 @@ function buildDiscordAttachmentPlaceholder(attachments?: APIAttachment[]): strin
     return "";
   }
   const count = attachments.length;
-  const allImages = attachments.every(isImageAttachment);
-  const label = allImages ? "image" : "file";
-  const suffix = count === 1 ? label : `${label}s`;
-  const tag = allImages ? "<media:image>" : "<media:document>";
-  return `${tag} (${count} ${suffix})`;
+  const inferredTags = attachments.map((attachment) => inferPlaceholder(attachment));
+  const uniqueTags = Array.from(new Set(inferredTags));
+  const tag = uniqueTags.length === 1 ? uniqueTags[0] : "<media:document>";
+  return `${tag} (${count} ${resolveAttachmentLabel(tag, count)})`;
 }
 
 export function resolveDiscordMessageText(

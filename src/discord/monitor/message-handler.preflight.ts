@@ -57,6 +57,22 @@ export type {
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
 
+type DiscordAudioAttachmentCandidate = {
+  contentType?: string | null;
+  content_type?: string | null;
+  filename?: string | null;
+  url?: string | null;
+};
+
+function isDiscordAudioAttachment(attachment: DiscordAudioAttachmentCandidate): boolean {
+  const contentType = (attachment.content_type ?? attachment.contentType ?? "").toLowerCase();
+  if (contentType.startsWith("audio/")) {
+    return true;
+  }
+  const filename = attachment.filename?.toLowerCase() ?? "";
+  return /\.(aac|flac|m4a|mp3|oga|ogg|opus|wav|weba)$/.test(filename);
+}
+
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
@@ -386,8 +402,8 @@ export async function preflightDiscordMessage(
   // Preflight audio transcription for mention detection in guilds
   // This allows voice notes to be checked for mentions before being dropped
   let preflightTranscript: string | undefined;
-  const hasAudioAttachment = message.attachments?.some((att: { contentType?: string }) =>
-    att.contentType?.startsWith("audio/"),
+  const hasAudioAttachment = message.attachments?.some((att: DiscordAudioAttachmentCandidate) =>
+    isDiscordAudioAttachment(att),
   );
   const needsPreflightTranscription =
     !isDirectMessage &&
@@ -401,18 +417,15 @@ export async function preflightDiscordMessage(
       const { transcribeFirstAudio } = await import("../../media-understanding/audio-preflight.js");
       const audioPaths =
         message.attachments
-          ?.filter((att: { contentType?: string; url: string }) =>
-            att.contentType?.startsWith("audio/"),
-          )
-          .map((att: { url: string }) => att.url) ?? [];
+          ?.filter((att: DiscordAudioAttachmentCandidate) => isDiscordAudioAttachment(att))
+          .map((att: DiscordAudioAttachmentCandidate) => att.url)
+          .filter((url): url is string => Boolean(url)) ?? [];
       if (audioPaths.length > 0) {
         const tempCtx = {
           MediaUrls: audioPaths,
           MediaTypes: message.attachments
-            ?.filter((att: { contentType?: string; url: string }) =>
-              att.contentType?.startsWith("audio/"),
-            )
-            .map((att: { contentType?: string }) => att.contentType)
+            ?.filter((att: DiscordAudioAttachmentCandidate) => isDiscordAudioAttachment(att))
+            .map((att: DiscordAudioAttachmentCandidate) => att.content_type ?? att.contentType)
             .filter(Boolean) as string[],
         };
         preflightTranscript = await transcribeFirstAudio({
