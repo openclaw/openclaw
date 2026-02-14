@@ -49,7 +49,14 @@ function addCacheControlToSystemMessage(params: Record<string, unknown>): void {
     return;
   }
 
-  for (const msg of messages) {
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const msg = message as {
+      role?: unknown;
+      content?: unknown;
+    };
     if (msg.role !== "system" && msg.role !== "developer") {
       continue;
     }

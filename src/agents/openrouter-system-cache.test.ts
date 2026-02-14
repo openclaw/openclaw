@@ -154,4 +154,16 @@ describe("wrapStreamFnWithSystemCacheControl", () => {
 
     expect((getParams()!.messages as MsgArray)[0].content).toBe("Hello");
   });
+
+  it("skips malformed message entries without throwing", () => {
+    const [inner, getParams] = makeInnerStreamFn(() => ({
+      messages: ["not-an-object", { role: "system", content: "System prompt" }],
+    }));
+
+    const wrapped = wrapStreamFnWithSystemCacheControl(inner);
+    expect(() => wrapped(openRouterAnthropicModel, fakeContext, {})).not.toThrow();
+
+    const systemMsg = (getParams()!.messages as MsgArray)[1];
+    expect(Array.isArray(systemMsg.content)).toBe(true);
+  });
 });
