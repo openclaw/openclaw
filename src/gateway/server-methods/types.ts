@@ -30,7 +30,7 @@ export type GatewayRequestContext = {
   cron: CronService;
   cronStorePath: string;
   execApprovalManager?: ExecApprovalManager;
-  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalog: (agentId?: string) => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   logHealth: { error: (message: string) => void };
