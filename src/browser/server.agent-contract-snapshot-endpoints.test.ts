@@ -317,6 +317,17 @@ describe("browser control server", () => {
       targetId: "abcd1234",
       maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
     });
+
+    const snapAiZero = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
+      r.json(),
+    )) as { ok: boolean; format?: string };
+    expect(snapAiZero.ok).toBe(true);
+    expect(snapAiZero.format).toBe("ai");
+    const [lastCall] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
+    expect(lastCall).toEqual({
+      cdpUrl: cdpBaseUrl,
+      targetId: "abcd1234",
+    });
   });
 
   it("agent contract: navigation + common act commands", async () => {

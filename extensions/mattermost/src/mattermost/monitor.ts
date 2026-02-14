@@ -18,7 +18,6 @@ import {
   resolveChannelMediaMaxBytes,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
-import WebSocket from "ws";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -35,10 +34,15 @@ import {
 import {
   createDedupeCache,
   formatInboundFromLabel,
-  rawDataToString,
   resolveThreadSessionKeys,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
+import {
+  createMattermostConnectOnce,
+  type MattermostEventPayload,
+  type MattermostWebSocketFactory,
+} from "./monitor-websocket.js";
+import { runWithReconnect } from "./reconnect.js";
 import { sendMessageMattermost } from "./send.js";
 
 export type MonitorMattermostOpts = {
@@ -49,28 +53,11 @@ export type MonitorMattermostOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
+  webSocketFactory?: MattermostWebSocketFactory;
 };
 
 type FetchLike = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>;
 type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
-
-type MattermostEventPayload = {
-  event?: string;
-  data?: {
-    post?: string;
-    channel_id?: string;
-    channel_name?: string;
-    channel_display_name?: string;
-    channel_type?: string;
-    sender_name?: string;
-    team_id?: string;
-  };
-  broadcast?: {
-    channel_id?: string;
-    team_id?: string;
-    user_id?: string;
-  };
-};
 
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
@@ -888,91 +875,28 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
   const wsUrl = buildMattermostWsUrl(baseUrl);
   let seq = 1;
+  const connectOnce = createMattermostConnectOnce({
+    wsUrl,
+    botToken,
+    abortSignal: opts.abortSignal,
+    statusSink: opts.statusSink,
+    runtime,
+    webSocketFactory: opts.webSocketFactory,
+    nextSeq: () => seq++,
+    onPosted: async (post, payload) => {
+      await debouncer.enqueue({ post, payload });
+    },
+  });
 
-  const connectOnce = async (): Promise<void> => {
-    const ws = new WebSocket(wsUrl);
-    const onAbort = () => ws.close();
-    opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
-
-    return await new Promise((resolve) => {
-      ws.on("open", () => {
-        opts.statusSink?.({
-          connected: true,
-          lastConnectedAt: Date.now(),
-          lastError: null,
-        });
-        ws.send(
-          JSON.stringify({
-            seq: seq++,
-            action: "authentication_challenge",
-            data: { token: botToken },
-          }),
-        );
-      });
-
-      ws.on("message", async (data) => {
-        const raw = rawDataToString(data);
-        let payload: MattermostEventPayload;
-        try {
-          payload = JSON.parse(raw) as MattermostEventPayload;
-        } catch {
-          return;
-        }
-        if (payload.event !== "posted") {
-          return;
-        }
-        const postData = payload.data?.post;
-        if (!postData) {
-          return;
-        }
-        let post: MattermostPost | null = null;
-        if (typeof postData === "string") {
-          try {
-            post = JSON.parse(postData) as MattermostPost;
-          } catch {
-            return;
-          }
-        } else if (typeof postData === "object") {
-          post = postData as MattermostPost;
-        }
-        if (!post) {
-          return;
-        }
-        try {
-          await debouncer.enqueue({ post, payload });
-        } catch (err) {
-          runtime.error?.(`mattermost handler failed: ${String(err)}`);
-        }
-      });
-
-      ws.on("close", (code, reason) => {
-        const message = reason.length > 0 ? reason.toString("utf8") : "";
-        opts.statusSink?.({
-          connected: false,
-          lastDisconnect: {
-            at: Date.now(),
-            status: code,
-            error: message || undefined,
-          },
-        });
-        opts.abortSignal?.removeEventListener("abort", onAbort);
-        resolve();
-      });
-
-      ws.on("error", (err) => {
-        runtime.error?.(`mattermost websocket error: ${String(err)}`);
-        opts.statusSink?.({
-          lastError: String(err),
-        });
-      });
-    });
-  };
-
-  while (!opts.abortSignal?.aborted) {
-    await connectOnce();
-    if (opts.abortSignal?.aborted) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
+  await runWithReconnect(connectOnce, {
+    abortSignal: opts.abortSignal,
+    jitterRatio: 0.2,
+    onError: (err) => {
+      runtime.error?.(`mattermost connection failed: ${String(err)}`);
+      opts.statusSink?.({ lastError: String(err), connected: false });
+    },
+    onReconnect: (delayMs) => {
+      runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
+    },
+  });
 }

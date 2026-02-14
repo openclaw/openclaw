@@ -177,15 +177,9 @@ describe("QmdMemoryManager", () => {
     });
 
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-    const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
-    const race = await Promise.race([
-      createPromise.then(() => "created" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 40)),
-    ]);
-    expect(race).toBe("created");
-    await waitForCondition(() => releaseUpdate !== null, 200);
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(releaseUpdate).not.toBeNull();
     releaseUpdate?.();
-    const manager = await createPromise;
     await manager?.close();
   });
 
@@ -219,12 +213,13 @@ describe("QmdMemoryManager", () => {
 
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
-    const race = await Promise.race([
-      createPromise.then(() => "created" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 40)),
-    ]);
-    expect(race).toBe("timeout");
-    await waitForCondition(() => releaseUpdate !== null, 200);
+    await waitForCondition(() => releaseUpdate !== null, 400);
+    let created = false;
+    void createPromise.then(() => {
+      created = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(created).toBe(false);
     releaseUpdate?.();
     const manager = await createPromise;
     await manager?.close();
@@ -1027,7 +1022,7 @@ async function waitForCondition(check: () => boolean, timeoutMs: number): Promis
     if (check()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
   throw new Error("condition was not met in time");
 }
