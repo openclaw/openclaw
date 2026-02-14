@@ -295,6 +295,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow Discord to write config in response to channel events/commands (default: true).",
   "channels.discord.proxy":
     "Proxy URL for Discord gateway WebSocket connections. Set per account via channels.discord.accounts.<id>.proxy.",
+  "channels.discord.thread.autoCreate":
+    "If true, create a Discord thread for each non-thread guild message and reply inside that thread (default: false).",
+  "channels.discord.thread.inheritParent":
+    "If true, Discord thread sessions inherit parent channel session state (fork transcript and inherit model overrides) (default: false).",
+  "channels.discord.guilds.*.channels.*.autoThread":
+    "Per-channel override for Discord thread auto-create (default: inherit channels.discord.thread.autoCreate).",
+  "channels.discord.guilds.*.channels.*.includeThreadStarter":
+    "If false, omit the Discord thread starter context for this channel (default: true).",
   "channels.whatsapp.configWrites":
     "Allow WhatsApp to write config in response to channel events/commands (default: true).",
   "channels.signal.configWrites":
