@@ -125,6 +125,24 @@ export async function execDocker(args: string[], opts?: ExecDockerOptions) {
   };
 }
 
+export async function readDockerContainerLabel(
+  containerName: string,
+  label: string,
+): Promise<string | null> {
+  const result = await execDocker(
+    ["inspect", "-f", `{{ index .Config.Labels "${label}" }}`, containerName],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  const raw = result.stdout.trim();
+  if (!raw || raw === "<no value>") {
+    return null;
+  }
+  return raw;
+}
+
 export async function readDockerPort(containerName: string, port: number) {
   const result = await execDocker(["port", containerName, `${port}/tcp`], {
     allowFailure: true,
@@ -341,21 +359,7 @@ async function createSandboxContainer(params: {
 }
 
 async function readContainerConfigHash(containerName: string): Promise<string | null> {
-  const readLabel = async (label: string) => {
-    const result = await execDocker(
-      ["inspect", "-f", `{{ index .Config.Labels "${label}" }}`, containerName],
-      { allowFailure: true },
-    );
-    if (result.code !== 0) {
-      return null;
-    }
-    const raw = result.stdout.trim();
-    if (!raw || raw === "<no value>") {
-      return null;
-    }
-    return raw;
-  };
-  return await readLabel("openclaw.configHash");
+  return await readDockerContainerLabel(containerName, "openclaw.configHash");
 }
 
 function formatSandboxRecreateHint(params: { scope: SandboxConfig["scope"]; sessionKey: string }) {
