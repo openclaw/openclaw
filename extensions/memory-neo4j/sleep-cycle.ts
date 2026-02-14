@@ -1,17 +1,18 @@
 /**
- * Seven-phase sleep cycle for memory consolidation.
+ * Eight-phase sleep cycle for memory consolidation.
  *
  * Implements a Pareto-based memory ecosystem where core memory
  * is bounded to the top 20% of memories by effective score.
  *
  * Phases:
  * 1. DEDUPLICATION - Merge near-duplicate memories (reduce redundancy)
+ * 1d. ENTITY DEDUP - Merge near-duplicate entities (reduce entity bloat)
  * 2. PARETO SCORING - Calculate effective scores for all memories
  * 3. CORE PROMOTION - Regular memories above threshold -> core
- * 4. CORE DEMOTION - Core memories below threshold -> regular
+ * 4. EXTRACTION - Form entity relationships (strengthen connections)
  * 5. DECAY/PRUNING - Remove old, low-importance memories (forgetting curve)
- * 6. EXTRACTION - Form entity relationships (strengthen connections)
- * 7. CLEANUP - Remove orphaned entities/tags (garbage collection)
+ * 6. CLEANUP - Remove orphaned entities/tags (garbage collection)
+ * 7. NOISE CLEANUP - Remove dangerous pattern memories
  *
  * Research basis:
  * - Pareto principle (20/80 rule) for memory tiering
@@ -47,6 +48,11 @@ export type SleepCycleResult = {
     pairsChecked: number;
     duplicatesMerged: number;
   };
+  // Phase 1d: Entity Deduplication
+  entityDedup: {
+    pairsFound: number;
+    merged: number;
+  };
   // Phase 2: Pareto Scoring & Threshold
   pareto: {
     totalMemories: number;
@@ -74,6 +80,7 @@ export type SleepCycleResult = {
   cleanup: {
     entitiesRemoved: number;
     tagsRemoved: number;
+    singleUseTagsRemoved: number;
   };
   // Overall
   durationMs: number;
@@ -104,6 +111,9 @@ export type SleepCycleOptions = {
   extractionBatchSize?: number; // Memories per batch (default: 50)
   extractionDelayMs?: number; // Delay between batches (default: 1000)
 
+  // Phase 5: Cleanup
+  singleUseTagMinAgeDays?: number; // Min age before single-use tag pruning (default: 14)
+
   // Phase 4: Decay
   decayRetentionThreshold?: number; // Below this, memory is pruned (default: 0.1)
   decayBaseHalfLifeDays?: number; // Base half-life in days (default: 30)
@@ -116,6 +126,7 @@ export type SleepCycleOptions = {
       | "dedup"
       | "conflict"
       | "semanticDedup"
+      | "entityDedup"
       | "pareto"
       | "promotion"
       | "decay"
@@ -168,6 +179,7 @@ export async function runSleepCycle(
     decayCurves,
     extractionBatchSize = 50,
     extractionDelayMs = 1000,
+    singleUseTagMinAgeDays = 14,
     onPhaseStart,
     onProgress,
   } = options;
@@ -176,6 +188,7 @@ export async function runSleepCycle(
     dedup: { clustersFound: 0, memoriesMerged: 0 },
     conflict: { pairsFound: 0, resolved: 0, invalidated: 0 },
     semanticDedup: { pairsChecked: 0, duplicatesMerged: 0 },
+    entityDedup: { pairsFound: 0, merged: 0 },
     pareto: {
       totalMemories: 0,
       coreMemories: 0,
@@ -185,7 +198,7 @@ export async function runSleepCycle(
     promotion: { candidatesFound: 0, promoted: 0 },
     decay: { memoriesPruned: 0 },
     extraction: { total: 0, processed: 0, succeeded: 0, failed: 0 },
-    cleanup: { entitiesRemoved: 0, tagsRemoved: 0 },
+    cleanup: { entitiesRemoved: 0, tagsRemoved: 0, singleUseTagsRemoved: 0 },
     durationMs: 0,
     aborted: false,
   };
@@ -420,6 +433,51 @@ export async function runSleepCycle(
   }
 
   // --------------------------------------------------------------------------
+  // Phase 1d: Entity Deduplication
+  // Merge entities where one name is a substring of another (same type).
+  // Catches: "fish speech" → "fish speech s1 mini", "aaditya" → "aaditya sukhani"
+  // Transfers MENTIONS relationships to the canonical entity, then deletes the duplicate.
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted) {
+    onPhaseStart?.("entityDedup");
+    logger.info("memory-neo4j: [sleep] Phase 1d: Entity Deduplication");
+
+    try {
+      const pairs = await db.findDuplicateEntityPairs(agentId);
+      result.entityDedup.pairsFound = pairs.length;
+
+      // Track removed entity IDs to skip cascading merges on already-deleted entities
+      const removedIds = new Set<string>();
+
+      for (const pair of pairs) {
+        if (abortSignal?.aborted) {
+          break;
+        }
+        // Skip if either entity was already removed in a previous merge
+        if (removedIds.has(pair.keepId) || removedIds.has(pair.removeId)) {
+          continue;
+        }
+
+        const merged = await db.mergeEntityPair(pair.keepId, pair.removeId);
+        if (merged) {
+          removedIds.add(pair.removeId);
+          result.entityDedup.merged++;
+          onProgress?.(
+            "entityDedup",
+            `Merged "${pair.removeName}" → "${pair.keepName}" (${pair.removeMentions} mentions transferred)`,
+          );
+        }
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 1d complete — ${result.entityDedup.pairsFound} pairs found, ${result.entityDedup.merged} merged`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 1d error: ${String(err)}`);
+    }
+  }
+
+  // --------------------------------------------------------------------------
   // Phase 2: Pareto Scoring & Threshold Calculation
   // --------------------------------------------------------------------------
   let paretoThreshold = 0;
@@ -438,6 +496,8 @@ export async function runSleepCycle(
       paretoThreshold = db.calculateParetoThreshold(allScores, 1 - paretoPercentile);
       result.pareto.threshold = paretoThreshold;
 
+      const otherCount = allScores.filter((s) => s.category === "other").length;
+
       onProgress?.(
         "pareto",
         `Scored ${allScores.length} memories (${result.pareto.coreMemories} core, ${result.pareto.regularMemories} regular)`,
@@ -446,6 +506,17 @@ export async function runSleepCycle(
         "pareto",
         `Pareto threshold (top ${paretoPercentile * 100}%): ${paretoThreshold.toFixed(4)}`,
       );
+
+      if (otherCount > 0) {
+        const otherPct = ((otherCount / allScores.length) * 100).toFixed(1);
+        onProgress?.(
+          "pareto",
+          `⚠️ "other" category: ${otherCount} memories (${otherPct}%) — monitor for conversational noise`,
+        );
+        logger.info(
+          `memory-neo4j: [sleep] "other" category monitor: ${otherCount}/${allScores.length} (${otherPct}%)`,
+        );
+      }
 
       logger.info(
         `memory-neo4j: [sleep] Phase 2 complete — threshold=${paretoThreshold.toFixed(4)} for top ${paretoPercentile * 100}%`,
@@ -649,8 +720,23 @@ export async function runSleepCycle(
         }
       }
 
+      // Prune single-use tags (only 1 memory reference, older than threshold)
+      // These add noise without providing useful cross-memory connections.
+      if (!abortSignal?.aborted) {
+        const singleUseTags = await db.findSingleUseTags(singleUseTagMinAgeDays);
+        if (singleUseTags.length > 0) {
+          result.cleanup.singleUseTagsRemoved = await db.deleteOrphanTags(
+            singleUseTags.map((t) => t.id),
+          );
+          onProgress?.(
+            "cleanup",
+            `Removed ${result.cleanup.singleUseTagsRemoved} single-use tags (>${singleUseTagMinAgeDays}d old)`,
+          );
+        }
+      }
+
       logger.info(
-        `memory-neo4j: [sleep] Phase 6 complete — ${result.cleanup.entitiesRemoved} entities, ${result.cleanup.tagsRemoved} tags removed`,
+        `memory-neo4j: [sleep] Phase 6 complete — ${result.cleanup.entitiesRemoved} entities, ${result.cleanup.tagsRemoved} orphan tags, ${result.cleanup.singleUseTagsRemoved} single-use tags removed`,
       );
     } catch (err) {
       logger.warn(`memory-neo4j: [sleep] Phase 6 error: ${String(err)}`);
