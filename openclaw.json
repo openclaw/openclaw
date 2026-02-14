@@ -4,13 +4,17 @@
     "auth": {
       "mode": "token",
       "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    },
+    "controlUi": {
+      "dangerouslyDisableDeviceAuth": true
     }
   },
   "agents": {
     "defaults": {
       "skipBootstrap": true,
-      "model": { "primary": "anthropic/claude-sonnet-4-6" },
-      "workspace": "/home/node/.openclaw/workspace"
+      "model": { "primary": "anthropic/claude-sonnet-4-5" },
+      "workspace": "/home/node/.openclaw/workspace",
+      "heartbeat": {}
     },
     "list": [{
       "id": "bea",

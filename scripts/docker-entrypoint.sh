@@ -41,4 +41,7 @@ text = re.sub(r'^- \*\*Description:\*\*.*$', f'- **Description:** {desc}', text,
 open(user_md, 'w').write(text)
 "
 
+# Apply pending config changes (e.g. enable Slack channel) before starting
+node /app/openclaw.mjs doctor --fix 2>&1 || true
+
 exec "$@"
