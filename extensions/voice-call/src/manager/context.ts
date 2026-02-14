@@ -12,6 +12,10 @@ export type CallManagerContext = {
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;
   processedEventIds: Set<string>;
+  /** Provider call IDs we already sent a reject hangup for; avoids duplicate hangup calls. */
+  rejectedProviderCallIds: Set<string>;
+  /** Optional runtime hook invoked after an event transitions a call into answered state. */
+  onCallAnswered?: (call: CallRecord) => void;
   provider: VoiceCallProvider | null;
   config: VoiceCallConfig;
   storePath: string;
