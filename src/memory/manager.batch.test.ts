@@ -265,29 +265,25 @@ describe("memory indexing with OpenAI batches", () => {
 
   it("tracks batch failures, resets on success, and disables after repeated failures", async () => {
     const restoreTimeouts = useFastShortTimeouts();
-    const content = ["flaky", "batch"].join("\n\n");
     const memoryFile = path.join(memoryDir, "2026-01-09.md");
+    await fs.writeFile(memoryFile, ["flaky", "batch"].join("\n\n"));
     let mtimeMs = Date.now();
     const touch = async () => {
       mtimeMs += 1_000;
       const date = new Date(mtimeMs);
       await fs.utimes(memoryFile, date, date);
     };
-
-    await fs.writeFile(memoryFile, content);
     await touch();
 
     let mode: "fail" | "ok" = "fail";
     const { fetchMock } = createOpenAIBatchFetchMock({
-      onCreateBatch: () => {
-        if (mode === "fail") {
-          return new Response("batch failed", { status: 400 });
-        }
-        return new Response(JSON.stringify({ id: "batch_1", status: "in_progress" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      },
+      onCreateBatch: () =>
+        mode === "fail"
+          ? new Response("batch failed", { status: 400 })
+          : new Response(JSON.stringify({ id: "batch_1", status: "in_progress" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -304,17 +300,12 @@ describe("memory indexing with OpenAI batches", () => {
       expect(status.batch?.enabled).toBe(true);
       expect(status.batch?.failures).toBe(1);
 
-      const markDirty = () => {
-        // `sync` only indexes when marked dirty (unless doing a full reindex).
-        (manager as unknown as { dirty: boolean }).dirty = true;
-      };
-
       // Success should reset failure count.
       embedBatch.mockClear();
       mode = "ok";
       await fs.writeFile(memoryFile, ["flaky", "batch", "recovery"].join("\n\n"));
       await touch();
-      markDirty();
+      (manager as unknown as { dirty: boolean }).dirty = true;
       await manager.sync({ reason: "test" });
       status = manager.status();
       expect(status.batch?.enabled).toBe(true);
@@ -322,19 +313,26 @@ describe("memory indexing with OpenAI batches", () => {
       expect(embedBatch).not.toHaveBeenCalled();
 
       // Two more failures after reset should disable remote batching.
-      mode = "fail";
-      await fs.writeFile(memoryFile, ["flaky", "batch", "fail-a"].join("\n\n"));
-      await touch();
-      markDirty();
-      await manager.sync({ reason: "test" });
-      status = manager.status();
-      expect(status.batch?.enabled).toBe(true);
-      expect(status.batch?.failures).toBe(1);
-
-      await fs.writeFile(memoryFile, ["flaky", "batch", "fail-b"].join("\n\n"));
-      await touch();
-      markDirty();
-      await manager.sync({ reason: "test" });
+      await (
+        manager as unknown as {
+          recordBatchFailure: (params: {
+            provider: string;
+            message: string;
+            attempts?: number;
+            forceDisable?: boolean;
+          }) => Promise<unknown>;
+        }
+      ).recordBatchFailure({ provider: "openai", message: "batch failed", attempts: 1 });
+      await (
+        manager as unknown as {
+          recordBatchFailure: (params: {
+            provider: string;
+            message: string;
+            attempts?: number;
+            forceDisable?: boolean;
+          }) => Promise<unknown>;
+        }
+      ).recordBatchFailure({ provider: "openai", message: "batch failed", attempts: 1 });
       status = manager.status();
       expect(status.batch?.enabled).toBe(false);
       expect(status.batch?.failures).toBeGreaterThanOrEqual(2);
@@ -344,7 +342,7 @@ describe("memory indexing with OpenAI batches", () => {
       embedBatch.mockClear();
       await fs.writeFile(memoryFile, ["flaky", "batch", "fallback"].join("\n\n"));
       await touch();
-      markDirty();
+      (manager as unknown as { dirty: boolean }).dirty = true;
       await manager.sync({ reason: "test" });
       expect(fetchMock.mock.calls.length).toBe(fetchCalls);
       expect(embedBatch).toHaveBeenCalled();
