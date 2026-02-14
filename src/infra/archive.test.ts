@@ -177,6 +177,6 @@ describe("archive utils", () => {
         destDir: extractDir,
         timeoutMs: 5_000,
       }),
-    ).rejects.toThrow(/absolute|escapes destination/i);
+    ).rejects.toThrow(/absolute|drive path|escapes destination/i);
   });
 });
