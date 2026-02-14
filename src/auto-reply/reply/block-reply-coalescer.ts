@@ -6,6 +6,8 @@ export type BlockReplyCoalescer = {
   flush: (options?: { force?: boolean }) => Promise<void>;
   hasBuffered: () => boolean;
   stop: () => void;
+  hold: () => void;
+  resume: () => void;
 };
 
 export function createBlockReplyCoalescer(params: {
@@ -24,6 +26,7 @@ export function createBlockReplyCoalescer(params: {
   let bufferReplyToId: ReplyPayload["replyToId"];
   let bufferAudioAsVoice: ReplyPayload["audioAsVoice"];
   let idleTimer: NodeJS.Timeout | undefined;
+  let held = false;
 
   const clearIdleTimer = () => {
     if (!idleTimer) {
@@ -40,7 +43,7 @@ export function createBlockReplyCoalescer(params: {
   };
 
   const scheduleIdleFlush = () => {
-    if (idleMs <= 0) {
+    if (idleMs <= 0 || held) {
       return;
     }
     clearIdleTimer();
@@ -68,6 +71,10 @@ export function createBlockReplyCoalescer(params: {
       audioAsVoice: bufferAudioAsVoice,
     };
     resetBuffer();
+    // Reset held state on force flush for safety
+    if (options?.force) {
+      held = false;
+    }
     await onFlush(payload);
   };
 
@@ -140,10 +147,24 @@ export function createBlockReplyCoalescer(params: {
     scheduleIdleFlush();
   };
 
+  const hold = () => {
+    held = true;
+    clearIdleTimer();
+  };
+
+  const resume = () => {
+    held = false;
+    if (bufferText) {
+      scheduleIdleFlush();
+    }
+  };
+
   return {
     enqueue,
     flush,
     hasBuffered: () => Boolean(bufferText),
     stop: () => clearIdleTimer(),
+    hold,
+    resume,
   };
 }
