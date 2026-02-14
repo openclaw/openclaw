@@ -103,6 +103,8 @@
     "test:install:e2e:openai": "OPENCLAW_E2E_MODELS=openai CLAWDBOT_E2E_MODELS=openai bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:smoke": "bash scripts/test-install-sh-docker.sh",
     "test:live": "OPENCLAW_LIVE_TEST=1 CLAWDBOT_LIVE_TEST=1 vitest run --config vitest.live.config.ts",
+    "test:lowcpu": "OPENCLAW_TEST_PROFILE=low NODE_OPTIONS=--max-old-space-size=8192 node scripts/test-parallel.mjs",
+    "test:macmini": "OPENCLAW_TEST_PROFILE=low NODE_OPTIONS=--max-old-space-size=8192 node scripts/test-parallel.mjs",
     "test:ui": "pnpm --dir ui test",
     "test:watch": "vitest",
     "tsgo:test": "tsgo -p tsconfig.test.json",

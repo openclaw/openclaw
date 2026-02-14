@@ -110,6 +110,11 @@ const silentArgs =
 const rawPassthroughArgs = process.argv.slice(2);
 const passthroughArgs =
   rawPassthroughArgs[0] === "--" ? rawPassthroughArgs.slice(1) : rawPassthroughArgs;
+const rawTestProfile = process.env.OPENCLAW_TEST_PROFILE?.trim().toLowerCase();
+const testProfile =
+  rawTestProfile === "low" || rawTestProfile === "max" || rawTestProfile === "normal"
+    ? rawTestProfile
+    : "normal";
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
@@ -122,10 +127,29 @@ const keepGatewaySerial =
 const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
 const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
-const defaultUnitWorkers = localWorkers;
-// Local perf: extensions tend to be the critical path under parallel vitest runs; give them more headroom.
-const defaultExtensionsWorkers = Math.max(1, Math.min(6, Math.floor(localWorkers / 2)));
-const defaultGatewayWorkers = Math.max(1, Math.min(2, Math.floor(localWorkers / 4)));
+const defaultWorkerBudget =
+  testProfile === "low"
+    ? {
+        unit: 2,
+        unitIsolated: 1,
+        extensions: 1,
+        gateway: 1,
+      }
+    : testProfile === "max"
+      ? {
+          unit: localWorkers,
+          unitIsolated: Math.min(4, localWorkers),
+          extensions: Math.max(1, Math.min(6, Math.floor(localWorkers / 2))),
+          gateway: Math.max(1, Math.min(2, Math.floor(localWorkers / 4))),
+        }
+      : {
+          // Local `pnpm test` runs multiple vitest groups concurrently;
+          // keep per-group workers conservative to avoid pegging all cores.
+          unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
+          unitIsolated: 1,
+          extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
+          gateway: 1,
+        };
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
 // In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
@@ -140,16 +164,15 @@ const maxWorkersForRun = (name) => {
     return 1;
   }
   if (name === "unit-isolated") {
-    // Local: allow a bit of parallelism while keeping this run stable.
-    return Math.min(4, localWorkers);
+    return defaultWorkerBudget.unitIsolated;
   }
   if (name === "extensions") {
-    return defaultExtensionsWorkers;
+    return defaultWorkerBudget.extensions;
   }
   if (name === "gateway") {
-    return defaultGatewayWorkers;
+    return defaultWorkerBudget.gateway;
   }
-  return defaultUnitWorkers;
+  return defaultWorkerBudget.unit;
 };
 
 const WARNING_SUPPRESSION_FLAGS = [
