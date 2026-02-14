@@ -63,6 +63,21 @@ else
   echo ""
 fi
 
+# --- Force-push to remotes (this repo is source of truth) ---
+# Push early so mirrors stay in sync even if the build/lint/link steps fail.
+BRANCH=$(git branch --show-current)
+log "Force-pushing ${BRANCH} to bitbucket and fork..."
+BB_OK=0; FK_OK=0
+git push --force-with-lease bitbucket "HEAD:${BRANCH}" 2>&1 && BB_OK=1 || warn "Could not push to bitbucket"
+git push --force-with-lease fork "HEAD:${BRANCH}" 2>&1 && FK_OK=1 || warn "Could not push to fork"
+if [ "$BB_OK" -eq 1 ] && [ "$FK_OK" -eq 1 ]; then
+  ok "Pushed to both remotes"
+elif [ "$BB_OK" -eq 1 ] || [ "$FK_OK" -eq 1 ]; then
+  warn "Pushed to one remote only (see warnings above)"
+else
+  fail "Could not push to either remote"
+fi
+
 # --- pnpm install ---
 log "Installing dependencies..."
 if pnpm install --frozen-lockfile 2>&1; then
@@ -94,20 +109,6 @@ pnpm link --global 2>&1 || fail "pnpm link --global failed"
 ok "Linked globally"
 
 log "Built commit: ${BUILT_SHORT} (${BUILT_SHA})"
-
-# --- Force-push to remotes (this repo is source of truth) ---
-BRANCH=$(git branch --show-current)
-log "Force-pushing ${BRANCH} to bitbucket and fork..."
-BB_OK=0; FK_OK=0
-git push --force-with-lease bitbucket "HEAD:${BRANCH}" 2>&1 && BB_OK=1 || warn "Could not push to bitbucket"
-git push --force-with-lease fork "HEAD:${BRANCH}" 2>&1 && FK_OK=1 || warn "Could not push to fork"
-if [ "$BB_OK" -eq 1 ] && [ "$FK_OK" -eq 1 ]; then
-  ok "Pushed to both remotes"
-elif [ "$BB_OK" -eq 1 ] || [ "$FK_OK" -eq 1 ]; then
-  warn "Pushed to one remote only (see warnings above)"
-else
-  fail "Could not push to either remote"
-fi
 
 # --- Restart gateway ---
 log "Restarting gateway..."
