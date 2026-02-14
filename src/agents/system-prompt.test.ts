@@ -315,6 +315,34 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("includes proactive messaging guidance when cron tool is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["cron"],
+    });
+
+    expect(prompt).toContain("You CAN send proactive/unprompted messages and reminders");
+    expect(prompt).toContain("cron");
+  });
+
+  it("includes proactive messaging guidance when message tool is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+    });
+
+    expect(prompt).toContain("You CAN send proactive/unprompted messages and reminders");
+  });
+
+  it("omits proactive messaging guidance when neither cron nor message is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec"],
+    });
+
+    expect(prompt).not.toContain("proactive/unprompted");
+  });
+
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

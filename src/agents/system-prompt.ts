@@ -110,6 +110,9 @@ function buildMessagingSection(params: {
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
+    params.availableTools.has("cron") || params.availableTools.has("message")
+      ? "- You CAN send proactive/unprompted messages and reminders. Use `cron` to schedule timed reminders or recurring messages, and `message` (action=send) for immediate proactive sends."
+      : "",
     params.availableTools.has("message")
       ? [
           "",
