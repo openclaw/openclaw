@@ -36,7 +36,7 @@ export const PollParamsSchema = Type.Object(
     options: Type.Array(NonEmptyString, { minItems: 2, maxItems: 12 }),
     maxSelections: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
     /** Poll duration in seconds (channel-specific limits may apply). */
-    durationSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 600 })),
+    durationSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 604_800 })),
     durationHours: Type.Optional(Type.Integer({ minimum: 1 })),
     /** Send silently (no notification) where supported. */
     silent: Type.Optional(Type.Boolean()),
