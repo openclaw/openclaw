@@ -150,13 +150,7 @@ echo "merge_sha=$merge_sha"
 Use a literal multiline string or heredoc for newlines.
 
 ```sh
-gh pr comment <PR> -F - <<'EOF'
-Merged via squash.
-
-- Merge commit: $merge_sha
-
-Thanks @$contrib!
-EOF
+gh pr comment <PR> --body "$(printf 'Merged via squash.\n\n- Merge commit: %s\n\nThanks @%s!\n' \"$merge_sha\" \"$contrib\")"
 ```
 
 6. Verify PR state is MERGED
