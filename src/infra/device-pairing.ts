@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
@@ -7,6 +6,7 @@ import {
   resolvePairingPaths,
   writeJsonAtomic,
 } from "./pairing-files.js";
+import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type DevicePairingPendingRequest = {
   requestId: string;
@@ -176,7 +176,7 @@ function scopesAllow(requested: string[], allowed: string[]): boolean {
 }
 
 function newToken() {
-  return randomUUID().replaceAll("-", "");
+  return generatePairingToken();
 }
 
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
@@ -375,7 +375,7 @@ export async function verifyDeviceToken(params: {
     if (entry.revokedAtMs) {
       return { ok: false, reason: "token-revoked" };
     }
-    if (!safeEqualSecret(params.token, entry.token)) {
+    if (!verifyPairingToken(params.token, entry.token)) {
       return { ok: false, reason: "token-mismatch" };
     }
     const requestedScopes = normalizeScopes(params.scopes);
