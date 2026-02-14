@@ -143,6 +143,46 @@ export function createProcessTool(
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
 
+      const failedResult = (text: string) => ({
+        content: [{ type: "text", text }],
+        details: { status: "failed" },
+      });
+
+      const resolveBackgroundedWritableStdin = () => {
+        if (!scopedSession) {
+          return {
+            ok: false as const,
+            result: failedResult(`No active session found for ${params.sessionId}`),
+          };
+        }
+        if (!scopedSession.backgrounded) {
+          return {
+            ok: false as const,
+            result: failedResult(`Session ${params.sessionId} is not backgrounded.`),
+          };
+        }
+        const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
+        if (!stdin || stdin.destroyed) {
+          return {
+            ok: false as const,
+            result: failedResult(`Session ${params.sessionId} stdin is not writable.`),
+          };
+        }
+        return { ok: true as const, session: scopedSession, stdin };
+      };
+
+      const writeToStdin = async (stdin: NodeJS.WritableStream, data: string) => {
+        await new Promise<void>((resolve, reject) => {
+          stdin.write(data, (err) => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve();
+            }
+          });
+        });
+      };
+
       switch (params.action) {
         case "poll": {
           if (!scopedSession) {
@@ -300,51 +340,13 @@ export function createProcessTool(
         }
 
         case "write": {
-          if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+          const resolved = resolveBackgroundedWritableStdin();
+          if (!resolved.ok) {
+            return resolved.result;
           }
-          if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
-          if (!stdin || stdin.destroyed) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} stdin is not writable.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          await new Promise<void>((resolve, reject) => {
-            stdin.write(params.data ?? "", (err) => {
-              if (err) {
-                reject(err);
-              } else {
-                resolve();
-              }
-            });
-          });
+          await writeToStdin(resolved.stdin, params.data ?? "");
           if (params.eof) {
-            stdin.end();
+            resolved.stdin.end();
           }
           return {
             content: [
@@ -358,45 +360,15 @@ export function createProcessTool(
             details: {
               status: "running",
               sessionId: params.sessionId,
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+              name: deriveSessionName(resolved.session.command),
             },
           };
         }
 
         case "send-keys": {
-          if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
-          if (!stdin || stdin.destroyed) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} stdin is not writable.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+          const resolved = resolveBackgroundedWritableStdin();
+          if (!resolved.ok) {
+            return resolved.result;
           }
           const { data, warnings } = encodeKeySequence({
             keys: params.keys,
@@ -414,15 +386,7 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          await new Promise<void>((resolve, reject) => {
-            stdin.write(data, (err) => {
-              if (err) {
-                reject(err);
-              } else {
-                resolve();
-              }
-            });
-          });
+          await writeToStdin(resolved.stdin, data);
           return {
             content: [
               {
@@ -435,55 +399,17 @@ export function createProcessTool(
             details: {
               status: "running",
               sessionId: params.sessionId,
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+              name: deriveSessionName(resolved.session.command),
             },
           };
         }
 
         case "submit": {
-          if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+          const resolved = resolveBackgroundedWritableStdin();
+          if (!resolved.ok) {
+            return resolved.result;
           }
-          if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
-          if (!stdin || stdin.destroyed) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} stdin is not writable.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          await new Promise<void>((resolve, reject) => {
-            stdin.write("\r", (err) => {
-              if (err) {
-                reject(err);
-              } else {
-                resolve();
-              }
-            });
-          });
+          await writeToStdin(resolved.stdin, "\r");
           return {
             content: [
               {
@@ -494,45 +420,15 @@ export function createProcessTool(
             details: {
               status: "running",
               sessionId: params.sessionId,
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+              name: deriveSessionName(resolved.session.command),
             },
           };
         }
 
         case "paste": {
-          if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
-          if (!stdin || stdin.destroyed) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} stdin is not writable.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+          const resolved = resolveBackgroundedWritableStdin();
+          if (!resolved.ok) {
+            return resolved.result;
           }
           const payload = encodePaste(params.text ?? "", params.bracketed !== false);
           if (!payload) {
@@ -546,15 +442,7 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          await new Promise<void>((resolve, reject) => {
-            stdin.write(payload, (err) => {
-              if (err) {
-                reject(err);
-              } else {
-                resolve();
-              }
-            });
-          });
+          await writeToStdin(resolved.stdin, payload);
           return {
             content: [
               {
@@ -565,7 +453,7 @@ export function createProcessTool(
             details: {
               status: "running",
               sessionId: params.sessionId,
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+              name: deriveSessionName(resolved.session.command),
             },
           };
         }
