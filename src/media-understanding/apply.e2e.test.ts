@@ -641,6 +641,90 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).not.toContain("<file");
   });
 
+  it("skips application/vnd attachments before text heuristics", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const filePath = path.join(dir, "report.xlsx");
+    await fs.writeFile(filePath, Buffer.from("PK\x03\x04fake-office-zip-with-printable-xml", "utf-8"));
+
+    const ctx: MsgContext = {
+      Body: "<media:file>",
+      MediaPath: filePath,
+      MediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).toBe("<media:file>");
+    expect(ctx.Body).not.toContain("<file");
+  });
+
+  it("skips archive-like application/x-* attachments", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const filePath = path.join(dir, "archive.bin");
+    await fs.writeFile(filePath, Buffer.from("PK\x03\x04zip-contents", "utf-8"));
+
+    const ctx: MsgContext = {
+      Body: "<media:file>",
+      MediaPath: filePath,
+      MediaType: "application/x-zip-compressed",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).toBe("<media:file>");
+    expect(ctx.Body).not.toContain("<file");
+  });
+
+  it("skips application/octet-stream attachments", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const filePath = path.join(dir, "opaque.bin");
+    await fs.writeFile(filePath, Buffer.from("opaque-bytes", "utf-8"));
+
+    const ctx: MsgContext = {
+      Body: "<media:file>",
+      MediaPath: filePath,
+      MediaType: "application/octet-stream",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).toBe("<media:file>");
+    expect(ctx.Body).not.toContain("<file");
+  });
+
   it("respects configured allowedMimes for text-like attachments", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));

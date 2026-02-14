@@ -58,6 +58,20 @@ const EXTRA_TEXT_MIMES = [
   "text/javascript",
   "text/tab-separated-values",
 ];
+const BINARY_APPLICATION_MIME_EXACT = new Set([
+  "application/octet-stream",
+  "application/zip",
+]);
+const BINARY_APPLICATION_MIME_PREFIXES = [
+  "application/vnd.",
+  "application/x-zip",
+  "application/x-rar",
+  "application/x-7z",
+  "application/x-tar",
+  "application/x-gzip",
+  "application/x-bzip",
+  "application/x-xz",
+];
 const TEXT_EXT_MIME = new Map<string, string>([
   [".csv", "text/csv"],
   [".tsv", "text/tab-separated-values"],
@@ -321,7 +335,16 @@ function isBinaryMediaMime(mime?: string): boolean {
   if (!mime) {
     return false;
   }
-  return mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/");
+  if (mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/")) {
+    return true;
+  }
+  if (!mime.startsWith("application/")) {
+    return false;
+  }
+  if (BINARY_APPLICATION_MIME_EXACT.has(mime)) {
+    return true;
+  }
+  return BINARY_APPLICATION_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix));
 }
 
 async function extractFileBlocks(params: {
