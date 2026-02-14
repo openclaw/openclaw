@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
 
 export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
 
@@ -582,75 +583,6 @@ export function isWindowsPlatform(platform?: string | null): boolean {
   return normalized.startsWith("win");
 }
 
-function tokenizeShellSegment(segment: string): string[] | null {
-  const tokens: string[] = [];
-  let buf = "";
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-
-  const pushToken = () => {
-    if (buf.length > 0) {
-      tokens.push(buf);
-      buf = "";
-    }
-  };
-
-  for (let i = 0; i < segment.length; i += 1) {
-    const ch = segment[i];
-    if (escaped) {
-      buf += ch;
-      escaped = false;
-      continue;
-    }
-    if (!inSingle && !inDouble && ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (inSingle) {
-      if (ch === "'") {
-        inSingle = false;
-      } else {
-        buf += ch;
-      }
-      continue;
-    }
-    if (inDouble) {
-      const next = segment[i + 1];
-      if (ch === "\\" && isDoubleQuoteEscape(next)) {
-        buf += next;
-        i += 1;
-        continue;
-      }
-      if (ch === '"') {
-        inDouble = false;
-      } else {
-        buf += ch;
-      }
-      continue;
-    }
-    if (ch === "'") {
-      inSingle = true;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      pushToken();
-      continue;
-    }
-    buf += ch;
-  }
-
-  if (escaped || inSingle || inDouble) {
-    return null;
-  }
-  pushToken();
-  return tokens;
-}
-
 function parseSegmentsFromParts(
   parts: string[],
   cwd?: string,
@@ -658,7 +590,7 @@ function parseSegmentsFromParts(
 ): ExecCommandSegment[] | null {
   const segments: ExecCommandSegment[] = [];
   for (const raw of parts) {
-    const argv = tokenizeShellSegment(raw);
+    const argv = splitShellArgs(raw);
     if (!argv || argv.length === 0) {
       return null;
     }

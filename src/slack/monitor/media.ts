@@ -139,6 +139,33 @@ export type SlackMediaResult = {
 };
 
 const MAX_SLACK_MEDIA_FILES = 8;
+const MAX_SLACK_MEDIA_CONCURRENCY = 3;
+
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const results: R[] = [];
+  results.length = items.length;
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const idx = nextIndex++;
+        if (idx >= items.length) {
+          return;
+        }
+        results[idx] = await fn(items[idx]);
+      }
+    }),
+  );
+  return results;
+}
 
 /**
  * Downloads all files attached to a Slack message and returns them as an array.
@@ -152,43 +179,50 @@ export async function resolveSlackMedia(params: {
   const files = params.files ?? [];
   const limitedFiles =
     files.length > MAX_SLACK_MEDIA_FILES ? files.slice(0, MAX_SLACK_MEDIA_FILES) : files;
-  const results: SlackMediaResult[] = [];
-  for (const file of limitedFiles) {
-    const url = file.url_private_download ?? file.url_private;
-    if (!url) {
-      continue;
-    }
-    try {
-      // Note: fetchRemoteMedia calls fetchImpl(url) with the URL string today and
-      // handles size limits internally. Provide a fetcher that uses auth once, then lets
-      // the redirect chain continue without credentials.
-      const fetchImpl = createSlackMediaFetch(params.token);
-      const fetched = await fetchRemoteMedia({
-        url,
-        fetchImpl,
-        filePathHint: file.name,
-        maxBytes: params.maxBytes,
-      });
-      if (fetched.buffer.byteLength > params.maxBytes) {
-        continue;
+
+  const resolved = await mapLimit<SlackFile, SlackMediaResult | null>(
+    limitedFiles,
+    MAX_SLACK_MEDIA_CONCURRENCY,
+    async (file) => {
+      const url = file.url_private_download ?? file.url_private;
+      if (!url) {
+        return null;
       }
-      const effectiveMime = resolveSlackMediaMimetype(file, fetched.contentType);
-      const saved = await saveMediaBuffer(
-        fetched.buffer,
-        effectiveMime,
-        "inbound",
-        params.maxBytes,
-      );
-      const label = fetched.fileName ?? file.name;
-      results.push({
-        path: saved.path,
-        contentType: effectiveMime ?? saved.contentType,
-        placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
-      });
-    } catch {
-      // Ignore download failures and try the next file.
-    }
-  }
+      try {
+        // Note: fetchRemoteMedia calls fetchImpl(url) with the URL string today and
+        // handles size limits internally. Provide a fetcher that uses auth once, then lets
+        // the redirect chain continue without credentials.
+        const fetchImpl = createSlackMediaFetch(params.token);
+        const fetched = await fetchRemoteMedia({
+          url,
+          fetchImpl,
+          filePathHint: file.name,
+          maxBytes: params.maxBytes,
+        });
+        if (fetched.buffer.byteLength > params.maxBytes) {
+          return null;
+        }
+        const effectiveMime = resolveSlackMediaMimetype(file, fetched.contentType);
+        const saved = await saveMediaBuffer(
+          fetched.buffer,
+          effectiveMime,
+          "inbound",
+          params.maxBytes,
+        );
+        const label = fetched.fileName ?? file.name;
+        const contentType = effectiveMime ?? saved.contentType;
+        return {
+          path: saved.path,
+          ...(contentType ? { contentType } : {}),
+          placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
+        };
+      } catch {
+        return null;
+      }
+    },
+  );
+
+  const results = resolved.filter((entry): entry is SlackMediaResult => Boolean(entry));
   return results.length > 0 ? results : null;
 }
 

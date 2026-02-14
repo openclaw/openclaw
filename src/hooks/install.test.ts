@@ -101,6 +101,27 @@ describe("installHooksFromArchive", () => {
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "zip-hook", "HOOK.md"))).toBe(true);
   });
 
+  it("rejects zip archives with traversal entries", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const archivePath = path.join(workDir, "traversal.zip");
+
+    const zip = new JSZip();
+    zip.file("../pwned.txt", "nope\n");
+    const buffer = await zip.generateAsync({ type: "nodebuffer" });
+    fs.writeFileSync(archivePath, buffer);
+
+    const hooksDir = path.join(stateDir, "hooks");
+    const result = await installHooksFromArchive({ archivePath, hooksDir });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("failed to extract archive");
+    expect(result.error).toContain("archive entry");
+  });
+
   it("installs hook packs from tar archives", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
@@ -147,6 +168,28 @@ describe("installHooksFromArchive", () => {
     expect(result.hookPackId).toBe("tar-hooks");
     expect(result.hooks).toContain("tar-hook");
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "tar-hooks"));
+  });
+
+  it("rejects tar archives with traversal entries", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const insideDir = path.join(workDir, "inside");
+    fs.mkdirSync(insideDir, { recursive: true });
+
+    // Create a tar that contains a ../ entry; extract must fail closed.
+    fs.writeFileSync(path.join(workDir, "outside.txt"), "nope\n", "utf-8");
+    const archivePath = path.join(workDir, "traversal.tar");
+    await tar.c({ cwd: insideDir, file: archivePath }, ["../outside.txt"]);
+
+    const hooksDir = path.join(stateDir, "hooks");
+    const result = await installHooksFromArchive({ archivePath, hooksDir });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("failed to extract archive");
+    expect(result.error).toContain("escapes destination");
   });
 
   it("rejects hook packs with traversal-like ids", async () => {
