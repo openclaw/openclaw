@@ -173,6 +173,7 @@ export async function ensureAgentWorkspace(params?: {
   toolsPath?: string;
   identityPath?: string;
   userPath?: string;
+  heartbeatPath?: string;
   bootstrapPath?: string;
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
@@ -188,13 +189,11 @@ export async function ensureAgentWorkspace(params?: {
   const toolsPath = path.join(dir, DEFAULT_TOOLS_FILENAME);
   const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
-  // HEARTBEAT.md is intentionally NOT created from template.
-  // Per docs: "If the file is missing, the heartbeat still runs and the model decides what to do."
-  // Creating it from template (which is effectively empty) would cause heartbeat to be skipped.
+  const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
 
   const isBrandNewWorkspace = await (async () => {
-    const paths = [agentsPath, soulPath, toolsPath, identityPath, userPath];
+    const paths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
     const existing = await Promise.all(
       paths.map(async (p) => {
         try {
@@ -213,6 +212,7 @@ export async function ensureAgentWorkspace(params?: {
   const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
+  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
 
   await writeFileIfMissing(agentsPath, agentsTemplate);
@@ -220,6 +220,7 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(toolsPath, toolsTemplate);
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
+  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
   if (isBrandNewWorkspace) {
     await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
   }
@@ -232,6 +233,7 @@ export async function ensureAgentWorkspace(params?: {
     toolsPath,
     identityPath,
     userPath,
+    heartbeatPath,
     bootstrapPath,
   };
 }
