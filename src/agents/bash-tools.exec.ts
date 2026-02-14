@@ -15,6 +15,8 @@ import {
   recordAllowlistUse,
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
+  buildSafeShellCommand,
+  buildSafeBinsShellCommand,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
@@ -185,6 +187,7 @@ export function createExecTool(
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
+      let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
@@ -819,6 +822,43 @@ export function createExecTool(
           throw new Error("exec denied: allowlist miss");
         }
 
+        // If allowlist uses safeBins, sanitize only those stdin-only segments:
+        // disable glob/var expansion by forcing argv tokens to be literal via single-quoting.
+        if (
+          hostSecurity === "allowlist" &&
+          analysisOk &&
+          allowlistSatisfied &&
+          allowlistEval.segmentSatisfiedBy.some((by) => by === "safeBins")
+        ) {
+          const safe = buildSafeBinsShellCommand({
+            command: params.command,
+            segments: allowlistEval.segments,
+            segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+            platform: process.platform,
+          });
+          if (!safe.ok || !safe.command) {
+            // Fallback: quote everything (safe, but may change glob behavior).
+            const fallback = buildSafeShellCommand({
+              command: params.command,
+              platform: process.platform,
+            });
+            if (!fallback.ok || !fallback.command) {
+              throw new Error(
+                `exec denied: safeBins sanitize failed (${safe.reason ?? "unknown"})`,
+              );
+            }
+            warnings.push(
+              "Warning: safeBins hardening used fallback quoting due to parser mismatch.",
+            );
+            execCommandOverride = fallback.command;
+          } else {
+            warnings.push(
+              "Warning: safeBins hardening disabled glob/variable expansion for stdin-only segments.",
+            );
+            execCommandOverride = safe.command;
+          }
+        }
+
         if (allowlistMatches.length > 0) {
           const seen = new Set<string>();
           for (const match of allowlistMatches) {
@@ -843,6 +883,7 @@ export function createExecTool(
       const usePty = params.pty === true && !sandbox;
       const run = await runExecProcess({
         command: params.command,
+        execCommand: execCommandOverride,
         workdir,
         env,
         sandbox,

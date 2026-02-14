@@ -102,6 +102,10 @@ export type DiscordExecApprovalConfig = {
   sessionFilter?: string[];
   /** Delete approval DMs after approval, denial, or timeout. Default: false. */
   cleanupAfterResolve?: boolean;
+  /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
+   *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
+   *  are only usable by configured approvers; other users receive an ephemeral denial. */
+  target?: "dm" | "channel" | "both";
 };
 
 export type DiscordAgentComponentsConfig = {

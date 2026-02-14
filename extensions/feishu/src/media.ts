@@ -5,6 +5,7 @@ import path from "path";
 import { Readable } from "stream";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { getFeishuRuntime } from "./runtime.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
 
 export type DownloadImageResult = {
@@ -450,23 +451,6 @@ export function detectFileType(
 }
 
 /**
- * Check if a string is a local file path (not a URL)
- */
-function isLocalPath(urlOrPath: string): boolean {
-  // Starts with / or ~ or drive letter (Windows)
-  if (urlOrPath.startsWith("/") || urlOrPath.startsWith("~") || /^[a-zA-Z]:/.test(urlOrPath)) {
-    return true;
-  }
-  // Try to parse as URL - if it fails or has no protocol, it's likely a local path
-  try {
-    const url = new URL(urlOrPath);
-    return url.protocol === "file:";
-  } catch {
-    return true; // Not a valid URL, treat as local path
-  }
-}
-
-/**
  * Upload and send media (image or file) from URL, local path, or buffer
  */
 export async function sendMediaFeishu(params: {
@@ -479,6 +463,11 @@ export async function sendMediaFeishu(params: {
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, mediaUrl, mediaBuffer, fileName, replyToMessageId, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+  const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
 
   let buffer: Buffer;
   let name: string;
@@ -487,26 +476,12 @@ export async function sendMediaFeishu(params: {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
-    if (isLocalPath(mediaUrl)) {
-      // Local file path - read directly
-      const filePath = mediaUrl.startsWith("~")
-        ? mediaUrl.replace("~", process.env.HOME ?? "")
-        : mediaUrl.replace("file://", "");
-
-      if (!fs.existsSync(filePath)) {
-        throw new Error(`Local file not found: ${filePath}`);
-      }
-      buffer = fs.readFileSync(filePath);
-      name = fileName ?? path.basename(filePath);
-    } else {
-      // Remote URL - fetch
-      const response = await fetch(mediaUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch media from URL: ${response.status}`);
-      }
-      buffer = Buffer.from(await response.arrayBuffer());
-      name = fileName ?? (path.basename(new URL(mediaUrl).pathname) || "file");
-    }
+    const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
+      maxBytes: mediaMaxBytes,
+      optimizeImages: false,
+    });
+    buffer = loaded.buffer;
+    name = fileName ?? loaded.fileName ?? "file";
   } else {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }

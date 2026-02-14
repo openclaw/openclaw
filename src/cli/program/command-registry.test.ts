@@ -1,44 +1,60 @@
-/**
- * Tests for program command registration.
- * Plugin CLI commands are registered in run-main (before parse), not during build,
- * so built-in commands like "memory" are registered first and plugin overlap is skipped.
- */
-
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { ProgramContext } from "./context.js";
+import {
+  getCoreCliCommandNames,
+  registerCoreCliByName,
+  registerCoreCliCommands,
+} from "./command-registry.js";
 
-const registerPluginCliCommandsMock = vi.fn();
+const testProgramContext: ProgramContext = {
+  programVersion: "0.0.0-test",
+  channelOptions: [],
+  messageChannelOptions: "",
+  agentChannelOptions: "web",
+};
 
-vi.mock("../../plugins/cli.js", () => ({
-  registerPluginCliCommands: registerPluginCliCommandsMock,
-}));
-
-const { registerProgramCommands } = await import("./command-registry.js");
-const { createProgramContext } = await import("./context.js");
-
-describe("registerProgramCommands", () => {
-  let program: Command;
-  let ctx: ReturnType<typeof createProgramContext>;
-
-  beforeEach(() => {
-    program = new Command();
-    program.name("openclaw");
-    ctx = createProgramContext();
-    registerPluginCliCommandsMock.mockClear();
+describe("command-registry", () => {
+  it("includes both agent and agents in core CLI command names", () => {
+    const names = getCoreCliCommandNames();
+    expect(names).toContain("agent");
+    expect(names).toContain("agents");
   });
 
-  it("does not call registerPluginCliCommands (plugin CLI is registered in run-main)", () => {
-    const argv = ["node", "openclaw", "status"];
-    registerProgramCommands(program, ctx, argv);
-
-    expect(registerPluginCliCommandsMock).not.toHaveBeenCalled();
+  it("registerCoreCliByName resolves agents to the agent entry", async () => {
+    const program = new Command();
+    const found = await registerCoreCliByName(program, testProgramContext, "agents");
+    expect(found).toBe(true);
+    const agentsCmd = program.commands.find((c) => c.name() === "agents");
+    expect(agentsCmd).toBeDefined();
+    // The registrar also installs the singular "agent" command from the same entry.
+    const agentCmd = program.commands.find((c) => c.name() === "agent");
+    expect(agentCmd).toBeDefined();
   });
 
-  it("registers built-in commands including memory so plugin overlap is avoided later", () => {
-    const argv = ["node", "openclaw", "help"];
-    registerProgramCommands(program, ctx, argv);
+  it("registerCoreCliByName returns false for unknown commands", async () => {
+    const program = new Command();
+    const found = await registerCoreCliByName(program, testProgramContext, "nonexistent");
+    expect(found).toBe(false);
+  });
 
-    const names = program.commands.map((c) => c.name());
-    expect(names).toContain("memory");
+  it("registers doctor placeholder for doctor primary command", () => {
+    const program = new Command();
+    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor"]);
+
+    expect(program.commands.map((command) => command.name())).toEqual(["doctor"]);
+  });
+
+  it("treats maintenance commands as top-level builtins", async () => {
+    const program = new Command();
+
+    expect(await registerCoreCliByName(program, testProgramContext, "doctor")).toBe(true);
+
+    const names = getCoreCliCommandNames();
+    expect(names).toContain("doctor");
+    expect(names).toContain("dashboard");
+    expect(names).toContain("reset");
+    expect(names).toContain("uninstall");
+    expect(names).not.toContain("maintenance");
   });
 });

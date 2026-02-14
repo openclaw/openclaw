@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+
+// Ensure full agent-scope (session-utils uses resolveDefaultAgentId); avoid partial mocks from other files in same worker.
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
+}));
 import type { SessionEntry } from "../config/sessions.js";
 import {
   capArrayByJsonBytes,
@@ -68,6 +73,25 @@ describe("gateway session utils", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
       "agent:alpha:main",
     );
+  });
+
+  test("resolveSessionStoreKey falls back to first list entry when no agent is marked default", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops" }, { id: "review" }] },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:main");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
+      "agent:ops:discord:group:123",
+    );
+  });
+
+  test("resolveSessionStoreKey falls back to main when agents.list is missing", () => {
+    const cfg = {
+      session: { mainKey: "work" },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:main:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:main:thread-1");
   });
 
   test("resolveSessionStoreKey normalizes session key casing", () => {

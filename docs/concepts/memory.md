@@ -139,8 +139,8 @@ out to QMD for retrieval. Key points:
 - Boot refresh now runs in the background by default so chat startup is not
   blocked; set `memory.qmd.update.waitForBootSync = true` to keep the previous
   blocking behavior.
-- Searches run via `memory.qmd.searchMode` (default `qmd query --json`; also
-  supports `search` and `vsearch`). If the selected mode rejects flags on your
+- Searches run via `memory.qmd.searchMode` (default `qmd search --json`; also
+  supports `vsearch` and `query`). If the selected mode rejects flags on your
   QMD build, OpenClaw retries with `qmd query`. If QMD fails or the binary is
   missing, OpenClaw automatically falls back to the builtin SQLite manager so
   memory tools keep working.
@@ -159,10 +159,6 @@ out to QMD for retrieval. Key points:
     ```bash
     # Pick the same state dir OpenClaw uses
     STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
-    if [ -d "$HOME/.moltbot" ] && [ ! -d "$HOME/.openclaw" ] \
-      && [ -z "${OPENCLAW_STATE_DIR:-}" ]; then
-      STATE_DIR="$HOME/.moltbot"
-    fi
 
     export XDG_CONFIG_HOME="$STATE_DIR/agents/main/qmd/xdg-config"
     export XDG_CACHE_HOME="$STATE_DIR/agents/main/qmd/xdg-cache"
@@ -178,8 +174,8 @@ out to QMD for retrieval. Key points:
 **Config surface (`memory.qmd.*`)**
 
 - `command` (default `qmd`): override the executable path.
-- `searchMode` (default `query`): pick which QMD command backs
-  `memory_search` (`query`, `search`, `vsearch`).
+- `searchMode` (default `search`): pick which QMD command backs
+  `memory_search` (`search`, `vsearch`, `query`).
 - `includeDefaultMemory` (default `true`): auto-index `MEMORY.md` + `memory/**/*.md`.
 - `paths[]`: add extra directories/files (`path`, optional `pattern`, optional
   stable `name`).
@@ -535,7 +531,7 @@ Notes:
 
 ### Local embedding auto-download
 
-- Default local embedding model: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf` (~0.6 GB).
+- Default local embedding model: `hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB).
 - When `memorySearch.provider = "local"`, `node-llama-cpp` resolves `modelPath`; if the GGUF is missing it **auto-downloads** to the cache (or `local.modelCacheDir` if set), then loads it. Downloads resume on retry.
 - Native build requirement: run `pnpm approve-builds`, pick `node-llama-cpp`, then `pnpm rebuild node-llama-cpp`.
 - Fallback: if local setup fails and `memorySearch.fallback = "openai"`, we automatically switch to remote embeddings (`openai/text-embedding-3-small` unless overridden) and record the reason.

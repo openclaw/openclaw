@@ -338,6 +338,9 @@ export function emitExecSystemEvent(
 
 export async function runExecProcess(opts: {
   command: string;
+  // Execute this instead of `command` (which is kept for display/session/logging).
+  // Used to sanitize safeBins execution while preserving the original user input.
+  execCommand?: string;
   workdir: string;
   env: Record<string, string>;
   sandbox?: BashSandboxConfig;
@@ -357,6 +360,7 @@ export async function runExecProcess(opts: {
   let child: ChildProcessWithoutNullStreams | null = null;
   let pty: PtyHandle | null = null;
   let stdin: SessionStdin | undefined;
+  const execCommand = opts.execCommand ?? opts.command;
 
   if (opts.sandbox) {
     const { child: spawned } = await spawnWithFallback({
@@ -364,7 +368,7 @@ export async function runExecProcess(opts: {
         "docker",
         ...buildDockerExecArgs({
           containerName: opts.sandbox.containerName,
-          command: opts.command,
+          command: execCommand,
           workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
           env: opts.env,
           tty: opts.usePty,
@@ -403,7 +407,7 @@ export async function runExecProcess(opts: {
       if (!spawnPty) {
         throw new Error("PTY support is unavailable (node-pty spawn not found).");
       }
-      pty = spawnPty(shell, [...shellArgs, opts.command], {
+      pty = spawnPty(shell, [...shellArgs, execCommand], {
         cwd: opts.workdir,
         env: opts.env,
         name: process.env.TERM ?? "xterm-256color",
@@ -435,7 +439,7 @@ export async function runExecProcess(opts: {
       logWarn(`exec: PTY spawn failed (${errText}); retrying without PTY for "${opts.command}".`);
       opts.warnings.push(warning);
       const { child: spawned } = await spawnWithFallback({
-        argv: [shell, ...shellArgs, opts.command],
+        argv: [shell, ...shellArgs, execCommand],
         options: {
           cwd: opts.workdir,
           env: opts.env,
@@ -462,7 +466,7 @@ export async function runExecProcess(opts: {
   } else {
     const { shell, args: shellArgs } = getShellConfig();
     const { child: spawned } = await spawnWithFallback({
-      argv: [shell, ...shellArgs, opts.command],
+      argv: [shell, ...shellArgs, execCommand],
       options: {
         cwd: opts.workdir,
         env: opts.env,

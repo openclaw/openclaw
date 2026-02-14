@@ -39,6 +39,10 @@ Reports without reproduction steps, demonstrated impact, and remediation advice 
 OpenClaw is a labor of love. There is no bug bounty program and no budget for paid reports. Please still disclose responsibly so we can fix issues quickly.
 The best way to help the project right now is by sending PRs.
 
+## Maintainers: GHSA Updates via CLI
+
+When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (or newer). Without it, some fields (notably CVSS) may not persist even if the request returns 200.
+
 ## Out of Scope
 
 - Public Internet Exposure
@@ -53,7 +57,14 @@ For threat model + hardening guidance (including `openclaw security audit --deep
 
 ### Web Interface Safety
 
-OpenClaw's web interface is intended for local use only. Do **not** bind it to the public internet; it is not hardened for public exposure.
+OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for **local use only**.
+
+- Recommended: keep the Gateway **loopback-only** (`127.0.0.1` / `::1`).
+  - Config: `gateway.bind="loopback"` (default).
+  - CLI: `openclaw gateway run --bind loopback`.
+- Do **not** expose it to the public internet (no direct bind to `0.0.0.0`, no public reverse proxy). It is not hardened for public exposure.
+- If you need remote access, prefer an SSH tunnel or Tailscale serve/funnel (so the Gateway still binds to loopback), plus strong Gateway auth.
+- The Gateway HTTP surface includes the canvas host (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`). Treat canvas content as sensitive/untrusted and avoid exposing it beyond loopback unless you understand the risk.
 
 ## Runtime Requirements
 

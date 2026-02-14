@@ -89,7 +89,10 @@ vi.mock("./session.js", () => {
 import { monitorWebInbox, resetWebInboundDedupe } from "./inbound.js";
 
 async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
-  await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1), {
+    interval: 1,
+    timeout: 250,
+  });
   return onMessage.mock.calls[0][0];
 }
 

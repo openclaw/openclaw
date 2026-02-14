@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Ensure full agent-scope (session-utils/listAgentsForGateway uses resolveDefaultAgentId); avoid partial mocks from other files in same worker.
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
+}));
+
 vi.mock("../../config/config.js", () => {
   return {
     loadConfig: vi.fn(() => ({

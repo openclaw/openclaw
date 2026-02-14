@@ -10,6 +10,7 @@ import type {
   FlexText,
   ListItem,
 } from "./types.js";
+import { attachFooterText } from "./common.js";
 
 /**
  * Create an info card with title, body, and optional footer
@@ -76,22 +77,7 @@ export function createInfoCard(title: string, body: string, footer?: string): Fl
   };
 
   if (footer) {
-    bubble.footer = {
-      type: "box",
-      layout: "vertical",
-      contents: [
-        {
-          type: "text",
-          text: footer,
-          size: "xs",
-          color: "#AAAAAA",
-          wrap: true,
-          align: "center",
-        } as FlexText,
-      ],
-      paddingAll: "lg",
-      backgroundColor: "#FAFAFA",
-    };
+    attachFooterText(bubble, footer);
   }
 
   return bubble;

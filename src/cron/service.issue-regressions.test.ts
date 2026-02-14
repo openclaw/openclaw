@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "./types.js";
 import { CronService } from "./service.js";
@@ -29,6 +28,16 @@ async function makeStorePath() {
       await fs.rm(dir, { recursive: true, force: true });
     },
   };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function createDueIsolatedJob(params: {
@@ -143,6 +152,84 @@ describe("Cron issue regressions", () => {
     await store.cleanup();
   });
 
+  it("repairs missing nextRunAtMs on non-schedule updates without touching other jobs", async () => {
+    const store = await makeStorePath();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const created = await cron.add({
+      name: "repair-target",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+    const updated = await cron.update(created.id, {
+      payload: { kind: "systemEvent", text: "tick-2" },
+      state: { nextRunAtMs: undefined },
+    });
+
+    expect(updated.payload.kind).toBe("systemEvent");
+    expect(typeof updated.state.nextRunAtMs).toBe("number");
+    expect(updated.state.nextRunAtMs).toBe(created.state.nextRunAtMs);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not advance unrelated due jobs when updating another job", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    vi.setSystemTime(now);
+    const cron = new CronService({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const dueJob = await cron.add({
+      name: "due-preserved",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "due-preserved" },
+    });
+    const otherJob = await cron.add({
+      name: "other-job",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "other" },
+    });
+
+    const originalDueNextRunAtMs = dueJob.state.nextRunAtMs;
+    expect(typeof originalDueNextRunAtMs).toBe("number");
+
+    // Make dueJob past-due without running timer callbacks.
+    vi.setSystemTime(now + 5 * 60_000);
+
+    await cron.update(otherJob.id, {
+      payload: { kind: "systemEvent", text: "other-updated" },
+    });
+
+    const storeData = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+      jobs: Array<{ id: string; state?: { nextRunAtMs?: number } }>;
+    };
+    const persistedDueJob = storeData.jobs.find((job) => job.id === dueJob.id);
+    expect(persistedDueJob?.state?.nextRunAtMs).toBe(originalDueNextRunAtMs);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("caps timer delay to 60s for far-future schedules", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const store = await makeStorePath();
@@ -211,7 +298,6 @@ describe("Cron issue regressions", () => {
   });
 
   it("skips forced manual runs while a timer-triggered run is in progress", async () => {
-    vi.useRealTimers();
     const store = await makeStorePath();
     let resolveRun:
       | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
@@ -225,6 +311,10 @@ describe("Cron issue regressions", () => {
         ),
     );
 
+    const started = createDeferred<void>();
+    const finished = createDeferred<void>();
+    let targetJobId = "";
+
     const cron = new CronService({
       cronEnabled: true,
       storePath: store.storePath,
@@ -232,6 +322,16 @@ describe("Cron issue regressions", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob,
+      onEvent: (evt: CronEvent) => {
+        if (evt.jobId !== targetJobId) {
+          return;
+        }
+        if (evt.action === "started") {
+          started.resolve();
+        } else if (evt.action === "finished" && evt.status === "ok") {
+          finished.resolve();
+        }
+      },
     });
     await cron.start();
 
@@ -246,9 +346,9 @@ describe("Cron issue regressions", () => {
       delivery: { mode: "none" },
     });
 
-    for (let i = 0; i < 20 && runIsolatedAgentJob.mock.calls.length === 0; i++) {
-      await delay(1);
-    }
+    targetJobId = job.id;
+    await vi.advanceTimersByTimeAsync(2);
+    await started.promise;
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
     const manualResult = await cron.run(job.id, "force");
@@ -256,13 +356,9 @@ describe("Cron issue regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
     resolveRun?.({ status: "ok", summary: "done" });
-    for (let i = 0; i < 20; i++) {
-      const jobs = await cron.list({ includeDisabled: true });
-      if (jobs.some((j) => j.id === job.id && j.state.lastStatus === "ok")) {
-        break;
-      }
-      await delay(1);
-    }
+    await finished.promise;
+    // Barrier: ensure timer tick finished persisting state before cleanup.
+    await cron.list({ includeDisabled: true });
 
     cron.stop();
     await store.cleanup();
