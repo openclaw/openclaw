@@ -627,6 +627,89 @@ describe("deliverOutboundPayloads", () => {
       );
     });
   });
+
+  it("delivers modified content when message_sending hook changes text", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "modified text" });
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "original text" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "modified text", expect.anything());
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "modified text", success: true }),
+        expect.objectContaining({ channelId: "whatsapp" }),
+      );
+    });
+  });
+
+  it("emits message_sent success for media deliveries", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "caption", mediaUrl: "https://example.com/image.png" }],
+      deps: { sendWhatsApp },
+    });
+
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "+1555", content: "caption", success: true }),
+        expect.objectContaining({ channelId: "whatsapp" }),
+      );
+    });
+  });
+
+  it("does not call runMessageSent when no hooks are registered", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
+  });
+
+  it("still delivers when message_sending hook throws", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    hookMocks.runner.runMessageSending.mockRejectedValue(new Error("plugin crashed"));
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "should still send" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "should still send", success: true }),
+        expect.objectContaining({ channelId: "whatsapp" }),
+      );
+    });
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);
