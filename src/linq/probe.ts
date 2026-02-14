@@ -32,7 +32,7 @@ export async function probeLinq(
   try {
     const response = await fetch(url, {
       method: "GET",
-      headers: { Authorization: `Bearer ${resolvedToken}` },
+      headers: { Authorization: `Bearer ${resolvedToken}`, "User-Agent": "OpenClaw/1.0" },
       signal: controller.signal,
     });
     if (!response.ok) {
