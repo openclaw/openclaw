@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { runReplyAgent } from "./agent-runner.js";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   createBaseRun,
   getRunEmbeddedPiAgentMock,
@@ -10,6 +9,12 @@ import {
   type EmbeddedRunParams,
 } from "./agent-runner.memory-flush.test-harness.js";
 import { DEFAULT_MEMORY_FLUSH_PROMPT } from "./memory-flush.js";
+
+let runReplyAgent: typeof import("./agent-runner.js").runReplyAgent;
+
+beforeAll(async () => {
+  ({ runReplyAgent } = await import("./agent-runner.js"));
+});
 
 describe("runReplyAgent memory flush", () => {
   it("uses configured prompts for memory flush runs", async () => {
