@@ -209,4 +209,22 @@ describe("getMemorySearchManager caching", () => {
     expect(results[0]?.path).toBe("MEMORY.md");
     expect(fallbackSearch).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps original qmd error when fallback manager initialization fails", async () => {
+    const retryAgentId = "retry-agent-no-fallback-auth";
+    const cfg = {
+      memory: { backend: "qmd", qmd: {} },
+      agents: { list: [{ id: retryAgentId, default: true, workspace: "/tmp/workspace" }] },
+    } as const;
+
+    mockPrimary.search.mockRejectedValueOnce(new Error("qmd query failed"));
+    mockMemoryIndexGet.mockRejectedValueOnce(new Error("No API key found for provider openai"));
+
+    const first = await getMemorySearchManager({ cfg, agentId: retryAgentId });
+    if (!first.manager) {
+      throw new Error("manager missing");
+    }
+
+    await expect(first.manager.search("hello")).rejects.toThrow("qmd query failed");
+  });
 });
