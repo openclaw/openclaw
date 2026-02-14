@@ -1,15 +1,20 @@
 import { Command } from "commander";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 
 /**
  * Test for issue #6070:
- * `openclaw config set` should use snapshot.parsed (raw user config) instead of
- * snapshot.config (runtime-merged config with defaults), to avoid overwriting
- * the entire config with defaults when validation fails or config is unreadable.
+ * `openclaw config set/unset` must update snapshot.resolved (user config after $include/${ENV},
+ * but before runtime defaults), so runtime defaults don't leak into the written config.
  */
+
+const mockReadConfigFileSnapshot = vi.fn<[], Promise<ConfigFileSnapshot>>();
+const mockWriteConfigFile = vi.fn<[OpenClawConfig], Promise<void>>(async () => {});
+
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+  writeConfigFile: (cfg: OpenClawConfig) => mockWriteConfigFile(cfg),
+}));
 
 const mockLog = vi.fn();
 const mockError = vi.fn();
@@ -26,29 +31,22 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
-async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-cli-"));
-  const originalEnv = { ...process.env };
-  try {
-    // Override config path to use temp directory
-    process.env.OPENCLAW_CONFIG_PATH = path.join(home, ".openclaw", "openclaw.json");
-    await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
-    await run(home);
-  } finally {
-    process.env = originalEnv;
-    await fs.rm(home, { recursive: true, force: true });
-  }
-}
-
-async function readConfigFile(home: string): Promise<Record<string, unknown>> {
-  const configPath = path.join(home, ".openclaw", "openclaw.json");
-  const content = await fs.readFile(configPath, "utf-8");
-  return JSON.parse(content);
-}
-
-async function writeConfigFile(home: string, config: Record<string, unknown>): Promise<void> {
-  const configPath = path.join(home, ".openclaw", "openclaw.json");
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+function buildSnapshot(params: {
+  resolved: OpenClawConfig;
+  config: OpenClawConfig;
+}): ConfigFileSnapshot {
+  return {
+    path: "/tmp/openclaw.json",
+    exists: true,
+    raw: JSON.stringify(params.resolved),
+    parsed: params.resolved,
+    resolved: params.resolved,
+    valid: true,
+    config: params.config,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  };
 }
 
 describe("config cli", () => {
@@ -62,128 +60,122 @@ describe("config cli", () => {
 
   describe("config set - issue #6070", () => {
     it("preserves existing config keys when setting a new value", async () => {
-      await withTempHome(async (home) => {
-        // Set up a config file with multiple existing settings (using valid schema)
-        const initialConfig = {
-          agents: {
-            list: [{ id: "main" }, { id: "oracle", workspace: "~/oracle-workspace" }],
-          },
-          gateway: {
-            port: 18789,
-          },
-          tools: {
-            allow: ["group:fs"],
-          },
-          logging: {
-            level: "debug",
-          },
-        };
-        await writeConfigFile(home, initialConfig);
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main" }, { id: "oracle", workspace: "~/oracle-workspace" }],
+        },
+        gateway: { port: 18789 },
+        tools: { allow: ["group:fs"] },
+        logging: { level: "debug" },
+      };
+      const runtimeMerged: OpenClawConfig = {
+        ...resolved,
+        agents: {
+          ...resolved.agents,
+          defaults: {
+            model: "gpt-5.2",
+          } as never,
+        } as never,
+      };
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: runtimeMerged }),
+      );
 
-        // Run config set to add a new value
-        const { registerConfigCli } = await import("./config-cli.js");
-        const program = new Command();
-        program.exitOverride();
-        registerConfigCli(program);
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
 
-        await program.parseAsync(["config", "set", "gateway.auth.mode", "token"], { from: "user" });
+      await program.parseAsync(["config", "set", "gateway.auth.mode", "token"], { from: "user" });
 
-        // Read the config file and verify ALL original keys are preserved
-        const finalConfig = await readConfigFile(home);
-
-        // The new value should be set
-        expect((finalConfig.gateway as Record<string, unknown>).auth).toEqual({ mode: "token" });
-
-        // ALL original settings must still be present (this is the key assertion for #6070)
-        // The key bug in #6070 was that runtime defaults (like agents.defaults) were being
-        // written to the file, and paths were being expanded. This test verifies the fix.
-        expect(finalConfig.agents).not.toHaveProperty("defaults"); // No runtime defaults injected
-        expect((finalConfig.agents as Record<string, unknown>).list).toEqual(
-          initialConfig.agents.list,
-        );
-        expect((finalConfig.gateway as Record<string, unknown>).port).toBe(18789);
-        expect(finalConfig.tools).toEqual(initialConfig.tools);
-        expect(finalConfig.logging).toEqual(initialConfig.logging);
-      });
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.auth).toEqual({ mode: "token" });
+      expect(written.gateway?.port).toBe(18789);
+      expect(written.agents).toEqual(resolved.agents);
+      expect(written.tools).toEqual(resolved.tools);
+      expect(written.logging).toEqual(resolved.logging);
+      expect(written.agents).not.toHaveProperty("defaults");
     });
 
     it("does not inject runtime defaults into the written config", async () => {
-      await withTempHome(async (home) => {
-        // Set up a minimal config file
-        const initialConfig = {
-          gateway: { port: 18789 },
-        };
-        await writeConfigFile(home, initialConfig);
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      const runtimeMerged: OpenClawConfig = {
+        ...resolved,
+        agents: {
+          defaults: {
+            model: "gpt-5.2",
+            contextWindow: 128_000,
+            maxTokens: 16_000,
+          },
+        } as never,
+        messages: { ackReaction: "✅" } as never,
+        sessions: { persistence: { enabled: true } } as never,
+      };
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: runtimeMerged }),
+      );
 
-        // Run config set
-        const { registerConfigCli } = await import("./config-cli.js");
-        const program = new Command();
-        program.exitOverride();
-        registerConfigCli(program);
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
 
-        await program.parseAsync(["config", "set", "gateway.auth.mode", "token"], {
-          from: "user",
-        });
+      await program.parseAsync(["config", "set", "gateway.auth.mode", "token"], { from: "user" });
 
-        // Read the config file
-        const finalConfig = await readConfigFile(home);
-
-        // The config should NOT contain runtime defaults that weren't originally in the file
-        // These are examples of defaults that get merged in by applyModelDefaults, applyAgentDefaults, etc.
-        expect(finalConfig).not.toHaveProperty("agents.defaults.model");
-        expect(finalConfig).not.toHaveProperty("agents.defaults.contextWindow");
-        expect(finalConfig).not.toHaveProperty("agents.defaults.maxTokens");
-        expect(finalConfig).not.toHaveProperty("messages.ackReaction");
-        expect(finalConfig).not.toHaveProperty("sessions.persistence");
-
-        // Original config should still be present
-        expect((finalConfig.gateway as Record<string, unknown>).port).toBe(18789);
-        // New value should be set
-        expect((finalConfig.gateway as Record<string, unknown>).auth).toEqual({ mode: "token" });
-      });
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written).not.toHaveProperty("agents.defaults.model");
+      expect(written).not.toHaveProperty("agents.defaults.contextWindow");
+      expect(written).not.toHaveProperty("agents.defaults.maxTokens");
+      expect(written).not.toHaveProperty("messages.ackReaction");
+      expect(written).not.toHaveProperty("sessions.persistence");
+      expect(written.gateway?.port).toBe(18789);
+      expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
   });
 
   describe("config unset - issue #6070", () => {
     it("preserves existing config keys when unsetting a value", async () => {
-      await withTempHome(async (home) => {
-        // Set up a config file with multiple existing settings (using valid schema)
-        const initialConfig = {
-          agents: { list: [{ id: "main" }] },
-          gateway: { port: 18789 },
-          tools: {
-            profile: "coding",
-            alsoAllow: ["agents_list"],
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main" }] },
+        gateway: { port: 18789 },
+        tools: {
+          profile: "coding",
+          alsoAllow: ["agents_list"],
+        },
+        logging: { level: "debug" },
+      };
+      const runtimeMerged: OpenClawConfig = {
+        ...resolved,
+        agents: {
+          ...resolved.agents,
+          defaults: {
+            model: "gpt-5.2",
           },
-          logging: {
-            level: "debug",
-          },
-        };
-        await writeConfigFile(home, initialConfig);
+        } as never,
+      };
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: runtimeMerged }),
+      );
 
-        // Run config unset to remove a value
-        const { registerConfigCli } = await import("./config-cli.js");
-        const program = new Command();
-        program.exitOverride();
-        registerConfigCli(program);
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
 
-        await program.parseAsync(["config", "unset", "tools.alsoAllow"], { from: "user" });
+      await program.parseAsync(["config", "unset", "tools.alsoAllow"], { from: "user" });
 
-        // Read the config file and verify ALL original keys (except the unset one) are preserved
-        const finalConfig = await readConfigFile(home);
-
-        // The value should be removed
-        expect(finalConfig.tools as Record<string, unknown>).not.toHaveProperty("alsoAllow");
-
-        // ALL other original settings must still be present (no runtime defaults injected)
-        expect(finalConfig.agents).not.toHaveProperty("defaults");
-        expect((finalConfig.agents as Record<string, unknown>).list).toEqual(
-          initialConfig.agents.list,
-        );
-        expect(finalConfig.gateway).toEqual(initialConfig.gateway);
-        expect((finalConfig.tools as Record<string, unknown>).profile).toBe("coding");
-        expect(finalConfig.logging).toEqual(initialConfig.logging);
-      });
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.tools).not.toHaveProperty("alsoAllow");
+      expect(written.agents).not.toHaveProperty("defaults");
+      expect(written.agents?.list).toEqual(resolved.agents?.list);
+      expect(written.gateway).toEqual(resolved.gateway);
+      expect(written.tools?.profile).toBe("coding");
+      expect(written.logging).toEqual(resolved.logging);
     });
   });
 });
