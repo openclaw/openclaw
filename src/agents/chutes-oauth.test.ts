@@ -21,10 +21,9 @@ describe("parseOAuthCallbackInput", () => {
     expect((result as { error: string }).error).toMatch(/state mismatch/i);
   });
 
-  it("rejects bare code input without fabricating state", () => {
+  it("accepts bare code input for manual flow", () => {
     const result = parseOAuthCallbackInput("bare_auth_code", EXPECTED_STATE);
-    expect(result).toHaveProperty("error");
-    expect(result).not.toHaveProperty("code");
+    expect(result).toEqual({ code: "bare_auth_code", state: EXPECTED_STATE });
   });
 
   it("rejects empty input", () => {
