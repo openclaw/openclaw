@@ -78,6 +78,27 @@ if [[ ! -f "$RUN_SCRIPT_SRC" ]]; then
   exit 1
 fi
 
+generate_token_hex_32() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+    return 0
+  fi
+  if command -v od >/dev/null 2>&1; then
+    # 32 random bytes -> 64 lowercase hex chars
+    od -An -N32 -tx1 /dev/urandom | tr -d " \n"
+    return 0
+  fi
+  echo "Missing dependency: need openssl or python3 (or od) to generate OPENCLAW_GATEWAY_TOKEN." >&2
+  exit 1
+}
+
 user_exists() {
   local user="$1"
   if command -v getent >/dev/null 2>&1; then
@@ -138,7 +159,7 @@ LAUNCH_SCRIPT_DST="$OPENCLAW_HOME/run-openclaw-podman.sh"
 if command -v loginctl &>/dev/null; then
   run_root loginctl enable-linger "$OPENCLAW_USER" 2>/dev/null || true
 fi
-if [[ -n "${OPENCLAW_UID:-}" && -d /run/user && command -v systemctl &>/dev/null ]]; then
+if [[ -n "${OPENCLAW_UID:-}" && -d /run/user ]] && command -v systemctl &>/dev/null; then
   run_root systemctl start "user@${OPENCLAW_UID}.service" 2>/dev/null || true
 fi
 
@@ -151,21 +172,33 @@ fi
 echo "Creating $OPENCLAW_CONFIG and workspace..."
 run_root mkdir -p "$OPENCLAW_CONFIG/workspace"
 run_root chown -R "$OPENCLAW_USER:" "$OPENCLAW_CONFIG"
+run_root chmod 700 "$OPENCLAW_CONFIG" "$OPENCLAW_CONFIG/workspace" 2>/dev/null || true
 
-if [[ ! -f "$OPENCLAW_CONFIG/.env" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
-    TOKEN="$(openssl rand -hex 32)"
-  else
-    TOKEN="$(python3 - <<'PY'
-import secrets
-print(secrets.token_hex(32))
-PY
-)"
+ENV_FILE="$OPENCLAW_CONFIG/.env"
+if [[ -f "$ENV_FILE" ]]; then
+  if ! grep -q '^OPENCLAW_GATEWAY_TOKEN=' "$ENV_FILE" 2>/dev/null; then
+    TOKEN="$(generate_token_hex_32)"
+    echo "OPENCLAW_GATEWAY_TOKEN=$TOKEN" | run_root tee -a "$ENV_FILE" >/dev/null
+    echo "Added OPENCLAW_GATEWAY_TOKEN to $ENV_FILE."
   fi
-  echo "OPENCLAW_GATEWAY_TOKEN=$TOKEN" | run_root tee "$OPENCLAW_CONFIG/.env" >/dev/null
-  run_root chown "$OPENCLAW_USER:" "$OPENCLAW_CONFIG/.env"
-  run_root chmod 600 "$OPENCLAW_CONFIG/.env" 2>/dev/null || true
-  echo "Created $OPENCLAW_CONFIG/.env with new token."
+  run_root chown "$OPENCLAW_USER:" "$ENV_FILE"
+  run_root chmod 600 "$ENV_FILE" 2>/dev/null || true
+else
+  TOKEN="$(generate_token_hex_32)"
+  echo "OPENCLAW_GATEWAY_TOKEN=$TOKEN" | run_root tee "$ENV_FILE" >/dev/null
+  run_root chown "$OPENCLAW_USER:" "$ENV_FILE"
+  run_root chmod 600 "$ENV_FILE" 2>/dev/null || true
+  echo "Created $ENV_FILE with new token."
+fi
+
+# The gateway refuses to start unless gateway.mode=local is set in config.
+# Make first-run non-interactive; users can run the wizard later to configure channels/providers.
+OPENCLAW_JSON="$OPENCLAW_CONFIG/openclaw.json"
+if [[ ! -f "$OPENCLAW_JSON" ]]; then
+  echo '{ gateway: { mode: "local" } }' | run_root tee "$OPENCLAW_JSON" >/dev/null
+  run_root chown "$OPENCLAW_USER:" "$OPENCLAW_JSON"
+  run_root chmod 600 "$OPENCLAW_JSON" 2>/dev/null || true
+  echo "Created $OPENCLAW_JSON (minimal gateway.mode=local)."
 fi
 
 echo "Building image from $REPO_PATH..."

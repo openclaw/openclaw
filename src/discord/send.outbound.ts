@@ -21,6 +21,7 @@ import {
   resolveChannelId,
   sendDiscordMedia,
   sendDiscordText,
+  SUPPRESS_NOTIFICATIONS_FLAG,
 } from "./send.shared.js";
 import {
   ensureOggOpus,
@@ -273,13 +274,18 @@ export async function sendPollDiscord(
   const recipient = await parseAndResolveRecipient(to, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   const content = opts.content?.trim();
+  if (poll.durationSeconds !== undefined) {
+    throw new Error("Discord polls do not support durationSeconds; use durationHours");
+  }
   const payload = normalizeDiscordPollInput(poll);
+  const flags = opts.silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
   const res = (await request(
     () =>
       rest.post(Routes.channelMessages(channelId), {
         body: {
           content: content || undefined,
           poll: payload,
+          ...(flags ? { flags } : {}),
         },
       }) as Promise<{ id: string; channel_id: string }>,
     "poll",

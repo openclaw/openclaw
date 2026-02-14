@@ -57,7 +57,15 @@ const coreEntries: CoreCliEntry[] = [
     },
   },
   {
-    commands: [{ name: "maintenance", description: "Maintenance commands" }],
+    commands: [
+      { name: "doctor", description: "Health checks + quick fixes for the gateway and channels" },
+      { name: "dashboard", description: "Open the Control UI with your current token" },
+      { name: "reset", description: "Reset local config/state (keeps the CLI installed)" },
+      {
+        name: "uninstall",
+        description: "Uninstall the gateway service + local data (CLI remains)",
+      },
+    ],
     register: async ({ program }) => {
       const mod = await import("./register.maintenance.js");
       mod.registerMaintenanceCommands(program);
@@ -78,7 +86,10 @@ const coreEntries: CoreCliEntry[] = [
     },
   },
   {
-    commands: [{ name: "agent", description: "Agent commands" }],
+    commands: [
+      { name: "agent", description: "Agent commands" },
+      { name: "agents", description: "Manage isolated agents" },
+    ],
     register: async ({ program, ctx }) => {
       const mod = await import("./register.agent.js");
       mod.registerAgentCommands(program, { agentChannelOptions: ctx.agentChannelOptions });

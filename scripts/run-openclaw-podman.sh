@@ -89,6 +89,7 @@ fi
 mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR"
 # Subdirs the app may create at runtime (canvas, cron); create here so ownership is correct
 mkdir -p "$CONFIG_DIR/canvas" "$CONFIG_DIR/cron"
+chmod 700 "$CONFIG_DIR" "$WORKSPACE_DIR" 2>/dev/null || true
 
 if [[ -f "$ENV_FILE" ]]; then
   set -a
@@ -117,19 +118,40 @@ upsert_env_var() {
   chmod 600 "$file" 2>/dev/null || true
 }
 
-if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
-  if command -v openssl &>/dev/null; then
-    export OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
-  else
-    export OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
+generate_token_hex_32() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
 import secrets
 print(secrets.token_hex(32))
 PY
-)"
+    return 0
   fi
+  if command -v od >/dev/null 2>&1; then
+    od -An -N32 -tx1 /dev/urandom | tr -d " \n"
+    return 0
+  fi
+  echo "Missing dependency: need openssl or python3 (or od) to generate OPENCLAW_GATEWAY_TOKEN." >&2
+  exit 1
+}
+
+if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
+  export OPENCLAW_GATEWAY_TOKEN="$(generate_token_hex_32)"
   mkdir -p "$(dirname "$ENV_FILE")"
   upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_TOKEN" "$OPENCLAW_GATEWAY_TOKEN"
   echo "Generated OPENCLAW_GATEWAY_TOKEN and wrote it to $ENV_FILE." >&2
+fi
+
+# The gateway refuses to start unless gateway.mode=local is set in config.
+# Keep this minimal; users can run the wizard later to configure channels/providers.
+CONFIG_JSON="$CONFIG_DIR/openclaw.json"
+if [[ ! -f "$CONFIG_JSON" ]]; then
+  echo '{ gateway: { mode: "local" } }' >"$CONFIG_JSON"
+  chmod 600 "$CONFIG_JSON" 2>/dev/null || true
+  echo "Created $CONFIG_JSON (minimal gateway.mode=local)." >&2
 fi
 
 PODMAN_USERNS="${OPENCLAW_PODMAN_USERNS:-keep-id}"

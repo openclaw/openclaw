@@ -67,6 +67,7 @@ const mockResolveEnvelopeFormatOptions = vi.fn(() => ({
   template: "channel+name+time",
 }));
 const mockFormatAgentEnvelope = vi.fn((opts: { body: string }) => opts.body);
+const mockFormatInboundEnvelope = vi.fn((opts: { body: string }) => opts.body);
 const mockChunkMarkdownText = vi.fn((text: string) => [text]);
 
 function createMockRuntime(): PluginRuntime {
@@ -124,12 +125,13 @@ function createMockRuntime(): PluginRuntime {
           vi.fn() as unknown as PluginRuntime["channel"]["reply"]["resolveHumanDelayConfig"],
         dispatchReplyFromConfig:
           vi.fn() as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
-        finalizeInboundContext:
-          vi.fn() as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+        finalizeInboundContext: vi.fn(
+          (ctx: Record<string, unknown>) => ctx,
+        ) as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
         formatAgentEnvelope:
           mockFormatAgentEnvelope as unknown as PluginRuntime["channel"]["reply"]["formatAgentEnvelope"],
         formatInboundEnvelope:
-          vi.fn() as unknown as PluginRuntime["channel"]["reply"]["formatInboundEnvelope"],
+          mockFormatInboundEnvelope as unknown as PluginRuntime["channel"]["reply"]["formatInboundEnvelope"],
         resolveEnvelopeFormatOptions:
           mockResolveEnvelopeFormatOptions as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
       },
@@ -1366,6 +1368,145 @@ describe("BlueBubbles webhook monitor", () => {
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       expect(callArgs.ctx.GroupSubject).toBe("Family");
       expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
+    });
+  });
+
+  describe("group sender identity in envelope", () => {
+    it("includes sender in envelope body and group label as from for group messages", async () => {
+      const account = createMockAccount({ groupPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello everyone",
+          handle: { address: "+15551234567" },
+          senderName: "Alice",
+          isGroup: true,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;+;chat123456",
+          chatName: "Family Chat",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      // formatInboundEnvelope should be called with group label + id as from, and sender info
+      expect(mockFormatInboundEnvelope).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from: "Family Chat id:iMessage;+;chat123456",
+          chatType: "group",
+          sender: { name: "Alice", id: "+15551234567" },
+        }),
+      );
+      // ConversationLabel should be the group label + id, not the sender
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      expect(callArgs.ctx.ConversationLabel).toBe("Family Chat id:iMessage;+;chat123456");
+      expect(callArgs.ctx.SenderName).toBe("Alice");
+      // BodyForAgent should be raw text, not the envelope-formatted body
+      expect(callArgs.ctx.BodyForAgent).toBe("hello everyone");
+    });
+
+    it("falls back to group:peerId when chatName is missing", async () => {
+      const account = createMockAccount({ groupPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: true,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;+;chat123456",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockFormatInboundEnvelope).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from: expect.stringMatching(/^Group id:/),
+          chatType: "group",
+          sender: { name: undefined, id: "+15551234567" },
+        }),
+      );
+    });
+
+    it("uses sender as from label for DM messages", async () => {
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          senderName: "Alice",
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockFormatInboundEnvelope).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from: "Alice id:+15551234567",
+          chatType: "direct",
+          sender: { name: "Alice", id: "+15551234567" },
+        }),
+      );
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      expect(callArgs.ctx.ConversationLabel).toBe("Alice id:+15551234567");
     });
   });
 
