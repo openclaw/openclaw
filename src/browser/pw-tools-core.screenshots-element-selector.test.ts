@@ -1,58 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  getPwToolsCoreSessionMocks,
+  installPwToolsCoreTestHooks,
+  setPwToolsCoreCurrentPage,
+  setPwToolsCoreCurrentRefLocator,
+} from "./pw-tools-core.test-harness.js";
 
-let currentPage: Record<string, unknown> | null = null;
-let currentRefLocator: Record<string, unknown> | null = null;
-let pageState: {
-  console: unknown[];
-  armIdUpload: number;
-  armIdDialog: number;
-  armIdDownload: number;
-};
-
-const sessionMocks = vi.hoisted(() => ({
-  getPageForTargetId: vi.fn(async () => {
-    if (!currentPage) {
-      throw new Error("missing page");
-    }
-    return currentPage;
-  }),
-  ensurePageState: vi.fn(() => pageState),
-  restoreRoleRefsForTarget: vi.fn(() => {}),
-  refLocator: vi.fn(() => {
-    if (!currentRefLocator) {
-      throw new Error("missing locator");
-    }
-    return currentRefLocator;
-  }),
-  rememberRoleRefsForTarget: vi.fn(() => {}),
-}));
-
-vi.mock("./pw-session.js", () => sessionMocks);
+installPwToolsCoreTestHooks();
+const sessionMocks = getPwToolsCoreSessionMocks();
 const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
-  beforeEach(() => {
-    currentPage = null;
-    currentRefLocator = null;
-    pageState = {
-      console: [],
-      armIdUpload: 0,
-      armIdDialog: 0,
-      armIdDownload: 0,
-    };
-    for (const fn of Object.values(sessionMocks)) {
-      fn.mockClear();
-    }
-  });
-
   it("screenshots an element selector", async () => {
     const elementScreenshot = vi.fn(async () => Buffer.from("E"));
-    currentPage = {
+    const page = {
       locator: vi.fn(() => ({
         first: () => ({ screenshot: elementScreenshot }),
       })),
       screenshot: vi.fn(async () => Buffer.from("P")),
     };
+    setPwToolsCoreCurrentPage(page);
 
     const res = await mod.takeScreenshotViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -63,16 +30,17 @@ describe("pw-tools-core", () => {
 
     expect(res.buffer.toString()).toBe("E");
     expect(sessionMocks.getPageForTargetId).toHaveBeenCalled();
-    expect(currentPage.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
+    expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
     expect(elementScreenshot).toHaveBeenCalledWith({ type: "png" });
   });
   it("screenshots a ref locator", async () => {
     const refScreenshot = vi.fn(async () => Buffer.from("R"));
-    currentRefLocator = { screenshot: refScreenshot };
-    currentPage = {
+    setPwToolsCoreCurrentRefLocator({ screenshot: refScreenshot });
+    const page = {
       locator: vi.fn(),
       screenshot: vi.fn(async () => Buffer.from("P")),
     };
+    setPwToolsCoreCurrentPage(page);
 
     const res = await mod.takeScreenshotViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -82,17 +50,17 @@ describe("pw-tools-core", () => {
     });
 
     expect(res.buffer.toString()).toBe("R");
-    expect(sessionMocks.refLocator).toHaveBeenCalledWith(currentPage, "76");
+    expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "76");
     expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg" });
   });
   it("rejects fullPage for element or ref screenshots", async () => {
-    currentRefLocator = { screenshot: vi.fn(async () => Buffer.from("R")) };
-    currentPage = {
+    setPwToolsCoreCurrentRefLocator({ screenshot: vi.fn(async () => Buffer.from("R")) });
+    setPwToolsCoreCurrentPage({
       locator: vi.fn(() => ({
         first: () => ({ screenshot: vi.fn(async () => Buffer.from("E")) }),
       })),
       screenshot: vi.fn(async () => Buffer.from("P")),
-    };
+    });
 
     await expect(
       mod.takeScreenshotViaPlaywright({
@@ -115,10 +83,10 @@ describe("pw-tools-core", () => {
   it("arms the next file chooser and sets files (default timeout)", async () => {
     const fileChooser = { setFiles: vi.fn(async () => {}) };
     const waitForEvent = vi.fn(async (_event: string, _opts: unknown) => fileChooser);
-    currentPage = {
+    setPwToolsCoreCurrentPage({
       waitForEvent,
       keyboard: { press: vi.fn(async () => {}) },
-    };
+    });
 
     await mod.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -138,10 +106,10 @@ describe("pw-tools-core", () => {
     const fileChooser = { setFiles: vi.fn(async () => {}) };
     const press = vi.fn(async () => {});
     const waitForEvent = vi.fn(async () => fileChooser);
-    currentPage = {
+    setPwToolsCoreCurrentPage({
       waitForEvent,
       keyboard: { press },
-    };
+    });
 
     await mod.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",

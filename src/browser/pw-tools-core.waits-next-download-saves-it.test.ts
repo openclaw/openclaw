@@ -1,34 +1,14 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getPwToolsCoreSessionMocks,
+  installPwToolsCoreTestHooks,
+  setPwToolsCoreCurrentPage,
+  setPwToolsCoreCurrentRefLocator,
+} from "./pw-tools-core.test-harness.js";
 
-let currentPage: Record<string, unknown> | null = null;
-let currentRefLocator: Record<string, unknown> | null = null;
-let pageState: {
-  console: unknown[];
-  armIdUpload: number;
-  armIdDialog: number;
-  armIdDownload: number;
-};
-
-const sessionMocks = vi.hoisted(() => ({
-  getPageForTargetId: vi.fn(async () => {
-    if (!currentPage) {
-      throw new Error("missing page");
-    }
-    return currentPage;
-  }),
-  ensurePageState: vi.fn(() => pageState),
-  restoreRoleRefsForTarget: vi.fn(() => {}),
-  refLocator: vi.fn(() => {
-    if (!currentRefLocator) {
-      throw new Error("missing locator");
-    }
-    return currentRefLocator;
-  }),
-  rememberRoleRefsForTarget: vi.fn(() => {}),
-}));
-
-vi.mock("./pw-session.js", () => sessionMocks);
+installPwToolsCoreTestHooks();
+const sessionMocks = getPwToolsCoreSessionMocks();
 const tmpDirMocks = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
 }));
@@ -37,17 +17,6 @@ const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
   beforeEach(() => {
-    currentPage = null;
-    currentRefLocator = null;
-    pageState = {
-      console: [],
-      armIdUpload: 0,
-      armIdDialog: 0,
-      armIdDownload: 0,
-    };
-    for (const fn of Object.values(sessionMocks)) {
-      fn.mockClear();
-    }
     for (const fn of Object.values(tmpDirMocks)) {
       fn.mockClear();
     }
@@ -70,7 +39,7 @@ describe("pw-tools-core", () => {
       saveAs,
     };
 
-    currentPage = { on, off };
+    setPwToolsCoreCurrentPage({ on, off });
 
     const targetPath = path.resolve("/tmp/file.bin");
     const p = mod.waitForDownloadViaPlaywright({
@@ -98,7 +67,7 @@ describe("pw-tools-core", () => {
     const off = vi.fn();
 
     const click = vi.fn(async () => {});
-    currentRefLocator = { click };
+    setPwToolsCoreCurrentRefLocator({ click });
 
     const saveAs = vi.fn(async () => {});
     const download = {
@@ -107,7 +76,7 @@ describe("pw-tools-core", () => {
       saveAs,
     };
 
-    currentPage = { on, off };
+    setPwToolsCoreCurrentPage({ on, off });
 
     const targetPath = path.resolve("/tmp/report.pdf");
     const p = mod.downloadViaPlaywright({
@@ -145,7 +114,7 @@ describe("pw-tools-core", () => {
     };
 
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
-    currentPage = { on, off };
+    setPwToolsCoreCurrentPage({ on, off });
 
     const p = mod.waitForDownloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -189,7 +158,7 @@ describe("pw-tools-core", () => {
     };
 
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
-    currentPage = { on, off };
+    setPwToolsCoreCurrentPage({ on, off });
 
     const p = mod.waitForDownloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -219,7 +188,7 @@ describe("pw-tools-core", () => {
       }
     });
     const off = vi.fn();
-    currentPage = { on, off };
+    setPwToolsCoreCurrentPage({ on, off });
 
     const resp = {
       url: () => "https://example.com/api/data",
@@ -248,8 +217,9 @@ describe("pw-tools-core", () => {
   });
   it("scrolls a ref into view (default timeout)", async () => {
     const scrollIntoViewIfNeeded = vi.fn(async () => {});
-    currentRefLocator = { scrollIntoViewIfNeeded };
-    currentPage = {};
+    setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
+    const page = {};
+    setPwToolsCoreCurrentPage(page);
 
     await mod.scrollIntoViewViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -257,12 +227,12 @@ describe("pw-tools-core", () => {
       ref: "1",
     });
 
-    expect(sessionMocks.refLocator).toHaveBeenCalledWith(currentPage, "1");
+    expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "1");
     expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({ timeout: 20_000 });
   });
   it("requires a ref for scrollIntoView", async () => {
-    currentRefLocator = { scrollIntoViewIfNeeded: vi.fn(async () => {}) };
-    currentPage = {};
+    setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded: vi.fn(async () => {}) });
+    setPwToolsCoreCurrentPage({});
 
     await expect(
       mod.scrollIntoViewViaPlaywright({
