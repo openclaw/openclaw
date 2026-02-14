@@ -50,8 +50,10 @@ describe("memory embedding batches", () => {
   });
 
   it("splits large files across multiple embedding batches", async () => {
-    const line = "a".repeat(200);
-    const content = Array.from({ length: 40 }, () => line).join("\n");
+    // Keep this small but above the embedding batch byte threshold (8k) so we
+    // exercise multi-batch behavior without generating lots of chunks/DB rows.
+    const line = "a".repeat(5000);
+    const content = [line, line].join("\n");
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-03.md"), content);
 
     const cfg = {
@@ -62,7 +64,7 @@ describe("memory embedding batches", () => {
             provider: "openai",
             model: "mock-embed",
             store: { path: indexPath },
-            chunking: { tokens: 200, overlap: 0 },
+            chunking: { tokens: 1250, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: false },
             query: { minScore: 0 },
           },
