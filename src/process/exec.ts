@@ -154,6 +154,10 @@ export async function runCommandWithTimeout(
       }
       settled = true;
       clearTimeout(timer);
+      // Destroy stdio streams to release pipe FDs on spawn failure
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.stdin?.destroy();
       reject(err);
     });
     child.on("close", (code, signal) => {

@@ -633,8 +633,23 @@ export async function runExecProcess(opts: {
       const status: "completed" | "failed" = isSuccess ? "completed" : "failed";
       markExited(session, code, exitSignal, status);
       maybeNotifyOnExit(session, status);
-      if (!session.child && session.stdin) {
-        session.stdin.destroyed = true;
+      // Clean up PTY handle to release master FD.
+      // For non-PTY sessions, moveToFinished (via markExited) already
+      // destroys child stdio streams; this covers the PTY path where
+      // session.child is undefined and pty holds the file descriptor.
+      if (pty) {
+        try {
+          // node-pty handles may expose a kill or destroy method
+          const handle = pty as unknown as {
+            kill?: (signal?: string) => void;
+            destroy?: () => void;
+          };
+          handle.kill?.();
+          handle.destroy?.();
+        } catch {
+          // ignore — best-effort cleanup
+        }
+        pty = null;
       }
 
       if (settled) {
@@ -688,6 +703,24 @@ export async function runExecProcess(opts: {
         }
         if (timeoutFinalizeTimer) {
           clearTimeout(timeoutFinalizeTimer);
+        }
+        // Destroy stdio streams explicitly on spawn error to prevent
+        // pipe FD leaks. markExited → moveToFinished also attempts this,
+        // but the child reference may already be cleared by then.
+        try {
+          child.stdin?.destroy();
+        } catch {
+          /* ignore */
+        }
+        try {
+          child.stdout?.destroy();
+        } catch {
+          /* ignore */
+        }
+        try {
+          child.stderr?.destroy();
+        } catch {
+          /* ignore */
         }
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");

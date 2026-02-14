@@ -59,6 +59,23 @@ function shouldRetry(err: unknown, codes: string[]): boolean {
   return code.length > 0 && codes.includes(code);
 }
 
+/**
+ * Destroy all stdio streams on a child process to release pipe file descriptors.
+ * Called on spawn failure to prevent FD leaks that accumulate over time and
+ * eventually cause EBADF errors on subsequent spawns.
+ */
+export function destroyChildStreams(child: ChildProcess): void {
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    if (stream && !stream.destroyed) {
+      try {
+        stream.destroy();
+      } catch {
+        // ignore — best-effort cleanup
+      }
+    }
+  }
+}
+
 async function spawnAndWaitForSpawn(
   spawnImpl: typeof spawn,
   argv: string[],
@@ -86,6 +103,10 @@ async function spawnAndWaitForSpawn(
       }
       settled = true;
       cleanup();
+      // Destroy stdio streams to release pipe FDs that were allocated before
+      // the spawn failed. Without this, each failed spawn leaks pipe FDs,
+      // eventually exhausting the FD table and causing EBADF on future spawns.
+      destroyChildStreams(child);
       reject(err);
     };
     const onSpawn = () => {
