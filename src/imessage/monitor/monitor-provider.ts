@@ -111,6 +111,88 @@ function describeReplyContext(message: IMessagePayload): IMessageReplyContext | 
   return { body, id, sender };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isOptionalString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function isOptionalStringOrNumber(value: unknown): value is string | number | null | undefined {
+  return (
+    value === undefined || value === null || typeof value === "string" || typeof value === "number"
+  );
+}
+
+function isOptionalNumber(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null || typeof value === "number";
+}
+
+function isOptionalBoolean(value: unknown): value is boolean | null | undefined {
+  return value === undefined || value === null || typeof value === "boolean";
+}
+
+function isOptionalStringArray(value: unknown): value is string[] | null | undefined {
+  return (
+    value === undefined ||
+    value === null ||
+    (Array.isArray(value) && value.every((entry) => typeof entry === "string"))
+  );
+}
+
+function isOptionalAttachments(value: unknown): value is IMessagePayload["attachments"] {
+  if (value === undefined || value === null) {
+    return true;
+  }
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.every((attachment) => {
+    if (!isRecord(attachment)) {
+      return false;
+    }
+    return (
+      isOptionalString(attachment.original_path) &&
+      isOptionalString(attachment.mime_type) &&
+      isOptionalBoolean(attachment.missing)
+    );
+  });
+}
+
+function parseIMessageNotification(raw: unknown): IMessagePayload | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const maybeMessage = raw.message;
+  if (!isRecord(maybeMessage)) {
+    return null;
+  }
+
+  const message: IMessagePayload = maybeMessage;
+  if (
+    !isOptionalNumber(message.id) ||
+    !isOptionalNumber(message.chat_id) ||
+    !isOptionalString(message.sender) ||
+    !isOptionalBoolean(message.is_from_me) ||
+    !isOptionalString(message.text) ||
+    !isOptionalStringOrNumber(message.reply_to_id) ||
+    !isOptionalString(message.reply_to_text) ||
+    !isOptionalString(message.reply_to_sender) ||
+    !isOptionalString(message.created_at) ||
+    !isOptionalAttachments(message.attachments) ||
+    !isOptionalString(message.chat_identifier) ||
+    !isOptionalString(message.chat_guid) ||
+    !isOptionalString(message.chat_name) ||
+    !isOptionalStringArray(message.participants) ||
+    !isOptionalBoolean(message.is_group)
+  ) {
+    return null;
+  }
+
+  return message;
+}
+
 /**
  * Cache for recently sent messages, used for echo detection.
  * Keys are scoped by conversation (accountId:target) so the same text in different chats is not conflated.
@@ -294,7 +376,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const effectiveDmAllowFrom = Array.from(new Set([...allowFrom, ...storeAllowFrom]))
       .map((v) => String(v).trim())
       .filter(Boolean);
-    const effectiveGroupAllowFrom = Array.from(new Set([...groupAllowFrom, ...storeAllowFrom]))
+    // Keep DM pairing-store authorization scoped to DMs; group access must come
+    // from explicit group allowlist config.
+    const effectiveGroupAllowFrom = Array.from(new Set(groupAllowFrom))
       .map((v) => String(v).trim())
       .filter(Boolean);
 
@@ -676,9 +760,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }
 
   const handleMessage = async (raw: unknown) => {
-    const params = raw as { message?: IMessagePayload | null };
-    const message = params?.message ?? null;
+    const message = parseIMessageNotification(raw);
     if (!message) {
+      logVerbose("imessage: dropping malformed RPC message payload");
       return;
     }
     await inboundDebouncer.enqueue({ message });

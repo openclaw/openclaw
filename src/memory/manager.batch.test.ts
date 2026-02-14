@@ -7,6 +7,18 @@ import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 const embedBatch = vi.fn(async () => []);
 const embedQuery = vi.fn(async () => [0.5, 0.5, 0.5]);
 
+// Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).
+vi.mock("chokidar", () => ({
+  default: {
+    watch: () => ({ on: () => {}, close: async () => {} }),
+  },
+  watch: () => ({ on: () => {}, close: async () => {} }),
+}));
+
+vi.mock("./sqlite-vec.js", () => ({
+  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+}));
+
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => ({
     requestedProvider: "openai",
@@ -47,6 +59,95 @@ describe("memory indexing with OpenAI batches", () => {
     return () => spy.mockRestore();
   }
 
+  async function readOpenAIBatchUploadRequests(body: FormData) {
+    let uploadedRequests: Array<{ custom_id?: string }> = [];
+    for (const [key, value] of body.entries()) {
+      if (key !== "file") {
+        continue;
+      }
+      const text = typeof value === "string" ? value : await value.text();
+      uploadedRequests = text
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { custom_id?: string });
+    }
+    return uploadedRequests;
+  }
+
+  function createOpenAIBatchFetchMock(options?: {
+    onCreateBatch?: (ctx: { batchCreates: number }) => Response | Promise<Response>;
+  }) {
+    let uploadedRequests: Array<{ custom_id?: string }> = [];
+    const state = { batchCreates: 0 };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/files")) {
+        const body = init?.body;
+        if (!(body instanceof FormData)) {
+          throw new Error("expected FormData upload");
+        }
+        uploadedRequests = await readOpenAIBatchUploadRequests(body);
+        return new Response(JSON.stringify({ id: "file_1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/batches")) {
+        state.batchCreates += 1;
+        if (options?.onCreateBatch) {
+          return await options.onCreateBatch({ batchCreates: state.batchCreates });
+        }
+        return new Response(JSON.stringify({ id: "batch_1", status: "in_progress" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/batches/batch_1")) {
+        return new Response(
+          JSON.stringify({ id: "batch_1", status: "completed", output_file_id: "file_out" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/files/file_out/content")) {
+        const lines = uploadedRequests.map((request, index) =>
+          JSON.stringify({
+            custom_id: request.custom_id,
+            response: {
+              status_code: 200,
+              body: { data: [{ embedding: [index + 1, 0, 0], index: 0 }] },
+            },
+          }),
+        );
+        return new Response(lines.join("\n"), {
+          status: 200,
+          headers: { "Content-Type": "application/jsonl" },
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    return { fetchMock, state };
+  }
+
+  function createBatchCfg() {
+    return {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            store: { path: indexPath, vector: { enabled: false } },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: { minScore: 0, hybrid: { enabled: false } },
+            remote: { batch: { enabled: true, wait: true, pollIntervalMs: 1 } },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+  }
+
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-batch-"));
   });
@@ -75,201 +176,15 @@ describe("memory indexing with OpenAI batches", () => {
   });
 
   it("uses OpenAI batch uploads when enabled", async () => {
+    const restoreTimeouts = useFastShortTimeouts();
     const content = ["hello", "from", "batch"].join("\n\n");
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-07.md"), content);
 
-    let uploadedRequests: Array<{ custom_id?: string }> = [];
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.endsWith("/files")) {
-        const body = init?.body;
-        if (!(body instanceof FormData)) {
-          throw new Error("expected FormData upload");
-        }
-        for (const [key, value] of body.entries()) {
-          if (key !== "file") {
-            continue;
-          }
-          if (typeof value === "string") {
-            uploadedRequests = value
-              .split("\n")
-              .filter(Boolean)
-              .map((line) => JSON.parse(line) as { custom_id?: string });
-          } else {
-            const text = await value.text();
-            uploadedRequests = text
-              .split("\n")
-              .filter(Boolean)
-              .map((line) => JSON.parse(line) as { custom_id?: string });
-          }
-        }
-        return new Response(JSON.stringify({ id: "file_1" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url.endsWith("/batches")) {
-        return new Response(JSON.stringify({ id: "batch_1", status: "in_progress" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url.endsWith("/batches/batch_1")) {
-        return new Response(
-          JSON.stringify({ id: "batch_1", status: "completed", output_file_id: "file_out" }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      if (url.endsWith("/files/file_out/content")) {
-        const lines = uploadedRequests.map((request, index) =>
-          JSON.stringify({
-            custom_id: request.custom_id,
-            response: {
-              status_code: 200,
-              body: { data: [{ embedding: [index + 1, 0, 0], index: 0 }] },
-            },
-          }),
-        );
-        return new Response(lines.join("\n"), {
-          status: 200,
-          headers: { "Content-Type": "application/jsonl" },
-        });
-      }
-      throw new Error(`unexpected fetch ${url}`);
-    });
+    const { fetchMock } = createOpenAIBatchFetchMock();
 
     vi.stubGlobal("fetch", fetchMock);
 
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-            store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0, hybrid: { enabled: false } },
-            remote: { batch: { enabled: true, wait: true, pollIntervalMs: 1 } },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-    const labels: string[] = [];
-    await manager.sync({
-      force: true,
-      progress: (update) => {
-        if (update.label) {
-          labels.push(update.label);
-        }
-      },
-    });
-
-    const status = manager.status();
-    expect(status.chunks).toBeGreaterThan(0);
-    expect(embedBatch).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalled();
-    expect(labels.some((label) => label.toLowerCase().includes("batch"))).toBe(true);
-  });
-
-  it("retries OpenAI batch create on transient failures", async () => {
-    const restoreTimeouts = useFastShortTimeouts();
-    const content = ["retry", "the", "batch"].join("\n\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-08.md"), content);
-
-    let uploadedRequests: Array<{ custom_id?: string }> = [];
-    let batchCreates = 0;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.endsWith("/files")) {
-        const body = init?.body;
-        if (!(body instanceof FormData)) {
-          throw new Error("expected FormData upload");
-        }
-        for (const [key, value] of body.entries()) {
-          if (key !== "file") {
-            continue;
-          }
-          if (typeof value === "string") {
-            uploadedRequests = value
-              .split("\n")
-              .filter(Boolean)
-              .map((line) => JSON.parse(line) as { custom_id?: string });
-          } else {
-            const text = await value.text();
-            uploadedRequests = text
-              .split("\n")
-              .filter(Boolean)
-              .map((line) => JSON.parse(line) as { custom_id?: string });
-          }
-        }
-        return new Response(JSON.stringify({ id: "file_1" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url.endsWith("/batches")) {
-        batchCreates += 1;
-        if (batchCreates === 1) {
-          return new Response("upstream connect error", { status: 503 });
-        }
-        return new Response(JSON.stringify({ id: "batch_1", status: "in_progress" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url.endsWith("/batches/batch_1")) {
-        return new Response(
-          JSON.stringify({ id: "batch_1", status: "completed", output_file_id: "file_out" }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      if (url.endsWith("/files/file_out/content")) {
-        const lines = uploadedRequests.map((request, index) =>
-          JSON.stringify({
-            custom_id: request.custom_id,
-            response: {
-              status_code: 200,
-              body: { data: [{ embedding: [index + 1, 0, 0], index: 0 }] },
-            },
-          }),
-        );
-        return new Response(lines.join("\n"), {
-          status: 200,
-          headers: { "Content-Type": "application/jsonl" },
-        });
-      }
-      throw new Error(`unexpected fetch ${url}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-            store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0, hybrid: { enabled: false } },
-            remote: { batch: { enabled: true, wait: true, pollIntervalMs: 1 } },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
+    const cfg = createBatchCfg();
 
     try {
       const result = await getMemorySearchManager({ cfg, agentId: "main" });
@@ -278,53 +193,80 @@ describe("memory indexing with OpenAI batches", () => {
         throw new Error("manager missing");
       }
       manager = result.manager;
-      await manager.sync({ force: true });
+      const labels: string[] = [];
+      await manager.sync({
+        progress: (update) => {
+          if (update.label) {
+            labels.push(update.label);
+          }
+        },
+      });
 
       const status = manager.status();
       expect(status.chunks).toBeGreaterThan(0);
-      expect(batchCreates).toBe(2);
+      expect(embedBatch).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalled();
+      expect(labels.some((label) => label.toLowerCase().includes("batch"))).toBe(true);
+    } finally {
+      restoreTimeouts();
+    }
+  });
+
+  it("retries OpenAI batch create on transient failures", async () => {
+    const restoreTimeouts = useFastShortTimeouts();
+    const content = ["retry", "the", "batch"].join("\n\n");
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-08.md"), content);
+
+    const { fetchMock, state } = createOpenAIBatchFetchMock({
+      onCreateBatch: ({ batchCreates }) => {
+        if (batchCreates === 1) {
+          return new Response("upstream connect error", { status: 503 });
+        }
+        return new Response(JSON.stringify({ id: "batch_1", status: "in_progress" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const cfg = createBatchCfg();
+
+    try {
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      expect(result.manager).not.toBeNull();
+      if (!result.manager) {
+        throw new Error("manager missing");
+      }
+      manager = result.manager;
+      await manager.sync({ reason: "test" });
+
+      const status = manager.status();
+      expect(status.chunks).toBeGreaterThan(0);
+      expect(state.batchCreates).toBe(2);
     } finally {
       restoreTimeouts();
     }
   });
 
   it("tracks batch failures, resets on success, and disables after repeated failures", async () => {
+    const restoreTimeouts = useFastShortTimeouts();
     const content = ["flaky", "batch"].join("\n\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-09.md"), content);
+    const memoryFile = path.join(workspaceDir, "memory", "2026-01-09.md");
+    let mtimeMs = Date.now();
+    const touch = async () => {
+      mtimeMs += 1_000;
+      const date = new Date(mtimeMs);
+      await fs.utimes(memoryFile, date, date);
+    };
 
-    let uploadedRequests: Array<{ custom_id?: string }> = [];
+    await fs.writeFile(memoryFile, content);
+    await touch();
+
     let mode: "fail" | "ok" = "fail";
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.endsWith("/files")) {
-        const body = init?.body;
-        if (!(body instanceof FormData)) {
-          throw new Error("expected FormData upload");
-        }
-        for (const [key, value] of body.entries()) {
-          if (key !== "file") {
-            continue;
-          }
-          if (typeof value === "string") {
-            uploadedRequests = value
-              .split("\n")
-              .filter(Boolean)
-              .map((line) => JSON.parse(line) as { custom_id?: string });
-          } else {
-            const text = await value.text();
-            uploadedRequests = text
-              .split("\n")
-              .filter(Boolean)
-              .map((line) => JSON.parse(line) as { custom_id?: string });
-          }
-        }
-        return new Response(JSON.stringify({ id: "file_1" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url.endsWith("/batches")) {
+    const { fetchMock } = createOpenAIBatchFetchMock({
+      onCreateBatch: () => {
         if (mode === "fail") {
           return new Response("batch failed", { status: 400 });
         }
@@ -332,106 +274,74 @@ describe("memory indexing with OpenAI batches", () => {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
-      }
-      if (url.endsWith("/batches/batch_1")) {
-        return new Response(
-          JSON.stringify({ id: "batch_1", status: "completed", output_file_id: "file_out" }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      if (url.endsWith("/files/file_out/content")) {
-        const lines = uploadedRequests.map((request, index) =>
-          JSON.stringify({
-            custom_id: request.custom_id,
-            response: {
-              status_code: 200,
-              body: { data: [{ embedding: [index + 1, 0, 0], index: 0 }] },
-            },
-          }),
-        );
-        return new Response(lines.join("\n"), {
-          status: 200,
-          headers: { "Content-Type": "application/jsonl" },
-        });
-      }
-      throw new Error(`unexpected fetch ${url}`);
+      },
     });
 
     vi.stubGlobal("fetch", fetchMock);
 
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-            store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0, hybrid: { enabled: false } },
-            remote: { batch: { enabled: true, wait: true, pollIntervalMs: 1 } },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
+    const cfg = createBatchCfg();
 
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
+    try {
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      expect(result.manager).not.toBeNull();
+      if (!result.manager) {
+        throw new Error("manager missing");
+      }
+      manager = result.manager;
+
+      // First failure: fallback to regular embeddings and increment failure count.
+      await manager.sync({ reason: "test" });
+      expect(embedBatch).toHaveBeenCalled();
+      let status = manager.status();
+      expect(status.batch?.enabled).toBe(true);
+      expect(status.batch?.failures).toBe(1);
+
+      const markDirty = () => {
+        // `sync` only indexes when marked dirty (unless doing a full reindex).
+        (manager as unknown as { dirty: boolean }).dirty = true;
+      };
+
+      // Success should reset failure count.
+      embedBatch.mockClear();
+      mode = "ok";
+      await fs.writeFile(memoryFile, ["flaky", "batch", "recovery"].join("\n\n"));
+      await touch();
+      markDirty();
+      await manager.sync({ reason: "test" });
+      status = manager.status();
+      expect(status.batch?.enabled).toBe(true);
+      expect(status.batch?.failures).toBe(0);
+      expect(embedBatch).not.toHaveBeenCalled();
+
+      // Two more failures after reset should disable remote batching.
+      mode = "fail";
+      await fs.writeFile(memoryFile, ["flaky", "batch", "fail-a"].join("\n\n"));
+      await touch();
+      markDirty();
+      await manager.sync({ reason: "test" });
+      status = manager.status();
+      expect(status.batch?.enabled).toBe(true);
+      expect(status.batch?.failures).toBe(1);
+
+      await fs.writeFile(memoryFile, ["flaky", "batch", "fail-b"].join("\n\n"));
+      await touch();
+      markDirty();
+      await manager.sync({ reason: "test" });
+      status = manager.status();
+      expect(status.batch?.enabled).toBe(false);
+      expect(status.batch?.failures).toBeGreaterThanOrEqual(2);
+
+      // Once disabled, batch endpoints are skipped and fallback embeddings run directly.
+      const fetchCalls = fetchMock.mock.calls.length;
+      embedBatch.mockClear();
+      await fs.writeFile(memoryFile, ["flaky", "batch", "fallback"].join("\n\n"));
+      await touch();
+      markDirty();
+      await manager.sync({ reason: "test" });
+      expect(fetchMock.mock.calls.length).toBe(fetchCalls);
+      expect(embedBatch).toHaveBeenCalled();
+    } finally {
+      restoreTimeouts();
     }
-    manager = result.manager;
-
-    // First failure: fallback to regular embeddings and increment failure count.
-    await manager.sync({ force: true });
-    expect(embedBatch).toHaveBeenCalled();
-    let status = manager.status();
-    expect(status.batch?.enabled).toBe(true);
-    expect(status.batch?.failures).toBe(1);
-
-    // Success should reset failure count.
-    embedBatch.mockClear();
-    mode = "ok";
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-09.md"),
-      ["flaky", "batch", "recovery"].join("\n\n"),
-    );
-    await manager.sync({ force: true });
-    status = manager.status();
-    expect(status.batch?.enabled).toBe(true);
-    expect(status.batch?.failures).toBe(0);
-    expect(embedBatch).not.toHaveBeenCalled();
-
-    // Two more failures after reset should disable remote batching.
-    mode = "fail";
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-09.md"),
-      ["flaky", "batch", "fail-a"].join("\n\n"),
-    );
-    await manager.sync({ force: true });
-    status = manager.status();
-    expect(status.batch?.enabled).toBe(true);
-    expect(status.batch?.failures).toBe(1);
-
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-09.md"),
-      ["flaky", "batch", "fail-b"].join("\n\n"),
-    );
-    await manager.sync({ force: true });
-    status = manager.status();
-    expect(status.batch?.enabled).toBe(false);
-    expect(status.batch?.failures).toBeGreaterThanOrEqual(2);
-
-    // Once disabled, batch endpoints are skipped and fallback embeddings run directly.
-    const fetchCalls = fetchMock.mock.calls.length;
-    embedBatch.mockClear();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-09.md"),
-      ["flaky", "batch", "fallback"].join("\n\n"),
-    );
-    await manager.sync({ force: true });
-    expect(fetchMock.mock.calls.length).toBe(fetchCalls);
-    expect(embedBatch).toHaveBeenCalled();
   });
 });

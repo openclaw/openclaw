@@ -7,6 +7,18 @@ import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 const embedBatch = vi.fn(async (texts: string[]) => texts.map(() => [0, 1, 0]));
 const embedQuery = vi.fn(async () => [0, 1, 0]);
 
+// Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).
+vi.mock("chokidar", () => ({
+  default: {
+    watch: () => ({ on: () => {}, close: async () => {} }),
+  },
+  watch: () => ({ on: () => {}, close: async () => {} }),
+}));
+
+vi.mock("./sqlite-vec.js", () => ({
+  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+}));
+
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => ({
     requestedProvider: "openai",
@@ -63,10 +75,10 @@ describe("memory embedding batches", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
             chunking: { tokens: 1250, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
+            query: { minScore: 0, hybrid: { enabled: false } },
           },
         },
         list: [{ id: "main", default: true }],
@@ -81,7 +93,6 @@ describe("memory embedding batches", () => {
     manager = result.manager;
     const updates: Array<{ completed: number; total: number; label?: string }> = [];
     await manager.sync({
-      force: true,
       progress: (update) => {
         updates.push(update);
       },
@@ -110,10 +121,10 @@ describe("memory embedding batches", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
             chunking: { tokens: 200, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
+            query: { minScore: 0, hybrid: { enabled: false } },
           },
         },
         list: [{ id: "main", default: true }],
@@ -126,7 +137,7 @@ describe("memory embedding batches", () => {
       throw new Error("manager missing");
     }
     manager = result.manager;
-    await manager.sync({ force: true });
+    await manager.sync({ reason: "test" });
 
     expect(embedBatch.mock.calls.length).toBe(1);
   });
@@ -170,10 +181,10 @@ describe("memory embedding batches", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
             chunking: { tokens: 200, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
+            query: { minScore: 0, hybrid: { enabled: false } },
           },
         },
         list: [{ id: "main", default: true }],
@@ -187,7 +198,7 @@ describe("memory embedding batches", () => {
     }
     manager = result.manager;
     try {
-      await manager.sync({ force: true });
+      await manager.sync({ reason: "test" });
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -205,9 +216,9 @@ describe("memory embedding batches", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
+            query: { minScore: 0, hybrid: { enabled: false } },
           },
         },
         list: [{ id: "main", default: true }],
@@ -220,7 +231,7 @@ describe("memory embedding batches", () => {
       throw new Error("manager missing");
     }
     manager = result.manager;
-    await manager.sync({ force: true });
+    await manager.sync({ reason: "test" });
 
     const inputs = embedBatch.mock.calls.flatMap((call) => call[0] ?? []);
     expect(inputs).not.toContain("");

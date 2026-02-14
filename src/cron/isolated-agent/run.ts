@@ -14,8 +14,6 @@ import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
-import { resolveAgentIdentity } from "../../agents/identity.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
@@ -46,6 +44,7 @@ import {
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { logWarn } from "../../logger.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
@@ -122,6 +121,7 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const requestedAgentId =
     typeof params.agentId === "string" && params.agentId.trim()
@@ -163,7 +163,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentDir = resolveAgentDir(params.cfg, agentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+    ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
 
@@ -233,6 +233,9 @@ export async function runCronIsolatedAgentTurn(params: {
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
   const persistSessionEntry = async () => {
+    if (isFastTestEnv) {
+      return;
+    }
     cronSession.store[agentSessionKey] = cronSession.sessionEntry;
     if (runSessionKey !== agentSessionKey) {
       cronSession.store[runSessionKey] = cronSession.sessionEntry;
@@ -365,24 +368,30 @@ export async function runCronIsolatedAgentTurn(params: {
       `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
   }
 
-  const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
-  const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-  const needsSkillsSnapshot =
-    !existingSnapshot || existingSnapshot.version !== skillsSnapshotVersion;
-  const skillsSnapshot = needsSkillsSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
+  let skillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
+  if (isFastTestEnv) {
+    // Fast unit-test mode: avoid scanning the workspace and writing session stores.
+    skillsSnapshot = skillsSnapshot ?? { prompt: "", skills: [] };
+  } else {
+    const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
+    const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+    const needsSkillsSnapshot =
+      !existingSnapshot || existingSnapshot.version !== skillsSnapshotVersion;
+    if (needsSkillsSnapshot) {
+      skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfgWithAgentDefaults,
         eligibility: { remote: getRemoteSkillEligibility() },
         snapshotVersion: skillsSnapshotVersion,
-      })
-    : cronSession.sessionEntry.skillsSnapshot;
-  if (needsSkillsSnapshot && skillsSnapshot) {
-    cronSession.sessionEntry = {
-      ...cronSession.sessionEntry,
-      updatedAt: Date.now(),
-      skillsSnapshot,
-    };
-    await persistSessionEntry();
+      });
+      if (skillsSnapshot) {
+        cronSession.sessionEntry = {
+          ...cronSession.sessionEntry,
+          updatedAt: Date.now(),
+          skillsSnapshot,
+        };
+        await persistSessionEntry();
+      }
+    }
   }
 
   // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
@@ -557,18 +566,14 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText });
     }
-    const agentIdentity = resolveAgentIdentity(cfgWithAgentDefaults, agentId);
-    const avatar = resolveAgentAvatar(cfgWithAgentDefaults, agentId);
-    const icon_url = avatar.kind === "remote" ? avatar.url : undefined;
-    const username = agentIdentity?.name?.trim() || undefined;
-    const rawEmoji = agentIdentity?.emoji?.trim();
-    // Slack `icon_emoji` requires :emoji_name: (not a Unicode emoji).
-    const icon_emoji =
-      !icon_url && rawEmoji && /^:[^:\\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+    const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
 
-    // Shared subagent announce flow is text-based. When we have an explicit sender
-    // identity to preserve, prefer direct outbound delivery even for plain-text payloads.
-    if (deliveryPayloadHasStructuredContent || username || icon_url || icon_emoji) {
+    // Shared subagent announce flow is text-based and prompts the main agent to
+    // summarize. When we have an explicit delivery target (delivery.to), sender
+    // identity, or structured content, prefer direct outbound delivery to send
+    // the actual cron output without summarization.
+    const hasExplicitDeliveryTarget = Boolean(deliveryPlan.to);
+    if (deliveryPayloadHasStructuredContent || identity || hasExplicitDeliveryTarget) {
       try {
         const payloadsForDelivery =
           deliveryPayloadHasStructuredContent && deliveryPayloads.length > 0
@@ -584,9 +589,7 @@ export async function runCronIsolatedAgentTurn(params: {
             accountId: resolvedDelivery.accountId,
             threadId: resolvedDelivery.threadId,
             payloads: payloadsForDelivery,
-            username,
-            icon_url,
-            icon_emoji,
+            identity,
             bestEffort: deliveryBestEffort,
             deps: createOutboundSendDeps(params.deps),
           });
