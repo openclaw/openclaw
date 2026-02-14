@@ -1,11 +1,13 @@
 import type { Command } from "commander";
 import fs from "node:fs";
+import path from "node:path";
 import type { GatewayAuthMode } from "../../config/config.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import {
   CONFIG_PATH,
   loadConfig,
   readConfigFileSnapshot,
+  resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
@@ -160,6 +162,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   const snapshot = await readConfigFileSnapshot().catch(() => null);
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
+  const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const mode = cfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
@@ -170,6 +173,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       defaultRuntime.error(
         `Gateway start blocked: set gateway.mode=local (current: ${mode ?? "unset"}) or pass --allow-unconfigured.`,
       );
+      defaultRuntime.error(`Config write audit: ${configAuditPath}`);
     }
     defaultRuntime.exit(1);
     return;

@@ -68,7 +68,39 @@ const SHELL_ENV_EXPECTED_KEYS = [
 ];
 
 const CONFIG_BACKUP_COUNT = 5;
+const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
+
+type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
+
+type ConfigWriteAuditRecord = {
+  ts: string;
+  source: "config-io";
+  event: "config.write";
+  result: ConfigWriteAuditResult;
+  configPath: string;
+  pid: number;
+  ppid: number;
+  cwd: string;
+  argv: string[];
+  execArgv: string[];
+  watchMode: boolean;
+  watchSession: string | null;
+  watchCommand: string | null;
+  existsBefore: boolean;
+  previousHash: string | null;
+  nextHash: string | null;
+  previousBytes: number | null;
+  nextBytes: number | null;
+  changedPathCount: number | null;
+  hasMetaBefore: boolean;
+  hasMetaAfter: boolean;
+  gatewayModeBefore: string | null;
+  gatewayModeAfter: string | null;
+  suspicious: string[];
+  errorCode?: string;
+  errorMessage?: string;
+};
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 export type ConfigWriteOptions = {
@@ -121,6 +153,26 @@ function coerceConfig(value: unknown): OpenClawConfig {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasConfigMeta(value: unknown): boolean {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  const meta = value.meta;
+  return isPlainObject(meta);
+}
+
+function resolveGatewayMode(value: unknown): string | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const gateway = value.gateway;
+  if (!isPlainObject(gateway) || typeof gateway.mode !== "string") {
+    return null;
+  }
+  const trimmed = gateway.mode.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function cloneUnknown<T>(value: T): T {
@@ -305,6 +357,55 @@ async function rotateConfigBackups(configPath: string, ioFs: typeof fs.promises)
   await ioFs.rename(backupBase, `${backupBase}.1`).catch(() => {
     // best-effort
   });
+}
+
+function resolveConfigAuditLogPath(env: NodeJS.ProcessEnv, homedir: () => string): string {
+  return path.join(resolveStateDir(env, homedir), "logs", CONFIG_AUDIT_LOG_FILENAME);
+}
+
+function resolveConfigWriteSuspiciousReasons(params: {
+  existsBefore: boolean;
+  previousBytes: number | null;
+  nextBytes: number | null;
+  hasMetaBefore: boolean;
+  gatewayModeBefore: string | null;
+  gatewayModeAfter: string | null;
+}): string[] {
+  const reasons: string[] = [];
+  if (!params.existsBefore) {
+    return reasons;
+  }
+  if (
+    typeof params.previousBytes === "number" &&
+    typeof params.nextBytes === "number" &&
+    params.previousBytes >= 512 &&
+    params.nextBytes < Math.floor(params.previousBytes * 0.5)
+  ) {
+    reasons.push(`size-drop:${params.previousBytes}->${params.nextBytes}`);
+  }
+  if (!params.hasMetaBefore) {
+    reasons.push("missing-meta-before-write");
+  }
+  if (params.gatewayModeBefore && !params.gatewayModeAfter) {
+    reasons.push("gateway-mode-removed");
+  }
+  return reasons;
+}
+
+async function appendConfigWriteAuditRecord(
+  deps: Required<ConfigIoDeps>,
+  record: ConfigWriteAuditRecord,
+): Promise<void> {
+  try {
+    const auditPath = resolveConfigAuditLogPath(deps.env, deps.homedir);
+    await deps.fs.promises.mkdir(path.dirname(auditPath), { recursive: true, mode: 0o700 });
+    await deps.fs.promises.appendFile(auditPath, `${JSON.stringify(record)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+  } catch {
+    // best-effort
+  }
 }
 
 export type ConfigIoDeps = {
@@ -822,10 +923,26 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         : cfgToWrite;
     // Do NOT apply runtime defaults when writing — user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
-    const json = JSON.stringify(stampConfigVersion(outputConfig), null, 2).trimEnd().concat("\n");
+    const stampedOutputConfig = stampConfigVersion(outputConfig);
+    const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
     const changedPathCount = changedPaths?.size;
+    const previousBytes =
+      typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
+    const nextBytes = Buffer.byteLength(json, "utf-8");
+    const hasMetaBefore = hasConfigMeta(snapshot.parsed);
+    const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
+    const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
+    const gatewayModeAfter = resolveGatewayMode(stampedOutputConfig);
+    const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
+      existsBefore: snapshot.exists,
+      previousBytes,
+      nextBytes,
+      hasMetaBefore,
+      gatewayModeBefore,
+      gatewayModeAfter,
+    });
     const logConfigOverwrite = () => {
       if (!snapshot.exists) {
         return;
@@ -841,46 +958,112 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         `Config overwrite: ${configPath} (sha256 ${previousHash ?? "unknown"} -> ${nextHash}, backup=${configPath}.bak${changeSummary})`,
       );
     };
+    const logConfigWriteAnomalies = () => {
+      if (suspiciousReasons.length === 0) {
+        return;
+      }
+      deps.logger.warn(`Config write anomaly: ${configPath} (${suspiciousReasons.join(", ")})`);
+    };
+    const auditRecordBase = {
+      ts: new Date().toISOString(),
+      source: "config-io" as const,
+      event: "config.write" as const,
+      configPath,
+      pid: process.pid,
+      ppid: process.ppid,
+      cwd: process.cwd(),
+      argv: process.argv.slice(0, 8),
+      execArgv: process.execArgv.slice(0, 8),
+      watchMode: deps.env.OPENCLAW_WATCH_MODE === "1",
+      watchSession:
+        typeof deps.env.OPENCLAW_WATCH_SESSION === "string" &&
+        deps.env.OPENCLAW_WATCH_SESSION.trim().length > 0
+          ? deps.env.OPENCLAW_WATCH_SESSION.trim()
+          : null,
+      watchCommand:
+        typeof deps.env.OPENCLAW_WATCH_COMMAND === "string" &&
+        deps.env.OPENCLAW_WATCH_COMMAND.trim().length > 0
+          ? deps.env.OPENCLAW_WATCH_COMMAND.trim()
+          : null,
+      existsBefore: snapshot.exists,
+      previousHash: previousHash ?? null,
+      nextHash,
+      previousBytes,
+      nextBytes,
+      changedPathCount: typeof changedPathCount === "number" ? changedPathCount : null,
+      hasMetaBefore,
+      hasMetaAfter,
+      gatewayModeBefore,
+      gatewayModeAfter,
+      suspicious: suspiciousReasons,
+    };
+    const appendWriteAudit = async (result: ConfigWriteAuditResult, err?: unknown) => {
+      const errorCode =
+        err && typeof err === "object" && "code" in err && typeof err.code === "string"
+          ? err.code
+          : undefined;
+      const errorMessage =
+        err && typeof err === "object" && "message" in err && typeof err.message === "string"
+          ? err.message
+          : undefined;
+      await appendConfigWriteAuditRecord(deps, {
+        ...auditRecordBase,
+        result,
+        nextHash: result === "failed" ? null : auditRecordBase.nextHash,
+        nextBytes: result === "failed" ? null : auditRecordBase.nextBytes,
+        errorCode,
+        errorMessage,
+      });
+    };
 
     const tmp = path.join(
       dir,
       `${path.basename(configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
     );
 
-    await deps.fs.promises.writeFile(tmp, json, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-
-    if (deps.fs.existsSync(configPath)) {
-      await rotateConfigBackups(configPath, deps.fs.promises);
-      await deps.fs.promises.copyFile(configPath, `${configPath}.bak`).catch(() => {
-        // best-effort
-      });
-    }
-
     try {
-      await deps.fs.promises.rename(tmp, configPath);
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      // Windows doesn't reliably support atomic replace via rename when dest exists.
-      if (code === "EPERM" || code === "EEXIST") {
-        await deps.fs.promises.copyFile(tmp, configPath);
-        await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
+      await deps.fs.promises.writeFile(tmp, json, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+
+      if (deps.fs.existsSync(configPath)) {
+        await rotateConfigBackups(configPath, deps.fs.promises);
+        await deps.fs.promises.copyFile(configPath, `${configPath}.bak`).catch(() => {
           // best-effort
         });
+      }
+
+      try {
+        await deps.fs.promises.rename(tmp, configPath);
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        // Windows doesn't reliably support atomic replace via rename when dest exists.
+        if (code === "EPERM" || code === "EEXIST") {
+          await deps.fs.promises.copyFile(tmp, configPath);
+          await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
+            // best-effort
+          });
+          await deps.fs.promises.unlink(tmp).catch(() => {
+            // best-effort
+          });
+          logConfigOverwrite();
+          logConfigWriteAnomalies();
+          await appendWriteAudit("copy-fallback");
+          return;
+        }
         await deps.fs.promises.unlink(tmp).catch(() => {
           // best-effort
         });
-        logConfigOverwrite();
-        return;
+        throw err;
       }
-      await deps.fs.promises.unlink(tmp).catch(() => {
-        // best-effort
-      });
+      logConfigOverwrite();
+      logConfigWriteAnomalies();
+      await appendWriteAudit("rename");
+    } catch (err) {
+      await appendWriteAudit("failed", err);
       throw err;
     }
-    logConfigOverwrite();
   }
 
   return {

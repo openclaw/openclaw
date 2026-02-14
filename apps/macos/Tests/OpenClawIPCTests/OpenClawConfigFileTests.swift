@@ -76,4 +76,43 @@ struct OpenClawConfigFileTests {
             #expect(OpenClawConfigFile.url().path == "\(dir)/openclaw.json")
         }
     }
+
+    @MainActor
+    @Test
+    func saveDictAppendsConfigAuditLog() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": ["mode": "local"],
+            ])
+
+            let configData = try Data(contentsOf: configPath)
+            let configRoot = try JSONSerialization.jsonObject(with: configData) as? [String: Any]
+            #expect((configRoot?["meta"] as? [String: Any]) != nil)
+
+            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
+            let lines = rawAudit
+                .split(whereSeparator: \.isNewline)
+                .map(String.init)
+            #expect(!lines.isEmpty)
+            guard let last = lines.last else {
+                Issue.record("Missing config audit line")
+                return
+            }
+            let auditRoot = try JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any]
+            #expect(auditRoot?["source"] as? String == "macos-openclaw-config-file")
+            #expect(auditRoot?["event"] as? String == "config.write")
+            #expect(auditRoot?["result"] as? String == "success")
+            #expect(auditRoot?["configPath"] as? String == configPath.path)
+        }
+    }
 }
