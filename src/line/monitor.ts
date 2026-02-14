@@ -322,8 +322,24 @@ export async function monitorLineProvider(
         const rawBody = await readLineWebhookRequestBody(req, LINE_WEBHOOK_MAX_BODY_BYTES);
         const signature = req.headers["x-line-signature"];
 
-        // Validate signature
+        // LINE webhook verification sends POST {"events":[]} without a
+        // signature header.  Return 200 so the LINE Developers Console
+        // "Verify" button succeeds.
         if (!signature || typeof signature !== "string") {
+          try {
+            const verifyBody = JSON.parse(rawBody) as WebhookRequestBody;
+            if (Array.isArray(verifyBody.events) && verifyBody.events.length === 0) {
+              logVerbose(
+                "line: webhook verification request (empty events, no signature) — 200 OK",
+              );
+              res.statusCode = 200;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ status: "ok" }));
+              return;
+            }
+          } catch {
+            // Not valid JSON — fall through to the error below.
+          }
           logVerbose("line: webhook missing X-Line-Signature header");
           res.statusCode = 400;
           res.setHeader("Content-Type", "application/json");
