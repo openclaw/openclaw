@@ -47,6 +47,7 @@ const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage 
 const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
   aborted: false,
   timedOut: false,
+  timedOutDuringCompaction: false,
   promptError: null,
   sessionIdUsed: "session:test",
   systemPromptReport: undefined,
@@ -168,6 +169,54 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
       ) as { usageStats?: Record<string, { lastUsed?: number }> };
       expect(typeof stored.usageStats?.["openai:p2"]?.lastUsed).toBe("number");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not rotate for compaction timeouts", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    try {
+      await writeAuthStore(agentDir);
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          aborted: true,
+          timedOut: true,
+          timedOutDuringCompaction: true,
+          assistantTexts: ["partial"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "partial" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:compaction-timeout",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:compaction-timeout",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.meta.aborted).toBe(true);
+
+      const stored = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
+      ) as { usageStats?: Record<string, { lastUsed?: number }> };
+      expect(stored.usageStats?.["openai:p2"]?.lastUsed).toBe(2);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });
