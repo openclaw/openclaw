@@ -45,7 +45,7 @@ export async function rmDirWithRetries(
       retryDelay: delayMs,
     });
     return;
-  } catch (err) {
+  } catch {
     // Fall back for older Node implementations (or unexpected retry behavior).
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
