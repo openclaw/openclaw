@@ -17,6 +17,7 @@ const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => false),
     runMessageSent: vi.fn(async () => {}),
+    runMessageSending: vi.fn(async () => ({})),
   },
 }));
 const queueMocks = vi.hoisted(() => ({
@@ -74,6 +75,8 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSent.mockReset();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
+    hookMocks.runner.runMessageSending.mockReset();
+    hookMocks.runner.runMessageSending.mockResolvedValue({});
     queueMocks.enqueueDelivery.mockReset();
     queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
     queueMocks.ackDelivery.mockReset();
