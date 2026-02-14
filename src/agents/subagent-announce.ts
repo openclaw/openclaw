@@ -12,7 +12,7 @@ import {
 import { resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { callGateway } from "../gateway/call.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
-import { normalizeMainKey } from "../routing/session-key.js";
+import { isSubagentSessionKey, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { getSubagentDepth } from "../sessions/session-key-utils.js";
 import {
@@ -32,6 +32,7 @@ import { resolveMaxChildrenPerAgent, resolveMaxSpawnDepth } from "./recursive-sp
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getActiveChildCount, listAllSubagentRuns } from "./subagent-registry.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
+import { getAncestors } from "./tools/sessions-lineage.js";
 
 function formatTokenCount(value?: number) {
   if (!value || !Number.isFinite(value)) {
@@ -575,6 +576,39 @@ export async function runSubagentAnnounceFlow(params: {
       `Do not mention technical details like tokens, stats, or that this was a ${announceType}.`,
       "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
     ].join("\n");
+
+    const isNestedSubagent = isSubagentSessionKey(params.requesterSessionKey ?? "");
+    if (isNestedSubagent) {
+      const targets = [params.requesterSessionKey, ...getAncestors(params.requesterSessionKey)];
+      for (const rawTarget of targets) {
+        const target = rawTarget?.trim();
+        if (!target) {
+          continue;
+        }
+        try {
+          await callGateway({
+            method: "agent",
+            params: {
+              sessionKey: target,
+              message: triggerMessage,
+              deliver: false,
+              lane: "subagent",
+            },
+            timeoutMs: 10_000,
+          });
+          didAnnounce = true;
+          break;
+        } catch {
+          continue;
+        }
+      }
+      if (!didAnnounce) {
+        console.warn(
+          `[subagent-announce] Failed to deliver nested announce for ${params.childSessionKey}`,
+        );
+      }
+      return true;
+    }
 
     const queued = await maybeQueueSubagentAnnounce({
       requesterSessionKey: params.requesterSessionKey,
