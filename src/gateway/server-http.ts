@@ -344,10 +344,14 @@ export function createGatewayHttpServer(opts: {
       // Apply rate limiting before processing requests
       if (rateLimiter) {
         // Check auth backoff first (no counter increment, just backoff state)
-        const backoff = rateLimiter.checkAuthBackoff({ req, trustedProxies });
-        if (!backoff.allowed) {
-          sendRateLimited(res, backoff.retryAfter, backoff.reason);
-          return;
+        // Check auth backoff for endpoints that use gateway auth (skip hooks/plugins with independent auth)
+        const endpoint = determineRateLimitEndpoint(req);
+        if (endpoint !== "hooks") {
+          const backoff = rateLimiter.checkAuthBackoff({ req, trustedProxies });
+          if (!backoff.allowed) {
+            sendRateLimited(res, backoff.retryAfter, backoff.reason);
+            return;
+          }
         }
 
         const endpoint = determineRateLimitEndpoint(req);
