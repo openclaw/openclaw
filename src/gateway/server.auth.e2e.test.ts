@@ -144,6 +144,18 @@ describe("gateway server auth/connect", () => {
         signedAtMs,
         token: token ?? null,
       });
+
+      test("ignores requested scopes when device identity is omitted", async () => {
+        const ws = await openWs(port);
+        const res = await connectReq(ws, { device: null });
+        expect(res.ok).toBe(true);
+
+        const health = await rpcReq(ws, "health");
+        expect(health.ok).toBe(false);
+        expect(health.error?.message).toContain("missing scope");
+
+        ws.close();
+      });
       const device = {
         id: identity.deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -493,6 +505,9 @@ describe("gateway server auth/connect", () => {
       const ws = await openTailscaleWs(port);
       const res = await connectReq(ws, { token: "secret", device: null });
       expect(res.ok).toBe(true);
+      const health = await rpcReq(ws, "health");
+      expect(health.ok).toBe(false);
+      expect(health.error?.message).toContain("missing scope");
       ws.close();
     });
   });
