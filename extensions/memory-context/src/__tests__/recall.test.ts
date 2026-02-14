@@ -11,7 +11,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
 import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
 import { buildRecalledContextBlock } from "../../../../src/agents/memory-context/recall-format.js";
-import { estimateTokens } from "../../../../src/agents/memory-context/runtime.js";
 import { WarmStore } from "../../../../src/agents/memory-context/store.js";
 
 describe("recall + format", () => {

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { HashEmbedding } from "../memory-context/embedding.js";
+import { HashEmbedding, TransformerEmbedding, type EmbeddingProvider } from "../memory-context/embedding.js";
 import {
   setGlobalMemoryRuntime,
   type MemoryContextConfig,
@@ -146,7 +146,19 @@ export function buildEmbeddedExtensionPaths(params: {
       evictionDays: memCtxCfg.evictionDays ?? 90,
     };
 
-    const embedding = new HashEmbedding(384);
+    // Honor embeddingModel config: TransformerEmbedding inits lazily on first embed() call.
+    // If transformer model fails to load at runtime, it throws at embed time.
+    let embedding: EmbeddingProvider;
+    if (config.embeddingModel === "transformer") {
+      try {
+        embedding = new TransformerEmbedding();
+      } catch {
+        console.warn("[memory-context] TransformerEmbedding unavailable, falling back to HashEmbedding");
+        embedding = new HashEmbedding(384);
+      }
+    } else {
+      embedding = new HashEmbedding(384);
+    }
     const rawStore = new WarmStore({
       sessionId:
         (params.sessionManager as unknown as { sessionId?: string }).sessionId ?? "default",
@@ -160,6 +172,8 @@ export function buildEmbeddedExtensionPaths(params: {
       },
       vectorPersist: true,
     });
+    // KnowledgeStore and WarmStore share the same directory intentionally:
+    // KnowledgeStore writes knowledge.jsonl, WarmStore writes segments.jsonl — no collision.
     const knowledgeStore = new KnowledgeStore(resolvedPath);
 
     const sessionId =

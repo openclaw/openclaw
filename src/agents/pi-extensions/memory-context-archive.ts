@@ -126,7 +126,7 @@ export default function memoryContextArchiveExtension(api: ExtensionAPI): void {
         scheduleKnowledgeExtraction(messages, runtime.knowledgeStore, llmCall, {
           warn: console.warn.bind(console),
           info: console.info.bind(console),
-        });
+        }, runtime.config.redaction);
       }
     } catch (err) {
       // Error isolation: archive failure must NOT block compaction

@@ -1,6 +1,5 @@
 import type { SearchConfig, BudgetConfig } from "./config.js";
 import type { SegmentSearchResult, WarmStore } from "./store.js";
-import { BM25Index } from "./bm25.js";
 import { selectWithinBudget, type BudgetSegment } from "./budget.js";
 
 export type HybridSearchResult = SegmentSearchResult & {

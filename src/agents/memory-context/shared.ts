@@ -18,7 +18,7 @@ export function extractText(msg: { content?: unknown }): string {
     return (msg.content as Array<{ type?: string; text?: string }>)
       .filter((b) => b?.type === "text" && typeof b.text === "string")
       .map((b) => b.text!)
-      .join(" ");
+      .join("\n");
   }
   return "";
 }

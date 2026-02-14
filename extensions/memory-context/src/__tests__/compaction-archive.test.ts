@@ -126,10 +126,9 @@ describe("compaction archive", () => {
       { role: "user", content: "hello world" }, // duplicate
     ];
 
-    const count = await archiveCompactedMessages(rawStore, messages, { redaction: false });
-    // archiveCompactedMessages calls addSegment for both, but dedup in store means only 1 stored
-    // count reflects attempted adds (both succeed from bridge perspective)
-    // but store count reflects actual unique segments
+    await archiveCompactedMessages(rawStore, messages, { redaction: false });
+    // archiveCompactedMessages calls addSegmentLite for both, but dedup in store means only 1 stored
+    // store count reflects actual unique segments
     expect(rawStore.stats().count).toBe(1);
   });
 

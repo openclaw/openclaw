@@ -29,7 +29,7 @@ export function extractMessageText(msg: AgentMessageLike): string {
 /**
  * Archive messages to the Raw Store during compaction.
  *
- * - Synchronous embedding is skipped (deferred to async queue).
+ * - Embedding is skipped (uses addSegmentLite: JSONL + BM25 only, no vector embedding).
  * - Only user/assistant text messages are archived (toolResult skipped by default).
  * - Redaction is applied before storage.
  *
@@ -59,7 +59,7 @@ export async function archiveCompactedMessages(
     text = maybeRedact(text, options.redaction);
 
     try {
-      await rawStore.addSegment({
+      await rawStore.addSegmentLite({
         role: role as ConversationRole,
         content: text,
       });
@@ -87,6 +87,7 @@ export function scheduleKnowledgeExtraction(
   knowledgeStore: KnowledgeStore,
   llmCall: LLMCallFn | undefined,
   logger?: { warn: (msg: string) => void; info: (msg: string) => void },
+  redaction = true,
 ): void {
   if (!llmCall) {
     return;
@@ -100,7 +101,13 @@ export function scheduleKnowledgeExtraction(
         if (facts.length === 0) {
           return;
         }
-        const result = await applyKnowledgeUpdates(knowledgeStore, facts);
+        // Redact sensitive content from extracted facts before persisting
+        const redactedFacts = facts.map((f) => ({
+          ...f,
+          content: maybeRedact(f.content, redaction),
+          context: f.context ? maybeRedact(f.context, redaction) : f.context,
+        }));
+        const result = await applyKnowledgeUpdates(knowledgeStore, redactedFacts);
         logger?.info(
           `memory-context: extracted ${facts.length} facts → ` +
             `added=${result.added} updated=${result.updated} ` +

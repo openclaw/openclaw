@@ -9,7 +9,6 @@ import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
 import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
-import { buildRecalledContextBlock } from "../../../../src/agents/memory-context/recall-format.js";
 import {
   smartTrim,
   isRecalledContext,
@@ -160,7 +159,6 @@ describe("smart-trim e2e", () => {
     });
 
     // Count recalled-context messages in kept
-    const recalledInKept = r2.kept.filter((m) => isRecalledContext(m));
     // Old recalled-context should have been protected (not trimmed to archive)
     // but the actual recall handler removes it before smartTrim runs
 
@@ -211,7 +209,7 @@ describe("smart-trim e2e", () => {
       '<recalled-context source="memory-context">\n<knowledge>\n- Use Stripe\n</knowledge>\n</recalled-context>';
 
     // Simulate: this is a message that was in the context
-    const seg = await rawStore.addSegmentLite({
+    await rawStore.addSegmentLite({
       role: "user",
       content: recalledBlock,
     });

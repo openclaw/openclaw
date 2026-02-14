@@ -120,6 +120,9 @@ export async function applyKnowledgeUpdates(
   newFacts: ExtractedFact[],
   _options?: KnowledgeUpdaterOptions,
 ): Promise<UpdateResult> {
+  // Ensure KnowledgeStore is initialized (loads existing facts from disk).
+  await store.init();
+
   const result: UpdateResult = {
     actions: [],
     added: 0,

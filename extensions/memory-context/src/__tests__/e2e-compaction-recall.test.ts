@@ -14,13 +14,11 @@ import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   archiveCompactedMessages,
-  scheduleKnowledgeExtraction,
 } from "../../../../src/agents/memory-context/compaction-bridge.js";
 import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
 import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
 import { buildRecalledContextBlock } from "../../../../src/agents/memory-context/recall-format.js";
 import {
-  computeHardCap,
   type MemoryContextRuntime,
   type MemoryContextConfig,
 } from "../../../../src/agents/memory-context/runtime.js";
