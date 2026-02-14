@@ -25,7 +25,7 @@ export function resolveReplyToMode(
 
 export function createReplyToModeFilter(
   mode: ReplyToMode,
-  opts: { allowTagsWhenOff?: boolean } = {},
+  opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
 ) {
   let hasThreaded = false;
   return (payload: ReplyPayload): ReplyPayload => {
@@ -33,7 +33,8 @@ export function createReplyToModeFilter(
       return payload;
     }
     if (mode === "off") {
-      if (opts.allowTagsWhenOff && payload.replyToTag) {
+      const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
+      if (opts.allowExplicitReplyTagsWhenOff && isExplicit) {
         return payload;
       }
       return { ...payload, replyToId: undefined };
@@ -54,12 +55,15 @@ export function createReplyToModeFilterForChannel(
   channel?: OriginatingChannelType,
 ) {
   const provider = normalizeChannelId(channel);
-  // Always honour explicit [[reply_to_*]] tags even when replyToMode is "off".
-  // Per-channel opt-out is possible but the safe default is to allow them.
-  const allowTagsWhenOff = provider
-    ? (getChannelDock(provider)?.threading?.allowTagsWhenOff ?? true)
-    : true;
+  const normalized = typeof channel === "string" ? channel.trim().toLowerCase() : undefined;
+  const isWebchat = normalized === "webchat";
+  // Default: allow explicit reply tags/directives even when replyToMode is "off".
+  // Unknown channels fail closed; internal webchat stays allowed.
+  const dock = provider ? getChannelDock(provider) : undefined;
+  const allowExplicitReplyTagsWhenOff = provider
+    ? (dock?.threading?.allowExplicitReplyTagsWhenOff ?? dock?.threading?.allowTagsWhenOff ?? true)
+    : isWebchat;
   return createReplyToModeFilter(mode, {
-    allowTagsWhenOff,
+    allowExplicitReplyTagsWhenOff,
   });
 }
