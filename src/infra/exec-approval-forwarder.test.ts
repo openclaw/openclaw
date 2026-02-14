@@ -167,4 +167,167 @@ describe("exec approval forwarder", () => {
 
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n````\necho ```danger```\n````");
   });
+
+  it("forwards to explicit targets even when sessionFilter does not match", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    // User's configuration from the issue - sessionFilter doesn't match but explicit targets are set
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          sessionFilter: ["telegram"], // sessionKey is "agent:main:main" which doesn't include "telegram"
+          targets: [{ channel: "telegram", to: "@amrrady83" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => null,
+    });
+
+    await forwarder.handleRequested(baseRequest);
+    // Should still forward because mode is "targets" and sessionFilter only affects session-based forwarding
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "@amrrady83",
+      }),
+    );
+  });
+
+  it("forwards to explicit targets with mode both even when sessionFilter does not match", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "both",
+          sessionFilter: ["telegram"], // sessionKey doesn't match
+          targets: [{ channel: "telegram", to: "@amrrady83" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => ({ channel: "slack", to: "U1" }), // Would return a target but sessionFilter doesn't match
+    });
+
+    await forwarder.handleRequested(baseRequest);
+    // Should forward to explicit target only (session target skipped due to sessionFilter)
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "@amrrady83",
+      }),
+    );
+  });
+
+  it("skips session target when sessionFilter does not match", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "session",
+          sessionFilter: ["telegram"], // sessionKey doesn't match
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
+    });
+
+    await forwarder.handleRequested(baseRequest);
+    // Should NOT forward because mode is "session" and sessionFilter doesn't match
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("forwards to session target when sessionFilter matches", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "session",
+          sessionFilter: ["telegram"],
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => ({ channel: "telegram", to: "12345" }),
+    });
+
+    // Request with matching sessionKey
+    const telegramRequest = {
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        sessionKey: "agent:main:telegram:direct:12345",
+      },
+    };
+
+    await forwarder.handleRequested(telegramRequest);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "12345",
+      }),
+    );
+  });
+
+  it("forwards to both session and explicit targets when mode is both and sessionFilter matches", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "both",
+          sessionFilter: ["telegram"],
+          targets: [{ channel: "discord", to: "admin" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => ({ channel: "telegram", to: "12345" }),
+    });
+
+    const telegramRequest = {
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        sessionKey: "agent:main:telegram:direct:12345",
+      },
+    };
+
+    await forwarder.handleRequested(telegramRequest);
+    // Should forward to both session and explicit targets
+    expect(deliver).toHaveBeenCalledTimes(2);
+  });
 });

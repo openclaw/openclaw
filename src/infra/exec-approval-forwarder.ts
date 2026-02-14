@@ -96,16 +96,30 @@ function shouldForward(params: {
       return false;
     }
   }
-  if (config.sessionFilter?.length) {
-    const sessionKey = params.request.request.sessionKey;
-    if (!sessionKey) {
-      return false;
-    }
-    if (!matchSessionFilter(sessionKey, config.sessionFilter)) {
-      return false;
-    }
-  }
+  // Note: sessionFilter is NOT checked here because it should only apply to
+  // session-based forwarding, not to explicit targets. The sessionFilter check
+  // is done separately when resolving session targets.
   return true;
+}
+
+/**
+ * Check if the request's session matches the session filter.
+ * This is used to determine if session-based forwarding should be used.
+ * Returns true if no sessionFilter is configured, or if the sessionKey matches.
+ */
+function sessionMatchesFilter(params: {
+  config?: ExecApprovalForwardingConfig;
+  request: ExecApprovalRequest;
+}): boolean {
+  const config = params.config;
+  if (!config?.sessionFilter?.length) {
+    return true;
+  }
+  const sessionKey = params.request.request.sessionKey;
+  if (!sessionKey) {
+    return false;
+  }
+  return matchSessionFilter(sessionKey, config.sessionFilter);
 }
 
 function buildTargetKey(target: ExecApprovalForwardTarget): string {
@@ -260,12 +274,15 @@ export function createExecApprovalForwarder(
     const seen = new Set<string>();
 
     if (mode === "session" || mode === "both") {
-      const sessionTarget = resolveSessionTarget({ cfg, request });
-      if (sessionTarget) {
-        const key = buildTargetKey(sessionTarget);
-        if (!seen.has(key)) {
-          seen.add(key);
-          targets.push({ ...sessionTarget, source: "session" });
+      // Only resolve session target if session matches the filter (or no filter configured)
+      if (sessionMatchesFilter({ config, request })) {
+        const sessionTarget = resolveSessionTarget({ cfg, request });
+        if (sessionTarget) {
+          const key = buildTargetKey(sessionTarget);
+          if (!seen.has(key)) {
+            seen.add(key);
+            targets.push({ ...sessionTarget, source: "session" });
+          }
         }
       }
     }
