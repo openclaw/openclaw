@@ -1,33 +1,5 @@
 import { describe, it, expect } from "vitest";
-
-/**
- * Legacy placeholder aliases for CLI args.
- * Maps intuitive single-brace placeholders to standard double-brace format.
- */
-const LEGACY_PLACEHOLDER_MAP: Record<string, string> = {
-  "{file}": "{{MediaPath}}",
-  "{input}": "{{MediaPath}}",
-  "{media}": "{{MediaPath}}",
-  "{output}": "{{OutputDir}}",
-  "{output_dir}": "{{OutputDir}}",
-  "{output_base}": "{{OutputBase}}",
-  "{prompt}": "{{Prompt}}",
-  "{media_dir}": "{{MediaDir}}",
-};
-
-/**
- * Normalize legacy single-brace placeholders to standard double-brace format.
- * Supports case-insensitive matching for convenience.
- */
-function normalizePlaceholders(value: string): string {
-  let result = value;
-  for (const [legacy, standard] of Object.entries(LEGACY_PLACEHOLDER_MAP)) {
-    // Case-insensitive replacement
-    const pattern = new RegExp(legacy.replace(/[{}]/g, "\\$&"), "gi");
-    result = result.replace(pattern, standard);
-  }
-  return result;
-}
+import { normalizePlaceholders } from "./runner.entries.js";
 
 describe("normalizePlaceholders", () => {
   it("should convert {file} to {{MediaPath}}", () => {

@@ -37,7 +37,7 @@ const LEGACY_PLACEHOLDER_MAP: Record<string, string> = {
  * Normalize legacy single-brace placeholders to standard double-brace format.
  * Supports case-insensitive matching for convenience.
  */
-function normalizePlaceholders(value: string): string {
+export function normalizePlaceholders(value: string): string {
   let result = value;
   for (const [legacy, standard] of Object.entries(LEGACY_PLACEHOLDER_MAP)) {
     const pattern = new RegExp(legacy.replace(/[{}]/g, "\\$&"), "gi");
