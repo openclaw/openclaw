@@ -248,7 +248,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
-  it("allows group messages from senders in allowFrom (by username) when groupPolicy is 'allowlist'", async () => {
+  it("blocks group messages when allowFrom is configured with @username entries (numeric IDs required)", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
@@ -276,7 +276,7 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy).toHaveBeenCalledTimes(0);
   });
   it("allows group messages from telegram:-prefixed allowFrom entries when groupPolicy is 'allowlist'", async () => {
     onSpy.mockReset();

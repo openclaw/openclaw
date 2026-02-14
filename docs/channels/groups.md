@@ -138,7 +138,7 @@ Control how group/room messages are handled per channel:
     },
     telegram: {
       groupPolicy: "disabled",
-      groupAllowFrom: ["123456789", "@username"],
+      groupAllowFrom: ["123456789"], // numeric Telegram user id (wizard can resolve @username)
     },
     signal: {
       groupPolicy: "disabled",

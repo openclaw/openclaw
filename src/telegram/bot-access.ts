@@ -2,12 +2,34 @@ import type { AllowlistMatch } from "../channels/allowlist-match.js";
 
 export type NormalizedAllowFrom = {
   entries: string[];
-  entriesLower: string[];
   hasWildcard: boolean;
   hasEntries: boolean;
+  invalidEntries: string[];
 };
 
-export type AllowFromMatch = AllowlistMatch<"wildcard" | "id" | "username">;
+export type AllowFromMatch = AllowlistMatch<"wildcard" | "id">;
+
+const warnedInvalidEntries = new Set<string>();
+
+function warnInvalidAllowFromEntries(entries: string[]) {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return;
+  }
+  for (const entry of entries) {
+    if (warnedInvalidEntries.has(entry)) {
+      continue;
+    }
+    warnedInvalidEntries.add(entry);
+    console.warn(
+      [
+        "[telegram] Invalid allowFrom entry:",
+        JSON.stringify(entry),
+        "- allowFrom/groupAllowFrom authorization requires numeric Telegram sender IDs only.",
+        'If you had "@username" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.',
+      ].join(" "),
+    );
+  }
+}
 
 export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
   const entries = (list ?? []).map((value) => String(value).trim()).filter(Boolean);
@@ -15,12 +37,16 @@ export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAll
   const normalized = entries
     .filter((value) => value !== "*")
     .map((value) => value.replace(/^(telegram|tg):/i, ""));
-  const normalizedLower = normalized.map((value) => value.toLowerCase());
+  const invalidEntries = normalized.filter((value) => !/^\d+$/.test(value));
+  if (invalidEntries.length > 0) {
+    warnInvalidAllowFromEntries([...new Set(invalidEntries)]);
+  }
+  const ids = normalized.filter((value) => /^\d+$/.test(value));
   return {
-    entries: normalized,
-    entriesLower: normalizedLower,
+    entries: ids,
     hasWildcard,
     hasEntries: entries.length > 0,
+    invalidEntries,
   };
 };
 
@@ -48,7 +74,7 @@ export const isSenderAllowed = (params: {
   senderId?: string;
   senderUsername?: string;
 }) => {
-  const { allow, senderId, senderUsername } = params;
+  const { allow, senderId } = params;
   if (!allow.hasEntries) {
     return true;
   }
@@ -58,11 +84,7 @@ export const isSenderAllowed = (params: {
   if (senderId && allow.entries.includes(senderId)) {
     return true;
   }
-  const username = senderUsername?.toLowerCase();
-  if (!username) {
-    return false;
-  }
-  return allow.entriesLower.some((entry) => entry === username || entry === `@${username}`);
+  return false;
 };
 
 export const resolveSenderAllowMatch = (params: {
@@ -70,7 +92,7 @@ export const resolveSenderAllowMatch = (params: {
   senderId?: string;
   senderUsername?: string;
 }): AllowFromMatch => {
-  const { allow, senderId, senderUsername } = params;
+  const { allow, senderId } = params;
   if (allow.hasWildcard) {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
@@ -79,16 +101,6 @@ export const resolveSenderAllowMatch = (params: {
   }
   if (senderId && allow.entries.includes(senderId)) {
     return { allowed: true, matchKey: senderId, matchSource: "id" };
-  }
-  const username = senderUsername?.toLowerCase();
-  if (!username) {
-    return { allowed: false };
-  }
-  const entry = allow.entriesLower.find(
-    (candidate) => candidate === username || candidate === `@${username}`,
-  );
-  if (entry) {
-    return { allowed: true, matchKey: entry, matchSource: "username" };
   }
   return { allowed: false };
 };
