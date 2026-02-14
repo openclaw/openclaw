@@ -484,6 +484,11 @@ export async function monitorBlueBubblesProvider(
   if (serverInfo?.os_version) {
     runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);
   }
+  if (typeof serverInfo?.private_api === "boolean") {
+    runtime.log?.(
+      `[${account.accountId}] BlueBubbles Private API ${serverInfo.private_api ? "enabled" : "disabled"}`,
+    );
+  }
 
   const unregister = registerBlueBubblesWebhookTarget({
     account,

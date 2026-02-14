@@ -480,6 +480,36 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   }, 60_000);
 
+  it("infers QIANFAN auth choice from --qianfan-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-qianfan-infer-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          qianfanApiKey: "qianfan-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["qianfan:default"]?.provider).toBe("qianfan");
+      expect(cfg.auth?.profiles?.["qianfan:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("qianfan/deepseek-v3.2");
+      await expectApiKeyProfile({
+        profileId: "qianfan:default",
+        provider: "qianfan",
+        key: "qianfan-test-key",
+      });
+    });
+  }, 60_000);
+
   it("configures a custom provider from non-interactive flags", async () => {
     await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ configPath, runtime }) => {
       await runNonInteractive(
