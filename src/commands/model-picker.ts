@@ -1,10 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
-import {
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-  upsertAuthProfileWithLock,
-} from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
@@ -17,20 +13,12 @@ import {
 } from "../agents/model-selection.js";
 import { formatTokenK } from "./models/shared.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
+import { promptAndConfigureVllm } from "./vllm-setup.js";
 
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
 const VLLM_VALUE = "__vllm__";
 const PROVIDER_FILTER_THRESHOLD = 30;
-const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
-const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
-const VLLM_DEFAULT_MAX_TOKENS = 8192;
-const VLLM_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
 
 // Models that are internal routing features and should not be shown in selection lists.
 // These may be valid as defaults (e.g., set automatically during auth flow) but are not
@@ -327,63 +315,13 @@ export async function promptDefaultModel(
       );
       return {};
     }
-    const baseUrlRaw = await params.prompter.text({
-      message: "vLLM base URL",
-      initialValue: VLLM_DEFAULT_BASE_URL,
-      placeholder: VLLM_DEFAULT_BASE_URL,
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
-    const apiKeyRaw = await params.prompter.text({
-      message: "vLLM API key",
-      placeholder: "sk-... (or any non-empty string)",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
-    const modelIdRaw = await params.prompter.text({
-      message: "vLLM model",
-      placeholder: "meta-llama/Meta-Llama-3-8B-Instruct",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
-
-    const baseUrl = String(baseUrlRaw ?? "")
-      .trim()
-      .replace(/\/+$/, "");
-    const apiKey = String(apiKeyRaw ?? "").trim();
-    const modelId = String(modelIdRaw ?? "").trim();
-
-    await upsertAuthProfileWithLock({
-      profileId: "vllm:default",
-      credential: { type: "api_key", provider: "vllm", key: apiKey },
+    const { config: nextConfig, modelRef } = await promptAndConfigureVllm({
+      cfg,
+      prompter: params.prompter,
       agentDir,
     });
 
-    const nextConfig: OpenClawConfig = {
-      ...cfg,
-      models: {
-        ...cfg.models,
-        mode: cfg.models?.mode ?? "merge",
-        providers: {
-          ...cfg.models?.providers,
-          vllm: {
-            baseUrl,
-            api: "openai-completions",
-            apiKey: "VLLM_API_KEY",
-            models: [
-              {
-                id: modelId,
-                name: modelId,
-                reasoning: false,
-                input: ["text"],
-                cost: VLLM_DEFAULT_COST,
-                contextWindow: VLLM_DEFAULT_CONTEXT_WINDOW,
-                maxTokens: VLLM_DEFAULT_MAX_TOKENS,
-              },
-            ],
-          },
-        },
-      },
-    };
-
-    return { model: `vllm/${modelId}`, config: nextConfig };
+    return { model: modelRef, config: nextConfig };
   }
   return { model: String(selection) };
 }
