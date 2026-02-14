@@ -406,39 +406,44 @@
 
 /* Queue tab and panel - compact collapsible queue */
 .chat-queue-tab {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  font-size: 11px;
-  font-weight: 500;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   color: var(--muted);
-  background: var(--bg-elevated);
+  background: var(--card);
   border: 1px solid var(--border);
   border-bottom: none;
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-radius: 6px 6px 0 0;
   cursor: pointer;
   align-self: flex-start;
   margin-left: 14px;
-  transition: color 0.15s ease;
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 1;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
 .chat-queue-tab:hover {
   color: var(--text);
+  background: var(--bg-elevated);
 }
 
 .chat-queue-panel {
   border: 1px solid var(--border);
-  border-radius: 0 var(--radius-md) 0 0;
-  background: var(--bg-elevated);
+  border-radius: 0 6px 0 0;
+  background: var(--card);
   margin: 0 14px;
-  padding: 8px;
+  margin-bottom: 4px;
+  padding: 6px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  max-height: 120px;
+  gap: 3px;
+  max-height: 100px;
   overflow-y: auto;
-  animation: rise 0.15s ease backwards;
 }
 
 .chat-queue-item {
