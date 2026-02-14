@@ -8,12 +8,14 @@ import { detectBinary } from "./onboard-helpers.js";
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
 function pickHost(beacon: GatewayBonjourBeacon): string | undefined {
-  return beacon.tailnetDns || beacon.lanHost || beacon.host;
+  // Security: TXT is unauthenticated. Prefer the resolved service endpoint host.
+  return beacon.host || beacon.tailnetDns || beacon.lanHost;
 }
 
 function buildLabel(beacon: GatewayBonjourBeacon): string {
   const host = pickHost(beacon);
-  const port = beacon.gatewayPort ?? beacon.port ?? 18789;
+  // Security: Prefer the resolved service endpoint port.
+  const port = beacon.port ?? beacon.gatewayPort ?? 18789;
   const title = beacon.displayName ?? beacon.instanceName;
   const hint = host ? `${host}:${port}` : "host unknown";
   return `${title} (${hint})`;
@@ -80,7 +82,7 @@ export async function promptRemoteGatewayConfig(
 
   if (selectedBeacon) {
     const host = pickHost(selectedBeacon);
-    const port = selectedBeacon.gatewayPort ?? 18789;
+    const port = selectedBeacon.port ?? selectedBeacon.gatewayPort ?? 18789;
     if (host) {
       const mode = await prompter.select({
         message: "Connection method",

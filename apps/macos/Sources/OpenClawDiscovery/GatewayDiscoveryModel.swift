@@ -20,6 +20,9 @@ public final class GatewayDiscoveryModel {
     public struct DiscoveredGateway: Identifiable, Equatable, Sendable {
         public var id: String { self.stableID }
         public var displayName: String
+        // Resolved service endpoint (SRV + A/AAAA). Used for routing; do not trust TXT for routing.
+        public var serviceHost: String?
+        public var servicePort: Int?
         public var lanHost: String?
         public var tailnetDns: String?
         public var sshPort: Int
@@ -31,6 +34,8 @@ public final class GatewayDiscoveryModel {
 
         public init(
             displayName: String,
+            serviceHost: String? = nil,
+            servicePort: Int? = nil,
             lanHost: String? = nil,
             tailnetDns: String? = nil,
             sshPort: Int,
@@ -41,6 +46,8 @@ public final class GatewayDiscoveryModel {
             isLocal: Bool)
         {
             self.displayName = displayName
+            self.serviceHost = serviceHost
+            self.servicePort = servicePort
             self.lanHost = lanHost
             self.tailnetDns = tailnetDns
             self.sshPort = sshPort
@@ -62,8 +69,8 @@ public final class GatewayDiscoveryModel {
     private var localIdentity: LocalIdentity
     private let localDisplayName: String?
     private let filterLocalGateways: Bool
-    private var resolvedTXTByID: [String: [String: String]] = [:]
-    private var pendingTXTResolvers: [String: GatewayTXTResolver] = [:]
+    private var resolvedServiceByID: [String: ResolvedGatewayService] = [:]
+    private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
     private var wideAreaFallbackTask: Task<Void, Never>?
     private var wideAreaFallbackGateways: [DiscoveredGateway] = []
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway-discovery")
@@ -133,9 +140,9 @@ public final class GatewayDiscoveryModel {
         self.resultsByDomain = [:]
         self.gatewaysByDomain = [:]
         self.statesByDomain = [:]
-        self.resolvedTXTByID = [:]
-        self.pendingTXTResolvers.values.forEach { $0.cancel() }
-        self.pendingTXTResolvers = [:]
+        self.resolvedServiceByID = [:]
+        self.pendingServiceResolvers.values.forEach { $0.cancel() }
+        self.pendingServiceResolvers = [:]
         self.wideAreaFallbackTask?.cancel()
         self.wideAreaFallbackTask = nil
         self.wideAreaFallbackGateways = []
@@ -154,6 +161,8 @@ public final class GatewayDiscoveryModel {
                 local: self.localIdentity)
             return DiscoveredGateway(
                 displayName: beacon.displayName,
+                serviceHost: beacon.host,
+                servicePort: beacon.port,
                 lanHost: beacon.lanHost,
                 tailnetDns: beacon.tailnetDns,
                 sshPort: beacon.sshPort ?? 22,
@@ -195,7 +204,8 @@ public final class GatewayDiscoveryModel {
 
             let decodedName = BonjourEscapes.decode(name)
             let stableID = GatewayEndpointID.stableID(result.endpoint)
-            let resolvedTXT = self.resolvedTXTByID[stableID] ?? [:]
+            let resolved = self.resolvedServiceByID[stableID]
+            let resolvedTXT = resolved?.txt ?? [:]
             let txt = Self.txtDictionary(from: result).merging(
                 resolvedTXT,
                 uniquingKeysWith: { _, new in new })
@@ -208,8 +218,10 @@ public final class GatewayDiscoveryModel {
 
             let parsedTXT = Self.parseGatewayTXT(txt)
 
-            if parsedTXT.lanHost == nil || parsedTXT.tailnetDns == nil {
-                self.ensureTXTResolution(
+            // Always attempt NetService resolution for the endpoint (host/port and TXT).
+            // TXT is unauthenticated; do not use it for routing.
+            if resolved == nil {
+                self.ensureServiceResolution(
                     stableID: stableID,
                     serviceName: name,
                     type: type,
@@ -224,6 +236,8 @@ public final class GatewayDiscoveryModel {
                 local: self.localIdentity)
             return DiscoveredGateway(
                 displayName: prettyName,
+                serviceHost: resolved?.host,
+                servicePort: resolved?.port,
                 lanHost: parsedTXT.lanHost,
                 tailnetDns: parsedTXT.tailnetDns,
                 sshPort: parsedTXT.sshPort,
@@ -421,16 +435,16 @@ public final class GatewayDiscoveryModel {
         return target
     }
 
-    private func ensureTXTResolution(
+    private func ensureServiceResolution(
         stableID: String,
         serviceName: String,
         type: String,
         domain: String)
     {
-        guard self.resolvedTXTByID[stableID] == nil else { return }
-        guard self.pendingTXTResolvers[stableID] == nil else { return }
+        guard self.resolvedServiceByID[stableID] == nil else { return }
+        guard self.pendingServiceResolvers[stableID] == nil else { return }
 
-        let resolver = GatewayTXTResolver(
+        let resolver = GatewayServiceResolver(
             name: serviceName,
             type: type,
             domain: domain,
@@ -438,10 +452,10 @@ public final class GatewayDiscoveryModel {
         { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
-                self.pendingTXTResolvers[stableID] = nil
+                self.pendingServiceResolvers[stableID] = nil
                 switch result {
-                case let .success(txt):
-                    self.resolvedTXTByID[stableID] = txt
+                case let .success(resolved):
+                    self.resolvedServiceByID[stableID] = resolved
                     self.updateGatewaysForAllDomains()
                     self.recomputeGateways()
                 case .failure:
@@ -450,7 +464,7 @@ public final class GatewayDiscoveryModel {
             }
         }
 
-        self.pendingTXTResolvers[stableID] = resolver
+        self.pendingServiceResolvers[stableID] = resolver
         resolver.start()
     }
 
@@ -607,9 +621,15 @@ public final class GatewayDiscoveryModel {
     }
 }
 
-final class GatewayTXTResolver: NSObject, NetServiceDelegate {
+struct ResolvedGatewayService: Equatable, Sendable {
+    var txt: [String: String]
+    var host: String?
+    var port: Int?
+}
+
+final class GatewayServiceResolver: NSObject, NetServiceDelegate {
     private let service: NetService
-    private let completion: (Result<[String: String], Error>) -> Void
+    private let completion: (Result<ResolvedGatewayService, Error>) -> Void
     private let logger: Logger
     private var didFinish = false
 
@@ -618,7 +638,7 @@ final class GatewayTXTResolver: NSObject, NetServiceDelegate {
         type: String,
         domain: String,
         logger: Logger,
-        completion: @escaping (Result<[String: String], Error>) -> Void)
+        completion: @escaping (Result<ResolvedGatewayService, Error>) -> Void)
     {
         self.service = NetService(domain: domain, type: type, name: name)
         self.completion = completion
@@ -633,24 +653,27 @@ final class GatewayTXTResolver: NSObject, NetServiceDelegate {
     }
 
     func cancel() {
-        self.finish(result: .failure(GatewayTXTResolverError.cancelled))
+        self.finish(result: .failure(GatewayServiceResolverError.cancelled))
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {
         let txt = Self.decodeTXT(sender.txtRecordData())
+        let host = Self.normalizeHost(sender.hostName)
+        let port = sender.port > 0 ? sender.port : nil
         if !txt.isEmpty {
             let payload = self.formatTXT(txt)
             self.logger.debug(
                 "discovery: resolved TXT for \(sender.name, privacy: .public): \(payload, privacy: .public)")
         }
-        self.finish(result: .success(txt))
+        let resolved = ResolvedGatewayService(txt: txt, host: host, port: port)
+        self.finish(result: .success(resolved))
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
-        self.finish(result: .failure(GatewayTXTResolverError.resolveFailed(errorDict)))
+        self.finish(result: .failure(GatewayServiceResolverError.resolveFailed(errorDict)))
     }
 
-    private func finish(result: Result<[String: String], Error>) {
+    private func finish(result: Result<ResolvedGatewayService, Error>) {
         guard !self.didFinish else { return }
         self.didFinish = true
         self.service.stop()
@@ -671,6 +694,12 @@ final class GatewayTXTResolver: NSObject, NetServiceDelegate {
         return out
     }
 
+    private static func normalizeHost(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty { return nil }
+        return trimmed.hasSuffix(".") ? String(trimmed.dropLast()) : trimmed
+    }
+
     private func formatTXT(_ txt: [String: String]) -> String {
         txt.sorted(by: { $0.key < $1.key })
             .map { "\($0.key)=\($0.value)" }
@@ -678,7 +707,7 @@ final class GatewayTXTResolver: NSObject, NetServiceDelegate {
     }
 }
 
-enum GatewayTXTResolverError: Error {
+enum GatewayServiceResolverError: Error {
     case cancelled
     case resolveFailed([String: NSNumber])
 }
