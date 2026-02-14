@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 
@@ -34,11 +33,13 @@ describe("CronService read ops while job is running", () => {
 
     const runIsolatedAgentJob = vi.fn(
       async () =>
-        await new Promise<{ status: "ok" | "error" | "skipped"; summary?: string; error?: string }>(
-          (resolve) => {
-            resolveRun = resolve;
-          },
-        ),
+        await new Promise<{
+          status: "ok" | "error" | "skipped";
+          summary?: string;
+          error?: string;
+        }>((resolve) => {
+          resolveRun = resolve;
+        }),
     );
 
     const cron = new CronService({
@@ -50,55 +51,69 @@ describe("CronService read ops while job is running", () => {
       runIsolatedAgentJob,
     });
 
-    await cron.start();
+    const timeout = async <T>(promise: Promise<T>, ms: number): Promise<T> => {
+      let t: NodeJS.Timeout;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        t = setTimeout(() => reject(new Error("timeout")), ms);
+      });
+      return await Promise.race([promise.finally(() => clearTimeout(t!)), timeoutPromise]);
+    };
 
-    const runAt = Date.now() + 30;
-    await cron.add({
-      name: "slow isolated",
-      enabled: true,
-      deleteAfterRun: false,
-      schedule: { kind: "at", at: new Date(runAt).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "long task" },
-      delivery: { mode: "none" },
-    });
+    try {
+      await cron.start();
 
-    for (let i = 0; i < 25 && runIsolatedAgentJob.mock.calls.length === 0; i++) {
-      await delay(20);
+      // Schedule the job in the past so the cron timer fires immediately.
+      await cron.add({
+        name: "slow isolated",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(Date.now() - 1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "long task" },
+        delivery: { mode: "none" },
+      });
+
+      // Let the scheduler tick and start the job.
+      await timeout(
+        (async () => {
+          for (;;) {
+            if (runIsolatedAgentJob.mock.calls.length > 0) {
+              return;
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          }
+        })(),
+        200,
+      );
+
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+
+      await expect(timeout(cron.list({ includeDisabled: true }), 100)).resolves.toBeTypeOf(
+        "object",
+      );
+      await expect(timeout(cron.status(), 100)).resolves.toBeTypeOf("object");
+
+      const running = await cron.list({ includeDisabled: true });
+      expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
+
+      resolveRun?.({ status: "ok", summary: "done" });
+
+      await timeout(
+        (async () => {
+          for (;;) {
+            const finished = await cron.list({ includeDisabled: true });
+            if (finished[0]?.state.lastStatus === "ok") {
+              return;
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          }
+        })(),
+        500,
+      );
+    } finally {
+      cron.stop();
+      await store.cleanup();
     }
-
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-
-    const listRace = await Promise.race([
-      cron.list({ includeDisabled: true }).then(() => "ok"),
-      delay(200).then(() => "timeout"),
-    ]);
-    expect(listRace).toBe("ok");
-
-    const statusRace = await Promise.race([
-      cron.status().then(() => "ok"),
-      delay(200).then(() => "timeout"),
-    ]);
-    expect(statusRace).toBe("ok");
-
-    const running = await cron.list({ includeDisabled: true });
-    expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
-
-    resolveRun?.({ status: "ok", summary: "done" });
-
-    for (let i = 0; i < 25; i++) {
-      const jobs = await cron.list({ includeDisabled: true });
-      if (jobs[0]?.state.lastStatus === "ok") {
-        break;
-      }
-      await delay(20);
-    }
-
-    const finished = await cron.list({ includeDisabled: true });
-    expect(finished[0]?.state.lastStatus).toBe("ok");
-
-    cron.stop();
-    await store.cleanup();
   });
 });
