@@ -293,6 +293,13 @@ export async function runEmbeddedPiAgent(
         );
       }
 
+      // Propagate the resolved context window back to the model object so that
+      // downstream consumers (pi-ai's shouldCompact, isContextOverflow, status
+      // display) use the config-overridden value instead of the catalog default.
+      if (ctxInfo.source !== "model" && ctxInfo.tokens !== model.contextWindow) {
+        (model as Record<string, unknown>).contextWindow = ctxInfo.tokens;
+      }
+
       const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
       const preferredProfileId = params.authProfileId?.trim();
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
