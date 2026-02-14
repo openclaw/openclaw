@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   ensureAuthProfileStore,
   isProfileInCooldown,
@@ -25,6 +26,8 @@ type ModelCandidate = {
   provider: string;
   model: string;
 };
+
+const log = createSubsystemLogger("agent/model-fallback");
 
 export type FallbackAttempt = {
   provider: string;
@@ -281,7 +284,8 @@ export async function runWithModelFallback<T>(params: {
       await params.onInfo(message);
       return;
     }
-    console.info(message);
+    // Avoid direct stdout writes; use structured logging unless caller provides onInfo.
+    log.info(message);
   };
 
   for (let i = 0; i < candidates.length; i += 1) {

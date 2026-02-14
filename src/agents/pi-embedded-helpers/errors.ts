@@ -600,7 +600,7 @@ const ERROR_PATTERNS = {
     "overloaded",
   ],
   badRequest: ["bad request", "invalid request", "malformed", "unprocessable", "invalid input"],
-  policy: ["policy", "content policy", "safety system", "legal restriction", "451"],
+  policy: ["content policy", "policy violation", "safety system", "legal restriction", /\b451\b/],
   cancelled: ["cancelled", "canceled", "request aborted by client"],
   format: [
     "string should match pattern",

@@ -39,6 +39,26 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not call console.info when onInfo is not provided", async () => {
+    const cfg = makeCfg();
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const run = vi.fn().mockResolvedValue("ok");
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(infoSpy).not.toHaveBeenCalled();
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
   it("falls back on auth errors", async () => {
     const cfg = makeCfg();
     const run = vi

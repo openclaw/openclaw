@@ -17,4 +17,16 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("gibberish")).toBeNull();
   });
+
+  it("does not classify generic policy mentions as policy failures", () => {
+    expect(classifyFailoverReason("CORS policy blocked the request")).toBeNull();
+    expect(classifyFailoverReason("retry policy exhausted")).toBeNull();
+    expect(classifyFailoverReason("cache policy prevented write")).toBeNull();
+  });
+
+  it("still classifies explicit policy failures", () => {
+    expect(classifyFailoverReason("content policy violation")).toBe("policy");
+    expect(classifyFailoverReason("safety system triggered")).toBe("policy");
+    expect(classifyFailoverReason("HTTP 451 unavailable for legal reasons")).toBe("policy");
+  });
 });
