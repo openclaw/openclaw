@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { getReplyFromConfig } from "./reply.js";
 
 type RunEmbeddedPiAgent = typeof import("../agents/pi-embedded.js").runEmbeddedPiAgent;
 type RunEmbeddedPiAgentParams = Parameters<RunEmbeddedPiAgent>[0];
+type ReplyResult = Awaited<ReturnType<RunEmbeddedPiAgent>>;
 
 const piEmbeddedMock = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -75,6 +77,16 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   } finally {
     restoreHomeEnv(envSnapshot);
   }
+}
+
+function makeAgentResult(text: string): ReplyResult {
+  return {
+    payloads: [{ text }],
+    meta: {
+      durationMs: 5,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  };
 }
 
 describe("block streaming", () => {
@@ -252,5 +264,101 @@ describe("block streaming", () => {
       expect(resStreamMode?.text).toBe("final");
       expect(onBlockReplyStreamMode).not.toHaveBeenCalled();
     });
+  });
+
+  it("queues followups for collect + summarize modes", async () => {
+    vi.useFakeTimers();
+    await withTempHomeBase(
+      async (home) => {
+        const prompts: string[] = [];
+        piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(async (params) => {
+          prompts.push(params.prompt);
+          return makeAgentResult("ok");
+        });
+
+        const collectCfg = {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions.json") },
+          messages: {
+            queue: {
+              mode: "collect",
+              debounceMs: 200,
+              cap: 10,
+              drop: "summarize",
+            },
+          },
+        };
+
+        piEmbeddedMock.isEmbeddedPiRunActive.mockReturnValue(true);
+        piEmbeddedMock.isEmbeddedPiRunStreaming.mockReturnValue(true);
+
+        const first = await getReplyFromConfig(
+          { Body: "first", From: "+1001", To: "+2000", MessageSid: "m-1" },
+          {},
+          collectCfg,
+        );
+        expect(first).toBeUndefined();
+        expect(piEmbeddedMock.runEmbeddedPiAgent).not.toHaveBeenCalled();
+
+        piEmbeddedMock.isEmbeddedPiRunActive.mockReturnValue(false);
+        piEmbeddedMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+        const second = await getReplyFromConfig(
+          { Body: "second", From: "+1001", To: "+2000" },
+          {},
+          collectCfg,
+        );
+        const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
+        expect(secondText).toBe("ok");
+
+        await vi.advanceTimersByTimeAsync(500);
+        await Promise.resolve();
+        const queuedPrompt =
+          prompts.find((p) => p.includes("[Queued messages while agent was busy]")) ?? "";
+        expect(queuedPrompt).toContain("Queued #1");
+        expect(queuedPrompt).toContain("first");
+        expect(queuedPrompt).not.toContain("[message_id:");
+
+        prompts.length = 0;
+        piEmbeddedMock.isEmbeddedPiRunActive.mockReturnValue(true);
+        piEmbeddedMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+        const followupCfg = {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions-2.json") },
+          messages: {
+            queue: {
+              mode: "followup",
+              debounceMs: 0,
+              cap: 1,
+              drop: "summarize",
+            },
+          },
+        };
+
+        await getReplyFromConfig({ Body: "one", From: "+1002", To: "+2000" }, {}, followupCfg);
+        await getReplyFromConfig({ Body: "two", From: "+1002", To: "+2000" }, {}, followupCfg);
+
+        piEmbeddedMock.isEmbeddedPiRunActive.mockReturnValue(false);
+        await getReplyFromConfig({ Body: "three", From: "+1002", To: "+2000" }, {}, followupCfg);
+
+        await vi.advanceTimersByTimeAsync(50);
+        await Promise.resolve();
+        expect(prompts.some((p) => p.includes("[Queue overflow]"))).toBe(true);
+      },
+      { prefix: "openclaw-queue-" },
+    );
   });
 });

@@ -282,28 +282,14 @@ describe("web media loading", () => {
   });
 
   it("falls back to JPEG when PNG alpha cannot fit under cap", async () => {
-    const sizes = [224, 256, 320];
-    let pngBuffer: Buffer | null = null;
-    let smallestPng: Awaited<ReturnType<typeof optimizeImageToPng>> | null = null;
-    let jpegOptimized: Awaited<ReturnType<typeof optimizeImageToJpeg>> | null = null;
-    let cap = 0;
-
-    for (const size of sizes) {
-      const raw = buildDeterministicBytes(size * size * 4);
-      pngBuffer = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
-        .png()
-        .toBuffer();
-      smallestPng = await optimizeImageToPng(pngBuffer, 1);
-      cap = Math.max(1, smallestPng.optimizedSize - 1);
-      jpegOptimized = await optimizeImageToJpeg(pngBuffer, cap);
-      if (jpegOptimized.buffer.length < smallestPng.optimizedSize) {
-        break;
-      }
-    }
-
-    if (!pngBuffer || !smallestPng || !jpegOptimized) {
-      throw new Error("PNG fallback setup failed");
-    }
+    const size = 96;
+    const raw = buildDeterministicBytes(size * size * 4);
+    const pngBuffer = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
+      .png()
+      .toBuffer();
+    const smallestPng = await optimizeImageToPng(pngBuffer, 1);
+    const cap = Math.max(1, smallestPng.optimizedSize - 1);
+    const jpegOptimized = await optimizeImageToJpeg(pngBuffer, cap);
 
     if (jpegOptimized.buffer.length >= smallestPng.optimizedSize) {
       throw new Error(
