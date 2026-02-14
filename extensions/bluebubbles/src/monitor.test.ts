@@ -256,6 +256,9 @@ function createMockRequest(
   body: unknown,
   headers: Record<string, string> = {},
 ): IncomingMessage {
+  if (headers.host === undefined) {
+    headers.host = "localhost";
+  }
   const parsedUrl = new URL(url, "http://localhost");
   const hasAuthQuery = parsedUrl.searchParams.has("guid") || parsedUrl.searchParams.has("password");
   const hasAuthHeader =
@@ -702,6 +705,79 @@ describe("BlueBubbles webhook monitor", () => {
 
         loopbackUnregister();
       }
+    });
+
+    it("rejects passwordless targets when the request looks proxied (has forwarding headers)", async () => {
+      const account = createMockAccount({ password: undefined });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      const req = createMockRequest(
+        "POST",
+        "/bluebubbles-webhook",
+        {
+          type: "new-message",
+          data: {
+            text: "hello",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: false,
+            guid: "msg-1",
+          },
+        },
+        { "x-forwarded-for": "203.0.113.10", host: "localhost" },
+      );
+      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+        remoteAddress: "127.0.0.1",
+      };
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const res = createMockResponse();
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(401);
+    });
+
+    it("accepts passwordless targets for direct localhost loopback requests (no forwarding headers)", async () => {
+      const account = createMockAccount({ password: undefined });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+        },
+      });
+      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+        remoteAddress: "127.0.0.1",
+      };
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const res = createMockResponse();
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
     });
 
     it("ignores unregistered webhook paths", async () => {
