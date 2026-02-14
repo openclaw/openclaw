@@ -843,6 +843,51 @@ export async function runEmbeddedAttempt(
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
+
+        // Log user query for debugging and monitoring
+        const promptPreview = effectivePrompt.slice(0, 500);
+        const isTruncated = effectivePrompt.length > 500;
+        log.info(`user query: ${promptPreview}${isTruncated ? "..." : ""}`, {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          promptLength: effectivePrompt.length,
+          fullPrompt: effectivePrompt,
+        });
+
+        // Log complete prompt with messages context
+        const messagesForLogging = activeSession.messages.map((msg) => {
+          // Type guard: only process messages that have content
+          if (!("content" in msg)) {
+            return { role: msg.role, content: "(no content)" };
+          }
+          return {
+            role: msg.role,
+            content:
+              typeof msg.content === "string"
+                ? msg.content
+                : Array.isArray(msg.content)
+                  ? msg.content.map((block: unknown) => {
+                      if (typeof block === "object" && block !== null) {
+                        return { type: (block as Record<string, unknown>).type, ...block };
+                      }
+                      return block;
+                    })
+                  : msg.content,
+          };
+        });
+
+        log.debug(`complete prompt context: ${messagesForLogging.length} messages`, {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          provider: params.provider,
+          model: params.modelId,
+          thinkLevel: params.thinkLevel,
+          reasoningLevel: params.reasoningLevel,
+          systemPrompt: systemPromptText || "(none)",
+          messages: messagesForLogging,
+          latestUserPrompt: effectivePrompt,
+        });
+
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,
           messages: activeSession.messages,
@@ -1010,6 +1055,128 @@ export async function runEmbeddedAttempt(
         .slice()
         .toReversed()
         .find((m) => m.role === "assistant");
+
+      // Log assistant reply for debugging and monitoring
+      if (lastAssistant && !promptError) {
+        const { extractAssistantText, extractAssistantThinking } =
+          await import("../../pi-embedded-utils.js");
+        const replyText = extractAssistantText(lastAssistant as never);
+
+        // Extract thinking/reasoning content
+        const thinkingText = extractAssistantThinking(lastAssistant as never);
+
+        // Extract tool calls
+        const toolCalls = Array.isArray(lastAssistant.content)
+          ? lastAssistant.content
+              .filter((block: { type?: string }) => block?.type === "tool_call")
+              .map((block: unknown) => {
+                const toolBlock = block as {
+                  type: string;
+                  id?: string;
+                  name?: string;
+                  input?: unknown;
+                  toolName?: string;
+                  toolInput?: unknown;
+                };
+                return {
+                  id: toolBlock.id,
+                  name: toolBlock.name || toolBlock.toolName,
+                  input: toolBlock.input || toolBlock.toolInput,
+                };
+              })
+          : [];
+
+        // Extract tool results
+        const toolResults = messagesSnapshot
+          .filter((msg) => msg.role === "user")
+          .flatMap((msg) => {
+            if (!Array.isArray(msg.content)) return [];
+            return msg.content
+              .filter((block: { type?: string }) => block?.type === "tool_result")
+              .map((block: unknown) => {
+                const resultBlock = block as {
+                  type: string;
+                  tool_use_id?: string;
+                  toolCallId?: string;
+                  id?: string;
+                  content?: unknown;
+                  result?: unknown;
+                  isError?: boolean;
+                };
+                return {
+                  toolCallId: resultBlock.tool_use_id || resultBlock.toolCallId || resultBlock.id,
+                  content: resultBlock.content || resultBlock.result,
+                  isError: resultBlock.isError,
+                };
+              });
+          });
+
+        if (replyText) {
+          const replyPreview = replyText.slice(0, 500);
+          const isTruncated = replyText.length > 500;
+          log.debug(`assistant reply: ${replyPreview}${isTruncated ? "..." : ""}`, {
+            runId: params.runId,
+            sessionId: params.sessionId,
+            replyLength: replyText.length,
+            fullReply: replyText,
+            stopReason: (lastAssistant as { stopReason?: string }).stopReason,
+            hasToolCalls: toolCalls.length > 0,
+          });
+        }
+
+        // Log thinking/reasoning if present
+        if (thinkingText) {
+          const thinkingPreview = thinkingText.slice(0, 500);
+          const isThinkingTruncated = thinkingText.length > 500;
+          log.debug(`assistant thinking: ${thinkingPreview}${isThinkingTruncated ? "..." : ""}`, {
+            runId: params.runId,
+            sessionId: params.sessionId,
+            thinkingLength: thinkingText.length,
+            fullThinking: thinkingText,
+          });
+        }
+
+        // Log tool calls if present
+        if (toolCalls.length > 0) {
+          log.debug(`assistant tool calls: ${toolCalls.length} tool(s) invoked`, {
+            runId: params.runId,
+            sessionId: params.sessionId,
+            toolCalls: toolCalls.map((tc) => ({
+              id: tc.id,
+              name: tc.name,
+              input: tc.input,
+            })),
+          });
+        }
+
+        // Log tool results if present
+        if (toolResults.length > 0) {
+          log.info(`tool results: ${toolResults.length} result(s) received`, {
+            runId: params.runId,
+            sessionId: params.sessionId,
+            toolResults: toolResults.map((tr) => ({
+              toolCallId: tr.toolCallId,
+              isError: tr.isError,
+              content: tr.content,
+            })),
+          });
+        }
+
+        // Log complete assistant message structure
+        log.info(`assistant complete response`, {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          stopReason: (lastAssistant as { stopReason?: string }).stopReason,
+          hasText: !!replyText,
+          hasThinking: !!thinkingText,
+          toolCallsCount: toolCalls.length,
+          toolResultsCount: toolResults.length,
+          fullMessage: {
+            role: lastAssistant.role,
+            content: lastAssistant.content,
+          },
+        });
+      }
 
       const toolMetasNormalized = toolMetas
         .filter(

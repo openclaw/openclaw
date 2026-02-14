@@ -92,6 +92,9 @@ export async function handleToolExecutionStart(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
+  // Log detailed tool call information
+  ctx.log.debug(`tool call start: ${toolName} runId=${ctx.params.runId} toolCallId=${toolCallId}`);
+
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
   emitAgentEvent({
     runId: ctx.params.runId,
@@ -242,6 +245,14 @@ export async function handleToolExecutionEnd(
 
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+  );
+
+  // Log detailed tool result information
+  const resultText = extractToolResultText(sanitizedResult);
+  const resultPreview = resultText ? resultText.slice(0, 200) : undefined;
+
+  ctx.log.debug(
+    `tool call end: ${toolName} runId=${ctx.params.runId} toolCallId=${toolCallId} isError=${isToolError}${resultPreview ? ` preview=${resultPreview}` : ""}`,
   );
 
   if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {

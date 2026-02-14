@@ -64,7 +64,16 @@ function resolveSettings(): ResolvedSettings {
     }
   }
   const level = normalizeLogLevel(cfg?.level, "info");
-  const file = cfg?.file ?? defaultRollingPathForToday();
+  let file = cfg?.file ?? defaultRollingPathForToday();
+  // Replace {DATE} placeholder with current date
+  if (file.includes("{DATE}")) {
+    const today = formatLocalDate(new Date());
+    file = file.replace(/{DATE}/g, today);
+  }
+  // Resolve relative paths
+  if (!path.isAbsolute(file)) {
+    file = path.resolve(file);
+  }
   return { level, file };
 }
 
