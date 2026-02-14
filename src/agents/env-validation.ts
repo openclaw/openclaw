@@ -184,7 +184,7 @@ function validateTimezone(value: string): boolean {
   if (/^[+-]\d{4}$/.test(value)) {
     return true;
   }
-  if (/^[A-Z][a-zA-Z_]+\/[A-Za-z_]+$/.test(value)) {
+  if (/^[A-Z][a-zA-Z_]+(\/[A-Za-z_]+){1,2}$/.test(value)) {
     return true;
   }
   const abbreviations = new Set([
