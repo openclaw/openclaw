@@ -13,6 +13,8 @@ type HarnessState = {
   cfgEvaluateEnabled: boolean;
   createTargetId: string | null;
   prevGatewayPort: string | undefined;
+  prevGatewayToken: string | undefined;
+  prevGatewayPassword: string | undefined;
 };
 
 const state: HarnessState = {
@@ -23,6 +25,8 @@ const state: HarnessState = {
   cfgEvaluateEnabled: true,
   createTargetId: null,
   prevGatewayPort: undefined,
+  prevGatewayToken: undefined,
+  prevGatewayPassword: undefined,
 };
 
 export function getBrowserControlServerTestState(): HarnessState {
@@ -279,6 +283,12 @@ export function installBrowserControlServerHooks() {
     state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 1}`;
     state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
+    // Avoid flaky auth coupling: some suites temporarily set gateway env auth
+    // which would make the browser control server require auth.
+    state.prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    state.prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
     // Minimal CDP JSON endpoints used by the server.
     let putNewCalls = 0;
@@ -340,6 +350,16 @@ export function installBrowserControlServerHooks() {
       delete process.env.OPENCLAW_GATEWAY_PORT;
     } else {
       process.env.OPENCLAW_GATEWAY_PORT = state.prevGatewayPort;
+    }
+    if (state.prevGatewayToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = state.prevGatewayToken;
+    }
+    if (state.prevGatewayPassword === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = state.prevGatewayPassword;
     }
     await stopBrowserControlServer();
   });
