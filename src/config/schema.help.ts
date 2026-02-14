@@ -223,7 +223,8 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.limits.maxResults": "Max QMD results returned to the agent loop (default: 6).",
   "memory.qmd.limits.maxSnippetChars": "Max characters per snippet pulled from QMD (default: 700).",
   "memory.qmd.limits.maxInjectedChars": "Max total characters injected from QMD hits per turn.",
-  "memory.qmd.limits.timeoutMs": "Per-query timeout for QMD searches (default: 4000).",
+  "memory.qmd.limits.timeoutMs":
+    "Per-query timeout for QMD searches (default: 15000). QMD's ML pipeline needs 10-15 seconds.",
   "memory.qmd.scope":
     "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only).",
   "agents.defaults.memorySearch.cache.maxEntries":

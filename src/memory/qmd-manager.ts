@@ -529,13 +529,20 @@ export class QmdMemoryManager implements MemorySearchManager {
       // Clean snippet (remove line numbers)
       const cleanSnippet = (r.snippet || "").replace(/^\d+:\s?/gm, "");
       const snippet = cleanSnippet.slice(0, this.qmd.limits.maxSnippetChars);
-      const endLine = startLine + snippet.split("\n").length;
+      const endLine = startLine + snippet.split("\n").length - 1;
+
+      const score = r.score ?? 0;
+
+      // Apply minScore filter (consistent with CLI path)
+      if (score < minScore) {
+        continue;
+      }
 
       results.push({
         path: doc.rel,
         startLine,
         endLine,
-        score: r.score ?? 0,
+        score,
         snippet,
         source: doc.source,
       });
