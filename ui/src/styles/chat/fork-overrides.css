@@ -2,13 +2,13 @@
 
 /* Reduce gap between message groups */
 .chat-group {
-  margin-bottom: 6px;
-  gap: 8px;
+  margin-bottom: 2px;
+  gap: 4px;
 }
 
 /* Default: no bubble box (tool-only messages, etc.) */
 .chat-bubble {
-  padding: 2px 0;
+  padding: 1px 0;
   border-radius: 0;
   background: transparent !important;
   border: none !important;
@@ -18,6 +18,7 @@
 /* Text messages (assistant reports) get a visible bubble */
 .chat-bubble.chat-bubble--text {
   padding: 8px 12px;
+  margin-top: 2px;
   border-radius: 10px;
   background: var(--card) !important;
   border: 1px solid var(--border) !important;
@@ -41,9 +42,9 @@
   gap: 0;
 }
 
-/* Smaller footer */
+/* Hide footers (role + timestamp) — saves vertical space */
 .chat-group-footer {
-  margin-top: 2px;
+  display: none;
 }
 
 /* Hide avatars — saves 48px horizontal + cleaner look */
@@ -59,7 +60,12 @@
 /* System messages: compact, muted */
 .chat-group.system .chat-bubble,
 .chat-group.other .chat-bubble {
-  padding: 2px 0;
+  padding: 1px 0;
   font-size: 12px;
   color: var(--muted);
+}
+
+/* Chat thread: tighter padding */
+.chat-thread {
+  padding: 8px 4px;
 }
