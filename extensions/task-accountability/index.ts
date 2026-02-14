@@ -227,12 +227,20 @@ const plugin = {
 
     api.logger.info(`Task accountability enabled (strictMode: ${strictMode})`);
 
-    // Cache instructions
+    // Cache instructions and track injection per session
     let cachedInstructions: string | null = null;
     let instructionsLoaded = false;
+    const injectedSessions = new Set<string>();
 
-    // Layer 1: Inject instructions at agent start
-    api.on("before_agent_start", async () => {
+    // Layer 1: Inject instructions at agent start (ONCE per session)
+    api.on("before_agent_start", async (event) => {
+      const sessionKey = event.sessionKey ?? "default";
+
+      // Only inject once per session
+      if (injectedSessions.has(sessionKey)) {
+        return undefined;
+      }
+
       if (!instructionsLoaded) {
         cachedInstructions = await loadCustomInstructions(config ?? {});
         instructionsLoaded = true;
@@ -241,6 +249,10 @@ const plugin = {
       if (!cachedInstructions) {
         return undefined; // Instructions disabled
       }
+
+      // Mark this session as injected
+      injectedSessions.add(sessionKey);
+      api.logger.debug?.(`[task-accountability] Injected instructions for session: ${sessionKey}`);
 
       return {
         prependContext: cachedInstructions,
