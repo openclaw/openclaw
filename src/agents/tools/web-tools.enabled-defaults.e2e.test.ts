@@ -105,6 +105,23 @@ describe("web_search country and language parameters", () => {
     expect(url.searchParams.get("freshness")).toBe("pw");
   });
 
+  it("should enable Brave text_decorations by default", async () => {
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ web: { results: [] } }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    await tool?.execute?.(1, { query: "test-text-decorations" });
+
+    const url = new URL(mockFetch.mock.calls[0][0] as string);
+    expect(url.searchParams.get("text_decorations")).toBe("1");
+  });
+
   it("rejects invalid freshness values", async () => {
     const mockFetch = vi.fn(() =>
       Promise.resolve({
