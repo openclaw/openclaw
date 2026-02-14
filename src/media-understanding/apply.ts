@@ -321,7 +321,19 @@ function isBinaryMediaMime(mime?: string): boolean {
   if (!mime) {
     return false;
   }
-  return mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/");
+  return (
+    mime.startsWith("image/") ||
+    mime.startsWith("audio/") ||
+    mime.startsWith("video/") ||
+    mime.startsWith("application/vnd.") ||
+    mime === "application/zip" ||
+    mime === "application/gzip" ||
+    mime === "application/x-tar" ||
+    mime === "application/x-7z-compressed" ||
+    mime === "application/octet-stream" ||
+    mime === "application/pdf" ||
+    mime === "application/wasm"
+  );
 }
 
 async function extractFileBlocks(params: {
