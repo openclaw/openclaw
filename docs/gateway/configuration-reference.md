@@ -2065,14 +2065,18 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 {
   canvasHost: {
     root: "~/.openclaw/workspace/canvas",
-    port: 18793,
     liveReload: true,
     // enabled: false, // or OPENCLAW_SKIP_CANVAS_HOST=1
   },
 }
 ```
 
-- Serves HTML/CSS/JS over HTTP for iOS/Android nodes.
+- Serves agent-editable HTML/CSS/JS and A2UI over HTTP under the Gateway port:
+  - `http://<gateway-host>:<gateway.port>/__openclaw__/canvas/`
+  - `http://<gateway-host>:<gateway.port>/__openclaw__/a2ui/`
+- Local-only: keep `gateway.bind: "loopback"` (default).
+- Non-loopback binds: canvas routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
+- Node WebViews typically don't send auth headers; after a node is paired and connected, the Gateway allows a private-IP fallback so the node can load canvas/A2UI without leaking secrets into URLs.
 - Injects live-reload client into served HTML.
 - Auto-creates starter `index.html` when empty.
 - Also serves A2UI at `/__openclaw__/a2ui/`.
