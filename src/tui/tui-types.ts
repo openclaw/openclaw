@@ -37,6 +37,9 @@ export type SessionInfo = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   updatedAt?: number | null;
   displayName?: string;
+  tokPerSec?: number | null;
+  connectivityStatus?: string;
+  ollamaHealthy?: boolean;
 };
 
 export type SessionScope = "per-sender" | "global";

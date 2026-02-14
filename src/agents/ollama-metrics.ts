@@ -1,10 +1,3 @@
-/**
- * Ollama performance metrics extraction and formatting.
- *
- * Ollama's final `done: true` chunk includes nanosecond-precision timing fields.
- * This module parses them into a useful metrics object.
- */
-
 export interface OllamaPerformanceMetrics {
   totalDurationMs: number;
   loadDurationMs: number;
@@ -14,10 +7,9 @@ export interface OllamaPerformanceMetrics {
   evalTokens: number;
   tokensPerSecond: number;
   promptTokensPerSecond: number;
-  timeToFirstToken: number; // ms
+  timeToFirstToken: number;
 }
 
-/** Shape of the timing fields on Ollama's final response chunk. */
 interface OllamaDoneChunk {
   total_duration?: number;
   load_duration?: number;
@@ -30,49 +22,36 @@ interface OllamaDoneChunk {
 const NS_TO_MS = 1e-6;
 
 export function extractMetrics(response: OllamaDoneChunk): OllamaPerformanceMetrics | null {
-  // Need at least eval fields to produce meaningful metrics
   if (response.eval_count == null && response.eval_duration == null) {
     return null;
   }
 
-  const totalDurationMs = (response.total_duration ?? 0) * NS_TO_MS;
   const loadDurationMs = (response.load_duration ?? 0) * NS_TO_MS;
   const promptEvalDurationMs = (response.prompt_eval_duration ?? 0) * NS_TO_MS;
   const evalDurationMs = (response.eval_duration ?? 0) * NS_TO_MS;
   const promptTokens = response.prompt_eval_count ?? 0;
   const evalTokens = response.eval_count ?? 0;
 
-  const evalDurationSec = evalDurationMs / 1000;
-  const promptEvalDurationSec = promptEvalDurationMs / 1000;
-
   return {
-    totalDurationMs,
+    totalDurationMs: (response.total_duration ?? 0) * NS_TO_MS,
     loadDurationMs,
     promptEvalDurationMs,
     evalDurationMs,
     promptTokens,
     evalTokens,
-    tokensPerSecond: evalDurationSec > 0 ? evalTokens / evalDurationSec : 0,
-    promptTokensPerSecond: promptEvalDurationSec > 0 ? promptTokens / promptEvalDurationSec : 0,
+    tokensPerSecond: evalDurationMs > 0 ? evalTokens / (evalDurationMs / 1000) : 0,
+    promptTokensPerSecond:
+      promptEvalDurationMs > 0 ? promptTokens / (promptEvalDurationMs / 1000) : 0,
     timeToFirstToken: loadDurationMs + promptEvalDurationMs,
   };
 }
 
-function fmtNum(n: number, decimals = 1): string {
-  return n.toFixed(decimals);
+const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`);
+
+export function formatMetrics(m: OllamaPerformanceMetrics): string {
+  return `${m.tokensPerSecond.toFixed(1)} tok/s • ${fmtMs(m.timeToFirstToken)} to first token • ${m.evalTokens} tokens generated`;
 }
 
-function fmtMs(ms: number): string {
-  if (ms >= 1000) {
-    return `${fmtNum(ms / 1000)}s`;
-  }
-  return `${Math.round(ms)}ms`;
-}
-
-export function formatMetrics(metrics: OllamaPerformanceMetrics): string {
-  return `${fmtNum(metrics.tokensPerSecond)} tok/s • ${fmtMs(metrics.timeToFirstToken)} to first token • ${metrics.evalTokens} tokens generated`;
-}
-
-export function formatMetricsCompact(metrics: OllamaPerformanceMetrics): string {
-  return `${fmtNum(metrics.tokensPerSecond)} t/s • ${fmtMs(metrics.timeToFirstToken)} TTFT`;
+export function formatMetricsCompact(m: OllamaPerformanceMetrics): string {
+  return `${m.tokensPerSecond.toFixed(1)} t/s • ${fmtMs(m.timeToFirstToken)} TTFT`;
 }

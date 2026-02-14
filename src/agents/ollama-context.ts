@@ -43,42 +43,28 @@ export const OLLAMA_MODEL_PROFILES: Record<
   },
 };
 
-/**
- * Get the model profile for a given model name.
- * Matches by prefix so "gemma3:4b-q4_0" or "gemma3:4b:latest" match "gemma3:4b".
- */
+/** Get model profile by exact or prefix match. */
 export function getModelProfile(modelName: string): ModelProfile | undefined {
-  // Exact match first
   if (OLLAMA_MODEL_PROFILES[modelName]) {
-    const p = OLLAMA_MODEL_PROFILES[modelName];
-    return { name: modelName, ...p };
+    return { name: modelName, ...OLLAMA_MODEL_PROFILES[modelName] };
   }
-
-  // Prefix match: find the longest key that is a prefix of modelName
-  // The model name must match key exactly or key followed by a separator (-, :, .)
+  // Prefix match: longest key that matches followed by separator
   let bestKey: string | undefined;
   for (const key of Object.keys(OLLAMA_MODEL_PROFILES)) {
     if (modelName.startsWith(key) && modelName.length > key.length) {
-      const nextChar = modelName[key.length];
-      if (nextChar === "-" || nextChar === ":" || nextChar === ".") {
-        if (!bestKey || key.length > bestKey.length) {
-          bestKey = key;
-        }
+      const next = modelName[key.length];
+      if ("-:.".includes(next) && (!bestKey || key.length > bestKey.length)) {
+        bestKey = key;
       }
     }
   }
-
   if (bestKey) {
-    const p = OLLAMA_MODEL_PROFILES[bestKey];
-    return { name: bestKey, ...p };
+    return { name: bestKey, ...OLLAMA_MODEL_PROFILES[bestKey] };
   }
-
   return undefined;
 }
 
-/**
- * Recommend models that fit in the given RAM budget, sorted by ramGB descending (most capable first).
- */
+/** Models that fit in the given RAM, sorted by capability descending. */
 export function recommendModelsForRam(availableRamGB: number): ModelProfile[] {
   return Object.entries(OLLAMA_MODEL_PROFILES)
     .filter(([, p]) => p.ramGB <= availableRamGB)
@@ -86,10 +72,7 @@ export function recommendModelsForRam(availableRamGB: number): ModelProfile[] {
     .toSorted((a, b) => b.ramGB - a.ramGB || b.contextWindow - a.contextWindow);
 }
 
-/**
- * Get usable system RAM in GB (total minus ~2GB for OS overhead).
- */
+/** Usable system RAM in GB (total minus ~2GB OS overhead). */
 export async function getSystemRam(): Promise<number> {
-  const totalGB = os.totalmem() / 1024 ** 3;
-  return Math.max(0, totalGB - 2);
+  return Math.max(0, os.totalmem() / 1024 ** 3 - 2);
 }
