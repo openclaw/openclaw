@@ -17,6 +17,52 @@ const sleep = async (ms: number) => {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 };
 
+async function createBotHandler(): Promise<{
+  handler: (ctx: Record<string, unknown>) => Promise<void>;
+  replySpy: ReturnType<typeof vi.fn>;
+  runtimeError: ReturnType<typeof vi.fn>;
+}> {
+  const { createTelegramBot } = await import("./bot.js");
+  const replyModule = await import("../auto-reply/reply.js");
+  const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+  onSpy.mockReset();
+  replySpy.mockReset();
+  sendChatActionSpy.mockReset();
+
+  const runtimeError = vi.fn();
+  createTelegramBot({
+    token: "tok",
+    testTimings: TELEGRAM_TEST_TIMINGS,
+    runtime: {
+      log: vi.fn(),
+      error: runtimeError,
+      exit: () => {
+        throw new Error("exit");
+      },
+    },
+  });
+  const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+    ctx: Record<string, unknown>,
+  ) => Promise<void>;
+  expect(handler).toBeDefined();
+
+  return { handler, replySpy, runtimeError };
+}
+
+function mockTelegramFileDownload(params: {
+  contentType: string;
+  bytes: Uint8Array;
+}): ReturnType<typeof vi.spyOn> {
+  return vi.spyOn(globalThis, "fetch" as never).mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    headers: { get: () => params.contentType },
+    arrayBuffer: async () => params.bytes.buffer,
+  } as Response);
+}
+
 beforeEach(() => {
   vi.useRealTimers();
   lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
@@ -44,39 +90,11 @@ describe("telegram inbound media", () => {
   it(
     "downloads media via file_path (no file.download)",
     async () => {
-      const { createTelegramBot } = await import("./bot.js");
-      const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
-
-      onSpy.mockReset();
-      replySpy.mockReset();
-      sendChatActionSpy.mockReset();
-
-      const runtimeLog = vi.fn();
-      const runtimeError = vi.fn();
-      createTelegramBot({
-        token: "tok",
-        testTimings: TELEGRAM_TEST_TIMINGS,
-        runtime: {
-          log: runtimeLog,
-          error: runtimeError,
-          exit: () => {
-            throw new Error("exit");
-          },
-        },
+      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const fetchSpy = mockTelegramFileDownload({
+        contentType: "image/jpeg",
+        bytes: new Uint8Array([0xff, 0xd8, 0xff, 0x00]),
       });
-      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
-      expect(handler).toBeDefined();
-
-      const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: { get: () => "image/jpeg" },
-        arrayBuffer: async () => new Uint8Array([0xff, 0xd8, 0xff, 0x00]).buffer,
-      } as Response);
 
       await handler({
         message: {
@@ -366,39 +384,11 @@ describe("telegram stickers", () => {
   it(
     "downloads static sticker (WEBP) and includes sticker metadata",
     async () => {
-      const { createTelegramBot } = await import("./bot.js");
-      const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
-
-      onSpy.mockReset();
-      replySpy.mockReset();
-      sendChatActionSpy.mockReset();
-
-      const runtimeLog = vi.fn();
-      const runtimeError = vi.fn();
-      createTelegramBot({
-        token: "tok",
-        testTimings: TELEGRAM_TEST_TIMINGS,
-        runtime: {
-          log: runtimeLog,
-          error: runtimeError,
-          exit: () => {
-            throw new Error("exit");
-          },
-        },
+      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const fetchSpy = mockTelegramFileDownload({
+        contentType: "image/webp",
+        bytes: new Uint8Array([0x52, 0x49, 0x46, 0x46]), // RIFF header
       });
-      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
-      expect(handler).toBeDefined();
-
-      const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: { get: () => "image/webp" },
-        arrayBuffer: async () => new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer, // RIFF header
-      } as Response);
 
       await handler({
         message: {
@@ -524,31 +514,8 @@ describe("telegram stickers", () => {
   it(
     "skips animated stickers (TGS format)",
     async () => {
-      const { createTelegramBot } = await import("./bot.js");
-      const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
-
-      onSpy.mockReset();
-      replySpy.mockReset();
-
-      const runtimeError = vi.fn();
+      const { handler, replySpy, runtimeError } = await createBotHandler();
       const fetchSpy = vi.spyOn(globalThis, "fetch" as never);
-
-      createTelegramBot({
-        token: "tok",
-        testTimings: TELEGRAM_TEST_TIMINGS,
-        runtime: {
-          log: vi.fn(),
-          error: runtimeError,
-          exit: () => {
-            throw new Error("exit");
-          },
-        },
-      });
-      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
-      expect(handler).toBeDefined();
 
       await handler({
         message: {
@@ -585,31 +552,8 @@ describe("telegram stickers", () => {
   it(
     "skips video stickers (WEBM format)",
     async () => {
-      const { createTelegramBot } = await import("./bot.js");
-      const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
-
-      onSpy.mockReset();
-      replySpy.mockReset();
-
-      const runtimeError = vi.fn();
+      const { handler, replySpy, runtimeError } = await createBotHandler();
       const fetchSpy = vi.spyOn(globalThis, "fetch" as never);
-
-      createTelegramBot({
-        token: "tok",
-        testTimings: TELEGRAM_TEST_TIMINGS,
-        runtime: {
-          log: vi.fn(),
-          error: runtimeError,
-          exit: () => {
-            throw new Error("exit");
-          },
-        },
-      });
-      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
-      expect(handler).toBeDefined();
 
       await handler({
         message: {
