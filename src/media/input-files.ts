@@ -1,6 +1,7 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
+import { estimateBase64DecodedBytes } from "./base64.js";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -109,16 +110,6 @@ export const DEFAULT_INPUT_TIMEOUT_MS = 10_000;
 export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
 export const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 export const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
-
-function estimateBase64DecodedBytes(base64: string): number {
-  const cleaned = base64.trim().replace(/\s+/g, "");
-  if (!cleaned) {
-    return 0;
-  }
-  const padding = cleaned.endsWith("==") ? 2 : cleaned.endsWith("=") ? 1 : 0;
-  const estimated = Math.floor((cleaned.length * 3) / 4) - padding;
-  return Math.max(0, estimated);
-}
 
 function rejectOversizedBase64Payload(params: {
   data: string;

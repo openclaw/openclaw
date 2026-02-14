@@ -58,6 +58,7 @@ describe("base64 size guards", () => {
   it("rejects oversized base64 images before decoding", async () => {
     const data = Buffer.alloc(7).toString("base64");
     const { extractImageContentFromSource } = await import("./input-files.js");
+    const fromSpy = vi.spyOn(Buffer, "from");
     await expect(
       extractImageContentFromSource(
         { type: "base64", data, mediaType: "image/png" },
@@ -70,11 +71,17 @@ describe("base64 size guards", () => {
         },
       ),
     ).rejects.toThrow("Image too large");
+
+    // Regression check: the oversize reject must happen before Buffer.from(..., "base64") allocates.
+    const base64Calls = fromSpy.mock.calls.filter((args) => args[1] === "base64");
+    expect(base64Calls).toHaveLength(0);
+    fromSpy.mockRestore();
   });
 
   it("rejects oversized base64 files before decoding", async () => {
     const data = Buffer.alloc(7).toString("base64");
     const { extractFileContentFromSource } = await import("./input-files.js");
+    const fromSpy = vi.spyOn(Buffer, "from");
     await expect(
       extractFileContentFromSource({
         source: { type: "base64", data, mediaType: "text/plain", filename: "x.txt" },
@@ -89,5 +96,9 @@ describe("base64 size guards", () => {
         },
       }),
     ).rejects.toThrow("File too large");
+
+    const base64Calls = fromSpy.mock.calls.filter((args) => args[1] === "base64");
+    expect(base64Calls).toHaveLength(0);
+    fromSpy.mockRestore();
   });
 });
