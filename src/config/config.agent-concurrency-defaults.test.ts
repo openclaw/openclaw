@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
   resolveAgentMaxConcurrent,
   resolveSubagentMaxConcurrent,
 } from "./agent-limits.js";
+import { loadConfig } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
 
 describe("agent concurrency defaults", () => {
@@ -51,8 +52,6 @@ describe("agent concurrency defaults", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
       expect(cfg.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);

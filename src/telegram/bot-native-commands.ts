@@ -26,10 +26,6 @@ import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gat
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { resolveTelegramCustomCommands } from "../config/telegram-custom-commands.js";
-import {
-  normalizeTelegramCommandName,
-  TELEGRAM_COMMAND_NAME_PATTERN,
-} from "../config/telegram-custom-commands.js";
 import { danger, logVerbose } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
@@ -42,6 +38,11 @@ import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
+import {
+  buildCappedTelegramMenuCommands,
+  buildPluginTelegramMenuCommands,
+  syncTelegramMenuCommands,
+} from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -294,8 +295,7 @@ export const registerTelegramNativeCommands = ({
     nativeEnabled && nativeSkillsEnabled
       ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
       : null;
-  const boundAgentIds =
-    boundRoute && boundRoute.matchedBy.startsWith("binding.") ? [boundRoute.agentId] : null;
+  const boundAgentIds = boundRoute ? [boundRoute.agentId] : null;
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled
       ? listSkillCommandsForAgents(boundAgentIds ? { cfg, agentIds: boundAgentIds } : { cfg })
@@ -321,87 +321,43 @@ export const registerTelegramNativeCommands = ({
   }
   const customCommands = customResolution.commands;
   const pluginCommandSpecs = getPluginCommandSpecs();
-  const pluginCommands: Array<{ command: string; description: string }> = [];
   const existingCommands = new Set(
     [
       ...nativeCommands.map((command) => command.name),
       ...customCommands.map((command) => command.command),
     ].map((command) => command.toLowerCase()),
   );
-  const pluginCommandNames = new Set<string>();
-  for (const spec of pluginCommandSpecs) {
-    const normalized = normalizeTelegramCommandName(spec.name);
-    if (!normalized || !TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
-      runtime.error?.(
-        danger(
-          `Plugin command "/${spec.name}" is invalid for Telegram (use a-z, 0-9, underscore; max 32 chars).`,
-        ),
-      );
-      continue;
-    }
-    const description = spec.description.trim();
-    if (!description) {
-      runtime.error?.(danger(`Plugin command "/${normalized}" is missing a description.`));
-      continue;
-    }
-    if (existingCommands.has(normalized)) {
-      runtime.error?.(
-        danger(`Plugin command "/${normalized}" conflicts with an existing Telegram command.`),
-      );
-      continue;
-    }
-    if (pluginCommandNames.has(normalized)) {
-      runtime.error?.(danger(`Plugin command "/${normalized}" is duplicated.`));
-      continue;
-    }
-    pluginCommandNames.add(normalized);
-    existingCommands.add(normalized);
-    pluginCommands.push({ command: normalized, description });
+  const pluginCatalog = buildPluginTelegramMenuCommands({
+    specs: pluginCommandSpecs,
+    existingCommands,
+  });
+  for (const issue of pluginCatalog.issues) {
+    runtime.error?.(danger(issue));
   }
   const allCommandsFull: Array<{ command: string; description: string }> = [
     ...nativeCommands.map((command) => ({
       command: command.name,
       description: command.description,
     })),
-    ...pluginCommands,
+    ...pluginCatalog.commands,
     ...customCommands,
   ];
-  // Telegram Bot API limits commands to 100 per scope.
-  // Truncate with a warning rather than failing with BOT_COMMANDS_TOO_MUCH.
-  const TELEGRAM_MAX_COMMANDS = 100;
-  if (allCommandsFull.length > TELEGRAM_MAX_COMMANDS) {
+  const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
+    buildCappedTelegramMenuCommands({
+      allCommands: allCommandsFull,
+    });
+  if (overflowCount > 0) {
     runtime.log?.(
-      `telegram: truncating ${allCommandsFull.length} commands to ${TELEGRAM_MAX_COMMANDS} (Telegram Bot API limit)`,
+      `Telegram limits bots to ${maxCommands} commands. ` +
+        `${totalCommands} configured; registering first ${maxCommands}. ` +
+        `Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
     );
   }
-  const allCommands = allCommandsFull.slice(0, TELEGRAM_MAX_COMMANDS);
+  // Telegram only limits the setMyCommands payload (menu entries).
+  // Keep hidden commands callable by registering handlers for the full catalog.
+  syncTelegramMenuCommands({ bot, runtime, commandsToRegister });
 
-  // Clear stale commands before registering new ones to prevent
-  // leftover commands from deleted skills persisting across restarts (#5717).
-  // Chain delete → set so a late-resolving delete cannot wipe newly registered commands.
-  const registerCommands = () => {
-    if (allCommands.length > 0) {
-      withTelegramApiErrorLogging({
-        operation: "setMyCommands",
-        runtime,
-        fn: () => bot.api.setMyCommands(allCommands),
-      }).catch(() => {});
-    }
-  };
-  if (typeof bot.api.deleteMyCommands === "function") {
-    withTelegramApiErrorLogging({
-      operation: "deleteMyCommands",
-      runtime,
-      fn: () => bot.api.deleteMyCommands(),
-    })
-      .catch(() => {})
-      .then(registerCommands)
-      .catch(() => {});
-  } else {
-    registerCommands();
-  }
-
-  if (allCommands.length > 0) {
+  if (commandsToRegister.length > 0) {
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
@@ -642,7 +598,7 @@ export const registerTelegramNativeCommands = ({
         });
       }
 
-      for (const pluginCommand of pluginCommands) {
+      for (const pluginCommand of pluginCatalog.commands) {
         bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext) => {
           const msg = ctx.message;
           if (!msg) {

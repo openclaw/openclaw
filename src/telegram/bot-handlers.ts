@@ -57,11 +57,21 @@ export const registerTelegramHandlers = ({
   processMessage,
   logger,
 }: RegisterTelegramHandlerParams) => {
+  const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
-  const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
+  const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
+    typeof opts.testTimings?.textFragmentGapMs === "number" &&
+    Number.isFinite(opts.testTimings.textFragmentGapMs)
+      ? Math.max(10, Math.floor(opts.testTimings.textFragmentGapMs))
+      : DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS;
   const TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP = 1;
   const TELEGRAM_TEXT_FRAGMENT_MAX_PARTS = 12;
   const TELEGRAM_TEXT_FRAGMENT_MAX_TOTAL_CHARS = 50_000;
+  const mediaGroupTimeoutMs =
+    typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
+    Number.isFinite(opts.testTimings.mediaGroupFlushMs)
+      ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
+      : MEDIA_GROUP_TIMEOUT_MS;
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
@@ -504,7 +514,16 @@ export const registerTelegramHandlers = ({
             );
           } catch (editErr) {
             const errStr = String(editErr);
-            if (!errStr.includes("message is not modified")) {
+            if (errStr.includes("no text in the message")) {
+              try {
+                await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
+              } catch {}
+              await bot.api.sendMessage(
+                callbackMessage.chat.id,
+                text,
+                keyboard ? { reply_markup: keyboard } : undefined,
+              );
+            } else if (!errStr.includes("message is not modified")) {
               throw editErr;
             }
           }
@@ -850,7 +869,7 @@ export const registerTelegramHandlers = ({
               })
               .catch(() => undefined);
             await mediaGroupProcessing;
-          }, MEDIA_GROUP_TIMEOUT_MS);
+          }, mediaGroupTimeoutMs);
         } else {
           const entry: MediaGroupEntry = {
             messages: [{ msg, ctx }],
@@ -862,7 +881,7 @@ export const registerTelegramHandlers = ({
                 })
                 .catch(() => undefined);
               await mediaGroupProcessing;
-            }, MEDIA_GROUP_TIMEOUT_MS),
+            }, mediaGroupTimeoutMs),
           };
           mediaGroupBuffer.set(mediaGroupId, entry);
         }

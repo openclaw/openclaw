@@ -14,7 +14,7 @@ import type {
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
 import {
   listSessionFilesForAgent,
   buildSessionEntry,
@@ -24,19 +24,12 @@ import { requireNodeSqlite } from "./sqlite.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 import type { ResolvedMemoryBackendConfig, ResolvedQmdConfig } from "./backend-config.js";
+import { parseQmdQueryJson } from "./qmd-query-parser.js";
 
 const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
-
-type QmdQueryResult = {
-  docid?: string;
-  score?: number;
-  file?: string;
-  snippet?: string;
-  body?: string;
-};
 
 type CollectionRoot = {
   path: string;
@@ -267,23 +260,40 @@ export class QmdMemoryManager implements MemorySearchManager {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
     }
-    const args = ["query", trimmed, "--json", "-n", String(limit), ...collectionFilterArgs];
+    const qmdSearchCommand = this.qmd.searchMode;
+    const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
+    if (qmdSearchCommand === "query") {
+      args.push(...collectionFilterArgs);
+    }
     let stdout: string;
+    let stderr: string;
     try {
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
       stdout = result.stdout;
+      stderr = result.stderr;
     } catch (err) {
-      log.warn(`qmd query failed: ${String(err)}`);
-      throw err instanceof Error ? err : new Error(String(err));
+      if (qmdSearchCommand !== "query" && this.isUnsupportedQmdOptionError(err)) {
+        log.warn(
+          `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
+        );
+        try {
+          const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
+          fallbackArgs.push(...collectionFilterArgs);
+          const fallback = await this.runQmd(fallbackArgs, {
+            timeoutMs: this.qmd.limits.timeoutMs,
+          });
+          stdout = fallback.stdout;
+          stderr = fallback.stderr;
+        } catch (fallbackErr) {
+          log.warn(`qmd query fallback failed: ${String(fallbackErr)}`);
+          throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
+        }
+      } else {
+        log.warn(`qmd ${qmdSearchCommand} failed: ${String(err)}`);
+        throw err instanceof Error ? err : new Error(String(err));
+      }
     }
-    let parsed: QmdQueryResult[] = [];
-    try {
-      parsed = JSON.parse(stdout);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd query returned invalid JSON: ${message}`);
-      throw new Error(`qmd query returned invalid JSON: ${message}`, { cause: err });
-    }
+    const parsed = parseQmdQueryJson(stdout, stderr);
     const results: MemorySearchResult[] = [];
     for (const entry of parsed) {
       const doc = await this.resolveDocLocation(entry.docid);
@@ -741,89 +751,17 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private isScopeAllowed(sessionKey?: string): boolean {
-    const scope = this.qmd.scope;
-    if (!scope) {
-      return true;
-    }
-    const channel = this.deriveChannelFromKey(sessionKey);
-    const chatType = this.deriveChatTypeFromKey(sessionKey);
-    const normalizedKey = sessionKey ?? "";
-    for (const rule of scope.rules ?? []) {
-      if (!rule) {
-        continue;
-      }
-      const match = rule.match ?? {};
-      if (match.channel && match.channel !== channel) {
-        continue;
-      }
-      if (match.chatType && match.chatType !== chatType) {
-        continue;
-      }
-      if (match.keyPrefix && !normalizedKey.startsWith(match.keyPrefix)) {
-        continue;
-      }
-      return rule.action === "allow";
-    }
-    const fallback = scope.default ?? "allow";
-    return fallback === "allow";
-  }
-
   private logScopeDenied(sessionKey?: string): void {
-    const channel = this.deriveChannelFromKey(sessionKey) ?? "unknown";
-    const chatType = this.deriveChatTypeFromKey(sessionKey) ?? "unknown";
+    const channel = deriveQmdScopeChannel(sessionKey) ?? "unknown";
+    const chatType = deriveQmdScopeChatType(sessionKey) ?? "unknown";
     const key = sessionKey?.trim() || "<none>";
     log.warn(
       `qmd search denied by scope (channel=${channel}, chatType=${chatType}, session=${key})`,
     );
   }
 
-  private deriveChannelFromKey(key?: string) {
-    if (!key) {
-      return undefined;
-    }
-    const normalized = this.normalizeSessionKey(key);
-    if (!normalized) {
-      return undefined;
-    }
-    const parts = normalized.split(":").filter(Boolean);
-    if (
-      parts.length >= 2 &&
-      (parts[1] === "group" || parts[1] === "channel" || parts[1] === "direct" || parts[1] === "dm")
-    ) {
-      return parts[0]?.toLowerCase();
-    }
-    return undefined;
-  }
-
-  private deriveChatTypeFromKey(key?: string) {
-    if (!key) {
-      return undefined;
-    }
-    const normalized = this.normalizeSessionKey(key);
-    if (!normalized) {
-      return undefined;
-    }
-    if (normalized.includes(":group:")) {
-      return "group";
-    }
-    if (normalized.includes(":channel:")) {
-      return "channel";
-    }
-    return "direct";
-  }
-
-  private normalizeSessionKey(key: string): string | undefined {
-    const trimmed = key.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    const parsed = parseAgentSessionKey(trimmed);
-    const normalized = (parsed?.rest ?? trimmed).toLowerCase();
-    if (normalized.startsWith("subagent:")) {
-      return undefined;
-    }
-    return normalized;
+  private isScopeAllowed(sessionKey?: string): boolean {
+    return isQmdScopeAllowed(this.qmd.scope, sessionKey);
   }
 
   private toDocLocation(
@@ -965,6 +903,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     return normalized.includes("sqlite_busy") || normalized.includes("database is locked");
   }
 
+  private isUnsupportedQmdOptionError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes("unknown flag") ||
+      normalized.includes("unknown option") ||
+      normalized.includes("unrecognized option") ||
+      normalized.includes("flag provided but not defined") ||
+      normalized.includes("unexpected argument")
+    );
+  }
+
   private createQmdBusyError(err: unknown): Error {
     const message = err instanceof Error ? err.message : String(err);
     return new Error(`qmd index busy while reading results: ${message}`);
@@ -987,5 +937,16 @@ export class QmdMemoryManager implements MemorySearchManager {
       return [];
     }
     return names.flatMap((name) => ["-c", name]);
+  }
+
+  private buildSearchArgs(
+    command: "query" | "search" | "vsearch",
+    query: string,
+    limit: number,
+  ): string[] {
+    if (command === "query") {
+      return ["query", query, "--json", "-n", String(limit)];
+    }
+    return [command, query, "--json"];
   }
 }

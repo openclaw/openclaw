@@ -6,6 +6,7 @@ import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
+  resolveSessionFilePath,
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
@@ -229,8 +230,16 @@ async function buildSubagentStatsLine(params: {
   });
 
   const sessionId = entry?.sessionId;
-  const transcriptPath =
-    sessionId && storePath ? path.join(path.dirname(storePath), `${sessionId}.jsonl`) : undefined;
+  let transcriptPath: string | undefined;
+  if (sessionId && storePath) {
+    try {
+      transcriptPath = resolveSessionFilePath(sessionId, entry, {
+        sessionsDir: path.dirname(storePath),
+      });
+    } catch {
+      transcriptPath = undefined;
+    }
+  }
 
   const input = entry?.inputTokens;
   const output = entry?.outputTokens;
@@ -289,6 +298,7 @@ async function readLatestAssistantReplyWithRetry(params: {
   initialReply?: string;
   maxWaitMs: number;
 }): Promise<string | undefined> {
+  const RETRY_INTERVAL_MS = 100;
   let reply = params.initialReply?.trim() ? params.initialReply : undefined;
   if (reply) {
     return reply;
@@ -296,7 +306,7 @@ async function readLatestAssistantReplyWithRetry(params: {
 
   const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
   while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
     const latest = await readLatestAssistantReply({ sessionKey: params.sessionKey });
     if (latest?.trim()) {
       return latest;

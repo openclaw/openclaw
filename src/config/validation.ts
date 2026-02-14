@@ -83,7 +83,11 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
   return issues;
 }
 
-export function validateConfigObject(
+/**
+ * Validates config without applying runtime defaults.
+ * Use this when you need the raw validated config (e.g., for writing back to file).
+ */
+export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyIssues = findLegacyConfigIssues(raw);
@@ -124,9 +128,20 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: applyModelDefaults(
-      applyAgentDefaults(applySessionDefaults(validated.data as OpenClawConfig)),
-    ),
+    config: validated.data as OpenClawConfig,
+  };
+}
+
+export function validateConfigObject(
+  raw: unknown,
+): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+  const result = validateConfigObjectRaw(raw);
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    config: applyModelDefaults(applyAgentDefaults(applySessionDefaults(result.config))),
   };
 }
 
@@ -141,7 +156,38 @@ export function validateConfigObjectWithPlugins(raw: unknown):
       issues: ConfigValidationIssue[];
       warnings: ConfigValidationIssue[];
     } {
-  const base = validateConfigObject(raw);
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true });
+}
+
+export function validateConfigObjectRawWithPlugins(raw: unknown):
+  | {
+      ok: true;
+      config: OpenClawConfig;
+      warnings: ConfigValidationIssue[];
+    }
+  | {
+      ok: false;
+      issues: ConfigValidationIssue[];
+      warnings: ConfigValidationIssue[];
+    } {
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
+}
+
+function validateConfigObjectWithPluginsBase(
+  raw: unknown,
+  opts: { applyDefaults: boolean },
+):
+  | {
+      ok: true;
+      config: OpenClawConfig;
+      warnings: ConfigValidationIssue[];
+    }
+  | {
+      ok: false;
+      issues: ConfigValidationIssue[];
+      warnings: ConfigValidationIssue[];
+    } {
+  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }

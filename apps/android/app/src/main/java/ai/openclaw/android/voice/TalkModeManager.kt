@@ -814,7 +814,7 @@ class TalkModeManager(
     val sagVoice = System.getenv("SAG_VOICE_ID")?.trim()
     val envKey = System.getenv("ELEVENLABS_API_KEY")?.trim()
     try {
-      val res = session.request("config.get", "{}")
+      val res = session.request("talk.config", """{"includeSecrets":true}""")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
       val talk = config?.get("talk").asObjectOrNull()

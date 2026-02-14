@@ -153,4 +153,62 @@ describe("createModelSelectionState parent inheritance", () => {
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe(defaultModel);
   });
+
+  it("applies stored override when heartbeat override was not resolved", async () => {
+    const cfg = {} as OpenClawConfig;
+    const sessionKey = "agent:main:discord:channel:c1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    });
+    const sessionStore = {
+      [sessionKey]: sessionEntry,
+    };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasResolvedHeartbeatModelOverride: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o");
+  });
+
+  it("skips stored override when heartbeat override was resolved", async () => {
+    const cfg = {} as OpenClawConfig;
+    const sessionKey = "agent:main:discord:channel:c1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    });
+    const sessionStore = {
+      [sessionKey]: sessionEntry,
+    };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasResolvedHeartbeatModelOverride: true,
+    });
+
+    expect(state.provider).toBe("anthropic");
+    expect(state.model).toBe("claude-opus-4-5");
+  });
 });

@@ -1671,7 +1671,7 @@ extension TalkModeManager {
     func reloadConfig() async {
         guard let gateway else { return }
         do {
-            let res = try await gateway.request(method: "config.get", paramsJSON: "{}", timeoutSeconds: 8)
+            let res = try await gateway.request(method: "talk.config", paramsJSON: "{\"includeSecrets\":true}", timeoutSeconds: 8)
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
             guard let config = json["config"] as? [String: Any] else { return }
             let talk = config["talk"] as? [String: Any]

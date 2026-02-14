@@ -29,10 +29,52 @@ type DiscordThreadParentInfo = {
   type?: ChannelType;
 };
 
-const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarter>();
+// Cache entry with timestamp for TTL-based eviction
+type DiscordThreadStarterCacheEntry = {
+  value: DiscordThreadStarter;
+  updatedAt: number;
+};
+
+// Cache configuration: 5 minute TTL (thread starters rarely change), max 500 entries
+const DISCORD_THREAD_STARTER_CACHE_TTL_MS = 5 * 60 * 1000;
+const DISCORD_THREAD_STARTER_CACHE_MAX = 500;
+
+const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarterCacheEntry>();
 
 export function __resetDiscordThreadStarterCacheForTest() {
   DISCORD_THREAD_STARTER_CACHE.clear();
+}
+
+// Get cached entry with TTL check, refresh LRU position on hit
+function getCachedThreadStarter(key: string, now: number): DiscordThreadStarter | undefined {
+  const entry = DISCORD_THREAD_STARTER_CACHE.get(key);
+  if (!entry) {
+    return undefined;
+  }
+  // Check TTL expiry
+  if (now - entry.updatedAt > DISCORD_THREAD_STARTER_CACHE_TTL_MS) {
+    DISCORD_THREAD_STARTER_CACHE.delete(key);
+    return undefined;
+  }
+  // Refresh LRU position by re-inserting (Map maintains insertion order)
+  DISCORD_THREAD_STARTER_CACHE.delete(key);
+  DISCORD_THREAD_STARTER_CACHE.set(key, { ...entry, updatedAt: now });
+  return entry.value;
+}
+
+// Set cached entry with LRU eviction when max size exceeded
+function setCachedThreadStarter(key: string, value: DiscordThreadStarter, now: number): void {
+  // Remove existing entry first (to update LRU position)
+  DISCORD_THREAD_STARTER_CACHE.delete(key);
+  DISCORD_THREAD_STARTER_CACHE.set(key, { value, updatedAt: now });
+  // Evict oldest entries (first in Map) when over max size
+  while (DISCORD_THREAD_STARTER_CACHE.size > DISCORD_THREAD_STARTER_CACHE_MAX) {
+    const iter = DISCORD_THREAD_STARTER_CACHE.keys().next();
+    if (iter.done) {
+      break;
+    }
+    DISCORD_THREAD_STARTER_CACHE.delete(iter.value);
+  }
 }
 
 function isDiscordThreadType(type: ChannelType | undefined): boolean {
@@ -100,7 +142,8 @@ export async function resolveDiscordThreadStarter(params: {
   resolveTimestampMs: (value?: string | null) => number | undefined;
 }): Promise<DiscordThreadStarter | null> {
   const cacheKey = params.channel.id;
-  const cached = DISCORD_THREAD_STARTER_CACHE.get(cacheKey);
+  const now = Date.now();
+  const cached = getCachedThreadStarter(cacheKey, now);
   if (cached) {
     return cached;
   }
@@ -146,7 +189,7 @@ export async function resolveDiscordThreadStarter(params: {
       author,
       timestamp: timestamp ?? undefined,
     };
-    DISCORD_THREAD_STARTER_CACHE.set(cacheKey, payload);
+    setCachedThreadStarter(cacheKey, payload, Date.now());
     return payload;
   } catch {
     return null;
@@ -251,7 +294,9 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
   agentId: string;
   channel: string;
 }): Promise<DiscordAutoThreadReplyPlan> {
-  const originalReplyTarget = `channel:${params.message.channelId}`;
+  // Prefer the resolved thread channel ID when available so replies stay in-thread.
+  const targetChannelId = params.threadChannel?.id ?? params.message.channelId;
+  const originalReplyTarget = `channel:${targetChannelId}`;
   const createdThreadId = await maybeCreateDiscordAutoThread({
     client: params.client,
     message: params.message,
@@ -315,8 +360,24 @@ export async function maybeCreateDiscordAutoThread(params: {
     return createdId || undefined;
   } catch (err) {
     logVerbose(
-      `discord: autoThread failed for ${params.message.channelId}/${params.message.id}: ${String(err)}`,
+      `discord: autoThread creation failed for ${params.message.channelId}/${params.message.id}: ${String(err)}`,
     );
+    // Race condition: another agent may have already created a thread on this
+    // message. Re-fetch the message to check for an existing thread.
+    try {
+      const msg = (await params.client.rest.get(
+        Routes.channelMessage(params.message.channelId, params.message.id),
+      )) as { thread?: { id?: string } };
+      const existingThreadId = msg?.thread?.id ? String(msg.thread.id) : "";
+      if (existingThreadId) {
+        logVerbose(
+          `discord: autoThread reusing existing thread ${existingThreadId} on ${params.message.channelId}/${params.message.id}`,
+        );
+        return existingThreadId;
+      }
+    } catch {
+      // If the refetch also fails, fall through to return undefined.
+    }
     return undefined;
   }
 }
@@ -331,6 +392,8 @@ export function resolveDiscordReplyDeliveryPlan(params: {
   const originalReplyTarget = params.replyTarget;
   let deliverTarget = originalReplyTarget;
   let replyTarget = originalReplyTarget;
+
+  // When a new thread was created, route to the new thread.
   if (params.createdThreadId) {
     deliverTarget = `channel:${params.createdThreadId}`;
     replyTarget = deliverTarget;

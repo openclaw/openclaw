@@ -114,7 +114,27 @@ describe("sendMessageDiscord", () => {
     await createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" });
     expect(postMock).toHaveBeenCalledWith(
       Routes.threads("chan1"),
-      expect.objectContaining({ body: { name: "thread" } }),
+      expect.objectContaining({
+        body: expect.objectContaining({ name: "thread", type: ChannelType.PublicThread }),
+      }),
+    );
+  });
+
+  it("respects explicit thread type for standalone threads", async () => {
+    const { rest, getMock, postMock } = makeRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", type: ChannelType.PrivateThread },
+      { rest, token: "t" },
+    );
+    expect(getMock).toHaveBeenCalledWith(Routes.channel("chan1"));
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: expect.objectContaining({ name: "thread", type: ChannelType.PrivateThread }),
+      }),
     );
   });
 

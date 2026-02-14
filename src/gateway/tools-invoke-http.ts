@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   filterToolsByPolicy,
@@ -14,6 +15,7 @@ import {
   resolveToolProfilePolicy,
   stripPluginOnlyAllowlist,
 } from "../agents/tool-policy.js";
+import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
@@ -24,15 +26,31 @@ import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
+  sendGatewayAuthFailure,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
-  sendUnauthorized,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+
+/**
+ * Tools denied via HTTP /tools/invoke regardless of session policy.
+ * Prevents RCE and privilege escalation from HTTP API surface.
+ * Configurable via gateway.tools.{deny,allow} in openclaw.json.
+ */
+const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
+  // Session orchestration — spawning agents remotely is RCE
+  "sessions_spawn",
+  // Cross-session injection — message injection across sessions
+  "sessions_send",
+  // Gateway control plane — prevents gateway reconfiguration via HTTP
+  "gateway",
+  // Interactive setup — requires terminal QR scan, hangs on HTTP
+  "whatsapp_login",
+];
 
 type ToolsInvokeBody = {
   tool?: unknown;
@@ -99,10 +117,37 @@ function mergeActionIntoArgsIfSupported(params: {
   return { ...args, action };
 }
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message || String(err);
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  return String(err);
+}
+
+function isToolInputError(err: unknown): boolean {
+  if (err instanceof ToolInputError) {
+    return true;
+  }
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "name" in err &&
+    (err as { name?: unknown }).name === "ToolInputError"
+  );
+}
+
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { auth: ResolvedGatewayAuth; maxBodyBytes?: number; trustedProxies?: string[] },
+  opts: {
+    auth: ResolvedGatewayAuth;
+    maxBodyBytes?: number;
+    trustedProxies?: string[];
+    rateLimiter?: AuthRateLimiter;
+  },
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (url.pathname !== "/tools/invoke") {
@@ -121,9 +166,10 @@ export async function handleToolsInvokeHttpRequest(
     connectAuth: token ? { token, password: token } : null,
     req,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    sendGatewayAuthFailure(res, authResult);
     return true;
   }
 
@@ -297,7 +343,15 @@ export async function handleToolsInvokeHttpRequest(
     ? filterToolsByPolicy(groupFiltered, subagentPolicyExpanded)
     : groupFiltered;
 
-  const tool = subagentFiltered.find((t) => t.name === toolName);
+  // Gateway HTTP-specific deny list — applies to ALL sessions via HTTP.
+  const gatewayToolsCfg = cfg.gateway?.tools;
+  const gatewayDenyNames = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+    (name) => !gatewayToolsCfg?.allow?.includes(name),
+  ).concat(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []);
+  const gatewayDenySet = new Set(gatewayDenyNames);
+  const gatewayFiltered = subagentFiltered.filter((t) => !gatewayDenySet.has(t.name));
+
+  const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {
     sendJson(res, 404, {
       ok: false,
@@ -317,9 +371,17 @@ export async function handleToolsInvokeHttpRequest(
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
-    sendJson(res, 400, {
+    if (isToolInputError(err)) {
+      sendJson(res, 400, {
+        ok: false,
+        error: { type: "tool_error", message: getErrorMessage(err) || "invalid tool arguments" },
+      });
+      return true;
+    }
+    logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
+    sendJson(res, 500, {
       ok: false,
-      error: { type: "tool_error", message: err instanceof Error ? err.message : String(err) },
+      error: { type: "tool_error", message: "tool execution failed" },
     });
   }
 

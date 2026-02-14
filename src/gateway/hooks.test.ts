@@ -7,6 +7,7 @@ import { createIMessageTestPlugin, createTestRegistry } from "../test-utils/chan
 import {
   extractHookToken,
   isHookAgentAllowed,
+  resolveHookSessionKey,
   resolveHookTargetAgentId,
   normalizeAgentPayload,
   normalizeWakePayload,
@@ -32,6 +33,7 @@ describe("gateway hooks helpers", () => {
     const resolved = resolveHooksConfig(base);
     expect(resolved?.basePath).toBe("/hooks");
     expect(resolved?.token).toBe("secret");
+    expect(resolved?.sessionPolicy.allowRequestSessionKey).toBe(false);
   });
 
   test("resolveHooksConfig rejects root path", () => {
@@ -71,19 +73,16 @@ describe("gateway hooks helpers", () => {
   });
 
   test("normalizeAgentPayload defaults + validates channel", () => {
-    const ok = normalizeAgentPayload({ message: "hello" }, { idFactory: () => "fixed" });
+    const ok = normalizeAgentPayload({ message: "hello" });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
-      expect(ok.value.sessionKey).toBe("hook:fixed");
+      expect(ok.value.sessionKey).toBeUndefined();
       expect(ok.value.channel).toBe("last");
       expect(ok.value.name).toBe("Hook");
       expect(ok.value.deliver).toBe(true);
     }
 
-    const explicitNoDeliver = normalizeAgentPayload(
-      { message: "hello", deliver: false },
-      { idFactory: () => "fixed" },
-    );
+    const explicitNoDeliver = normalizeAgentPayload({ message: "hello", deliver: false });
     expect(explicitNoDeliver.ok).toBe(true);
     if (explicitNoDeliver.ok) {
       expect(explicitNoDeliver.value.deliver).toBe(false);
@@ -98,10 +97,7 @@ describe("gateway hooks helpers", () => {
         },
       ]),
     );
-    const imsg = normalizeAgentPayload(
-      { message: "yo", channel: "imsg" },
-      { idFactory: () => "x" },
-    );
+    const imsg = normalizeAgentPayload({ message: "yo", channel: "imsg" });
     expect(imsg.ok).toBe(true);
     if (imsg.ok) {
       expect(imsg.value.channel).toBe("imessage");
@@ -116,10 +112,7 @@ describe("gateway hooks helpers", () => {
         },
       ]),
     );
-    const teams = normalizeAgentPayload(
-      { message: "yo", channel: "teams" },
-      { idFactory: () => "x" },
-    );
+    const teams = normalizeAgentPayload({ message: "yo", channel: "teams" });
     expect(teams.ok).toBe(true);
     if (teams.ok) {
       expect(teams.value.channel).toBe("msteams");
@@ -130,16 +123,13 @@ describe("gateway hooks helpers", () => {
   });
 
   test("normalizeAgentPayload passes agentId", () => {
-    const ok = normalizeAgentPayload(
-      { message: "hello", agentId: "hooks" },
-      { idFactory: () => "fixed" },
-    );
+    const ok = normalizeAgentPayload({ message: "hello", agentId: "hooks" });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.value.agentId).toBe("hooks");
     }
 
-    const noAgent = normalizeAgentPayload({ message: "hello" }, { idFactory: () => "fixed" });
+    const noAgent = normalizeAgentPayload({ message: "hello" });
     expect(noAgent.ok).toBe(true);
     if (noAgent.ok) {
       expect(noAgent.value.agentId).toBeUndefined();
@@ -224,6 +214,116 @@ describe("gateway hooks helpers", () => {
     expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
     expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(true);
+  });
+
+  test("resolveHookSessionKey disables request sessionKey by default", () => {
+    const cfg = {
+      hooks: { enabled: true, token: "secret" },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfig(cfg);
+    expect(resolved).not.toBeNull();
+    if (!resolved) {
+      return;
+    }
+    const denied = resolveHookSessionKey({
+      hooksConfig: resolved,
+      source: "request",
+      sessionKey: "agent:main:dm:u99999",
+    });
+    expect(denied.ok).toBe(false);
+  });
+
+  test("resolveHookSessionKey allows request sessionKey when explicitly enabled", () => {
+    const cfg = {
+      hooks: { enabled: true, token: "secret", allowRequestSessionKey: true },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfig(cfg);
+    expect(resolved).not.toBeNull();
+    if (!resolved) {
+      return;
+    }
+    const allowed = resolveHookSessionKey({
+      hooksConfig: resolved,
+      source: "request",
+      sessionKey: "hook:manual",
+    });
+    expect(allowed).toEqual({ ok: true, value: "hook:manual" });
+  });
+
+  test("resolveHookSessionKey enforces allowed prefixes", () => {
+    const cfg = {
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowRequestSessionKey: true,
+        allowedSessionKeyPrefixes: ["hook:"],
+      },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfig(cfg);
+    expect(resolved).not.toBeNull();
+    if (!resolved) {
+      return;
+    }
+
+    const blocked = resolveHookSessionKey({
+      hooksConfig: resolved,
+      source: "request",
+      sessionKey: "agent:main:main",
+    });
+    expect(blocked.ok).toBe(false);
+
+    const allowed = resolveHookSessionKey({
+      hooksConfig: resolved,
+      source: "mapping",
+      sessionKey: "hook:gmail:1",
+    });
+    expect(allowed).toEqual({ ok: true, value: "hook:gmail:1" });
+  });
+
+  test("resolveHookSessionKey uses defaultSessionKey when request key is absent", () => {
+    const cfg = {
+      hooks: {
+        enabled: true,
+        token: "secret",
+        defaultSessionKey: "hook:ingress",
+      },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfig(cfg);
+    expect(resolved).not.toBeNull();
+    if (!resolved) {
+      return;
+    }
+
+    const resolvedKey = resolveHookSessionKey({
+      hooksConfig: resolved,
+      source: "request",
+    });
+    expect(resolvedKey).toEqual({ ok: true, value: "hook:ingress" });
+  });
+
+  test("resolveHooksConfig validates defaultSessionKey and generated fallback against prefixes", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          defaultSessionKey: "agent:main:main",
+          allowedSessionKeyPrefixes: ["hook:"],
+        },
+      } as OpenClawConfig),
+    ).toThrow("hooks.defaultSessionKey must match hooks.allowedSessionKeyPrefixes");
+
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          allowedSessionKeyPrefixes: ["agent:"],
+        },
+      } as OpenClawConfig),
+    ).toThrow(
+      "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
+    );
   });
 });
 

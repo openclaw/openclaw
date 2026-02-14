@@ -1,8 +1,8 @@
 import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import type { AnyAgentTool } from "./common.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
@@ -14,7 +14,6 @@ import { runWithImageModelFallback } from "../model-fallback.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
-import { assertSandboxPath } from "../sandbox-paths.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -30,7 +29,19 @@ const ANTHROPIC_IMAGE_FALLBACK = "anthropic/claude-opus-4-5";
 export const __testing = {
   decodeDataUrl,
   coerceImageAssistantText,
+  resolveImageToolMaxTokens,
 } as const;
+
+function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
+  if (
+    typeof modelMaxTokens !== "number" ||
+    !Number.isFinite(modelMaxTokens) ||
+    modelMaxTokens <= 0
+  ) {
+    return requestedMaxTokens;
+  }
+  return Math.min(requestedMaxTokens, modelMaxTokens);
+}
 
 function resolveDefaultModelRef(cfg?: OpenClawConfig): {
   provider: string;
@@ -185,34 +196,42 @@ function buildImageContext(prompt: string, base64: string, mimeType: string): Co
   };
 }
 
+type ImageSandboxConfig = {
+  root: string;
+  bridge: SandboxFsBridge;
+};
+
 async function resolveSandboxedImagePath(params: {
-  sandboxRoot: string;
+  sandbox: ImageSandboxConfig;
   imagePath: string;
 }): Promise<{ resolved: string; rewrittenFrom?: string }> {
   const normalize = (p: string) => (p.startsWith("file://") ? p.slice("file://".length) : p);
   const filePath = normalize(params.imagePath);
   try {
-    const out = await assertSandboxPath({
+    const resolved = params.sandbox.bridge.resolvePath({
       filePath,
-      cwd: params.sandboxRoot,
-      root: params.sandboxRoot,
+      cwd: params.sandbox.root,
     });
-    return { resolved: out.resolved };
+    return { resolved: resolved.hostPath };
   } catch (err) {
     const name = path.basename(filePath);
     const candidateRel = path.join("media", "inbound", name);
-    const candidateAbs = path.join(params.sandboxRoot, candidateRel);
     try {
-      await fs.stat(candidateAbs);
+      const stat = await params.sandbox.bridge.stat({
+        filePath: candidateRel,
+        cwd: params.sandbox.root,
+      });
+      if (!stat) {
+        throw err;
+      }
     } catch {
       throw err;
     }
-    const out = await assertSandboxPath({
+    const out = params.sandbox.bridge.resolvePath({
       filePath: candidateRel,
-      cwd: params.sandboxRoot,
-      root: params.sandboxRoot,
+      cwd: params.sandbox.root,
     });
-    return { resolved: out.resolved, rewrittenFrom: filePath };
+    return { resolved: out.hostPath, rewrittenFrom: filePath };
   }
 }
 
@@ -280,7 +299,7 @@ async function runImagePrompt(params: {
       const context = buildImageContext(params.prompt, params.base64, params.mimeType);
       const message = await complete(model, context, {
         apiKey,
-        maxTokens: 512,
+        maxTokens: resolveImageToolMaxTokens(model.maxTokens),
       });
       const text = coerceImageAssistantText({
         message,
@@ -306,7 +325,7 @@ async function runImagePrompt(params: {
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
-  sandboxRoot?: string;
+  sandbox?: ImageSandboxConfig;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
 }): AnyAgentTool | null {
@@ -385,14 +404,17 @@ export function createImageTool(options?: {
       const maxBytesMb = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
 
-      const sandboxRoot = options?.sandboxRoot?.trim();
+      const sandboxConfig =
+        options?.sandbox && options?.sandbox.root.trim()
+          ? { root: options.sandbox.root.trim(), bridge: options.sandbox.bridge }
+          : null;
       const isUrl = isHttpUrl;
-      if (sandboxRoot && isUrl) {
+      if (sandboxConfig && isUrl) {
         throw new Error("Sandboxed image tool does not allow remote URLs.");
       }
 
       const resolvedImage = (() => {
-        if (sandboxRoot) {
+        if (sandboxConfig) {
           return imageRaw;
         }
         if (imageRaw.startsWith("~")) {
@@ -402,9 +424,9 @@ export function createImageTool(options?: {
       })();
       const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
         ? { resolved: "" }
-        : sandboxRoot
+        : sandboxConfig
           ? await resolveSandboxedImagePath({
-              sandboxRoot,
+              sandbox: sandboxConfig,
               imagePath: resolvedImage,
             })
           : {
@@ -416,7 +438,13 @@ export function createImageTool(options?: {
 
       const media = isDataUrl
         ? decodeDataUrl(resolvedImage)
-        : await loadWebMedia(resolvedPath ?? resolvedImage, maxBytes);
+        : sandboxConfig
+          ? await loadWebMedia(resolvedPath ?? resolvedImage, {
+              maxBytes,
+              readFile: (filePath) =>
+                sandboxConfig.bridge.readFile({ filePath, cwd: sandboxConfig.root }),
+            })
+          : await loadWebMedia(resolvedPath ?? resolvedImage, maxBytes);
       if (media.kind !== "image") {
         throw new Error(`Unsupported media type: ${media.kind}`);
       }

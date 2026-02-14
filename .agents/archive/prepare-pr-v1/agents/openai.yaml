@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prepare PR"
+  short_description: "Prepare GitHub PRs for merge"
+  default_prompt: "Use $prepare-pr to prep a GitHub PR for merge without merging."

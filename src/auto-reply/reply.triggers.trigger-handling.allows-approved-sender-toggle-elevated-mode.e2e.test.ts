@@ -222,8 +222,8 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("ok");
-      expect(text).not.toContain("Elevated mode set to ask");
+      expect(text).toBeUndefined();
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
 });

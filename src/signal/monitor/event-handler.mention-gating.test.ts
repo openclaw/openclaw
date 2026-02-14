@@ -53,6 +53,12 @@ type GroupEventOpts = {
   message?: string;
   attachments?: unknown[];
   quoteText?: string;
+  mentions?: Array<{
+    uuid?: string;
+    number?: string;
+    start?: number;
+    length?: number;
+  }> | null;
 };
 
 function makeGroupEvent(opts: GroupEventOpts) {
@@ -67,6 +73,7 @@ function makeGroupEvent(opts: GroupEventOpts) {
           message: opts.message ?? "",
           attachments: opts.attachments ?? [],
           quote: opts.quoteText ? { text: opts.quoteText } : undefined,
+          mentions: opts.mentions ?? undefined,
           groupInfo: { groupId: "g1", groupName: "Test Group" },
         },
       },
@@ -202,5 +209,64 @@ describe("signal mention gating", () => {
 
     await handler(makeGroupEvent({ message: "/help" }));
     expect(capturedCtx).toBeTruthy();
+  });
+
+  it("hydrates mention placeholders before trimming so offsets stay aligned", async () => {
+    capturedCtx = undefined;
+    const handler = createSignalEventHandler(
+      createBaseDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
+          channels: { signal: { groups: { "*": { requireMention: false } } } },
+        },
+      }),
+    );
+
+    const placeholder = "\uFFFC";
+    const message = `\n${placeholder} hi ${placeholder}`;
+    const firstStart = message.indexOf(placeholder);
+    const secondStart = message.indexOf(placeholder, firstStart + 1);
+
+    await handler(
+      makeGroupEvent({
+        message,
+        mentions: [
+          { uuid: "123e4567", start: firstStart, length: placeholder.length },
+          { number: "+15550002222", start: secondStart, length: placeholder.length },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    const body = String(capturedCtx?.Body ?? "");
+    expect(body).toContain("@123e4567 hi @+15550002222");
+    expect(body).not.toContain(placeholder);
+  });
+
+  it("counts mention metadata replacements toward requireMention gating", async () => {
+    capturedCtx = undefined;
+    const handler = createSignalEventHandler(
+      createBaseDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@123e4567"] } },
+          channels: { signal: { groups: { "*": { requireMention: true } } } },
+        },
+      }),
+    );
+
+    const placeholder = "\uFFFC";
+    const message = ` ${placeholder} ping`;
+    const start = message.indexOf(placeholder);
+
+    await handler(
+      makeGroupEvent({
+        message,
+        mentions: [{ uuid: "123e4567", start, length: placeholder.length }],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(String(capturedCtx?.Body ?? "")).toContain("@123e4567");
+    expect(capturedCtx?.WasMentioned).toBe(true);
   });
 });

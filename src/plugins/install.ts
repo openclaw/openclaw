@@ -10,7 +10,7 @@ import {
   resolvePackedRootDir,
 } from "../infra/archive.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import * as skillScanner from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 type PluginInstallLogger = {
@@ -196,7 +196,7 @@ async function installPluginFromPackageDir(params: {
 
   // Scan plugin source for dangerous code patterns (warn-only; never blocks install)
   try {
-    const scanSummary = await scanDirectoryWithSummary(params.packageDir, {
+    const scanSummary = await skillScanner.scanDirectoryWithSummary(params.packageDir, {
       includeFiles: forcedScanEntries,
     });
     if (scanSummary.critical > 0) {
@@ -278,10 +278,13 @@ async function installPluginFromPackageDir(params: {
   const hasDeps = Object.keys(deps).length > 0;
   if (hasDeps) {
     logger.info?.("Installing plugin dependencies…");
-    const npmRes = await runCommandWithTimeout(["npm", "install", "--omit=dev", "--silent"], {
-      timeoutMs: Math.max(timeoutMs, 300_000),
-      cwd: targetDir,
-    });
+    const npmRes = await runCommandWithTimeout(
+      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      {
+        timeoutMs: Math.max(timeoutMs, 300_000),
+        cwd: targetDir,
+      },
+    );
     if (npmRes.code !== 0) {
       if (backupDir) {
         await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);

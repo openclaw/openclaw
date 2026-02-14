@@ -4,6 +4,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { getChildLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
+import { markdownToWhatsApp } from "../markdown/whatsapp.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
@@ -34,6 +35,7 @@ export async function sendMessageWhatsApp(
     accountId: resolvedAccountId ?? options.accountId,
   });
   text = convertMarkdownTables(text ?? "", tableMode);
+  text = markdownToWhatsApp(text);
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,
@@ -43,6 +45,7 @@ export async function sendMessageWhatsApp(
     const jid = toWhatsappJid(to);
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
+    let documentFileName: string | undefined;
     if (options.mediaUrl) {
       const media = await loadWebMedia(options.mediaUrl);
       const caption = text || undefined;
@@ -60,6 +63,7 @@ export async function sendMessageWhatsApp(
         text = caption ?? "";
       } else {
         text = caption ?? "";
+        documentFileName = media.fileName;
       }
     }
     outboundLog.info(`Sending message -> ${jid}${options.mediaUrl ? " (media)" : ""}`);
@@ -68,9 +72,10 @@ export async function sendMessageWhatsApp(
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId
+      options.gifPlayback || accountId || documentFileName
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
+            ...(documentFileName ? { fileName: documentFileName } : {}),
             accountId,
           }
         : undefined;

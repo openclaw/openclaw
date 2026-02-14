@@ -116,7 +116,22 @@ export const SYNTHETIC_MODEL_CATALOG = [
     contextWindow: 198000,
     maxTokens: 128000,
   },
-
+  {
+    id: "hf:zai-org/GLM-5",
+    name: "GLM-5",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 256000,
+    maxTokens: 128000,
+  },
+  {
+    id: "hf:deepseek-ai/DeepSeek-V3",
+    name: "DeepSeek V3",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 128000,
+    maxTokens: 8192,
+  },
   {
     id: "hf:Qwen/Qwen3-235B-A22B-Thinking-2507",
     name: "Qwen3 235B A22B Thinking 2507",

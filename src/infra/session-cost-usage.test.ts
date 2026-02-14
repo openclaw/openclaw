@@ -7,6 +7,8 @@ import {
   discoverAllSessions,
   loadCostUsageSummary,
   loadSessionCostSummary,
+  loadSessionLogs,
+  loadSessionUsageTimeSeries,
 } from "./session-cost-usage.js";
 
 describe("session cost usage", () => {
@@ -232,6 +234,135 @@ describe("session cost usage", () => {
       });
       expect(sessions.length).toBe(1);
       expect(sessions[0]?.sessionId).toBe("sess-late");
+    } finally {
+      if (originalState === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalState;
+      }
+    }
+  });
+
+  it("resolves non-main absolute sessionFile using explicit agentId for cost summary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-agent-"));
+    const workerSessionsDir = path.join(root, "agents", "worker1", "sessions");
+    await fs.mkdir(workerSessionsDir, { recursive: true });
+    const workerSessionFile = path.join(workerSessionsDir, "sess-worker-1.jsonl");
+    const now = new Date("2026-02-12T10:00:00.000Z");
+
+    await fs.writeFile(
+      workerSessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: now.toISOString(),
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 7,
+            output: 11,
+            totalTokens: 18,
+            cost: { total: 0.01 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const originalState = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
+    try {
+      const summary = await loadSessionCostSummary({
+        sessionId: "sess-worker-1",
+        sessionEntry: { sessionFile: workerSessionFile } as { sessionFile: string },
+        agentId: "worker1",
+      });
+      expect(summary?.totalTokens).toBe(18);
+      expect(summary?.totalCost).toBeCloseTo(0.01, 5);
+    } finally {
+      if (originalState === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalState;
+      }
+    }
+  });
+
+  it("resolves non-main absolute sessionFile using explicit agentId for timeseries", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeseries-agent-"));
+    const workerSessionsDir = path.join(root, "agents", "worker2", "sessions");
+    await fs.mkdir(workerSessionsDir, { recursive: true });
+    const workerSessionFile = path.join(workerSessionsDir, "sess-worker-2.jsonl");
+
+    await fs.writeFile(
+      workerSessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-12T10:00:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-5.2",
+            usage: { input: 5, output: 3, totalTokens: 8, cost: { total: 0.001 } },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const originalState = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
+    try {
+      const timeseries = await loadSessionUsageTimeSeries({
+        sessionId: "sess-worker-2",
+        sessionEntry: { sessionFile: workerSessionFile } as { sessionFile: string },
+        agentId: "worker2",
+      });
+      expect(timeseries?.points.length).toBe(1);
+      expect(timeseries?.points[0]?.totalTokens).toBe(8);
+    } finally {
+      if (originalState === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalState;
+      }
+    }
+  });
+
+  it("resolves non-main absolute sessionFile using explicit agentId for logs", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-agent-"));
+    const workerSessionsDir = path.join(root, "agents", "worker3", "sessions");
+    await fs.mkdir(workerSessionsDir, { recursive: true });
+    const workerSessionFile = path.join(workerSessionsDir, "sess-worker-3.jsonl");
+
+    await fs.writeFile(
+      workerSessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-12T10:00:00.000Z",
+          message: {
+            role: "user",
+            content: "hello worker",
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const originalState = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
+    try {
+      const logs = await loadSessionLogs({
+        sessionId: "sess-worker-3",
+        sessionEntry: { sessionFile: workerSessionFile } as { sessionFile: string },
+        agentId: "worker3",
+      });
+      expect(logs).toHaveLength(1);
+      expect(logs?.[0]?.content).toContain("hello worker");
+      expect(logs?.[0]?.role).toBe("user");
     } finally {
       if (originalState === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

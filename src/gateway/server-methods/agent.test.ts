@@ -10,9 +10,13 @@ const mocks = vi.hoisted(() => ({
   loadConfigReturn: {} as Record<string, unknown>,
 }));
 
-vi.mock("../session-utils.js", () => ({
-  loadSessionEntry: mocks.loadSessionEntry,
-}));
+vi.mock("../session-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  return {
+    ...actual,
+    loadSessionEntry: mocks.loadSessionEntry,
+  };
+});
 
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
@@ -23,7 +27,13 @@ vi.mock("../../config/sessions.js", async () => {
     updateSessionStore: mocks.updateSessionStore,
     resolveAgentIdFromSessionKey: () => "main",
     resolveExplicitAgentSessionKey: () => undefined,
-    resolveAgentMainSessionKey: () => "agent:main:main",
+    resolveAgentMainSessionKey: ({
+      cfg,
+      agentId,
+    }: {
+      cfg?: { session?: { mainKey?: string } };
+      agentId: string;
+    }) => `agent:${agentId}:${cfg?.session?.mainKey ?? "main"}`,
   };
 });
 
@@ -212,5 +222,55 @@ describe("gateway agent handler", () => {
     // Should be undefined, not cause an error
     expect(capturedEntry?.cliSessionIds).toBeUndefined();
     expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("prunes legacy main alias keys when writing a canonical session entry", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {
+        session: { mainKey: "work" },
+        agents: { list: [{ id: "main", default: true }] },
+      },
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "existing-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:main:work",
+    });
+
+    let capturedStore: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:work": { sessionId: "existing-session-id", updatedAt: 10 },
+        "agent:main:MAIN": { sessionId: "legacy-session-id", updatedAt: 5 },
+      };
+      await updater(store);
+      capturedStore = store;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const respond = vi.fn();
+    await agentHandlers.agent({
+      params: {
+        message: "test",
+        agentId: "main",
+        sessionKey: "main",
+        idempotencyKey: "test-idem-alias-prune",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "3", method: "agent" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedStore).toBeDefined();
+    expect(capturedStore?.["agent:main:work"]).toBeDefined();
+    expect(capturedStore?.["agent:main:MAIN"]).toBeUndefined();
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping, setGroupIconBlueBubbles } from "./chat.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 
 vi.mock("./accounts.js", () => ({
   resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
@@ -13,12 +14,18 @@ vi.mock("./accounts.js", () => ({
   }),
 }));
 
+vi.mock("./probe.js", () => ({
+  getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
+}));
+
 const mockFetch = vi.fn();
 
 describe("chat", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
     mockFetch.mockReset();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -71,6 +78,17 @@ describe("chat", () => {
         expect.stringContaining("/api/v1/chat/iMessage%3B-%3B%2B15551234567/read"),
         expect.objectContaining({ method: "POST" }),
       );
+    });
+
+    it("does not send read receipt when private API is disabled", async () => {
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+
+      await markBlueBubblesChatRead("iMessage;-;+15551234567", {
+        serverUrl: "http://localhost:1234",
+        password: "test-password",
+      });
+
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("includes password in URL query", async () => {
@@ -188,6 +206,17 @@ describe("chat", () => {
         expect.stringContaining("/api/v1/chat/iMessage%3B-%3B%2B15551234567/typing"),
         expect.objectContaining({ method: "POST" }),
       );
+    });
+
+    it("does not send typing when private API is disabled", async () => {
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+
+      await sendBlueBubblesTyping("iMessage;-;+15551234567", true, {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("sends typing stop with DELETE method", async () => {
@@ -346,6 +375,17 @@ describe("chat", () => {
           serverUrl: "http://localhost:1234",
         }),
       ).rejects.toThrow("password is required");
+    });
+
+    it("throws when private API is disabled", async () => {
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+      await expect(
+        setGroupIconBlueBubbles("chat-guid", new Uint8Array([1, 2, 3]), "icon.png", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        }),
+      ).rejects.toThrow("requires Private API");
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("sets group icon successfully", async () => {

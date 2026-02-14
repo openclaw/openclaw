@@ -45,6 +45,7 @@ Start with the smallest access that still works, then widen it as you gain confi
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
+- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
 If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
@@ -265,6 +266,9 @@ tool calls. Reduce the blast radius by:
 - Using a read-only or tool-disabled **reader agent** to summarize untrusted content,
   then pass the summary to your main agent.
 - Keeping `web_search` / `web_fetch` / `browser` off for tool-enabled agents unless needed.
+- For OpenResponses URL inputs (`input_file` / `input_image`), set tight
+  `gateway.http.endpoints.responses.files.urlAllowlist` and
+  `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 
@@ -798,22 +802,6 @@ Commit the updated `.secrets.baseline` once it reflects the intended state.
 ## The Trust Hierarchy
 
 ```mermaid
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#ffffff',
-    'primaryTextColor': '#000000',
-    'primaryBorderColor': '#000000',
-    'lineColor': '#000000',
-    'secondaryColor': '#f9f9fb',
-    'tertiaryColor': '#ffffff',
-    'clusterBkg': '#f9f9fb',
-    'clusterBorder': '#000000',
-    'nodeBorder': '#000000',
-    'mainBkg': '#ffffff',
-    'edgeLabelBackground': '#ffffff'
-  }
-}}%%
 flowchart TB
     A["Owner (Peter)"] -- Full trust --> B["AI (Clawd)"]
     B -- Trust but verify --> C["Friends in allowlist"]

@@ -4,6 +4,7 @@ import {
   type Skill,
 } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
@@ -15,6 +16,7 @@ import type {
 } from "./types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
+import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import {
@@ -121,7 +123,7 @@ function loadSkillEntries(
   };
 
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
-  const workspaceSkillsDir = path.join(workspaceDir, "skills");
+  const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
@@ -150,13 +152,23 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
+  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
+  const personalAgentsSkills = loadSkills({
+    dir: personalAgentsSkillsDir,
+    source: "agents-skills-personal",
+  });
+  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
+  const projectAgentsSkills = loadSkills({
+    dir: projectAgentsSkillsDir,
+    source: "agents-skills-project",
+  });
   const workspaceSkills = loadSkills({
     dir: workspaceSkillsDir,
     source: "openclaw-workspace",
   });
 
   const merged = new Map<string, Skill>();
-  // Precedence: extra < bundled < managed < workspace
+  // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
   for (const skill of extraSkills) {
     merged.set(skill.name, skill);
   }
@@ -164,6 +176,12 @@ function loadSkillEntries(
     merged.set(skill.name, skill);
   }
   for (const skill of managedSkills) {
+    merged.set(skill.name, skill);
+  }
+  for (const skill of personalAgentsSkills) {
+    merged.set(skill.name, skill);
+  }
+  for (const skill of projectAgentsSkills) {
     merged.set(skill.name, skill);
   }
   for (const skill of workspaceSkills) {
@@ -284,6 +302,45 @@ export function loadWorkspaceSkillEntries(
   return loadSkillEntries(workspaceDir, opts);
 }
 
+function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+  for (let index = 2; index < 10_000; index += 1) {
+    const candidate = `${base}-${index}`;
+    if (!used.has(candidate)) {
+      used.add(candidate);
+      return candidate;
+    }
+  }
+  let fallbackIndex = 10_000;
+  let fallback = `${base}-${fallbackIndex}`;
+  while (used.has(fallback)) {
+    fallbackIndex += 1;
+    fallback = `${base}-${fallbackIndex}`;
+  }
+  used.add(fallback);
+  return fallback;
+}
+
+function resolveSyncedSkillDestinationPath(params: {
+  targetSkillsDir: string;
+  entry: SkillEntry;
+  usedDirNames: Set<string>;
+}): string | null {
+  const sourceDirName = path.basename(params.entry.skill.baseDir).trim();
+  if (!sourceDirName || sourceDirName === "." || sourceDirName === "..") {
+    return null;
+  }
+  const uniqueDirName = resolveUniqueSyncedSkillDirName(sourceDirName, params.usedDirNames);
+  return resolveSandboxPath({
+    filePath: uniqueDirName,
+    cwd: params.targetSkillsDir,
+    root: params.targetSkillsDir,
+  }).resolved;
+}
+
 export async function syncSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
@@ -309,8 +366,28 @@ export async function syncSkillsToWorkspace(params: {
     await fsp.rm(targetSkillsDir, { recursive: true, force: true });
     await fsp.mkdir(targetSkillsDir, { recursive: true });
 
+    const usedDirNames = new Set<string>();
     for (const entry of entries) {
-      const dest = path.join(targetSkillsDir, entry.skill.name);
+      let dest: string | null = null;
+      try {
+        dest = resolveSyncedSkillDestinationPath({
+          targetSkillsDir,
+          entry,
+          usedDirNames,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : JSON.stringify(error);
+        console.warn(
+          `[skills] Failed to resolve safe destination for ${entry.skill.name}: ${message}`,
+        );
+        continue;
+      }
+      if (!dest) {
+        console.warn(
+          `[skills] Failed to resolve safe destination for ${entry.skill.name}: invalid source directory name`,
+        );
+        continue;
+      }
       try {
         await fsp.cp(entry.skill.baseDir, dest, {
           recursive: true,

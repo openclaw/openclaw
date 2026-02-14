@@ -9,9 +9,11 @@ export type AuthChoice =
   | "claude-cli"
   | "token"
   | "chutes"
+  | "vllm"
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
+  | "litellm-api-key"
   | "ai-gateway-api-key"
   | "cloudflare-ai-gateway-api-key"
   | "moonshot-api-key"
@@ -20,12 +22,17 @@ export type AuthChoice =
   | "synthetic-api-key"
   | "venice-api-key"
   | "together-api-key"
+  | "huggingface-api-key"
   | "codex-cli"
   | "apiKey"
   | "gemini-api-key"
   | "google-antigravity"
   | "google-gemini-cli"
   | "zai-api-key"
+  | "zai-coding-global"
+  | "zai-coding-cn"
+  | "zai-global"
+  | "zai-cn"
   | "xiaomi-api-key"
   | "minimax-cloud"
   | "minimax"
@@ -43,9 +50,12 @@ export type AuthChoice =
 export type AuthChoiceGroupId =
   | "openai"
   | "anthropic"
+  | "chutes"
+  | "vllm"
   | "google"
   | "copilot"
   | "openrouter"
+  | "litellm"
   | "ai-gateway"
   | "cloudflare-ai-gateway"
   | "moonshot"
@@ -56,6 +66,8 @@ export type AuthChoiceGroupId =
   | "synthetic"
   | "venice"
   | "qwen"
+  | "together"
+  | "huggingface"
   | "qianfan"
   | "xai"
   | "custom";
@@ -89,6 +101,7 @@ export type OnboardOptions = {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  litellmApiKey?: string;
   aiGatewayApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;
@@ -102,9 +115,15 @@ export type OnboardOptions = {
   syntheticApiKey?: string;
   veniceApiKey?: string;
   togetherApiKey?: string;
+  huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;
+  customBaseUrl?: string;
+  customApiKey?: string;
+  customModelId?: string;
+  customProviderId?: string;
+  customCompatibility?: "openai" | "anthropic";
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;

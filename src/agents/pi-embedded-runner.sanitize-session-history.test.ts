@@ -31,7 +31,6 @@ describe("sanitizeSessionHistory", () => {
   beforeEach(async () => {
     vi.resetAllMocks();
     vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
-    vi.resetModules();
     ({ sanitizeSessionHistory } = await import("./pi-embedded-runner/google.js"));
   });
 
@@ -76,7 +75,7 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("does not sanitize tool call ids for non-Google APIs", async () => {
+  it("sanitizes tool call ids for Anthropic APIs", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     await sanitizeSessionHistory({
@@ -90,11 +89,11 @@ describe("sanitizeSessionHistory", () => {
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
       "session:history",
-      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: false }),
+      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: true }),
     );
   });
 
-  it("does not sanitize tool call ids for openai-responses", async () => {
+  it("sanitizes tool call ids for openai-responses while keeping images-only mode", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     await sanitizeSessionHistory({
@@ -108,8 +107,42 @@ describe("sanitizeSessionHistory", () => {
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
       "session:history",
-      expect.objectContaining({ sanitizeMode: "images-only", sanitizeToolCallIds: false }),
+      expect.objectContaining({
+        sanitizeMode: "images-only",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+      }),
     );
+  });
+
+  it("annotates inter-session user messages before context sanitization", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: "forwarded instruction",
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:req",
+          sourceTool: "sessions_send",
+        },
+      } as unknown as AgentMessage,
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    const first = result[0] as Extract<AgentMessage, { role: "user" }>;
+    expect(first.role).toBe("user");
+    expect(typeof first.content).toBe("string");
+    expect(first.content as string).toContain("[Inter-session message]");
+    expect(first.content as string).toContain("sourceSession=agent:main:req");
   });
 
   it("keeps reasoning-only assistant messages for openai-responses", async () => {

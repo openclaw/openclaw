@@ -194,7 +194,7 @@ export async function agentsAddCommand(
         },
       }));
 
-    const agentName = String(name).trim();
+    const agentName = String(name ?? "").trim();
     const agentId = normalizeAgentId(agentName);
     if (agentName !== agentId) {
       await prompter.note(`Normalized id to "${agentId}".`, "Agent id");
@@ -220,7 +220,7 @@ export async function agentsAddCommand(
       initialValue: workspaceDefault,
       validate: (value) => (value?.trim() ? undefined : "Required"),
     });
-    const workspaceDir = resolveUserPath(String(workspaceInput).trim() || workspaceDefault);
+    const workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || workspaceDefault);
     const agentDir = resolveAgentDir(cfg, agentId);
 
     let nextConfig = applyAgentConfig(cfg, {
@@ -359,7 +359,7 @@ export async function agentsAddCommand(
     await prompter.outro(`Agent "${agentId}" ready.`);
   } catch (err) {
     if (err instanceof WizardCancelledError) {
-      runtime.exit(0);
+      runtime.exit(1);
       return;
     }
     throw err;
