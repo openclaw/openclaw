@@ -134,7 +134,7 @@ export async function runAgentTurnWithFallback(params: {
     }
 
     const route = await routeMessage(params.commandBody, routerConfig, recentContext);
-    console.log(
+    logVerbose(
       `[pre-route] tier="${route.tier}" (${route.latencyMs}ms${route.fallback ? " FALLBACK" : ""}) → ${route.modelRef}`,
     );
     const routed = parseRoutedModelRef(route.modelRef);
