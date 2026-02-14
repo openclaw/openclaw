@@ -488,6 +488,23 @@ describe("browser control server", () => {
     expect(typeof shot.path).toBe("string");
   });
 
+  it("blocks file chooser traversal / absolute paths outside uploads dir", async () => {
+    const base = await startServerAndBase();
+
+    const traversal = await postJson<{ error?: string }>(`${base}/hooks/file-chooser`, {
+      paths: ["../../../../etc/passwd"],
+    });
+    expect(traversal.error).toContain("Invalid path");
+    expect(pwMocks.armFileUploadViaPlaywright).not.toHaveBeenCalled();
+
+    const absOutside = path.join(path.parse(DEFAULT_UPLOAD_DIR).root, "etc", "passwd");
+    const abs = await postJson<{ error?: string }>(`${base}/hooks/file-chooser`, {
+      paths: [absOutside],
+    });
+    expect(abs.error).toContain("Invalid path");
+    expect(pwMocks.armFileUploadViaPlaywright).not.toHaveBeenCalled();
+  });
+
   it("agent contract: stop endpoint", async () => {
     const base = await startServerAndBase();
 
