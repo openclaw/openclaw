@@ -594,6 +594,22 @@ describe("resolveSessionTranscriptCandidates", () => {
 });
 
 describe("resolveSessionTranscriptCandidates safety", () => {
+  test("keeps cross-agent absolute sessionFile when storePath agent context differs", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionFile = "/tmp/openclaw/agents/ops/sessions/sess-safe.jsonl";
+    const candidates = resolveSessionTranscriptCandidates("sess-safe", storePath, sessionFile);
+
+    expect(candidates.map((value) => path.resolve(value))).toContain(path.resolve(sessionFile));
+  });
+
+  test("keeps cross-agent absolute sessionFile for custom per-agent store roots", () => {
+    const storePath = "/srv/custom/agents/main/sessions/sessions.json";
+    const sessionFile = "/srv/custom/agents/ops/sessions/sess-safe.jsonl";
+    const candidates = resolveSessionTranscriptCandidates("sess-safe", storePath, sessionFile);
+
+    expect(candidates.map((value) => path.resolve(value))).toContain(path.resolve(sessionFile));
+  });
+
   test("drops unsafe session IDs instead of producing traversal paths", () => {
     const candidates = resolveSessionTranscriptCandidates(
       "../etc/passwd",
