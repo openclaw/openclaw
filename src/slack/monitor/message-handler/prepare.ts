@@ -37,6 +37,7 @@ import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../../security/channel-metadata.js";
 import { reactSlackMessage } from "../../actions.js";
+import { getAttachmentNote } from "../../overrides/attachment-helper.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
@@ -49,7 +50,6 @@ import {
   resolveSlackThreadHistory,
   resolveSlackThreadStarter,
 } from "../media.js";
-import { getAttachmentNote } from "../../overrides/attachment-helper.js";
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;

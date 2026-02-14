@@ -10,9 +10,7 @@ export function getAttachmentNote(attachments?: SlackAttachment[]): string | nul
   }
 
   // Check if this looks like a forwarded message
-  const hasForwardedContent = attachments.some(
-    (att) => att.text || att.title || att.pretext
-  );
+  const hasForwardedContent = attachments.some((att) => att.text || att.title || att.pretext);
 
   if (hasForwardedContent) {
     return "[Note: This message contains forwarded/attached content. Use Slack API to retrieve full content: conversations.history with the channel and message ts from above]";

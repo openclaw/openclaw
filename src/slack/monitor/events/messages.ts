@@ -10,6 +10,7 @@ import type {
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
+import { markMessageHandled } from "./file-shared.js";
 
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;
@@ -111,6 +112,9 @@ export function registerSlackMessageEvents(params: {
         return;
       }
 
+      if (message.files?.length && message.ts) {
+        markMessageHandled(message.ts);
+      }
       await handleSlackMessage(message, { source: "message" });
     } catch (err) {
       ctx.runtime.error?.(danger(`slack handler failed: ${String(err)}`));
