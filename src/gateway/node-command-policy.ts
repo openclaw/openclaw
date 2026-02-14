@@ -82,6 +82,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...REMINDERS_COMMANDS,
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
+    ...SYSTEM_COMMANDS,
   ],
   macos: [
     ...CANVAS_COMMANDS,
