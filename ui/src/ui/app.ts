@@ -69,6 +69,7 @@ import {
   loadOverview as loadOverviewInternal,
   setTab as setTabInternal,
   setTheme as setThemeInternal,
+  setMode as setModeInternal,
   onPopState as onPopStateInternal,
 } from "./app-settings.ts";
 import {
@@ -111,6 +112,7 @@ export class OpenClawApp extends LitElement {
   @state() connected = false;
   @state() theme: ThemeMode = this.settings.theme ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
+  @state() mode: "basic" | "advanced" = this.settings.mode ?? "basic";
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
@@ -419,6 +421,10 @@ export class OpenClawApp extends LitElement {
 
   setTheme(next: ThemeMode, context?: Parameters<typeof setThemeInternal>[2]) {
     setThemeInternal(this as unknown as Parameters<typeof setThemeInternal>[0], next, context);
+  }
+
+  setMode(next: "basic" | "advanced") {
+    setModeInternal(this as unknown as Parameters<typeof setModeInternal>[0], next);
   }
 
   async loadOverview() {

@@ -39,6 +39,7 @@ type SettingsHost = {
   password?: string;
   theme: ThemeMode;
   themeResolved: ResolvedTheme;
+  mode: "basic" | "advanced";
   applySessionKey: string;
   sessionKey: string;
   tab: Tab;
@@ -66,6 +67,9 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
   if (next.theme !== host.theme) {
     host.theme = next.theme;
     applyResolvedTheme(host, resolveTheme(next.theme));
+  }
+  if (next.mode !== host.mode) {
+    host.mode = next.mode;
   }
   host.applySessionKey = host.settings.lastActiveSessionKey;
 }
@@ -181,6 +185,13 @@ export function setTheme(host: SettingsHost, next: ThemeMode, context?: ThemeTra
   });
 }
 
+export function setMode(host: SettingsHost, next: "basic" | "advanced") {
+  if (host.mode !== next) {
+    host.mode = next;
+    applySettings(host, { ...host.settings, mode: next });
+  }
+}
+
 export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "overview") {
     await loadOverview(host);
@@ -264,6 +275,10 @@ export function inferBasePath() {
 export function syncThemeWithSettings(host: SettingsHost) {
   host.theme = host.settings.theme ?? "system";
   applyResolvedTheme(host, resolveTheme(host.theme));
+}
+
+export function syncModeWithSettings(host: SettingsHost) {
+  host.mode = host.settings.mode ?? "basic";
 }
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {

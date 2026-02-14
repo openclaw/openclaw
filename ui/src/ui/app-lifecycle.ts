@@ -16,6 +16,7 @@ import {
   inferBasePath,
   syncTabWithLocation,
   syncThemeWithSettings,
+  syncModeWithSettings,
 } from "./app-settings.ts";
 
 type LifecycleHost = {
@@ -39,6 +40,7 @@ export function handleConnected(host: LifecycleHost) {
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
+  syncModeWithSettings(host as unknown as Parameters<typeof syncModeWithSettings>[0]);
   attachThemeListener(host as unknown as Parameters<typeof attachThemeListener>[0]);
   window.addEventListener("popstate", host.popStateHandler);
   connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
