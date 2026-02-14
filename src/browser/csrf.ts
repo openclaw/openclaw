@@ -54,7 +54,11 @@ export function shouldRejectBrowserMutation(params: {
   return false;
 }
 
-export function browserMutationGuardMiddleware() {
+export function browserMutationGuardMiddleware(): (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => void {
   return (req: Request, res: Response, next: NextFunction) => {
     // OPTIONS is used for CORS preflight. Even if cross-origin, the preflight isn't mutating.
     const method = (req.method || "").trim().toUpperCase();
