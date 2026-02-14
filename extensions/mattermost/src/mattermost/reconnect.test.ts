@@ -148,4 +148,44 @@ describe("runWithReconnect", () => {
     expect(connectFn).toHaveBeenCalledTimes(1);
     expect(elapsed).toBeLessThan(5000);
   });
+
+  it("applies jitter to reconnect delay when configured", async () => {
+    const abort = new AbortController();
+    const delays: number[] = [];
+    let callCount = 0;
+    const connectFn = vi.fn(async () => {
+      callCount++;
+      if (callCount === 1) {
+        throw new Error("connection refused");
+      }
+      abort.abort();
+    });
+
+    await runWithReconnect(connectFn, {
+      abortSignal: abort.signal,
+      onReconnect: (delayMs) => delays.push(delayMs),
+      initialDelayMs: 100,
+      jitterRatio: 0.5,
+      random: () => 1,
+    });
+
+    expect(connectFn).toHaveBeenCalledTimes(2);
+    expect(delays).toEqual([150]);
+  });
+
+  it("supports strategy hook to stop reconnecting after failure", async () => {
+    const onReconnect = vi.fn();
+    const connectFn = vi.fn(async () => {
+      throw new Error("fatal");
+    });
+
+    await runWithReconnect(connectFn, {
+      initialDelayMs: 1,
+      onReconnect,
+      shouldReconnect: (params) => params.outcome !== "rejected",
+    });
+
+    expect(connectFn).toHaveBeenCalledTimes(1);
+    expect(onReconnect).not.toHaveBeenCalled();
+  });
 });
