@@ -2,12 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import {
   defaultSlackTestConfig,
-  flush,
   getSlackClient,
-  getSlackHandlers,
   getSlackTestState,
   resetSlackTestState,
-  waitForSlackEvent,
+  runSlackMessageOnce,
 } from "./monitor.test-helpers.js";
 
 const { monitorSlackProvider } = await import("./monitor.js");
@@ -37,20 +35,7 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -61,10 +46,6 @@ describe("monitorSlackProvider tool results", () => {
       },
     });
 
-    await flush();
-    controller.abort();
-    await run;
-
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "123" });
   });
@@ -72,20 +53,7 @@ describe("monitorSlackProvider tool results", () => {
   it("treats parent_user_id as a thread reply even when thread_ts matches ts", async () => {
     replyMock.mockResolvedValue({ text: "thread reply" });
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -97,10 +65,6 @@ describe("monitorSlackProvider tool results", () => {
         channel_type: "im",
       },
     });
-
-    await flush();
-    controller.abort();
-    await run;
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     const ctx = replyMock.mock.calls[0]?.[0] as {
@@ -125,20 +89,7 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -149,10 +100,6 @@ describe("monitorSlackProvider tool results", () => {
         channel_type: "channel",
       },
     });
-
-    await flush();
-    controller.abort();
-    await run;
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     const ctx = replyMock.mock.calls[0]?.[0] as {
@@ -188,20 +135,7 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -212,10 +146,6 @@ describe("monitorSlackProvider tool results", () => {
         channel_type: "channel",
       },
     });
-
-    await flush();
-    controller.abort();
-    await run;
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     const ctx = replyMock.mock.calls[0]?.[0] as {
@@ -256,20 +186,7 @@ describe("monitorSlackProvider tool results", () => {
       });
     }
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -280,10 +197,6 @@ describe("monitorSlackProvider tool results", () => {
         channel_type: "channel",
       },
     });
-
-    await flush();
-    controller.abort();
-    await run;
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     const ctx = replyMock.mock.calls[0]?.[0] as {
@@ -310,20 +223,7 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -333,10 +233,6 @@ describe("monitorSlackProvider tool results", () => {
         channel_type: "im",
       },
     });
-
-    await flush();
-    controller.abort();
-    await run;
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: undefined });
@@ -358,20 +254,7 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -381,10 +264,6 @@ describe("monitorSlackProvider tool results", () => {
         channel_type: "im",
       },
     });
-
-    await flush();
-    controller.abort();
-    await run;
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     // First reply starts a thread under the incoming message

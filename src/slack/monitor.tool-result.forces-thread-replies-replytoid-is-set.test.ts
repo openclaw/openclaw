@@ -2,12 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import {
   defaultSlackTestConfig,
-  flush,
   getSlackClient,
-  getSlackHandlers,
+  getSlackHandlerOrThrow,
   getSlackTestState,
   resetSlackTestState,
-  waitForSlackEvent,
+  runSlackMessageOnce,
+  startSlackMonitor,
+  stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
 const { monitorSlackProvider } = await import("./monitor.js");
@@ -39,20 +40,7 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -62,10 +50,6 @@ describe("monitorSlackProvider tool results", () => {
         channel_type: "im",
       },
     });
-
-    await flush();
-    controller.abort();
-    await run;
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "555" });
@@ -84,20 +68,7 @@ describe("monitorSlackProvider tool results", () => {
       channel: { name: "general", is_channel: true },
     });
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -107,10 +78,6 @@ describe("monitorSlackProvider tool results", () => {
         channel_type: "channel",
       },
     });
-
-    await flush();
-    controller.abort();
-    await run;
 
     expect(reactMock).toHaveBeenCalledWith({
       channel: "C1",
@@ -131,20 +98,7 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -154,10 +108,6 @@ describe("monitorSlackProvider tool results", () => {
         channel_type: "im",
       },
     });
-
-    await flush();
-    controller.abort();
-    await run;
 
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
@@ -181,18 +131,8 @@ describe("monitorSlackProvider tool results", () => {
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
       .mockResolvedValueOnce({ code: "PAIRCODE", created: false });
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
+    const { controller, run } = startSlackMonitor(monitorSlackProvider);
+    const handler = await getSlackHandlerOrThrow("message");
 
     const baseEvent = {
       type: "message",
@@ -206,9 +146,7 @@ describe("monitorSlackProvider tool results", () => {
     await handler({ event: baseEvent });
     await handler({ event: { ...baseEvent, ts: "124", text: "hello again" } });
 
-    await flush();
-    controller.abort();
-    await run;
+    await stopSlackMonitor({ controller, run });
 
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
