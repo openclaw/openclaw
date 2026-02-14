@@ -11,12 +11,14 @@ export type MemoryConfig = {
   dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
+  captureMinChars?: number;
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
+const DEFAULT_CAPTURE_MIN_CHARS = 10;
 const LEGACY_STATE_DIRS: string[] = [];
 
 function resolveDefaultDbPath(): string {
@@ -89,7 +91,11 @@ export const memoryConfigSchema = {
       throw new Error("memory config required");
     }
     const cfg = value as Record<string, unknown>;
-    assertAllowedKeys(cfg, ["embedding", "dbPath", "autoCapture", "autoRecall"], "memory config");
+    assertAllowedKeys(
+      cfg,
+      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMinChars"],
+      "memory config",
+    );
 
     const embedding = cfg.embedding as Record<string, unknown> | undefined;
     if (!embedding || typeof embedding.apiKey !== "string") {
@@ -98,6 +104,14 @@ export const memoryConfigSchema = {
     assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
 
     const model = resolveEmbeddingModel(embedding);
+    const captureMinChars =
+      typeof cfg.captureMinChars === "number" ? Math.floor(cfg.captureMinChars) : undefined;
+    if (
+      typeof captureMinChars === "number" &&
+      (captureMinChars < 1 || captureMinChars > 1000)
+    ) {
+      throw new Error("captureMinChars must be between 1 and 1000");
+    }
 
     return {
       embedding: {
@@ -108,6 +122,7 @@ export const memoryConfigSchema = {
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture !== false,
       autoRecall: cfg.autoRecall !== false,
+      captureMinChars: captureMinChars ?? DEFAULT_CAPTURE_MIN_CHARS,
     };
   },
   uiHints: {
@@ -134,6 +149,12 @@ export const memoryConfigSchema = {
     autoRecall: {
       label: "Auto-Recall",
       help: "Automatically inject relevant memories into context",
+    },
+    captureMinChars: {
+      label: "Capture Min Chars",
+      help: "Minimum message length eligible for auto-capture",
+      advanced: true,
+      placeholder: String(DEFAULT_CAPTURE_MIN_CHARS),
     },
   },
 };

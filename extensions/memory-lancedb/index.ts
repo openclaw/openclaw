@@ -194,8 +194,9 @@ const MEMORY_TRIGGERS = [
   /always|never|important/i,
 ];
 
-export function shouldCapture(text: string): boolean {
-  if (text.length < 10 || text.length > 500) {
+export function shouldCapture(text: string, options?: { minChars?: number }): boolean {
+  const minChars = options?.minChars ?? 10;
+  if (text.length < minChars || text.length > 500) {
     return false;
   }
   // Skip injected context from memory recall
@@ -570,7 +571,9 @@ const memoryPlugin = {
           }
 
           // Filter for capturable content
-          const toCapture = texts.filter((text) => text && shouldCapture(text));
+          const toCapture = texts.filter(
+            (text) => text && shouldCapture(text, { minChars: cfg.captureMinChars }),
+          );
           if (toCapture.length === 0) {
             return;
           }

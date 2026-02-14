@@ -61,6 +61,7 @@ describe("memory plugin e2e", () => {
     expect(config).toBeDefined();
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
     expect(config?.dbPath).toBe(dbPath);
+    expect(config?.captureMinChars).toBe(10);
   });
 
   test("config schema resolves env vars", async () => {
@@ -92,6 +93,18 @@ describe("memory plugin e2e", () => {
     }).toThrow("embedding.apiKey is required");
   });
 
+  test("config schema validates captureMinChars range", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: { apiKey: OPENAI_API_KEY },
+        dbPath,
+        captureMinChars: 0,
+      });
+    }).toThrow("captureMinChars must be between 1 and 1000");
+  });
+
   test("shouldCapture applies real capture rules", async () => {
     const { shouldCapture } = await import("./index.js");
 
@@ -101,6 +114,8 @@ describe("memory plugin e2e", () => {
     expect(shouldCapture("Call me at +1234567890123")).toBe(true);
     expect(shouldCapture("I always want verbose output")).toBe(true);
     expect(shouldCapture("x")).toBe(false);
+    expect(shouldCapture("I always", { minChars: 10 })).toBe(false);
+    expect(shouldCapture("I always", { minChars: 8 })).toBe(true);
     expect(shouldCapture("<relevant-memories>injected</relevant-memories>")).toBe(false);
     expect(shouldCapture("<system>status</system>")).toBe(false);
     expect(shouldCapture("Here is a short **summary**\n- bullet")).toBe(false);
