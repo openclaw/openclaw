@@ -297,7 +297,7 @@ export async function runEmbeddedPiAgent(
       // downstream consumers (pi-ai's shouldCompact, isContextOverflow, status
       // display) use the config-overridden value instead of the catalog default.
       if (ctxInfo.source !== "model" && ctxInfo.tokens !== model.contextWindow) {
-        (model as Record<string, unknown>).contextWindow = ctxInfo.tokens;
+        (model as unknown as Record<string, unknown>).contextWindow = ctxInfo.tokens;
       }
 
       const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
