@@ -8,3 +8,13 @@ This plugin is the control-plane bridge. It should expose only the closed dispat
 - no business-state writes outside dispatch-api
 - tool schemas must match `/src/contracts/v0.ts`
 - plugin config must include dispatch-api base URL and auth settings
+
+## Implemented v0 bridge actions
+
+- `ticket.create` -> `POST /tickets`
+- `ticket.triage` -> `POST /tickets/{ticketId}/triage`
+- `schedule.confirm` -> `POST /tickets/{ticketId}/schedule/confirm`
+- `assignment.dispatch` -> `POST /tickets/{ticketId}/assignment/dispatch`
+- `ticket.timeline` -> `GET /tickets/{ticketId}/timeline`
+
+Unknown tools and role/tool mismatches are rejected fail closed by the bridge before calling dispatch-api.

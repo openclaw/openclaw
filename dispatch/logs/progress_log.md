@@ -158,3 +158,152 @@ Risks:
 
 Next:
 - Continue to STORY-02 timeline/audit completeness work.
+
+## 2026-02-13 16:29 PST
+
+### STORY-02
+Summary:
+Started STORY-02 implementation for append-only audit completeness verification and timeline read endpoint delivery.
+
+Plan:
+- Define and commit the timeline endpoint contract in `dispatch/logs/story_02_contract.md`.
+- Implement `GET /tickets/{ticketId}/timeline` in `dispatch/api/src/server.mjs` with fail-closed UUID validation and deterministic ordering (`created_at ASC, id ASC`).
+- Validate mutation-path audit completeness (required actor/tool/request/state/payload fields) and patch any missing successful path writes.
+- Add deterministic node-native integration test `dispatch/tests/story_02_timeline.node.test.mjs` for ordered output, required keys, invalid UUID `400`, and unknown ticket `404` behavior.
+
+Planned File Changes:
+- `dispatch/api/src/server.mjs`
+- `dispatch/tests/story_02_timeline.node.test.mjs`
+- `dispatch/logs/story_02_contract.md`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+
+## 2026-02-13 16:31 PST
+
+### STORY-02
+Summary:
+Implemented `GET /tickets/{ticketId}/timeline` with deterministic ordering and fail-closed validation, and validated audit completeness coverage for all currently implemented mutation endpoints.
+
+Files Modified:
+- `dispatch/api/src/server.mjs`
+- `dispatch/tests/story_02_timeline.node.test.mjs`
+- `dispatch/logs/story_02_contract.md`
+- `dispatch/logs/progress_log.md`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+
+Endpoint Implemented:
+- `GET /tickets/{ticketId}/timeline`
+  - validates UUID format (`400 INVALID_TICKET_ID`)
+  - checks ticket existence first (`404 TICKET_NOT_FOUND`)
+  - returns deterministic ordered events (`created_at ASC, id ASC`)
+  - preserves required audit keys including nullable `correlation_id` and `trace_id`
+
+Audit Completeness Verification:
+- Reviewed all successful mutation handlers currently in scope:
+  - `POST /tickets`
+  - `POST /tickets/{ticketId}/triage`
+  - `POST /tickets/{ticketId}/schedule/confirm`
+  - `POST /tickets/{ticketId}/assignment/dispatch`
+- Each successful mutation path writes both:
+  - `audit_events`
+  - `ticket_state_transitions`
+- Required audit fields are populated (`actor_type`, `actor_id`, `tool_name`, `request_id`, `before_state`, `after_state`, `payload`), with `correlation_id`/`trace_id` surfaced in timeline output even when null.
+
+Tests Added:
+- `dispatch/tests/story_02_timeline.node.test.mjs`
+  - ordered timeline and required fields assertion
+  - completeness assertion (`events.length == count(audit_events)` for the ticket)
+  - unknown ticket `404`
+  - invalid UUID `400`
+
+Validation Commands + Results:
+- `node --test dispatch/tests/story_02_timeline.node.test.mjs` -> PASS (3/3)
+- `node --test dispatch/tests/story_01_idempotency.node.test.mjs` -> PASS (4/4)
+- `node --test dispatch/tests/001_init_migration.node.test.mjs` -> PASS (4/4)
+
+Caveats / Risks:
+- Timeline endpoint currently returns full event list without pagination; acceptable for P0 but should be bounded/paged before high-volume production usage.
+- Identity context is still dev-header based (`X-Actor-*`); production auth claim binding remains a later hardening item.
+
+## 2026-02-13 17:33 PST
+
+### STORY-04
+Summary:
+Started STORY-04 implementation for closed tool-bridge mapping and fail-closed allowlist enforcement.
+
+Plan:
+- Define STORY-04 contract with allowlisted tool mapping, actor role gating, correlation/request propagation, and deterministic error behavior.
+- Implement dispatch tool-bridge runtime in `dispatch/tools-plugin` that maps approved tool names to dispatch-api endpoints.
+- Enforce deny-by-default for unknown tools and role-tool mismatches before any API call.
+- Add node-native integration test proving: allowed tools execute, unknown tools are rejected, role-forbidden calls fail closed, and correlation/request headers propagate into audit rows.
+
+Planned File Changes:
+- `dispatch/tools-plugin/src/index.ts`
+- `dispatch/tools-plugin/src/bridge.mjs`
+- `dispatch/tests/story_04_tool_bridge.node.test.mjs`
+- `dispatch/logs/story_04_contract.md`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+
+## 2026-02-13 17:36 PST
+
+### STORY-04
+Summary:
+Implemented a closed dispatch tool bridge in `dispatch/tools-plugin` with allowlisted tool-to-endpoint mapping, role gating, deterministic bridge errors, and request/correlation propagation to dispatch-api.
+
+Files Modified:
+- `dispatch/tools-plugin/src/bridge.mjs`
+- `dispatch/tools-plugin/src/index.ts`
+- `dispatch/tools-plugin/README.md`
+- `dispatch/tests/story_04_tool_bridge.node.test.mjs`
+- `dispatch/logs/story_04_contract.md`
+- `dispatch/logs/progress_log.md`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+
+Bridge Behavior Delivered:
+- Allowlisted tool map (deny-by-default):
+  - `ticket.create`
+  - `ticket.triage`
+  - `schedule.confirm`
+  - `assignment.dispatch`
+  - `ticket.timeline`
+- Role-tool allowlist enforced in bridge before network call.
+- Mutations propagate:
+  - `Idempotency-Key` (request ID)
+  - `X-Actor-Id`, `X-Actor-Role`, `X-Actor-Type`
+  - `X-Tool-Name`
+  - `X-Correlation-Id`
+  - optional `X-Trace-Id`
+- Structured bridge logs emitted for request/response phases including request/correlation IDs.
+- Deterministic fail-closed bridge errors:
+  - `UNKNOWN_TOOL`
+  - `TOOL_ROLE_FORBIDDEN`
+  - `INVALID_REQUEST`
+  - `INVALID_TICKET_ID`
+  - `DISPATCH_API_ERROR`
+  - `DISPATCH_API_TIMEOUT`
+  - `DISPATCH_API_UNREACHABLE`
+
+Tests Added:
+- `dispatch/tests/story_04_tool_bridge.node.test.mjs`
+  - allowlisted tool forwarding to dispatch-api
+  - request/correlation propagation verified in audit rows
+  - ordered timeline retrieval via bridge
+  - unknown tool rejected fail-closed
+  - role-forbidden mutation blocked before side effects
+
+Validation Commands + Results:
+- `node --test dispatch/tests/story_04_tool_bridge.node.test.mjs` -> PASS (3/3)
+- `node --test dispatch/tests/story_01_idempotency.node.test.mjs` -> PASS (4/4)
+- `node --test dispatch/tests/story_02_timeline.node.test.mjs` -> PASS (3/3)
+- `node --test dispatch/tests/001_init_migration.node.test.mjs` -> PASS (4/4)
+
+Caveats / Risks:
+- Bridge currently covers only dispatch-api endpoints implemented to date; remaining v0 tools should be added incrementally as corresponding endpoints land.
+- Plugin returns structured `isError` tool payloads for deterministic failures; downstream agent policies should continue treating `isError=true` as terminal for that tool attempt.

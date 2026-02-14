@@ -54,6 +54,24 @@ function serializeTicket(row) {
   };
 }
 
+function serializeAuditEvent(row) {
+  return {
+    id: row.id,
+    ticket_id: row.ticket_id,
+    actor_type: row.actor_type,
+    actor_id: row.actor_id,
+    actor_role: row.actor_role,
+    tool_name: row.tool_name,
+    request_id: row.request_id,
+    correlation_id: row.correlation_id,
+    trace_id: row.trace_id,
+    before_state: row.before_state,
+    after_state: row.after_state,
+    payload: row.payload,
+    created_at: row.created_at ? new Date(row.created_at).toISOString() : null,
+  };
+}
+
 function assertRoleAllowed(actorRole, endpoint) {
   const allowed = roleAllowlist[endpoint] ?? [];
   if (!allowed.includes(actorRole)) {
@@ -183,6 +201,49 @@ async function getTicketForUpdate(client, ticketId) {
     throw new HttpError(404, "TICKET_NOT_FOUND", "Ticket not found");
   }
   return result.rows[0];
+}
+
+function validateTicketId(ticketId) {
+  if (!isUuid(ticketId)) {
+    throw new HttpError(400, "INVALID_TICKET_ID", "Path parameter 'ticketId' must be a valid UUID");
+  }
+}
+
+async function getTicketTimeline(pool, ticketId) {
+  validateTicketId(ticketId);
+
+  const ticketExists = await pool.query("SELECT 1 FROM tickets WHERE id = $1", [ticketId]);
+  if (ticketExists.rowCount === 0) {
+    throw new HttpError(404, "TICKET_NOT_FOUND", "Ticket not found");
+  }
+
+  const result = await pool.query(
+    `
+      SELECT
+        id,
+        ticket_id,
+        actor_type,
+        actor_id,
+        actor_role,
+        tool_name,
+        request_id,
+        correlation_id,
+        trace_id,
+        before_state,
+        after_state,
+        payload,
+        created_at
+      FROM audit_events
+      WHERE ticket_id = $1
+      ORDER BY created_at ASC, id ASC
+    `,
+    [ticketId],
+  );
+
+  return {
+    ticket_id: ticketId,
+    events: result.rows.map(serializeAuditEvent),
+  };
 }
 
 function ensureString(value, fieldName) {
@@ -556,6 +617,15 @@ function resolveRoute(method, pathname) {
     return { kind: "health" };
   }
 
+  const timelineMatch = pathname.match(/^\/tickets\/([^/]+)\/timeline$/);
+  if (method === "GET" && timelineMatch) {
+    return {
+      kind: "timeline",
+      endpoint: "/tickets/{ticketId}/timeline",
+      ticketId: timelineMatch[1],
+    };
+  }
+
   if (method === "POST" && pathname === "/tickets") {
     return {
       kind: "command",
@@ -631,6 +701,30 @@ export function createDispatchApiServer(options = {}) {
 
     let requestId = null;
     try {
+      if (route.kind === "timeline") {
+        const timeline = await getTicketTimeline(pool, route.ticketId);
+        sendJson(response, 200, timeline);
+        console.log(
+          JSON.stringify({
+            level: "info",
+            service: "dispatch-api",
+            method: requestMethod,
+            path: url.pathname,
+            endpoint: route.endpoint,
+            request_id: null,
+            correlation_id: null,
+            replay: false,
+            status: 200,
+            duration_ms: Date.now() - requestStart,
+          }),
+        );
+        return;
+      }
+
+      if (route.kind !== "command") {
+        throw new HttpError(500, "INTERNAL_ERROR", "Unsupported route handler");
+      }
+
       const body = await parseJsonBody(request);
       requestId = parseIdempotencyKey(request.headers);
       const actor = parseActorFromHeaders(request.headers, route.endpoint);
