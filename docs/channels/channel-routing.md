@@ -44,11 +44,15 @@ Examples:
 Routing picks **one agent** for each inbound message:
 
 1. **Exact peer match** (`bindings` with `peer.kind` + `peer.id`).
-2. **Guild match** (Discord) via `guildId`.
-3. **Team match** (Slack) via `teamId`.
-4. **Account match** (`accountId` on the channel).
-5. **Channel match** (any account on that channel).
-6. **Default agent** (`agents.list[].default`, else first list entry, fallback to `main`).
+2. **Parent peer match** (thread inheritance).
+3. **Guild + roles match** (Discord) via `guildId` + `roles`.
+4. **Guild match** (Discord) via `guildId`.
+5. **Team match** (Slack) via `teamId`.
+6. **Account match** (`accountId` on the channel).
+7. **Channel match** (any account on that channel, `accountId: "*"`).
+8. **Default agent** (`agents.list[].default`, else first list entry, fallback to `main`).
+
+When a binding includes multiple match fields (`peer`, `guildId`, `teamId`, `roles`), **all provided fields must match** for that binding to apply.
 
 The matched agent determines which workspace and session store are used.
 
