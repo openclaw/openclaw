@@ -96,7 +96,7 @@ the workspace is writable. See [Memory](/concepts/memory) and
   - Legacy `group:<id>` keys are still recognized for migration.
 - Inbound contexts may still use `group:<id>`; the channel is inferred from `Provider` and normalized to the canonical `agent:<agentId>:<channel>:group:<id>` form.
 - Other sources:
-  - Cron jobs: `cron:<job.id>`
+  - Cron jobs: `cron:<job.id>` (isolated) or custom `session:<custom-id>` (persistent)
   - Webhooks: `hook:<uuid>` (unless explicitly set by the hook)
   - Node runs: `node-<nodeId>`
 

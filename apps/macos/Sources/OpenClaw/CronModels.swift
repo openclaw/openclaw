@@ -3,9 +3,36 @@ import Foundation
 enum CronSessionTarget: String, CaseIterable, Identifiable, Codable {
     case main
     case isolated
+    case current
 
     var id: String {
         self.rawValue
+    }
+}
+
+enum CronCustomSessionTarget: Codable, Equatable {
+    case predefined(CronSessionTarget)
+    case session(id: String)
+
+    var rawValue: String {
+        switch self {
+        case .predefined(let target):
+            return target.rawValue
+        case .session(let id):
+            return "session:\(id)"
+        }
+    }
+
+    static func from(_ value: String) -> CronCustomSessionTarget {
+        if let predefined = CronSessionTarget(rawValue: value) {
+            return .predefined(predefined)
+        }
+        if value.hasPrefix("session:") {
+            let sessionId = String(value.dropFirst(8))
+            return .session(id: sessionId)
+        }
+        // Fallback to isolated for unknown values
+        return .predefined(.isolated)
     }
 }
 
@@ -204,11 +231,16 @@ struct CronJob: Identifiable, Codable, Equatable {
     let createdAtMs: Int
     let updatedAtMs: Int
     let schedule: CronSchedule
-    let sessionTarget: CronSessionTarget
+    let sessionTarget: String
     let wakeMode: CronWakeMode
     let payload: CronPayload
     let delivery: CronDelivery?
     let state: CronJobState
+
+    /// Parsed session target (predefined or custom session ID)
+    var parsedSessionTarget: CronCustomSessionTarget {
+        CronCustomSessionTarget.from(sessionTarget)
+    }
 
     var displayName: String {
         let trimmed = self.name.trimmingCharacters(in: .whitespacesAndNewlines)

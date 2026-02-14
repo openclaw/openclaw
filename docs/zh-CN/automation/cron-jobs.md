@@ -28,7 +28,9 @@ x-i18n:
 - 任务持久化存储在 `~/.openclaw/cron/` 下，因此重启不会丢失计划。
 - 两种执行方式：
   - **主会话**：入队一个系统事件，然后在下一次心跳时运行。
-  - **隔离式**：在 `cron:<jobId>` 中运行专用智能体轮次，可投递摘要（默认 announce）或不投递。
+  - **隔离式**：在 `cron:<jobId>` 或自定义会话中运行专用智能体轮次，可投递摘要（默认 announce）或不投递。
+  - **当前会话**：绑定到创建定时任务时的会话 (`sessionTarget: "current"`)。
+  - **自定义会话**：在持久化的命名会话中运行 (`sessionTarget: "session:custom-id"`)。
 - 唤醒是一等功能：任务可以请求"立即唤醒"或"下次心跳时"。
 
 ## 快速开始（可操作）
@@ -83,8 +85,22 @@ openclaw cron add \
 2. **选择运行位置**
    - `sessionTarget: "main"` → 在下一次心跳时使用主会话上下文运行。
    - `sessionTarget: "isolated"` → 在 `cron:<jobId>` 中运行专用智能体轮次。
+   - `sessionTarget: "current"` → 绑定到当前会话（创建时解析为 `session:<sessionKey>`）。
+   - `sessionTarget: "session:custom-id"` → 在持久化的命名会话中运行，跨运行保持上下文。
 
-3. **选择负载**
+3. **选择运行位置**
+   - `sessionTarget: "main"` → 在下一次心跳时使用主会话上下文运行。
+   - `sessionTarget: "isolated"` → 在 `cron:<jobId>` 中运行专用智能体轮次。
+   - `sessionTarget: "current"` → 绑定到当前会话（创建时解析为 `session:<sessionKey>`）。
+   - `sessionTarget: "session:custom-id"` → 在持久化的命名会话中运行，跨运行保持上下文。
+
+   默认行为（保持不变）：
+   - `systemEvent` 负载默认使用 `main`
+   - `agentTurn` 负载默认使用 `isolated`
+
+   要使用当前会话绑定，需显式设置 `sessionTarget: "current"`。
+
+4. **选择负载**
    - 主会话 → `payload.kind = "systemEvent"`
    - 隔离会话 → `payload.kind = "agentTurn"`
 
@@ -129,12 +145,13 @@ Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway网关主�
 
 #### 隔离任务（专用定时会话）
 
-隔离任务在会话 `cron:<jobId>` 中运行专用智能体轮次。
+隔离任务在会话 `cron:<jobId>` 或自定义会话中运行专用智能体轮次。
 
 关键行为：
 
 - 提示以 `[cron:<jobId> <任务名称>]` 为前缀，便于追踪。
-- 每次运行都会启动一个**全新的会话 ID**（不继承之前的对话）。
+- 每次运行都会启动一个**全新的会话 ID**（不继承之前的对话），除非使用自定义会话。
+- 自定义会话（`session:xxx`）可跨运行保持上下文，适用于如每日站会等需要基于前次摘要的工作流。
 - 如果未指定 `delivery`，隔离任务会默认以“announce”方式投递摘要。
 - `delivery.mode` 可选 `announce`（投递摘要）或 `none`（内部运行）。
 
