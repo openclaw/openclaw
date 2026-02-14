@@ -9,7 +9,7 @@ import {
   nextWakeAtMs,
   recomputeNextRuns,
 } from "./jobs.js";
-import { locked } from "./locked.js";
+import { locked, lockedRead } from "./locked.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
 
@@ -50,7 +50,8 @@ export function stop(state: CronServiceState) {
 }
 
 export async function status(state: CronServiceState) {
-  return await locked(state, async () => {
+  // Use lockedRead() instead of locked() so status checks don't wait for job executions
+  return await lockedRead(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (state.store) {
       const changed = recomputeNextRuns(state);
@@ -68,7 +69,8 @@ export async function status(state: CronServiceState) {
 }
 
 export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
-  return await locked(state, async () => {
+  // Use lockedRead() instead of locked() so list calls don't wait for job executions
+  return await lockedRead(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (state.store) {
       const changed = recomputeNextRuns(state);
