@@ -87,3 +87,29 @@ describe("markdownToIR tableMode code - style overlap", () => {
     }
   });
 });
+
+describe("markdownToIR tableMode code - CJK alignment", () => {
+  it("should produce visually aligned columns with CJK characters", () => {
+    const md = `
+| 專案 | 語言 |
+|------|------|
+| ABC | Python |
+| 全套 | JS |
+`.trim();
+
+    const ir = markdownToIR(md, { tableMode: "code" });
+    const lines = ir.text.trimEnd().split("\n");
+    // Verify that pipe positions align by checking display width of each row
+    // (CJK chars = 2 columns, ASCII = 1 column)
+    const dw = (s: string) => {
+      let w = 0;
+      for (const ch of s) {
+        const c = ch.codePointAt(0)!;
+        w += (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7af) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe6f) || (c >= 0xff01 && c <= 0xff60) || (c >= 0x20000 && c <= 0x3ffff) ? 2 : 1;
+      }
+      return w;
+    };
+    const displayWidths = lines.filter((l) => l.startsWith("|")).map((l) => dw(l));
+    expect(new Set(displayWidths).size).toBe(1);
+  });
+});

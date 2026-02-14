@@ -2,6 +2,53 @@ import MarkdownIt from "markdown-it";
 import type { MarkdownTableMode } from "../config/types.base.js";
 import { chunkText } from "../auto-reply/chunk.js";
 
+/**
+ * Compute the display width of a string in a monospace terminal/font.
+ * CJK characters and most emoji occupy 2 columns; others occupy 1.
+ * Zero-width joiners, variation selectors, and combining marks occupy 0.
+ */
+function displayWidth(str: string): number {
+  let width = 0;
+  for (const ch of str) {
+    const code = ch.codePointAt(0)!;
+    // Zero-width characters
+    if (
+      code === 0x200b || // ZWSP
+      code === 0x200d || // ZWJ
+      code === 0xfeff || // BOM
+      (code >= 0xfe00 && code <= 0xfe0f) || // variation selectors
+      (code >= 0xe0100 && code <= 0xe01ef) || // variation selectors supplement
+      (code >= 0x0300 && code <= 0x036f) || // combining diacritical marks
+      (code >= 0x1ab0 && code <= 0x1aff) || // combining diacritical marks extended
+      (code >= 0x20d0 && code <= 0x20ff) || // combining marks for symbols
+      (code >= 0xfe20 && code <= 0xfe2f) // combining half marks
+    ) {
+      continue;
+    }
+    // Wide characters: CJK, fullwidth forms, emoji modifiers, etc.
+    if (
+      (code >= 0x1100 && code <= 0x115f) || // Hangul Jamo
+      (code >= 0x2e80 && code <= 0x303e) || // CJK Radicals..CJK Symbols
+      (code >= 0x3040 && code <= 0x33bf) || // Hiragana..CJK Compatibility
+      (code >= 0x3400 && code <= 0x4dbf) || // CJK Unified Ext A
+      (code >= 0x4e00 && code <= 0xa4cf) || // CJK Unified..Yi Radicals
+      (code >= 0xac00 && code <= 0xd7af) || // Hangul Syllables
+      (code >= 0xf900 && code <= 0xfaff) || // CJK Compatibility Ideographs
+      (code >= 0xfe30 && code <= 0xfe6f) || // CJK Compatibility Forms..Small Forms
+      (code >= 0xff01 && code <= 0xff60) || // Fullwidth Forms
+      (code >= 0xffe0 && code <= 0xffe6) || // Fullwidth Signs
+      (code >= 0x1f000 && code <= 0x1fbff) || // Emoji & symbols
+      (code >= 0x20000 && code <= 0x2ffff) || // CJK Unified Ext B+
+      (code >= 0x30000 && code <= 0x3ffff) // CJK Unified Ext G+
+    ) {
+      width += 2;
+    } else {
+      width += 1;
+    }
+  }
+  return width;
+}
+
 type ListState = {
   type: "bullet" | "ordered";
   index: number;
@@ -463,7 +510,7 @@ function renderTableAsCode(state: RenderState) {
   const updateWidths = (cells: TableCell[]) => {
     for (let i = 0; i < columnCount; i += 1) {
       const cell = cells[i];
-      const width = cell?.text.length ?? 0;
+      const width = cell ? displayWidth(cell.text) : 0;
       if (widths[i] < width) {
         widths[i] = width;
       }
@@ -485,7 +532,7 @@ function renderTableAsCode(state: RenderState) {
         // Use text-only append to avoid overlapping styles with code_block
         appendCellTextOnly(state, cell);
       }
-      const pad = widths[i] - (cell?.text.length ?? 0);
+      const pad = widths[i] - (cell ? displayWidth(cell.text) : 0);
       if (pad > 0) {
         state.text += " ".repeat(pad);
       }
