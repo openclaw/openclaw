@@ -408,52 +408,71 @@
 .chat-queue-tab {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 3px 10px;
+  padding: 8px 14px;
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--muted);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
+  background: #000;
+  border: none;
+  border-radius: 8px 8px 0 0;
   cursor: pointer;
   align-self: flex-start;
   margin-left: 14px;
-  margin-bottom: -1px;
+  margin-bottom: 0;
   position: relative;
-  z-index: 1;
-  transition: color 0.15s ease, background 0.15s ease;
+  z-index: 2;
+  transition: color 0.15s ease;
+  /* Extend touch target */
+  min-height: 28px;
+}
+
+:root[data-theme="light"] .chat-queue-tab {
+  background: #e5e5e5;
+  color: #555;
 }
 
 .chat-queue-tab:hover {
   color: var(--text);
-  background: var(--bg-elevated);
 }
 
 .chat-queue-panel {
-  border: 1px solid var(--border);
-  border-radius: 0 6px 0 0;
-  background: var(--card);
+  background: #000;
+  border-radius: 0 8px 0 0;
   margin: 0 14px;
-  margin-bottom: 4px;
-  padding: 6px;
+  margin-bottom: 0;
+  padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: 100px;
+  max-height: 120px;
   overflow-y: auto;
+  border: none;
+  /* Drawer effect: overlaps input area at bottom */
+  position: relative;
+  z-index: 1;
+  padding-bottom: 12px;
+}
+
+:root[data-theme="light"] .chat-queue-panel {
+  background: #e5e5e5;
 }
 
 .chat-queue-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px;
+  padding: 6px 10px;
   font-size: 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="light"] .chat-queue-item {
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .chat-queue-text {
