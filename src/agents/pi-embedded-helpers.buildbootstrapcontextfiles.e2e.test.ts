@@ -14,7 +14,7 @@ describe("buildBootstrapContextFiles", () => {
     const files = [makeFile({ missing: true, content: undefined })];
     expect(buildBootstrapContextFiles(files)).toEqual([
       {
-        path: DEFAULT_AGENTS_FILENAME,
+        path: "/tmp/AGENTS.md",
         content: "[MISSING] Expected at: /tmp/AGENTS.md",
       },
     ]);

@@ -33,7 +33,13 @@ export type EmbeddedRunAttemptResult = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: { toolName: string; meta?: string; error?: string };
+  lastToolError?: {
+    toolName: string;
+    meta?: string;
+    error?: string;
+    mutatingAction?: boolean;
+    actionFingerprint?: string;
+  };
   didSendViaMessagingTool: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentTargets: MessagingToolSend[];
