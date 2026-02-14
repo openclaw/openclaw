@@ -1,6 +1,21 @@
 import { vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
-export function discordWebMediaMockFactory() {
+type DiscordWebMediaMockFactoryResult = {
+  loadWebMedia: MockFn;
+  loadWebMediaRaw: MockFn;
+};
+
+type DiscordRestFactoryResult = {
+  rest: import("@buape/carbon").RequestClient;
+  postMock: MockFn;
+  putMock: MockFn;
+  getMock: MockFn;
+  patchMock: MockFn;
+  deleteMock: MockFn;
+};
+
+export function discordWebMediaMockFactory(): DiscordWebMediaMockFactoryResult {
   return {
     loadWebMedia: vi.fn().mockResolvedValue({
       buffer: Buffer.from("img"),
@@ -17,12 +32,12 @@ export function discordWebMediaMockFactory() {
   };
 }
 
-export function makeDiscordRest() {
-  const postMock = vi.fn();
-  const putMock = vi.fn();
-  const getMock = vi.fn();
-  const patchMock = vi.fn();
-  const deleteMock = vi.fn();
+export function makeDiscordRest(): DiscordRestFactoryResult {
+  const postMock = vi.fn() as unknown as MockFn;
+  const putMock = vi.fn() as unknown as MockFn;
+  const getMock = vi.fn() as unknown as MockFn;
+  const patchMock = vi.fn() as unknown as MockFn;
+  const deleteMock = vi.fn() as unknown as MockFn;
 
   return {
     rest: {
