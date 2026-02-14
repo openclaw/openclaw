@@ -70,16 +70,27 @@ When given a text-only prompt (no source image), generate the described image wi
 # Helpers
 # ---------------------------------------------------------------------------
 def load_env():
-    """Load API key from env or .env file."""
-    key = os.environ.get("GEMINI_API_KEY")
-    if key:
-        return key
-    env_file = SKILL_DIR / ".env"
+    """Load API key from env or workspace root .env file.
+    
+    Checks (in order): GOOGLE_API_KEY env, GEMINI_API_KEY env, workspace .env file.
+    All skills share the workspace root .env — never create skill-specific .env files.
+    """
+    # Check env vars first
+    for var in ("GOOGLE_API_KEY", "GEMINI_API_KEY"):
+        key = os.environ.get(var)
+        if key:
+            return key
+    # Fall back to workspace root .env
+    workspace_root = SKILL_DIR.parent.parent  # skills/image-gen -> skills -> workspace
+    env_file = workspace_root / ".env"
     if env_file.exists():
         for line in env_file.read_text().splitlines():
             line = line.strip()
-            if line.startswith("GEMINI_API_KEY="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
+            if not line or line.startswith("#"):
+                continue
+            for prefix in ("GOOGLE_API_KEY=", "GEMINI_API_KEY="):
+                if line.startswith(prefix):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
     return None
 
 
@@ -422,15 +433,19 @@ def do_generate(client: genai.Client, req: dict) -> dict:
 
     for part in response.candidates[0].content.parts:
         if hasattr(part, 'inline_data') and part.inline_data and part.inline_data.mime_type.startswith("image/"):
-            result_image = part.as_image()
+            result_image = part.inline_data
         elif hasattr(part, 'text') and part.text:
             model_text += part.text
 
     if result_image is None:
         return {"success": False, "error": f"No image generated. Model said: {model_text or '(empty)'}"}
 
+    # Convert to PIL Image for format control
+    import io
+    pil_image = Image.open(io.BytesIO(result_image.data))
+
     # Save
-    metadata = save_image(result_image, output_path, fmt)
+    metadata = save_image(pil_image, output_path, fmt)
     result = {"success": True, **metadata}
     if model_text:
         result["model_notes"] = model_text.strip()
@@ -527,14 +542,18 @@ def do_edit(client: genai.Client, req: dict) -> dict:
 
     for part in response.candidates[0].content.parts:
         if hasattr(part, 'inline_data') and part.inline_data and part.inline_data.mime_type.startswith("image/"):
-            result_image = part.as_image()
+            result_image = part.inline_data
         elif hasattr(part, 'text') and part.text:
             model_text += part.text
 
     if result_image is None:
         return {"success": False, "error": f"No image generated. Model said: {model_text or '(empty)'}"}
 
-    metadata = save_image(result_image, output_path, fmt)
+    # Convert to PIL Image for format control
+    import io
+    pil_image = Image.open(io.BytesIO(result_image.data))
+
+    metadata = save_image(pil_image, output_path, fmt)
 
     # Save session state
     turn = (session.get("turn", 0) if session else 0) + 1
@@ -602,7 +621,7 @@ def main():
     if not api_key:
         print(json.dumps({
             "success": False,
-            "error": "GEMINI_API_KEY not found. Set it as env var or in skills/image-gen/.env"
+            "error": "GOOGLE_API_KEY not found. Set it as env var or in workspace root .env"
         }))
         sys.exit(1)
 

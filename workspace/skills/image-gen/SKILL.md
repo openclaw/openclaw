@@ -218,7 +218,7 @@ On error:
 ## Setup
 
 1. Get a Google AI Studio API key: https://aistudio.google.com/apikey
-2. Set it: `GEMINI_API_KEY=your_key` in env or `skills/image-gen/.env`
+2. Add `GOOGLE_API_KEY=your_key` to the **workspace root** `.env` file (shared by all skills)
 3. Dependencies: `pip install google-genai Pillow`
 
 ## Reference Docs
