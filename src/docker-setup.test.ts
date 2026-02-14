@@ -85,47 +85,53 @@ function resolveBashForCompatCheck(): string | null {
 }
 
 describe("docker-setup.sh", () => {
-  it("handles unset optional env vars under strict mode", async () => {
+  it("handles env defaults, home-volume mounts, and apt build args", async () => {
     const sandbox = await createDockerSetupSandbox();
-    const env = createEnv(sandbox, {
-      OPENCLAW_DOCKER_APT_PACKAGES: undefined,
-      OPENCLAW_EXTRA_MOUNTS: undefined,
-      OPENCLAW_HOME_VOLUME: undefined,
-    });
 
-    const result = spawnSync("bash", [sandbox.scriptPath], {
+    const defaultsResult = spawnSync("bash", [sandbox.scriptPath], {
       cwd: sandbox.rootDir,
-      env,
+      env: createEnv(sandbox, {
+        OPENCLAW_DOCKER_APT_PACKAGES: undefined,
+        OPENCLAW_EXTRA_MOUNTS: undefined,
+        OPENCLAW_HOME_VOLUME: undefined,
+      }),
       encoding: "utf8",
     });
+    expect(defaultsResult.status).toBe(0);
+    const defaultsEnvFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+    expect(defaultsEnvFile).toContain("OPENCLAW_DOCKER_APT_PACKAGES=");
+    expect(defaultsEnvFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
+    expect(defaultsEnvFile).toContain("OPENCLAW_HOME_VOLUME=");
 
-    expect(result.status).toBe(0);
-
-    const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
-    expect(envFile).toContain("OPENCLAW_DOCKER_APT_PACKAGES=");
-    expect(envFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
-    expect(envFile).toContain("OPENCLAW_HOME_VOLUME=");
-  });
-
-  it("supports a home volume when extra mounts are empty", async () => {
-    const sandbox = await createDockerSetupSandbox();
-    const env = createEnv(sandbox, {
-      OPENCLAW_EXTRA_MOUNTS: "",
-      OPENCLAW_HOME_VOLUME: "openclaw-home",
-    });
-
-    const result = spawnSync("bash", [sandbox.scriptPath], {
+    const homeVolumeResult = spawnSync("bash", [sandbox.scriptPath], {
       cwd: sandbox.rootDir,
-      env,
+      env: createEnv(sandbox, {
+        OPENCLAW_EXTRA_MOUNTS: "",
+        OPENCLAW_HOME_VOLUME: "openclaw-home",
+      }),
       encoding: "utf8",
     });
-
-    expect(result.status).toBe(0);
-
+    expect(homeVolumeResult.status).toBe(0);
     const extraCompose = await readFile(join(sandbox.rootDir, "docker-compose.extra.yml"), "utf8");
     expect(extraCompose).toContain("openclaw-home:/home/node");
     expect(extraCompose).toContain("volumes:");
     expect(extraCompose).toContain("openclaw-home:");
+
+    await writeFile(sandbox.logPath, "");
+    const aptResult = spawnSync("bash", [sandbox.scriptPath], {
+      cwd: sandbox.rootDir,
+      env: createEnv(sandbox, {
+        OPENCLAW_DOCKER_APT_PACKAGES: "ffmpeg build-essential",
+        OPENCLAW_EXTRA_MOUNTS: "",
+        OPENCLAW_HOME_VOLUME: "",
+      }),
+      encoding: "utf8",
+    });
+    expect(aptResult.status).toBe(0);
+    const aptEnvFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+    expect(aptEnvFile).toContain("OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
+    const log = await readFile(sandbox.logPath, "utf8");
+    expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
   });
 
   it("avoids associative arrays so the script remains Bash 3.2-compatible", async () => {
@@ -159,29 +165,6 @@ describe("docker-setup.sh", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).not.toContain("declare: -A: invalid option");
-  });
-
-  it("plumbs OPENCLAW_DOCKER_APT_PACKAGES into .env and docker build args", async () => {
-    const sandbox = await createDockerSetupSandbox();
-    const env = createEnv(sandbox, {
-      OPENCLAW_DOCKER_APT_PACKAGES: "ffmpeg build-essential",
-      OPENCLAW_EXTRA_MOUNTS: "",
-      OPENCLAW_HOME_VOLUME: "",
-    });
-
-    const result = spawnSync("bash", [sandbox.scriptPath], {
-      cwd: sandbox.rootDir,
-      env,
-      encoding: "utf8",
-    });
-
-    expect(result.status).toBe(0);
-
-    const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
-    expect(envFile).toContain("OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
-
-    const log = await readFile(sandbox.logPath, "utf8");
-    expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
   });
 
   it("keeps docker-compose gateway command in sync", async () => {
