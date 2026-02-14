@@ -28,6 +28,10 @@
       "types": "./dist/plugin-sdk/index.d.ts",
       "default": "./dist/plugin-sdk/index.js"
     },
+    "./plugin-sdk/account-id": {
+      "types": "./dist/plugin-sdk/account-id.d.ts",
+      "default": "./dist/plugin-sdk/account-id.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
