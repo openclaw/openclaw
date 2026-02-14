@@ -173,37 +173,6 @@ export async function handleToolExecutionStart(
   // Track start time and args for after_tool_call hook.
   ctx.state.toolStartData.set(toolCallId, { startTime, args });
 
-  // Call before_tool_call hook.
-  const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
-  if (hookRunner?.hasHooks?.("before_tool_call")) {
-    try {
-      const hookEvent: PluginHookBeforeToolCallEvent = {
-        toolName,
-        params: args && typeof args === "object" ? (args as Record<string, unknown>) : {},
-      };
-      await hookRunner.runBeforeToolCall(hookEvent, { toolName });
-    } catch (err) {
-      ctx.log.debug(`before_tool_call hook failed: tool=${toolName} error=${String(err)}`);
-    }
-  }
-
-  // Check unsubscribed again after hook (another async point) to prevent
-  // state corruption if timeout/unsubscribe happened during hook execution.
-  if (ctx.state.unsubscribed) {
-    ctx.log.debug(`tool_execution_start skipped (unsubscribed after hook): tool=${toolName}`);
-    // Clean up state we just set
-    ctx.state.toolExecutionCount = Math.max(0, ctx.state.toolExecutionCount - 1);
-    ctx.state.toolExecutionInFlight = ctx.state.toolExecutionCount > 0;
-    if (ctx.state.activeToolCallId === toolCallId) {
-      ctx.state.activeToolName = undefined;
-      ctx.state.activeToolCallId = undefined;
-      ctx.state.activeToolStartTime = undefined;
-    }
-    ctx.state.toolStartData.delete(toolCallId);
-    return;
-  }
-
-
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const filePathValue =
