@@ -29,6 +29,15 @@ function resolvePluginDebounce(channelKey: string | undefined): number | undefin
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
+function resolvePluginMode(channelKey: string | undefined): QueueMode | undefined {
+  if (!channelKey) {
+    return undefined;
+  }
+  const plugin = getChannelPlugin(channelKey);
+  const value = plugin?.defaults?.queue?.mode;
+  return normalizeQueueMode(typeof value === "string" ? value : undefined);
+}
+
 export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueSettings {
   const channelKey = params.channel?.trim().toLowerCase();
   const queueCfg = params.cfg.messages?.queue;
@@ -41,6 +50,7 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
     normalizeQueueMode(params.sessionEntry?.queueMode) ??
     normalizeQueueMode(providerModeRaw) ??
     normalizeQueueMode(queueCfg?.mode) ??
+    resolvePluginMode(channelKey) ??
     defaultQueueModeForChannel(channelKey);
   const debounceRaw =
     params.inlineOptions?.debounceMs ??

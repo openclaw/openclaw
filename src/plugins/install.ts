@@ -8,7 +8,6 @@ import {
   resolveArchiveKind,
   resolvePackedRootDir,
 } from "../infra/archive.js";
-import { installPackageDir } from "../infra/install-package-dir.js";
 import {
   resolveSafeInstallDir,
   safeDirName,
@@ -251,32 +250,111 @@ async function installPluginFromPackageDir(params: {
     };
   }
 
+  logger.info?.(`Installing to ${targetDir}…`);
+  let backupDir: string | null = null;
+  if (mode === "update" && (await fileExists(targetDir))) {
+    backupDir = `${targetDir}.backup-${Date.now()}`;
+    await fs.rename(targetDir, backupDir);
+  }
+  try {
+    // Never copy node_modules from the source directory:
+    // - It may contain pnpm store links that won't resolve on the target machine.
+    // - We re-install runtime deps in the target dir via npm when needed.
+    await fs.cp(params.packageDir, targetDir, {
+      recursive: true,
+      filter: (src) => {
+        const rel = path.relative(params.packageDir, src);
+        if (!rel || rel === ".") {
+          return true;
+        }
+        const firstSegment = rel.split(path.sep).at(0);
+        if (firstSegment === "node_modules") {
+          return false;
+        }
+        if (firstSegment === ".git") {
+          return false;
+        }
+        return true;
+      },
+    });
+  } catch (err) {
+    if (backupDir) {
+      await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rename(backupDir, targetDir).catch(() => undefined);
+    }
+    return { ok: false, error: `failed to copy plugin: ${String(err)}` };
+  }
+
+  for (const entry of extensions) {
+    const resolvedEntry = path.resolve(targetDir, entry);
+    if (!isPathInside(targetDir, resolvedEntry)) {
+      logger.warn?.(`extension entry escapes plugin directory: ${entry}`);
+      continue;
+    }
+    if (!(await fileExists(resolvedEntry))) {
+      logger.warn?.(`extension entry not found: ${entry}`);
+    }
+  }
+
   const deps = manifest.dependencies ?? {};
   const hasDeps = Object.keys(deps).length > 0;
-  const installRes = await installPackageDir({
-    sourceDir: params.packageDir,
-    targetDir,
-    mode,
-    timeoutMs,
-    logger,
-    copyErrorPrefix: "failed to copy plugin",
-    hasDeps,
-    depsLogMessage: "Installing plugin dependencies…",
-    afterCopy: async () => {
-      for (const entry of extensions) {
-        const resolvedEntry = path.resolve(targetDir, entry);
-        if (!isPathInside(targetDir, resolvedEntry)) {
-          logger.warn?.(`extension entry escapes plugin directory: ${entry}`);
-          continue;
-        }
-        if (!(await fileExists(resolvedEntry))) {
-          logger.warn?.(`extension entry not found: ${entry}`);
-        }
+  if (hasDeps) {
+    // npm will parse the whole package.json even when `--omit=dev` is used.
+    // Many workspace plugins keep `workspace:*` in devDependencies for pnpm,
+    // which npm can't parse. To keep local installs working, we temporarily
+    // write a minimal package.json containing only dependencies for install.
+    const packageJsonPath = path.join(targetDir, "package.json");
+    const packageJsonBackupPath = path.join(targetDir, "package.json.openclaw-backup");
+    let restoredPackageJson = false;
+    try {
+      await fs.rename(packageJsonPath, packageJsonBackupPath);
+      const originalManifest = await readJsonFile<PackageManifest>(packageJsonBackupPath);
+      const sanitized: PackageManifest = {
+        name: originalManifest.name || pluginId,
+        version: originalManifest.version || "0.0.0",
+        dependencies: deps,
+      };
+      await fs.writeFile(packageJsonPath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf-8");
+
+      logger.info?.("Installing plugin dependencies…");
+      const npmRes = await runCommandWithTimeout(
+        ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+        {
+          timeoutMs: Math.max(timeoutMs, 300_000),
+          cwd: targetDir,
+        },
+      );
+      if (npmRes.code !== 0) {
+        throw new Error(npmRes.stderr.trim() || npmRes.stdout.trim() || "unknown error");
       }
-    },
-  });
-  if (!installRes.ok) {
-    return installRes;
+    } catch (err) {
+      if (backupDir) {
+        await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
+        await fs.rename(backupDir, targetDir).catch(() => undefined);
+      }
+      return { ok: false, error: `npm install failed: ${String(err)}` };
+    } finally {
+      // Restore original package.json no matter what.
+      const hadBackup = await fileExists(packageJsonBackupPath);
+      try {
+        if (hadBackup) {
+          await fs.rm(packageJsonPath, { force: true }).catch(() => undefined);
+          await fs.rename(packageJsonBackupPath, packageJsonPath);
+          restoredPackageJson = true;
+        }
+      } catch {
+        // ignore restore failures; caller gets the original install error
+      }
+      if (hadBackup && !restoredPackageJson) {
+        logger.warn?.(
+          `Failed to restore ${packageJsonPath} after dependency install; plugin may not load.`,
+        );
+      }
+    }
+  }
+
+  if (backupDir) {
+    await fs.rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
   return {
