@@ -801,3 +801,428 @@ export async function runEmbeddedAttempt(
               isCompactionInFlight: activeSession.isCompacting,
             })
           ) {
+            timedOutDuringCompaction = true;
+          }
+          // Classify as tool execution timeout if a tool was actively running.
+          // Note: If tool execution completes and compaction starts before timeout,
+          // both flags may be true. Profile rotation logic should check both to avoid
+          // penalizing auth profiles for infrastructure issues (slow tools/compaction)
+          // rather than provider issues.
+          if (subscription.isToolExecutionInFlight()) {
+            timedOutDuringToolExecution = true;
+            if (!isProbeSession) {
+              log.debug(
+                `timeout classified as tool execution timeout: runId=${params.runId} tool=${toolStateSnapshot?.activeToolName ?? "unknown"}`,
+              );
+            }
+          }
+          abortRun(true);
+          if (!abortWarnTimer) {
+            abortWarnTimer = setTimeout(() => {
+              if (!activeSession.isStreaming) {
+                return;
+              }
+              if (!isProbeSession) {
+                log.warn(
+                  `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+                );
+              }
+            }, 10_000);
+          }
+        },
+        Math.max(1, params.timeoutMs),
+      );
+
+      let messagesSnapshot: AgentMessage[] = [];
+      let sessionIdUsed = activeSession.sessionId;
+      const onAbort = () => {
+        const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
+        const timeout = reason ? isTimeoutError(reason) : false;
+        if (
+          shouldFlagCompactionTimeout({
+            isTimeout: timeout,
+            isCompactionPendingOrRetrying: subscription.isCompacting(),
+            isCompactionInFlight: activeSession.isCompacting,
+          })
+        ) {
+          timedOutDuringCompaction = true;
+        }
+        abortRun(timeout, reason);
+      };
+      if (params.abortSignal) {
+        if (params.abortSignal.aborted) {
+          onAbort();
+        } else {
+          params.abortSignal.addEventListener("abort", onAbort, {
+            once: true,
+          });
+        }
+      }
+
+      // Hook runner was already obtained earlier before tool creation
+      const hookAgentId =
+        typeof params.agentId === "string" && params.agentId.trim()
+          ? normalizeAgentId(params.agentId)
+          : resolveSessionAgentIds({
+              sessionKey: params.sessionKey,
+              config: params.config,
+            }).sessionAgentId;
+
+      let promptError: unknown = null;
+      try {
+        const promptStartedAt = Date.now();
+
+        // Run before_agent_start hooks to allow plugins to inject context
+        let effectivePrompt = params.prompt;
+        if (hookRunner?.hasHooks("before_agent_start")) {
+          try {
+            const hookResult = await hookRunner.runBeforeAgentStart(
+              {
+                prompt: params.prompt,
+                messages: activeSession.messages,
+              },
+              {
+                agentId: hookAgentId,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+                workspaceDir: params.workspaceDir,
+                messageProvider: params.messageProvider ?? undefined,
+              },
+            );
+            if (hookResult?.prependContext) {
+              effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+              log.debug(
+                `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
+              );
+            }
+          } catch (hookErr) {
+            log.warn(`before_agent_start hook failed: ${String(hookErr)}`);
+          }
+        }
+
+        log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
+        cacheTrace?.recordStage("prompt:before", {
+          prompt: effectivePrompt,
+          messages: activeSession.messages,
+        });
+
+        // Repair orphaned trailing user messages so new prompts don't violate role ordering.
+        const leafEntry = sessionManager.getLeafEntry();
+        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+          if (leafEntry.parentId) {
+            sessionManager.branch(leafEntry.parentId);
+          } else {
+            sessionManager.resetLeaf();
+          }
+          const sessionContext = sessionManager.buildSessionContext();
+          const sanitizedOrphan = transcriptPolicy.normalizeAntigravityThinkingBlocks
+            ? sanitizeAntigravityThinkingBlocks(sessionContext.messages)
+            : sessionContext.messages;
+          activeSession.agent.replaceMessages(sanitizedOrphan);
+          log.warn(
+            `Removed orphaned user message to prevent consecutive user turns. ` +
+              `runId=${params.runId} sessionId=${params.sessionId}`,
+          );
+        }
+
+        try {
+          // Detect and load images referenced in the prompt for vision-capable models.
+          // This eliminates the need for an explicit "view" tool call by injecting
+          // images directly into the prompt when the model supports it.
+          // Also scans conversation history to enable follow-up questions about earlier images.
+          const imageResult = await detectAndLoadPromptImages({
+            prompt: effectivePrompt,
+            workspaceDir: effectiveWorkspace,
+            model: params.model,
+            existingImages: params.images,
+            historyMessages: activeSession.messages,
+            maxBytes: MAX_IMAGE_BYTES,
+            // Enforce sandbox path restrictions when sandbox is enabled
+            sandbox:
+              sandbox?.enabled && sandbox?.fsBridge
+                ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
+                : undefined,
+          });
+
+          // Inject history images into their original message positions.
+          // This ensures the model sees images in context (e.g., "compare to the first image").
+          const didMutate = injectHistoryImagesIntoMessages(
+            activeSession.messages,
+            imageResult.historyImagesByIndex,
+          );
+          if (didMutate) {
+            // Persist message mutations (e.g., injected history images) so we don't re-scan/reload.
+            activeSession.agent.replaceMessages(activeSession.messages);
+          }
+
+          cacheTrace?.recordStage("prompt:images", {
+            prompt: effectivePrompt,
+            messages: activeSession.messages,
+            note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
+          });
+
+          // Diagnostic: log context sizes before prompt to help debug early overflow errors.
+          if (log.isEnabled("debug")) {
+            const msgCount = activeSession.messages.length;
+            const systemLen = systemPromptText?.length ?? 0;
+            const promptLen = effectivePrompt.length;
+            const sessionSummary = summarizeSessionContext(activeSession.messages);
+            log.debug(
+              `[context-diag] pre-prompt: sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `messages=${msgCount} roleCounts=${sessionSummary.roleCounts} ` +
+                `historyTextChars=${sessionSummary.totalTextChars} ` +
+                `maxMessageTextChars=${sessionSummary.maxMessageTextChars} ` +
+                `historyImageBlocks=${sessionSummary.totalImageBlocks} ` +
+                `systemPromptChars=${systemLen} promptChars=${promptLen} ` +
+                `promptImages=${imageResult.images.length} ` +
+                `historyImageMessages=${imageResult.historyImagesByIndex.size} ` +
+                `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
+            );
+          }
+
+          // Only pass images option if there are actually images to pass
+          // This avoids potential issues with models that don't expect the images parameter
+          if (imageResult.images.length > 0) {
+            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+          } else {
+            await abortable(activeSession.prompt(effectivePrompt));
+          }
+        } catch (err) {
+          promptError = err;
+        } finally {
+          log.debug(
+            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
+          );
+        }
+
+        // Capture snapshot before compaction wait so we have complete messages if timeout occurs
+        // Check compaction state before and after to avoid race condition where compaction starts during capture
+        // Use session state (not subscription) for snapshot decisions - need instantaneous compaction status
+        const wasCompactingBefore = activeSession.isCompacting;
+        const snapshot = activeSession.messages.slice();
+        const wasCompactingAfter = activeSession.isCompacting;
+        // Only trust snapshot if compaction wasn't running before or after capture
+        const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
+        const preCompactionSessionId = activeSession.sessionId;
+
+        try {
+          await abortable(waitForCompactionRetry());
+        } catch (err) {
+          if (isRunnerAbortError(err)) {
+            if (!promptError) {
+              promptError = err;
+            }
+            if (!isProbeSession) {
+              log.debug(
+                `compaction wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
+          } else {
+            throw err;
+          }
+        }
+
+        // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
+        // Previously this was before the prompt, which caused a custom entry to be
+        // inserted between compaction and the next prompt — breaking the
+        // prepareCompaction() guard that checks the last entry type, leading to
+        // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
+        // Skip when timed out during compaction — session state may be inconsistent.
+        if (!timedOutDuringCompaction) {
+          const shouldTrackCacheTtl =
+            params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
+            isCacheTtlEligibleProvider(params.provider, params.modelId);
+          if (shouldTrackCacheTtl) {
+            appendCacheTtlTimestamp(sessionManager, {
+              timestamp: Date.now(),
+              provider: params.provider,
+              modelId: params.modelId,
+            });
+          }
+        }
+
+        // If timeout occurred during compaction, use pre-compaction snapshot when available
+        // (compaction restructures messages but does not add user/assistant turns).
+        const snapshotSelection = selectCompactionTimeoutSnapshot({
+          timedOutDuringCompaction,
+          preCompactionSnapshot,
+          preCompactionSessionId,
+          currentSnapshot: activeSession.messages.slice(),
+          currentSessionId: activeSession.sessionId,
+        });
+        if (timedOutDuringCompaction) {
+          if (!isProbeSession) {
+            log.warn(
+              `using ${snapshotSelection.source} snapshot: timed out during compaction runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+          }
+        }
+        messagesSnapshot = snapshotSelection.messagesSnapshot;
+        sessionIdUsed = snapshotSelection.sessionIdUsed;
+        cacheTrace?.recordStage("session:after", {
+          messages: messagesSnapshot,
+          note: timedOutDuringCompaction
+            ? "compaction timeout"
+            : promptError
+              ? "prompt error"
+              : undefined,
+        });
+        anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
+
+        // Run agent_end hooks to allow plugins to analyze the conversation
+        // This is fire-and-forget, so we don't await
+        // Run even on compaction timeout so plugins can log/cleanup
+        if (hookRunner?.hasHooks("agent_end")) {
+          hookRunner
+            .runAgentEnd(
+              {
+                messages: messagesSnapshot,
+                success: !aborted && !promptError,
+                error: promptError ? describeUnknownError(promptError) : undefined,
+                durationMs: Date.now() - promptStartedAt,
+              },
+              {
+                agentId: hookAgentId,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+                workspaceDir: params.workspaceDir,
+                messageProvider: params.messageProvider ?? undefined,
+              },
+            )
+            .catch((err) => {
+              log.warn(`agent_end hook failed: ${err}`);
+            });
+        }
+      } finally {
+        clearTimeout(abortTimer);
+        if (abortWarnTimer) {
+          clearTimeout(abortWarnTimer);
+        }
+        if (!isProbeSession && (aborted || timedOut) && !timedOutDuringCompaction) {
+          log.debug(
+            `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut}`,
+          );
+        }
+        try {
+          unsubscribe();
+        } catch (err) {
+          // unsubscribe() should never throw; if it does, it indicates a serious bug.
+          // Log at error level to ensure visibility, but don't rethrow in finally block
+          // as it would mask any exception from the try block above.
+          log.error(
+            `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
+          );
+        }
+        clearActiveEmbeddedRun(params.sessionId, queueHandle);
+        params.abortSignal?.removeEventListener?.("abort", onAbort);
+      }
+
+      const lastAssistant = messagesSnapshot
+        .slice()
+        .toReversed()
+        .find((m) => m.role === "assistant");
+
+      const toolMetasNormalized = toolMetas
+        .filter(
+          (entry): entry is { toolName: string; meta?: string } =>
+            typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
+        )
+        .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
+
+      // Build tool execution snapshot if we captured valid tool state during timeout.
+      // This provides debugging context about which tool was running when timeout fired.
+      // Uses state captured in timeout handler to avoid race with handleToolExecutionEnd.
+      const {
+        activeToolName: snapshotToolName,
+        activeToolCallId: snapshotToolCallId,
+        activeToolStartTime: snapshotToolStartTime,
+      } = toolStateSnapshot ?? {};
+      let toolExecutionSnapshot: ToolExecutionSnapshot | undefined;
+      const hasValidToolState =
+        typeof snapshotToolName === "string" &&
+        snapshotToolName.length > 0 &&
+        snapshotToolName.length <= 100 &&
+        typeof snapshotToolCallId === "string" &&
+        snapshotToolCallId.length > 0 &&
+        snapshotToolCallId.length <= 100 &&
+        typeof snapshotToolStartTime === "number" &&
+        snapshotToolStartTime > 0;
+      if (hasValidToolState) {
+        if (!timedOutDuringToolExecution) {
+          log.warn(
+            `tool state captured but flag not set - possible race: ` +
+              `tool=${snapshotToolName} runId=${params.runId}`,
+          );
+        }
+        const toolDuration = Date.now() - snapshotToolStartTime;
+        if (toolDuration > 0 && toolDuration < 86400000) {
+          toolExecutionSnapshot = {
+            toolName: snapshotToolName,
+            toolCallId: snapshotToolCallId,
+            startTime: snapshotToolStartTime,
+          };
+          if (!isProbeSession) {
+            log.warn(
+              `timeout during tool execution: tool=${snapshotToolName} ` +
+                `callId=${snapshotToolCallId} durationMs=${toolDuration} ` +
+                `runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+          }
+        } else {
+          log.warn(
+            `invalid tool duration ${toolDuration}ms (expected 1-86400000ms) - skipping snapshot: ` +
+              `tool=${snapshotToolName} runId=${params.runId}`,
+          );
+        }
+      } else if (timedOutDuringToolExecution) {
+        if (!isProbeSession) {
+          log.warn(`timeout flag set but no valid tool state captured: runId=${params.runId}`);
+        }
+      }
+
+      return {
+        aborted,
+        timedOut,
+        timedOutDuringCompaction,
+        timedOutDuringToolExecution,
+        toolExecutionSnapshot,
+        promptError,
+        sessionIdUsed,
+        systemPromptReport,
+        messagesSnapshot,
+        assistantTexts,
+        toolMetas: toolMetasNormalized,
+        lastAssistant,
+        lastToolError: getLastToolError?.(),
+        didSendViaMessagingTool: didSendViaMessagingTool(),
+        messagingToolSentTexts: getMessagingToolSentTexts(),
+        messagingToolSentTargets: getMessagingToolSentTargets(),
+        cloudCodeAssistFormatError: Boolean(
+          lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
+        ),
+        attemptUsage: getUsageTotals(),
+        compactionCount: getCompactionCount(),
+        // Client tool call detected (OpenResponses hosted tools)
+        clientToolCall: clientToolCallDetected ?? undefined,
+      };
+    } finally {
+      // Always tear down the session (and release the lock) before we leave this attempt.
+      //
+      // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.
+      // pi-agent-core's auto-retry resolves waitForRetry() on assistant message receipt,
+      // *before* tool execution completes in the retried agent loop. Without this wait,
+      // flushPendingToolResults() fires while tools are still executing, inserting
+      // synthetic "missing tool result" errors and causing silent agent failures.
+      // See: https://github.com/openclaw/openclaw/issues/8643
+      await flushPendingToolResultsAfterIdle({
+        agent: session?.agent,
+        sessionManager,
+      });
+      session?.dispose();
+      await sessionLock.release();
+    }
+  } finally {
+    restoreSkillEnv?.();
+    process.chdir(prevCwd);
+  }
+}
