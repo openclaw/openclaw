@@ -72,6 +72,19 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
   return paths;
 }
 
+function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
+  // Skills are defined by SKILL.md; watch only those files to avoid traversing
+  // or watching unrelated large trees (e.g. datasets) that can exhaust FDs.
+  const targets = new Set<string>();
+  for (const root of resolveWatchPaths(workspaceDir, config)) {
+    // Some configs point directly at a skill folder.
+    targets.add(path.join(root, "SKILL.md"));
+    // Standard layout: <skillsRoot>/<skillName>/SKILL.md
+    targets.add(path.join(root, "*", "SKILL.md"));
+  }
+  return Array.from(targets);
+}
+
 export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
   listeners.add(listener);
   return () => {
@@ -130,8 +143,8 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     return;
   }
 
-  const watchPaths = resolveWatchPaths(workspaceDir, params.config);
-  const pathsKey = watchPaths.join("|");
+  const watchTargets = resolveWatchTargets(workspaceDir, params.config);
+  const pathsKey = watchTargets.join("|");
   if (existing && existing.pathsKey === pathsKey && existing.debounceMs === debounceMs) {
     return;
   }
@@ -143,14 +156,14 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     void existing.watcher.close().catch(() => {});
   }
 
-  const watcher = chokidar.watch(watchPaths, {
+  const watcher = chokidar.watch(watchTargets, {
     ignoreInitial: true,
     awaitWriteFinish: {
       stabilityThreshold: debounceMs,
       pollInterval: 100,
     },
     // Avoid FD exhaustion on macOS when a workspace contains huge trees.
-    // This watcher only needs to react to skill changes.
+    // This watcher only needs to react to SKILL.md changes.
     ignored: DEFAULT_SKILLS_WATCH_IGNORED,
   });
 
