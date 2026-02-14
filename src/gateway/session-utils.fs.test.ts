@@ -475,6 +475,58 @@ describe("readSessionMessages", () => {
     expect(marker.__openclaw?.id).toBe("comp-1");
     expect(typeof marker.timestamp).toBe("number");
   });
+
+  test("reads cross-agent absolute sessionFile when storePath points to another agent dir", () => {
+    const sessionId = "cross-agent-default-root";
+    const sessionFile = path.join(tmpDir, "agents", "ops", "sessions", `${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "from-ops" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const wrongStorePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
+    const out = readSessionMessages(sessionId, wrongStorePath, sessionFile);
+
+    expect(out).toEqual([{ role: "user", content: "from-ops" }]);
+  });
+
+  test("reads cross-agent absolute sessionFile for custom per-agent store roots", () => {
+    const sessionId = "cross-agent-custom-root";
+    const sessionFile = path.join(
+      tmpDir,
+      "custom",
+      "agents",
+      "ops",
+      "sessions",
+      `${sessionId}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "assistant", content: "from-custom-ops" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const wrongStorePath = path.join(
+      tmpDir,
+      "custom",
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    const out = readSessionMessages(sessionId, wrongStorePath, sessionFile);
+
+    expect(out).toEqual([{ role: "assistant", content: "from-custom-ops" }]);
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {
@@ -594,6 +646,22 @@ describe("resolveSessionTranscriptCandidates", () => {
 });
 
 describe("resolveSessionTranscriptCandidates safety", () => {
+  test("keeps cross-agent absolute sessionFile when storePath agent context differs", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionFile = "/tmp/openclaw/agents/ops/sessions/sess-safe.jsonl";
+    const candidates = resolveSessionTranscriptCandidates("sess-safe", storePath, sessionFile);
+
+    expect(candidates.map((value) => path.resolve(value))).toContain(path.resolve(sessionFile));
+  });
+
+  test("keeps cross-agent absolute sessionFile for custom per-agent store roots", () => {
+    const storePath = "/srv/custom/agents/main/sessions/sessions.json";
+    const sessionFile = "/srv/custom/agents/ops/sessions/sess-safe.jsonl";
+    const candidates = resolveSessionTranscriptCandidates("sess-safe", storePath, sessionFile);
+
+    expect(candidates.map((value) => path.resolve(value))).toContain(path.resolve(sessionFile));
+  });
+
   test("drops unsafe session IDs instead of producing traversal paths", () => {
     const candidates = resolveSessionTranscriptCandidates(
       "../etc/passwd",
