@@ -200,6 +200,61 @@ function buildSignalContactContext(
   return context;
 }
 
+function buildSignalPollContext(params: {
+  pollCreate?: {
+    question?: string | null;
+    allowMultiple?: boolean | null;
+    options?: string[] | null;
+  } | null;
+  pollVote?: {
+    authorNumber?: string | null;
+    authorUuid?: string | null;
+    targetSentTimestamp?: number | null;
+    optionIndexes?: number[] | null;
+    voteCount?: number | null;
+  } | null;
+  pollTerminate?: { targetSentTimestamp?: number | null } | null;
+}): string[] {
+  const context: string[] = [];
+
+  if (params.pollCreate) {
+    const question = params.pollCreate.question?.trim() || "Untitled";
+    const options =
+      params.pollCreate.options?.filter((opt) => opt?.trim()).map((opt) => opt.trim()) ?? [];
+    const allowMultiple = params.pollCreate.allowMultiple === true;
+
+    if (options.length > 0) {
+      const optionsText = options.join(", ");
+      const suffix = allowMultiple ? " (multiple selections allowed)" : "";
+      context.push(`Poll: "${question}" — Options: ${optionsText}${suffix}`);
+    } else {
+      context.push(`Poll: "${question}"`);
+    }
+  }
+
+  if (params.pollVote) {
+    const targetTimestamp = params.pollVote.targetSentTimestamp;
+    const indexes = params.pollVote.optionIndexes?.filter((idx) => typeof idx === "number") ?? [];
+    const author = params.pollVote.authorNumber?.trim() || params.pollVote.authorUuid?.trim();
+
+    if (targetTimestamp != null) {
+      const timestampText = `#${targetTimestamp}`;
+      const indexesText = indexes.length > 0 ? indexes.join(", ") : "unknown";
+      const authorText = author ? ` (by ${author})` : "";
+      context.push(`Poll vote on ${timestampText}: option(s) ${indexesText}${authorText}`);
+    }
+  }
+
+  if (params.pollTerminate) {
+    const targetTimestamp = params.pollTerminate.targetSentTimestamp;
+    if (targetTimestamp != null) {
+      context.push(`Poll #${targetTimestamp} closed`);
+    }
+  }
+
+  return context;
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
 
@@ -651,6 +706,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const linkPreviewContext =
       deps.injectLinkPreviews !== false ? buildSignalLinkPreviewContext(dataMessage?.previews) : [];
     const contactContext = buildSignalContactContext(dataMessage?.contacts);
+    const pollCreate = dataMessage?.pollCreate ?? null;
+    const pollVote = dataMessage?.pollVote ?? null;
+    const pollTerminate = dataMessage?.pollTerminate ?? null;
+    const pollContext = buildSignalPollContext({ pollCreate, pollVote, pollTerminate });
     const attachments = dataMessage?.attachments ?? [];
     const allAttachments = sticker?.attachment ? [...attachments, sticker.attachment] : attachments;
     const hasBodyContent =
@@ -972,6 +1031,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       placeholder = "<media:attachment>";
     } else if (Array.isArray(dataMessage?.contacts) && dataMessage.contacts.length > 0) {
       placeholder = "<media:contact>";
+    } else if (pollCreate) {
+      const question = pollCreate.question?.trim() || "Untitled";
+      placeholder = `[Poll] ${question}`;
+    } else if (pollVote) {
+      placeholder = "[Poll vote]";
+    } else if (pollTerminate) {
+      placeholder = "[Poll closed]";
     }
 
     const bodyText = messageText || placeholder || quoteText;
@@ -1030,8 +1096,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaDimension,
       mediaDimensions,
       untrustedContext:
-        stickerContext.length > 0 || linkPreviewContext.length > 0 || contactContext.length > 0
-          ? [...stickerContext, ...linkPreviewContext, ...contactContext]
+        stickerContext.length > 0 ||
+        linkPreviewContext.length > 0 ||
+        contactContext.length > 0 ||
+        pollContext.length > 0
+          ? [...stickerContext, ...linkPreviewContext, ...contactContext, ...pollContext]
           : undefined,
       replyToId: quoteReplyId,
       replyToBody: quoteText || undefined,

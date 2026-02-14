@@ -852,4 +852,101 @@ describe("signal createSignalEventHandler inbound contract", () => {
       "Shared contact: John Smith (+15559876543, john@example.org)",
     );
   });
+
+  it("renders poll creation with question and options", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollCreate: {
+          question: "What's for lunch?",
+          allowMultiple: false,
+          options: ["Pizza", "Sushi", "Tacos"],
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll] What's for lunch?");
+    expect(capturedCtx?.UntrustedContext).toContain(
+      'Poll: "What\'s for lunch?" — Options: Pizza, Sushi, Tacos',
+    );
+  });
+
+  it("renders multi-select poll creation", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollCreate: {
+          question: "Pick your favorites",
+          allowMultiple: true,
+          options: ["Coffee", "Tea", "Water"],
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll] Pick your favorites");
+    expect(capturedCtx?.UntrustedContext).toContain(
+      'Poll: "Pick your favorites" — Options: Coffee, Tea, Water (multiple selections allowed)',
+    );
+  });
+
+  it("renders poll vote with option indexes", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollVote: {
+          authorNumber: "+15551234567",
+          targetSentTimestamp: 1234567890,
+          optionIndexes: [1, 3],
+          voteCount: 2,
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll vote]");
+    expect(capturedCtx?.UntrustedContext).toContain(
+      "Poll vote on #1234567890: option(s) 1, 3 (by +15551234567)",
+    );
+  });
+
+  it("renders poll termination", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollTerminate: {
+          targetSentTimestamp: 1234567890,
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll closed]");
+    expect(capturedCtx?.UntrustedContext).toContain("Poll #1234567890 closed");
+  });
+
+  it("uses poll placeholder when no message body", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollCreate: {
+          question: "Quick poll",
+          options: ["Yes", "No"],
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll] Quick poll");
+  });
 });

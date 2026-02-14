@@ -36,6 +36,9 @@ export type SignalDataMessage = {
   textStyles?: Array<SignalTextStyleRange> | null;
   mentions?: Array<SignalMention> | null;
   contacts?: Array<SignalSharedContact> | null;
+  pollCreate?: SignalPollCreate | null;
+  pollVote?: SignalPollVote | null;
+  pollTerminate?: SignalPollTerminate | null;
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;
@@ -97,6 +100,24 @@ export type SignalSharedContact = {
   phone?: Array<{ value?: string | null; type?: string | null }> | null;
   email?: Array<{ value?: string | null; type?: string | null }> | null;
   organization?: string | null;
+};
+
+export type SignalPollCreate = {
+  question?: string | null;
+  allowMultiple?: boolean | null;
+  options?: string[] | null;
+};
+
+export type SignalPollVote = {
+  authorNumber?: string | null;
+  authorUuid?: string | null;
+  targetSentTimestamp?: number | null;
+  optionIndexes?: number[] | null;
+  voteCount?: number | null;
+};
+
+export type SignalPollTerminate = {
+  targetSentTimestamp?: number | null;
 };
 
 export type SignalReactionTarget = {
