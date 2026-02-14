@@ -88,12 +88,58 @@ const routeMemoryStatus: RouteSpec = {
   },
 };
 
+function getCommandPositionals(argv: string[]): string[] {
+  const out: string[] = [];
+  const args = argv.slice(2);
+  for (const arg of args) {
+    if (!arg || arg === "--") {
+      break;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    out.push(arg);
+  }
+  return out;
+}
+
+const routeConfigGet: RouteSpec = {
+  match: (path) => path[0] === "config" && path[1] === "get",
+  run: async (argv) => {
+    const positionals = getCommandPositionals(argv);
+    const pathArg = positionals[2];
+    if (!pathArg) {
+      return false;
+    }
+    const json = hasFlag(argv, "--json");
+    const { runConfigGet } = await import("../config-cli.js");
+    await runConfigGet({ path: pathArg, json });
+    return true;
+  },
+};
+
+const routeConfigUnset: RouteSpec = {
+  match: (path) => path[0] === "config" && path[1] === "unset",
+  run: async (argv) => {
+    const positionals = getCommandPositionals(argv);
+    const pathArg = positionals[2];
+    if (!pathArg) {
+      return false;
+    }
+    const { runConfigUnset } = await import("../config-cli.js");
+    await runConfigUnset({ path: pathArg });
+    return true;
+  },
+};
+
 const routes: RouteSpec[] = [
   routeHealth,
   routeStatus,
   routeSessions,
   routeAgentsList,
   routeMemoryStatus,
+  routeConfigGet,
+  routeConfigUnset,
 ];
 
 export function findRoutedCommand(path: string[]): RouteSpec | null {

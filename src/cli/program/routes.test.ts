@@ -23,4 +23,16 @@ describe("program routes", () => {
   it("does not match unknown routes", () => {
     expect(findRoutedCommand(["definitely-not-real"])).toBeNull();
   });
+
+  it("returns false for config get route when path argument is missing", async () => {
+    const route = findRoutedCommand(["config", "get"]);
+    expect(route).not.toBeNull();
+    await expect(route?.run(["node", "openclaw", "config", "get", "--json"])).resolves.toBe(false);
+  });
+
+  it("returns false for config unset route when path argument is missing", async () => {
+    const route = findRoutedCommand(["config", "unset"]);
+    expect(route).not.toBeNull();
+    await expect(route?.run(["node", "openclaw", "config", "unset"])).resolves.toBe(false);
+  });
 });
