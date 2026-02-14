@@ -90,7 +90,7 @@ describe("canvas host", () => {
     }
   });
 
-  it("serves canvas content from the mounted base path", async () => {
+  it("serves canvas content from the mounted base path and reuses handlers without double close", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
 
@@ -131,28 +131,15 @@ describe("canvas host", () => {
       const miss = await fetch(`http://127.0.0.1:${port}/`);
       expect(miss.status).toBe(404);
     } finally {
-      await handler.close();
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
       );
     }
-  });
-
-  it("reuses a handler without closing it twice", async () => {
-    const dir = await createCaseDir();
-    await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
-
-    const handler = await createCanvasHostHandler({
-      runtime: quietRuntime,
-      rootDir: dir,
-      basePath: CANVAS_HOST_PATH,
-      allowInTests: true,
-    });
     const originalClose = handler.close;
     const closeSpy = vi.fn(async () => originalClose());
     handler.close = closeSpy;
 
-    const server = await startCanvasHost({
+    const hosted = await startCanvasHost({
       runtime: quietRuntime,
       handler,
       ownsHandler: false,
@@ -162,9 +149,9 @@ describe("canvas host", () => {
     });
 
     try {
-      expect(server.port).toBeGreaterThan(0);
+      expect(hosted.port).toBeGreaterThan(0);
     } finally {
-      await server.close();
+      await hosted.close();
       expect(closeSpy).not.toHaveBeenCalled();
       await originalClose();
     }
