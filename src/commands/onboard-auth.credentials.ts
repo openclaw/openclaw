@@ -89,6 +89,18 @@ export async function setKimiCodingApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setStepfunApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "stepfun:default",
+    credential: {
+      type: "api_key",
+      provider: "stepfun",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setSyntheticApiKey(key: string, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({

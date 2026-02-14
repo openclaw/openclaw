@@ -68,6 +68,16 @@ const MOONSHOT_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+const STEPFUN_BASE_URL = "https://api.stepfun.ai/v1";
+const STEPFUN_DEFAULT_MODEL_ID = "step-3.5-flash";
+const STEPFUN_DEFAULT_CONTEXT_WINDOW = 256000;
+const STEPFUN_DEFAULT_MAX_TOKENS = 8192;
+const STEPFUN_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
 
 const QWEN_PORTAL_BASE_URL = "https://portal.qwen.ai/v1";
 const QWEN_PORTAL_OAUTH_PLACEHOLDER = "qwen-oauth";
@@ -106,17 +116,6 @@ export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
 const QIANFAN_DEFAULT_MAX_TOKENS = 32768;
 const QIANFAN_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
-
-const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const NVIDIA_DEFAULT_MODEL_ID = "nvidia/llama-3.1-nemotron-70b-instruct";
-const NVIDIA_DEFAULT_CONTEXT_WINDOW = 131072;
-const NVIDIA_DEFAULT_MAX_TOKENS = 4096;
-const NVIDIA_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -483,6 +482,24 @@ function buildMoonshotProvider(): ProviderConfig {
   };
 }
 
+function buildStepfunProvider(): ProviderConfig {
+  return {
+    baseUrl: STEPFUN_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: STEPFUN_DEFAULT_MODEL_ID,
+        name: "Step 3.5 Flash",
+        reasoning: true,
+        input: ["text"],
+        cost: STEPFUN_DEFAULT_COST,
+        contextWindow: STEPFUN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: STEPFUN_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 function buildQwenPortalProvider(): ProviderConfig {
   return {
     baseUrl: QWEN_PORTAL_BASE_URL,
@@ -620,42 +637,6 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
-export function buildNvidiaProvider(): ProviderConfig {
-  return {
-    baseUrl: NVIDIA_BASE_URL,
-    api: "openai-completions",
-    models: [
-      {
-        id: NVIDIA_DEFAULT_MODEL_ID,
-        name: "NVIDIA Llama 3.1 Nemotron 70B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: NVIDIA_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "meta/llama-3.3-70b-instruct",
-        name: "Meta Llama 3.3 70B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: 4096,
-      },
-      {
-        id: "nvidia/mistral-nemo-minitron-8b-8k-instruct",
-        name: "NVIDIA Mistral NeMo Minitron 8B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 8192,
-        maxTokens: 2048,
-      },
-    ],
-  };
-}
-
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -685,6 +666,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
     providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
+  }
+
+  const stepfunKey =
+    resolveEnvApiKeyVarName("stepfun") ??
+    resolveApiKeyFromProfiles({ provider: "stepfun", store: authStore });
+  if (stepfunKey) {
+    providers.stepfun = { ...buildStepfunProvider(), apiKey: stepfunKey };
   }
 
   const syntheticKey =
@@ -798,13 +786,6 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
-  }
-
-  const nvidiaKey =
-    resolveEnvApiKeyVarName("nvidia") ??
-    resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
-  if (nvidiaKey) {
-    providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
   }
 
   return providers;

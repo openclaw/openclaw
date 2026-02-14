@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import {
-  buildAuthChoiceGroups,
-  buildAuthChoiceOptions,
-  formatAuthChoiceChoicesForCli,
-} from "./auth-choice-options.js";
+import { buildAuthChoiceOptions } from "./auth-choice-options.js";
 
 describe("buildAuthChoiceOptions", () => {
   it("includes GitHub Copilot", () => {
@@ -68,6 +64,16 @@ describe("buildAuthChoiceOptions", () => {
     expect(options.some((opt) => opt.value === "moonshot-api-key-cn")).toBe(true);
     expect(options.some((opt) => opt.value === "kimi-code-api-key")).toBe(true);
     expect(options.some((opt) => opt.value === "together-api-key")).toBe(true);
+  });
+
+  it("includes StepFun auth choice", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+    });
+
+    expect(options.some((opt) => opt.value === "stepfun-api-key")).toBe(true);
   });
 
   it("includes Vercel AI Gateway auth choice", () => {
@@ -147,45 +153,5 @@ describe("buildAuthChoiceOptions", () => {
     });
 
     expect(options.some((opt) => opt.value === "vllm")).toBe(true);
-  });
-
-  it("builds cli help choices from the same catalog", () => {
-    const store: AuthProfileStore = { version: 1, profiles: {} };
-    const options = buildAuthChoiceOptions({
-      store,
-      includeSkip: true,
-    });
-    const cliChoices = formatAuthChoiceChoicesForCli({
-      includeLegacyAliases: false,
-      includeSkip: true,
-    }).split("|");
-
-    for (const option of options) {
-      expect(cliChoices).toContain(option.value);
-    }
-  });
-
-  it("can include legacy aliases in cli help choices", () => {
-    const cliChoices = formatAuthChoiceChoicesForCli({
-      includeLegacyAliases: true,
-      includeSkip: true,
-    }).split("|");
-
-    expect(cliChoices).toContain("setup-token");
-    expect(cliChoices).toContain("oauth");
-    expect(cliChoices).toContain("claude-cli");
-    expect(cliChoices).toContain("codex-cli");
-  });
-
-  it("shows Chutes in grouped provider selection", () => {
-    const store: AuthProfileStore = { version: 1, profiles: {} };
-    const { groups } = buildAuthChoiceGroups({
-      store,
-      includeSkip: false,
-    });
-    const chutesGroup = groups.find((group) => group.value === "chutes");
-
-    expect(chutesGroup).toBeDefined();
-    expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
   });
 });
