@@ -202,4 +202,21 @@ describe("resolveInboundTime", () => {
     expect(result.value).toBe("7:13am");
     expect(result.isFullDate).toBe(false);
   });
+
+  it("maxGap takes priority over skipMs when maxGapMs < skipMs (custom config)", () => {
+    // Edge case: user configures maxGapMs (5min) < skipMs (10min)
+    // Gap of 6 min should trigger maxGap override even though it's < skipMs
+    const result = resolveInboundTime(FIXED_TS, {
+      ...baseParams,
+      agentDefaults: {
+        userTimezone: TZ,
+        envelopeInboundTimeSkipMs: 600_000, // 10 min
+        envelopeInboundTimeMaxGapMs: 300_000, // 5 min
+      },
+      lastTimeSentAt: FIXED_TS - 360_000, // 6 min ago
+      lastDateSentAt: FIXED_TS - 360_000,
+    });
+    expect(result.value).toBe("7:13am");
+    expect(result.isFullDate).toBe(false);
+  });
 });
