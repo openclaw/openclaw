@@ -361,7 +361,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBeUndefined();
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    // Subsequent turns still fetch thread history (delta fetch with oldest param)
+    expect(replies).toHaveBeenCalledWith(expect.objectContaining({ oldest: expect.any(String) }));
   });
 
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {

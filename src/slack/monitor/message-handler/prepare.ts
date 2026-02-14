@@ -521,13 +521,19 @@ export async function prepareSlackMessage(params: {
       storePath,
       sessionKey, // Thread-specific session key
     });
-    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+    if (threadInitialHistoryLimit > 0) {
+      // Convert session timestamp (ms) to Slack epoch (seconds) for delta fetch.
+      // On the first turn threadSessionPreviousTimestamp is undefined → fetch full history.
+      const oldestTs = threadSessionPreviousTimestamp
+        ? String(threadSessionPreviousTimestamp / 1000)
+        : undefined;
       const threadHistory = await resolveSlackThreadHistory({
         channelId: message.channel,
         threadTs,
         client: ctx.app.client,
         currentMessageTs: message.ts,
         limit: threadInitialHistoryLimit,
+        oldest: oldestTs,
       });
 
       if (threadHistory.length > 0) {
@@ -566,7 +572,7 @@ export async function prepareSlackMessage(params: {
         }
         threadHistoryBody = historyParts.join("\n\n");
         logVerbose(
-          `slack: populated thread history with ${threadHistory.length} messages for new session`,
+          `slack: populated thread history with ${threadHistory.length} messages${oldestTs ? " (delta)" : " (initial)"}`,
         );
       }
     }
@@ -611,6 +617,7 @@ export async function prepareSlackMessage(params: {
     ParentSessionKey: threadKeys.parentSessionKey,
     ThreadStarterBody: threadStarterBody,
     ThreadHistoryBody: threadHistoryBody,
+    ThreadTs: isThreadReply ? threadTs : undefined,
     IsFirstThreadTurn:
       isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
     ThreadLabel: threadLabel,

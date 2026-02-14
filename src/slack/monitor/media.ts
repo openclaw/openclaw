@@ -436,6 +436,8 @@ export async function resolveSlackThreadHistory(params: {
   client: SlackWebClient;
   currentMessageTs?: string;
   limit?: number;
+  /** Slack epoch timestamp – only return messages newer than this */
+  oldest?: string;
 }): Promise<SlackThreadMessage[]> {
   const maxMessages = params.limit ?? 20;
   if (!Number.isFinite(maxMessages) || maxMessages <= 0) {
@@ -454,6 +456,7 @@ export async function resolveSlackThreadHistory(params: {
         ts: params.threadTs,
         limit: fetchLimit,
         inclusive: true,
+        ...(params.oldest ? { oldest: params.oldest } : {}),
         ...(cursor ? { cursor } : {}),
       })) as SlackRepliesPage;
 
