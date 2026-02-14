@@ -2,8 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SafeOpenError, openFileWithinRoot, type SafeOpenResult } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
+import { resolveFileWithinRoot } from "./file-resolver.js";
 
 export const A2UI_PATH = "/__openclaw__/a2ui";
 
@@ -55,50 +55,6 @@ async function resolveA2uiRootReal(): Promise<string | null> {
     })();
   }
   return resolvingA2uiRoot;
-}
-
-function normalizeUrlPath(rawPath: string): string {
-  const decoded = decodeURIComponent(rawPath || "/");
-  const normalized = path.posix.normalize(decoded);
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
-}
-
-async function resolveA2uiFile(rootReal: string, urlPath: string): Promise<SafeOpenResult | null> {
-  const normalized = normalizeUrlPath(urlPath);
-  const rel = normalized.replace(/^\/+/, "");
-  if (rel.split("/").some((p) => p === "..")) {
-    return null;
-  }
-
-  const tryOpen = async (relative: string) => {
-    try {
-      return await openFileWithinRoot({ rootDir: rootReal, relativePath: relative });
-    } catch (err) {
-      if (err instanceof SafeOpenError) {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  if (normalized.endsWith("/")) {
-    return await tryOpen(path.posix.join(rel, "index.html"));
-  }
-
-  const candidate = path.join(rootReal, rel);
-  try {
-    const st = await fs.lstat(candidate);
-    if (st.isSymbolicLink()) {
-      return null;
-    }
-    if (st.isDirectory()) {
-      return await tryOpen(path.posix.join(rel, "index.html"));
-    }
-  } catch {
-    // ignore
-  }
-
-  return await tryOpen(rel);
 }
 
 export function injectCanvasLiveReload(html: string): string {
@@ -192,7 +148,7 @@ export async function handleA2uiHttpRequest(
   }
 
   const rel = url.pathname.slice(basePath.length);
-  const result = await resolveA2uiFile(a2uiRootReal, rel || "/");
+  const result = await resolveFileWithinRoot(a2uiRootReal, rel || "/");
   if (!result) {
     res.statusCode = 404;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
