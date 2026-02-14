@@ -5,6 +5,7 @@ import type { ModelRow } from "./list.types.js";
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import { resolveForwardCompatModel } from "../../agents/model-forward-compat.js";
 import { parseModelRef } from "../../agents/model-selection.js";
+import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
@@ -108,6 +109,9 @@ export async function modelsListCommand(
           model = forwardCompat;
           modelByKey.set(entry.key, forwardCompat);
         }
+      }
+      if (!model) {
+        model = resolveModel(entry.ref.provider, entry.ref.model, undefined, cfg).model;
       }
       if (opts.local && model && !isLocalBaseUrl(model.baseUrl)) {
         continue;
