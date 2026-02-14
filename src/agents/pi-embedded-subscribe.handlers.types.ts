@@ -20,12 +20,20 @@ export type ToolErrorSummary = {
   toolName: string;
   meta?: string;
   error?: string;
+  mutatingAction?: boolean;
+  actionFingerprint?: string;
+};
+
+export type ToolCallSummary = {
+  meta?: string;
+  mutatingAction: boolean;
+  actionFingerprint?: string;
 };
 
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
-  toolMetaById: Map<string, string | undefined>;
+  toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   lastToolError?: ToolErrorSummary;
 
