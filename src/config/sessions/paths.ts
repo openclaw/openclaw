@@ -82,6 +82,20 @@ function resolvePathWithinSessionsDir(sessionsDir: string, candidate: string): s
   // convert them to relative so the containment check passes.
   const normalized = path.isAbsolute(trimmed) ? path.relative(resolvedBase, trimmed) : trimmed;
   if (!normalized || normalized.startsWith("..") || path.isAbsolute(normalized)) {
+    // Allow absolute paths under <stateDir>/agents/*/sessions/ to support
+    // multi-agent setups where each agent has its own sessions directory.
+    if (path.isAbsolute(trimmed)) {
+      const resolved = path.resolve(trimmed);
+      const stateDir = resolveStateDir();
+      const agentsDir = path.join(stateDir, "agents");
+      if (resolved.startsWith(agentsDir + path.sep)) {
+        const relativePath = path.relative(agentsDir, resolved);
+        const parts = relativePath.split(path.sep);
+        if (parts.length >= 3 && parts[1] === "sessions") {
+          return resolved;
+        }
+      }
+    }
     throw new Error("Session file path must be within sessions directory");
   }
   return path.resolve(resolvedBase, normalized);

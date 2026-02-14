@@ -29,6 +29,10 @@ describe("resolveStorePath", () => {
 });
 
 describe("session path safety", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("validates safe session IDs", () => {
     expect(validateSessionId("sess-1")).toBe("sess-1");
     expect(validateSessionId("ABC_123.hello")).toBe("ABC_123.hello");
@@ -96,15 +100,37 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "abc-123-topic-42.jsonl"));
   });
 
-  it("rejects absolute sessionFile paths outside the sessions dir", () => {
+  it("accepts absolute sessionFile paths from another agent's sessions dir", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/openclaw");
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+
+    const resolved = resolveSessionFilePath(
+      "sess-1",
+      { sessionFile: "/tmp/openclaw/agents/feishu/sessions/abc-123.jsonl" },
+      { sessionsDir },
+    );
+
+    expect(resolved).toBe(path.resolve("/tmp/openclaw/agents/feishu/sessions/abc-123.jsonl"));
+  });
+
+  it("rejects absolute paths under agents/sessions outside the state dir", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/openclaw");
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
     expect(() =>
       resolveSessionFilePath(
         "sess-1",
-        { sessionFile: "/tmp/openclaw/agents/work/sessions/abc-123.jsonl" },
+        { sessionFile: "/etc/agents/evil/sessions/steal.jsonl" },
         { sessionsDir },
       ),
+    ).toThrow(/within sessions directory/);
+  });
+
+  it("rejects absolute sessionFile paths outside any agents sessions dir", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+
+    expect(() =>
+      resolveSessionFilePath("sess-1", { sessionFile: "/etc/passwd" }, { sessionsDir }),
     ).toThrow(/within sessions directory/);
   });
 
