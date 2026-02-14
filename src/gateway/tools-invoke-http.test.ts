@@ -1,16 +1,136 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { ToolInputError } from "../agents/tools/common.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
-import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
 
-installGatewayTestHooks({ scope: "suite" });
+const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 
-beforeEach(() => {
+// Perf: the real tool factory instantiates many tools per request; for these HTTP
+// routing/policy tests we only need a small set of tool names.
+vi.mock("../agents/openclaw-tools.js", () => {
+  const toolInputError = (message: string) => {
+    const err = new Error(message);
+    err.name = "ToolInputError";
+    return err;
+  };
+
+  const tools = [
+    {
+      name: "session_status",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true }),
+    },
+    {
+      name: "agents_list",
+      parameters: { type: "object", properties: { action: { type: "string" } } },
+      execute: async () => ({ ok: true, result: [] }),
+    },
+    {
+      name: "sessions_spawn",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true }),
+    },
+    {
+      name: "sessions_send",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true }),
+    },
+    {
+      name: "gateway",
+      parameters: { type: "object", properties: {} },
+      execute: async () => {
+        throw toolInputError("invalid args");
+      },
+    },
+    {
+      name: "tools_invoke_test",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { type: "string" },
+        },
+        required: ["mode"],
+        additionalProperties: false,
+      },
+      execute: async (_toolCallId: string, args: unknown) => {
+        const mode = (args as { mode?: unknown })?.mode;
+        if (mode === "input") {
+          throw toolInputError("mode invalid");
+        }
+        if (mode === "crash") {
+          throw new Error("boom");
+        }
+        return { ok: true };
+      },
+    },
+  ];
+
+  return {
+    createOpenClawTools: () => tools,
+  };
+});
+
+const { testState } = await import("./test-helpers.mocks.js");
+const { clearConfigCache, writeConfigFile } = await import("../config/config.js");
+const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
+
+let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
+
+let sharedPort = 0;
+let sharedServer: ReturnType<typeof createServer> | undefined;
+
+beforeAll(async () => {
+  sharedServer = createServer((req, res) => {
+    void (async () => {
+      const handled = await handleToolsInvokeHttpRequest(req, res, {
+        auth: { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false },
+      });
+      if (handled) {
+        return;
+      }
+      for (const handler of pluginHttpHandlers) {
+        if (await handler(req, res)) {
+          return;
+        }
+      }
+      res.statusCode = 404;
+      res.end("not found");
+    })().catch((err) => {
+      res.statusCode = 500;
+      res.end(String(err));
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    sharedServer?.once("error", reject);
+    sharedServer?.listen(0, "127.0.0.1", () => {
+      const address = sharedServer?.address() as AddressInfo | null;
+      sharedPort = address?.port ?? 0;
+      resolve();
+    });
+  });
+});
+
+afterAll(async () => {
+  const server = sharedServer;
+  if (!server) {
+    return;
+  }
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  sharedServer = undefined;
+});
+
+beforeEach(async () => {
   // Ensure these tests are not affected by host env vars.
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+
+  pluginHttpHandlers = [];
+  testState.agentConfig = undefined;
+  testState.agentsConfig = undefined;
+  testState.sessionConfig = undefined;
+  testState.gatewayAuth = { mode: "token", token: TEST_GATEWAY_TOKEN };
+  await writeConfigFile({});
+  clearConfigCache();
 });
 
 const resolveGatewayToken = (): string => {
@@ -46,7 +166,7 @@ const invokeAgentsList = async (params: {
   }
   return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
     method: "POST",
-    headers: { "content-type": "application/json", connection: "close", ...params.headers },
+    headers: { "content-type": "application/json", ...params.headers },
     body: JSON.stringify(body),
   });
 };
@@ -71,26 +191,12 @@ const invokeTool = async (params: {
   }
   return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
     method: "POST",
-    headers: { "content-type": "application/json", connection: "close", ...params.headers },
+    headers: { "content-type": "application/json", ...params.headers },
     body: JSON.stringify(body),
   });
 };
 
 describe("POST /tools/invoke", () => {
-  let sharedPort = 0;
-  let sharedServer: Awaited<ReturnType<typeof startGatewayServer>>;
-
-  beforeAll(async () => {
-    sharedPort = await getFreePort();
-    sharedServer = await startGatewayServer(sharedPort, {
-      bind: "loopback",
-    });
-  });
-
-  afterAll(async () => {
-    await sharedServer.close();
-  });
-
   it("invokes a tool and returns {ok:true,result}", async () => {
     allowAgentsListForMain();
     const token = resolveGatewayToken();
@@ -113,11 +219,11 @@ describe("POST /tools/invoke", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
-    const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       tools: { profile: "minimal", alsoAllow: ["agents_list"] },
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
+    clearConfigCache();
     const token = resolveGatewayToken();
 
     const resProfile = await invokeAgentsList({
@@ -134,6 +240,7 @@ describe("POST /tools/invoke", () => {
       tools: { alsoAllow: ["agents_list"] },
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
+    clearConfigCache();
     const resImplicit = await invokeAgentsList({
       port: sharedPort,
       headers: { authorization: `Bearer ${token}` },
@@ -150,33 +257,18 @@ describe("POST /tools/invoke", () => {
       res.end("plugin");
       return true;
     });
-    const registry = createTestRegistry();
-    registry.httpHandlers = [
-      {
-        pluginId: "test-plugin",
-        source: "test",
-        handler: pluginHandler as unknown as (
-          req: import("node:http").IncomingMessage,
-          res: import("node:http").ServerResponse,
-        ) => Promise<boolean>,
-      },
-    ];
-    setTestPluginRegistry(registry);
-
     allowAgentsListForMain();
-    try {
-      const token = resolveGatewayToken();
-      const res = await invokeAgentsList({
-        port: sharedPort,
-        headers: { authorization: `Bearer ${token}` },
-        sessionKey: "main",
-      });
+    pluginHttpHandlers = [async (req, res) => pluginHandler(req, res)];
 
-      expect(res.status).toBe(200);
-      expect(pluginHandler).not.toHaveBeenCalled();
-    } finally {
-      resetTestPluginRegistry();
-    }
+    const token = resolveGatewayToken();
+    const res = await invokeAgentsList({
+      port: sharedPort,
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    expect(pluginHandler).not.toHaveBeenCalled();
   });
 
   it("returns 404 when denylisted or blocked by tools.profile", async () => {
@@ -202,11 +294,11 @@ describe("POST /tools/invoke", () => {
 
     allowAgentsListForMain();
 
-    const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       tools: { profile: "minimal" },
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
+    clearConfigCache();
 
     const profileRes = await invokeAgentsList({
       port: sharedPort,
@@ -284,11 +376,11 @@ describe("POST /tools/invoke", () => {
       list: [{ id: "main", tools: { allow: ["gateway"] } }],
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
-    const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       gateway: { tools: { allow: ["gateway"] } },
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
+    clearConfigCache();
 
     const token = resolveGatewayToken();
 
@@ -309,6 +401,7 @@ describe("POST /tools/invoke", () => {
       await writeConfigFile({
         // oxlint-disable-next-line typescript/no-explicit-any
       } as any);
+      clearConfigCache();
     }
   });
 
@@ -317,11 +410,11 @@ describe("POST /tools/invoke", () => {
       list: [{ id: "main", tools: { allow: ["gateway"] } }],
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
-    const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       gateway: { tools: { allow: ["gateway"], deny: ["gateway"] } },
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
+    clearConfigCache();
 
     const token = resolveGatewayToken();
 
@@ -338,6 +431,7 @@ describe("POST /tools/invoke", () => {
       await writeConfigFile({
         // oxlint-disable-next-line typescript/no-explicit-any
       } as any);
+      clearConfigCache();
     }
   });
 
@@ -379,76 +473,37 @@ describe("POST /tools/invoke", () => {
   });
 
   it("maps tool input errors to 400 and unexpected execution errors to 500", async () => {
-    const registry = createTestRegistry();
-    registry.tools.push({
-      pluginId: "tools-invoke-test",
-      source: "test",
-      names: ["tools_invoke_test"],
-      optional: false,
-      factory: () => ({
-        label: "Tools Invoke Test",
-        name: "tools_invoke_test",
-        description: "Test-only tool.",
-        parameters: {
-          type: "object",
-          properties: {
-            mode: { type: "string" },
-          },
-          required: ["mode"],
-          additionalProperties: false,
-        },
-        execute: async (_toolCallId, args) => {
-          const mode = (args as { mode?: unknown }).mode;
-          if (mode === "input") {
-            throw new ToolInputError("mode invalid");
-          }
-          if (mode === "crash") {
-            throw new Error("boom");
-          }
-          return { ok: true };
-        },
-      }),
-    });
-    setTestPluginRegistry(registry);
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      plugins: { enabled: true },
+    testState.agentsConfig = {
+      list: [{ id: "main", tools: { allow: ["tools_invoke_test"] } }],
       // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
+    } as any;
 
     const token = resolveGatewayToken();
 
-    try {
-      const inputRes = await invokeTool({
-        port: sharedPort,
-        tool: "tools_invoke_test",
-        args: { mode: "input" },
-        headers: { authorization: `Bearer ${token}` },
-        sessionKey: "main",
-      });
-      expect(inputRes.status).toBe(400);
-      const inputBody = await inputRes.json();
-      expect(inputBody.ok).toBe(false);
-      expect(inputBody.error?.type).toBe("tool_error");
-      expect(inputBody.error?.message).toBe("mode invalid");
+    const inputRes = await invokeTool({
+      port: sharedPort,
+      tool: "tools_invoke_test",
+      args: { mode: "input" },
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
+    });
+    expect(inputRes.status).toBe(400);
+    const inputBody = await inputRes.json();
+    expect(inputBody.ok).toBe(false);
+    expect(inputBody.error?.type).toBe("tool_error");
+    expect(inputBody.error?.message).toBe("mode invalid");
 
-      const crashRes = await invokeTool({
-        port: sharedPort,
-        tool: "tools_invoke_test",
-        args: { mode: "crash" },
-        headers: { authorization: `Bearer ${token}` },
-        sessionKey: "main",
-      });
-      expect(crashRes.status).toBe(500);
-      const crashBody = await crashRes.json();
-      expect(crashBody.ok).toBe(false);
-      expect(crashBody.error?.type).toBe("tool_error");
-      expect(crashBody.error?.message).toBe("tool execution failed");
-    } finally {
-      await writeConfigFile({
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any);
-      resetTestPluginRegistry();
-    }
+    const crashRes = await invokeTool({
+      port: sharedPort,
+      tool: "tools_invoke_test",
+      args: { mode: "crash" },
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
+    });
+    expect(crashRes.status).toBe(500);
+    const crashBody = await crashRes.json();
+    expect(crashBody.ok).toBe(false);
+    expect(crashBody.error?.type).toBe("tool_error");
+    expect(crashBody.error?.message).toBe("tool execution failed");
   });
 });
