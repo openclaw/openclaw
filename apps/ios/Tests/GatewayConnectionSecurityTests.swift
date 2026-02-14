@@ -62,7 +62,7 @@ import Testing
 
         let params = controller._test_resolveDiscoveredTLSParams(gateway: gateway, allowTOFU: true)
         #expect(params?.expectedFingerprint == nil)
-        #expect(params?.allowTOFU == true)
+        #expect(params?.allowTOFU == false)
     }
 
     @Test @MainActor func autoconnectRequiresStoredPinForDiscoveredGateways() async {
@@ -77,6 +77,7 @@ import Testing
         defaults.removeObject(forKey: "gateway.last.port")
         defaults.removeObject(forKey: "gateway.last.tls")
         defaults.removeObject(forKey: "gateway.last.stableID")
+        defaults.removeObject(forKey: "gateway.last.kind")
         defaults.removeObject(forKey: "gateway.preferredStableID")
         defaults.set(stableID, forKey: "gateway.lastDiscoveredStableID")
 
@@ -102,4 +103,3 @@ import Testing
         #expect(controller._test_didAutoConnect() == false)
     }
 }
-

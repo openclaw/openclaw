@@ -52,6 +52,7 @@ struct RootCanvas: View {
                 CameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
             }
         }
+        .gatewayTrustPromptAlert()
         .sheet(item: self.$presentedSheet) { sheet in
             switch sheet {
             case .settings:

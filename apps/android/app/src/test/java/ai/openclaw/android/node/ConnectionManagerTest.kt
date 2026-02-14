@@ -49,7 +49,7 @@ class ConnectionManagerTest {
       )
 
     assertNull(params?.expectedFingerprint)
-    assertEquals(true, params?.allowTOFU)
+    assertEquals(false, params?.allowTOFU)
   }
 
   @Test
@@ -71,7 +71,6 @@ class ConnectionManagerTest {
         manualTlsEnabled = true,
       )
     assertNull(on?.expectedFingerprint)
-    assertEquals(true, on?.allowTOFU)
+    assertEquals(false, on?.allowTOFU)
   }
 }
-
