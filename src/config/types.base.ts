@@ -165,4 +165,16 @@ export type IdentityConfig = {
   emoji?: string;
   /** Avatar image: workspace-relative path, http(s) URL, or data URI. */
   avatar?: string;
+  /** Professional role/seniority (e.g. "specialist", "senior engineer"). */
+  role?: string;
+  /** Job title (e.g. "Design System Architect"). */
+  title?: string;
+  /** Areas of expertise. */
+  expertise?: string[];
+  /** Years/level of experience (e.g. "8 years"). */
+  experience?: string;
+  /** Companies/organizations for credibility context. */
+  companies?: string[];
+  /** Short biography or professional summary. */
+  bio?: string;
 };

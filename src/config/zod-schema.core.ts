@@ -100,6 +100,12 @@ export const IdentitySchema = z
     theme: z.string().optional(),
     emoji: z.string().optional(),
     avatar: z.string().optional(),
+    role: z.string().optional(),
+    title: z.string().optional(),
+    expertise: z.array(z.string()).optional(),
+    experience: z.string().optional(),
+    companies: z.array(z.string()).optional(),
+    bio: z.string().optional(),
   })
   .strict()
   .optional();
