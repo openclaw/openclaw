@@ -141,6 +141,8 @@ export type TelegramAccountConfig = {
    * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
    */
   responsePrefix?: string;
+  /** Custom API root URL for self-hosted Telegram Bot API servers. */
+  apiRoot?: string;
 };
 
 export type TelegramTopicConfig = {
