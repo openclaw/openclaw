@@ -45,8 +45,15 @@ function extractTextContent(content: unknown): string {
         }
         const type = (part as { type?: unknown }).type;
         const text = (part as { text?: unknown }).text;
+        const inputText = (part as { input_text?: unknown }).input_text;
         if (type === "text" && typeof text === "string") {
           return text;
+        }
+        if (type === "input_text" && typeof text === "string") {
+          return text;
+        }
+        if (typeof inputText === "string") {
+          return inputText;
         }
         return "";
       })
@@ -126,5 +133,18 @@ describe("extractTextContent with multimodal content", () => {
   it("ignores image_url parts in text extraction", () => {
     const content = [{ type: "image_url", image_url: { url: "data:image/png;base64,AAA" } }];
     expect(extractTextContent(content)).toBe("");
+  });
+
+  it("extracts input_text type parts", () => {
+    const content = [
+      { type: "input_text", text: "from input_text type" },
+      { type: "text", text: "from text type" },
+    ];
+    expect(extractTextContent(content)).toBe("from input_text type\nfrom text type");
+  });
+
+  it("extracts input_text property without type field", () => {
+    const content = [{ input_text: "raw input text" }];
+    expect(extractTextContent(content)).toBe("raw input text");
   });
 });
