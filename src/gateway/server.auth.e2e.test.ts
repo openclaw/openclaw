@@ -127,7 +127,13 @@ describe("gateway server auth/connect", () => {
 
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
         await import("../infra/device-identity.js");
-      const identity = loadOrCreateDeviceIdentity();
+      const { randomUUID } = await import("node:crypto");
+      const os = await import("node:os");
+      const path = await import("node:path");
+      // Fresh identity: avoid leaking prior scopes (presence merges lists).
+      const identity = loadOrCreateDeviceIdentity(
+        path.join(os.tmpdir(), `openclaw-test-device-${randomUUID()}.json`),
+      );
       const signedAtMs = Date.now();
       const payload = buildDeviceAuthPayload({
         deviceId: identity.deviceId,
@@ -166,7 +172,7 @@ describe("gateway server auth/connect", () => {
           },
         }),
       );
-      const connectRes = await onceMessage<{ ok: boolean }>(ws, (o) => {
+      const connectRes = await onceMessage<{ ok: boolean; payload?: unknown }>(ws, (o) => {
         if (!o || typeof o !== "object" || Array.isArray(o)) {
           return false;
         }
@@ -174,6 +180,20 @@ describe("gateway server auth/connect", () => {
         return rec.type === "res" && rec.id === "c-no-scopes";
       });
       expect(connectRes.ok).toBe(true);
+      const helloOk = connectRes.payload as
+        | {
+            snapshot?: {
+              presence?: Array<{ deviceId?: unknown; scopes?: unknown }>;
+            };
+          }
+        | undefined;
+      const presence = helloOk?.snapshot?.presence;
+      expect(Array.isArray(presence)).toBe(true);
+      const mine = presence?.find((entry) => entry.deviceId === identity.deviceId);
+      expect(mine).toBeTruthy();
+      const presenceScopes = Array.isArray(mine?.scopes) ? mine?.scopes : [];
+      expect(presenceScopes).toEqual([]);
+      expect(presenceScopes).not.toContain("operator.admin");
 
       const health = await rpcReq(ws, "health");
       expect(health.ok).toBe(false);
