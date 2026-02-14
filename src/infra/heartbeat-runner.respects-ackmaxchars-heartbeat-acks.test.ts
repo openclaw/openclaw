@@ -30,6 +30,52 @@ beforeEach(() => {
 });
 
 describe("resolveHeartbeatIntervalMs", () => {
+  async function seedSessionStore(
+    storePath: string,
+    sessionKey: string,
+    session: { lastChannel: string; lastProvider: string; lastTo: string },
+  ) {
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            ...session,
+          },
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  async function withTempTelegramHeartbeatSandbox<T>(
+    fn: (ctx: {
+      tmpDir: string;
+      storePath: string;
+      replySpy: ReturnType<typeof vi.spyOn>;
+    }) => Promise<T>,
+  ) {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "";
+    try {
+      return await fn({ tmpDir, storePath, replySpy });
+    } finally {
+      replySpy.mockRestore();
+      if (prevTelegramToken === undefined) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      }
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
   it("respects ackMaxChars for heartbeat acks", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
@@ -416,12 +462,7 @@ describe("resolveHeartbeatIntervalMs", () => {
   });
 
   it("passes through accountId for telegram heartbeats", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    process.env.TELEGRAM_BOT_TOKEN = "";
-    try {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -434,22 +475,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "telegram",
-              lastProvider: "telegram",
-              lastTo: "123456",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "123456",
+      });
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
       const sendTelegram = vi.fn().mockResolvedValue({
@@ -472,24 +502,11 @@ describe("resolveHeartbeatIntervalMs", () => {
         "Hello from heartbeat",
         expect.objectContaining({ accountId: undefined, verbose: false }),
       );
-    } finally {
-      replySpy.mockRestore();
-      if (prevTelegramToken === undefined) {
-        delete process.env.TELEGRAM_BOT_TOKEN;
-      } else {
-        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      }
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("uses explicit heartbeat accountId for telegram delivery", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    process.env.TELEGRAM_BOT_TOKEN = "";
-    try {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -508,22 +525,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "telegram",
-              lastProvider: "telegram",
-              lastTo: "123456",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "123456",
+      });
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
       const sendTelegram = vi.fn().mockResolvedValue({
@@ -546,24 +552,11 @@ describe("resolveHeartbeatIntervalMs", () => {
         "Hello from heartbeat",
         expect.objectContaining({ accountId: "work", verbose: false }),
       );
-    } finally {
-      replySpy.mockRestore();
-      if (prevTelegramToken === undefined) {
-        delete process.env.TELEGRAM_BOT_TOKEN;
-      } else {
-        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      }
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("does not pre-resolve telegram accountId (allows config-only account tokens)", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    process.env.TELEGRAM_BOT_TOKEN = "";
-    try {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -582,22 +575,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "telegram",
-              lastProvider: "telegram",
-              lastTo: "123456",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "123456",
+      });
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
       const sendTelegram = vi.fn().mockResolvedValue({
@@ -620,14 +602,6 @@ describe("resolveHeartbeatIntervalMs", () => {
         "Hello from heartbeat",
         expect.objectContaining({ accountId: undefined, verbose: false }),
       );
-    } finally {
-      replySpy.mockRestore();
-      if (prevTelegramToken === undefined) {
-        delete process.env.TELEGRAM_BOT_TOKEN;
-      } else {
-        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      }
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 });
