@@ -74,7 +74,10 @@ function parseQmdSessionScope(key?: string): ParsedQmdSessionScope {
   return { normalizedKey: normalized, chatType: "direct" };
 }
 
-function normalizeQmdSessionKey(key: string): string | undefined {
+function normalizeQmdSessionKey(key?: string): string | undefined {
+  if (!key) {
+    return undefined;
+  }
   const trimmed = key.trim();
   if (!trimmed) {
     return undefined;
