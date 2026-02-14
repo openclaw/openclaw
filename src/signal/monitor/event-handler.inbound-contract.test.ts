@@ -934,19 +934,65 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capturedCtx?.UntrustedContext).toContain("Poll #1234567890 closed");
   });
 
-  it("uses poll placeholder when no message body", async () => {
+  it("uses Untitled placeholder for null question with empty options", async () => {
     const handler = createTestHandler();
 
     await handler(
       makeReceiveEvent({
         pollCreate: {
-          question: "Quick poll",
-          options: ["Yes", "No"],
+          question: null,
+          allowMultiple: false,
+          options: [],
         },
       }),
     );
 
     expect(capturedCtx).toBeTruthy();
-    expect(capturedCtx?.BodyForCommands).toBe("[Poll] Quick poll");
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll] Untitled");
+    expect(capturedCtx?.UntrustedContext).toContain('Poll: "Untitled"');
+  });
+
+  it("falls back to authorUuid when authorNumber is missing on poll vote", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollVote: {
+          authorNumber: null,
+          authorUuid: "abc-123-uuid",
+          targetSentTimestamp: 1234567890,
+          optionIndexes: [0, 2],
+          voteCount: 2,
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll vote]");
+    expect(capturedCtx?.UntrustedContext).toContain(
+      "Poll vote on #1234567890: option(s) 0, 2 (by abc-123-uuid)",
+    );
+  });
+
+  it("preserves message body when poll is present", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "Check out this poll",
+        pollCreate: {
+          question: "Lunch?",
+          allowMultiple: false,
+          options: ["Pizza", "Sushi"],
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("Check out this poll");
+    expect(capturedCtx?.UntrustedContext).toContain('Poll: "Lunch?" — Options: Pizza, Sushi');
   });
 });
