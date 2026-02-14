@@ -25,6 +25,12 @@
     "autoRecall": {
       "label": "Auto-Recall",
       "help": "Automatically inject relevant memories into context"
+    },
+    "captureMaxChars": {
+      "label": "Capture Max Chars",
+      "help": "Maximum message length eligible for auto-capture",
+      "advanced": true,
+      "placeholder": "1500"
     }
   },
   "configSchema": {
@@ -53,6 +59,11 @@
       },
       "autoRecall": {
         "type": "boolean"
+      },
+      "captureMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
       }
     },
     "required": ["embedding"]
