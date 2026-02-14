@@ -44,7 +44,7 @@ import {
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -720,19 +720,11 @@ export async function startGatewayServer(
   return {
     close: async (opts) => {
       // Run gateway_stop plugin hook before shutdown
-      {
-        const hookRunner = getGlobalHookRunner();
-        if (hookRunner?.hasHooks("gateway_stop")) {
-          try {
-            await hookRunner.runGatewayStop(
-              { reason: opts?.reason ?? "gateway stopping" },
-              { port },
-            );
-          } catch (err) {
-            log.warn(`gateway_stop hook failed: ${String(err)}`);
-          }
-        }
-      }
+      await runGlobalGatewayStopSafely({
+        event: { reason: opts?.reason ?? "gateway stopping" },
+        ctx: { port },
+        onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
+      });
       if (diagnosticsEnabled) {
         stopDiagnosticHeartbeat();
       }
