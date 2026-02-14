@@ -1,6 +1,10 @@
-import { beforeEach, type MockInstance, vi } from "vitest";
+import { beforeEach, vi } from "vitest";
 
 type NotificationHandler = (msg: { method: string; params?: unknown }) => void;
+
+// Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
+// oxlint-disable-next-line typescript/no-explicit-any
+type AnyMock = any;
 
 const state = vi.hoisted(() => ({
   requestMock: vi.fn(),
@@ -15,39 +19,39 @@ const state = vi.hoisted(() => ({
   closeResolve: undefined as (() => void) | undefined,
 }));
 
-export function getRequestMock(): MockInstance {
+export function getRequestMock(): AnyMock {
   return state.requestMock;
 }
 
-export function getStopMock(): MockInstance {
+export function getStopMock(): AnyMock {
   return state.stopMock;
 }
 
-export function getSendMock(): MockInstance {
+export function getSendMock(): AnyMock {
   return state.sendMock;
 }
 
-export function getReplyMock(): MockInstance {
+export function getReplyMock(): AnyMock {
   return state.replyMock;
 }
 
-export function getUpdateLastRouteMock(): MockInstance {
+export function getUpdateLastRouteMock(): AnyMock {
   return state.updateLastRouteMock;
 }
 
-export function getReadAllowFromStoreMock(): MockInstance {
+export function getReadAllowFromStoreMock(): AnyMock {
   return state.readAllowFromStoreMock;
 }
 
-export function getUpsertPairingRequestMock(): MockInstance {
+export function getUpsertPairingRequestMock(): AnyMock {
   return state.upsertPairingRequestMock;
 }
 
-export function getNotificationHandler() {
+export function getNotificationHandler(): NotificationHandler | undefined {
   return state.notificationHandler;
 }
 
-export function getCloseResolve() {
+export function getCloseResolve(): (() => void) | undefined {
   return state.closeResolve;
 }
 
