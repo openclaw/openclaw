@@ -31,6 +31,28 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
+# Kaspar's custom tools (critical for Sparky functionality)
+# GitHub CLI
+RUN curl -fsSL https://github.com/cli/cli/releases/download/v2.86.0/gh_2.86.0_linux_amd64.tar.gz | \
+    tar -xz --strip-components=1 -C /tmp && \
+    mv /tmp/bin/gh /usr/local/bin/gh && \
+    chmod +x /usr/local/bin/gh && \
+    rm -rf /tmp/bin /tmp/etc
+
+# Gmail CLI (gogcli)
+RUN curl -fsSL https://github.com/steipete/gogcli/releases/download/v0.9.0/gogcli_0.9.0_linux_amd64.tar.gz | \
+    tar -xz -C /tmp && \
+    mv /tmp/gog /usr/local/bin/gog && \
+    chmod +x /usr/local/bin/gog && \
+    rm -rf /tmp/gog /tmp/CHANGELOG.md /tmp/LICENSE /tmp/README.md
+
+# Google Places CLI (goplaces)
+RUN curl -fsSL https://github.com/steipete/goplaces/releases/download/v0.2.1/goplaces_0.2.1_linux_amd64.tar.gz | \
+    tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/goplaces
+
+# SSH (for git operations)
+RUN apt-get update && apt-get install -y openssh-client && rm -rf /var/lib/apt/lists/*
+
 # Allow non-root user to write temp files during runtime/tests.
 RUN chown -R node:node /app
 
