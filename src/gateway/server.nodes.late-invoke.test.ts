@@ -15,26 +15,25 @@ vi.mock("../infra/update-runner.js", () => ({
 
 import {
   connectOk,
+  getFreePort,
   installGatewayTestHooks,
   rpcReq,
-  startServerWithClient,
+  startGatewayServer,
 } from "./test-helpers.js";
+import { testState } from "./test-helpers.mocks.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
-let ws: WebSocket;
+let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let port: number;
 let nodeWs: WebSocket;
 let nodeId: string;
 
 beforeAll(async () => {
   const token = "test-gateway-token-1234567890";
-  const started = await startServerWithClient(token);
-  server = started.server;
-  ws = started.ws;
-  port = started.port;
-  await connectOk(ws, { token });
+  testState.gatewayAuth = { mode: "token", token };
+  port = await getFreePort();
+  server = await startGatewayServer(port, { bind: "loopback" });
 
   nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
   await new Promise<void>((resolve) => nodeWs.once("open", resolve));
@@ -55,8 +54,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  nodeWs.close();
-  ws.close();
+  nodeWs.terminate();
   await server.close();
 });
 
