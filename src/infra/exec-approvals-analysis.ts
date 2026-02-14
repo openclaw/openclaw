@@ -248,6 +248,13 @@ export type ExecCommandAnalysis = {
   chains?: ExecCommandSegment[][]; // Segments grouped by chain operator (&&, ||, ;)
 };
 
+export type ShellChainOperator = "&&" | "||" | ";";
+
+export type ShellChainPart = {
+  part: string;
+  opToNext: ShellChainOperator | null;
+};
+
 const DISALLOWED_PIPELINE_TOKENS = new Set([">", "<", "`", "\n", "\r", "(", ")"]);
 const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`", "\n", "\r"]);
 const WINDOWS_UNSUPPORTED_TOKENS = new Set([
@@ -601,6 +608,168 @@ function parseSegmentsFromParts(
     });
   }
   return segments;
+}
+
+/**
+ * Splits a command string by chain operators (&&, ||, ;) while preserving the operators.
+ * Returns null when no chain is present or when the chain is malformed.
+ */
+export function splitCommandChainWithOperators(command: string): ShellChainPart[] | null {
+  const parts: ShellChainPart[] = [];
+  let buf = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  let foundChain = false;
+  let invalidChain = false;
+
+  const pushPart = (opToNext: ShellChainOperator | null) => {
+    const trimmed = buf.trim();
+    buf = "";
+    if (!trimmed) {
+      return false;
+    }
+    parts.push({ part: trimmed, opToNext });
+    return true;
+  };
+
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    const next = command[i + 1];
+    if (escaped) {
+      buf += ch;
+      escaped = false;
+      continue;
+    }
+    if (!inSingle && !inDouble && ch === "\\") {
+      escaped = true;
+      buf += ch;
+      continue;
+    }
+    if (inSingle) {
+      if (ch === "'") {
+        inSingle = false;
+      }
+      buf += ch;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === "\\" && isDoubleQuoteEscape(next)) {
+        buf += ch;
+        buf += next;
+        i += 1;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = false;
+      }
+      buf += ch;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      buf += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      buf += ch;
+      continue;
+    }
+
+    if (ch === "&" && next === "&") {
+      if (!pushPart("&&")) {
+        invalidChain = true;
+      }
+      i += 1;
+      foundChain = true;
+      continue;
+    }
+    if (ch === "|" && next === "|") {
+      if (!pushPart("||")) {
+        invalidChain = true;
+      }
+      i += 1;
+      foundChain = true;
+      continue;
+    }
+    if (ch === ";") {
+      if (!pushPart(";")) {
+        invalidChain = true;
+      }
+      foundChain = true;
+      continue;
+    }
+
+    buf += ch;
+  }
+
+  if (!foundChain) {
+    return null;
+  }
+  const trimmed = buf.trim();
+  if (!trimmed) {
+    return null;
+  }
+  parts.push({ part: trimmed, opToNext: null });
+  if (invalidChain || parts.length === 0) {
+    return null;
+  }
+  return parts;
+}
+
+function shellEscapeSingleArg(value: string): string {
+  // Shell-safe across sh/bash/zsh: single-quote everything, escape embedded single quotes.
+  // Example: foo'bar -> 'foo'"'"'bar'
+  const singleQuoteEscape = `'"'"'`;
+  return `'${value.replace(/'/g, singleQuoteEscape)}'`;
+}
+
+/**
+ * Builds a shell command string that preserves pipes/chaining, but forces *arguments* to be
+ * literal (no globbing, no env-var expansion) by single-quoting every argv token.
+ *
+ * Used to make "safe bins" actually stdin-only even though execution happens via `shell -c`.
+ */
+export function buildSafeShellCommand(params: { command: string; platform?: string | null }): {
+  ok: boolean;
+  command?: string;
+  reason?: string;
+} {
+  const platform = params.platform ?? null;
+  if (isWindowsPlatform(platform)) {
+    return { ok: false, reason: "unsupported platform" };
+  }
+  const source = params.command.trim();
+  if (!source) {
+    return { ok: false, reason: "empty command" };
+  }
+
+  const chain = splitCommandChainWithOperators(source);
+  const chainParts = chain ?? [{ part: source, opToNext: null }];
+  let out = "";
+
+  for (let i = 0; i < chainParts.length; i += 1) {
+    const part = chainParts[i];
+    const pipelineSplit = splitShellPipeline(part.part);
+    if (!pipelineSplit.ok) {
+      return { ok: false, reason: pipelineSplit.reason ?? "unable to parse pipeline" };
+    }
+    const renderedSegments: string[] = [];
+    for (const segmentRaw of pipelineSplit.segments) {
+      const argv = splitShellArgs(segmentRaw);
+      if (!argv || argv.length === 0) {
+        return { ok: false, reason: "unable to parse shell segment" };
+      }
+      renderedSegments.push(argv.map((token) => shellEscapeSingleArg(token)).join(" "));
+    }
+    out += renderedSegments.join(" | ");
+    if (part.opToNext) {
+      out += ` ${part.opToNext} `;
+    }
+  }
+
+  return { ok: true, command: out };
 }
 
 /**

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
+  buildSafeShellCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
   isSafeBinUsage,
@@ -75,6 +76,25 @@ describe("exec approvals allowlist matching", () => {
     const entries: ExecAllowlistEntry[] = [{ pattern: "bin/rg" }];
     const match = matchAllowlist(entries, resolution);
     expect(match).toBeNull();
+  });
+});
+
+describe("exec approvals safe shell command builder", () => {
+  it("single-quotes argv tokens while preserving pipes/chaining", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const res = buildSafeShellCommand({
+      command: 'head $FOO | grep * && echo "a\'b" ; wc -l',
+      platform: process.platform,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.command).toContain("'$FOO'");
+    expect(res.command).toContain("'*'");
+    expect(res.command).toContain("&&");
+    expect(res.command).toContain(";");
+    expect(res.command).toContain("|");
+    expect(res.command).toContain("'a'\"'\"'b'");
   });
 });
 

@@ -130,4 +130,46 @@ describe("createOpenClawCodingTools safeBins", () => {
     expect(result.details.status).toBe("completed");
     expect(text).toContain(marker);
   });
+
+  it("does not allow env var expansion to smuggle file args via safeBins", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const { createOpenClawCodingTools } = await import("./pi-tools.js");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-safe-bins-expand-"));
+
+    const secret = `TOP_SECRET_${Date.now()}`;
+    fs.writeFileSync(path.join(tmpDir, "secret.txt"), `${secret}\n`, "utf8");
+
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          host: "gateway",
+          security: "allowlist",
+          ask: "off",
+          safeBins: ["head", "wc"],
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: tmpDir,
+      agentDir: path.join(tmpDir, "agent"),
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+
+    const result = await execTool!.execute("call1", {
+      command: "head $FOO ; wc -l",
+      workdir: tmpDir,
+      env: { FOO: "secret.txt" },
+    });
+    const text = result.content.find((content) => content.type === "text")?.text ?? "";
+
+    expect(result.details.status).toBe("completed");
+    expect(text).not.toContain(secret);
+  });
 });
