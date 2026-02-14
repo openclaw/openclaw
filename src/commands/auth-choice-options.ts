@@ -1,5 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
+import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
 
 export type { AuthChoiceGroupId };
 
@@ -32,6 +33,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Anthropic",
     hint: "setup-token + API key",
     choices: ["token", "apiKey"],
+  },
+  {
+    value: "chutes",
+    label: "Chutes",
+    hint: "OAuth",
+    choices: ["chutes"],
   },
   {
     value: "vllm",
@@ -287,15 +294,6 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   { value: "custom-api-key", label: "Custom Provider" },
 ];
 
-const LEGACY_AUTH_CHOICE_ALIASES: ReadonlyArray<AuthChoice> = [
-  "setup-token",
-  "oauth",
-  "claude-cli",
-  "codex-cli",
-  "minimax-cloud",
-  "minimax",
-];
-
 export function formatAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
   includeLegacyAliases?: boolean;
@@ -308,7 +306,7 @@ export function formatAuthChoiceChoicesForCli(params?: {
     values.push("skip");
   }
   if (includeLegacyAliases) {
-    values.push(...LEGACY_AUTH_CHOICE_ALIASES);
+    values.push(...AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI);
   }
 
   return values.join("|");
