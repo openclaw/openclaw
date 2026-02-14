@@ -7,6 +7,8 @@ const hookMocks = vi.hoisted(() => ({
     hasHooks: vi.fn(() => false),
     runAfterToolCall: vi.fn(async () => {}),
   },
+  isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
+  consumeAdjustedParamsForToolCall: vi.fn(() => undefined),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
     params,
@@ -18,6 +20,8 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 }));
 
 vi.mock("./pi-tools.before-tool-call.js", () => ({
+  consumeAdjustedParamsForToolCall: hookMocks.consumeAdjustedParamsForToolCall,
+  isToolWrappedWithBeforeToolCallHook: hookMocks.isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
 }));
 
@@ -26,6 +30,10 @@ describe("pi tool definition adapter after_tool_call", () => {
     hookMocks.runner.hasHooks.mockReset();
     hookMocks.runner.runAfterToolCall.mockReset();
     hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
+    hookMocks.isToolWrappedWithBeforeToolCallHook.mockReset();
+    hookMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(false);
+    hookMocks.consumeAdjustedParamsForToolCall.mockReset();
+    hookMocks.consumeAdjustedParamsForToolCall.mockReturnValue(undefined);
     hookMocks.runBeforeToolCallHook.mockReset();
     hookMocks.runBeforeToolCallHook.mockImplementation(async ({ params }) => ({
       blocked: false,
@@ -35,6 +43,10 @@ describe("pi tool definition adapter after_tool_call", () => {
 
   it("dispatches after_tool_call once on successful adapter execution", async () => {
     hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
+    hookMocks.runBeforeToolCallHook.mockResolvedValue({
+      blocked: false,
+      params: { mode: "safe" },
+    });
     const tool = {
       name: "read",
       label: "Read",
@@ -48,13 +60,42 @@ describe("pi tool definition adapter after_tool_call", () => {
 
     expect(result.details).toMatchObject({ ok: true });
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-    // after_tool_call receives the params as passed to toToolDefinitions;
-    // before_tool_call adjustment happens in wrapToolWithBeforeToolCallHook
-    // (upstream), not inside toToolDefinitions (#15502).
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledWith(
       {
         toolName: "read",
-        params: { path: "/tmp/file" },
+        params: { mode: "safe" },
+        result,
+      },
+      { toolName: "read" },
+    );
+  });
+
+  it("uses wrapped-tool adjusted params for after_tool_call payload", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
+    hookMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(true);
+    hookMocks.consumeAdjustedParamsForToolCall.mockReturnValue({ mode: "safe" });
+    const tool = {
+      name: "read",
+      label: "Read",
+      description: "reads",
+      parameters: {},
+      execute: vi.fn(async () => ({ content: [], details: { ok: true } })),
+    } satisfies AgentTool<unknown, unknown>;
+
+    const defs = toToolDefinitions([tool]);
+    const result = await defs[0].execute(
+      "call-ok-wrapped",
+      { path: "/tmp/file" },
+      undefined,
+      undefined,
+    );
+
+    expect(result.details).toMatchObject({ ok: true });
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledWith(
+      {
+        toolName: "read",
+        params: { mode: "safe" },
         result,
       },
       { toolName: "read" },
