@@ -488,7 +488,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   const stripped = stripFinalTagsFromText(text);
   const trimmed = stripped.trim();
   if (!trimmed) {
-    return stripped;
+    return "";
   }
 
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
@@ -527,7 +527,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
   }
 
-  return collapseConsecutiveDuplicateBlocks(stripped);
+  return collapseConsecutiveDuplicateBlocks(stripped).trimStart();
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
