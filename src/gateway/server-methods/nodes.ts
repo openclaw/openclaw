@@ -10,6 +10,7 @@ import {
   verifyNodeToken,
 } from "../../infra/node-pairing.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { sanitizeSystemRunParamsForForwarding } from "../node-invoke-system-run-approval.js";
 import {
   ErrorCodes,
   errorShape,
@@ -361,7 +362,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
-  "node.invoke": async ({ params, respond, context }) => {
+  "node.invoke": async ({ params, respond, context, client }) => {
     if (!validateNodeInvokeParams(params)) {
       respondInvalidParams({
         respond,
@@ -417,10 +418,28 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const forwardedParams =
+        command === "system.run"
+          ? sanitizeSystemRunParamsForForwarding({
+              rawParams: p.params,
+              client,
+              execApprovalManager: context.execApprovalManager,
+            })
+          : ({ ok: true, params: p.params } as const);
+      if (!forwardedParams.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
+            details: forwardedParams.details ?? null,
+          }),
+        );
+        return;
+      }
       const res = await context.nodeRegistry.invoke({
         nodeId,
         command,
-        params: p.params,
+        params: forwardedParams.params,
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
       });
