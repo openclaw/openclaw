@@ -448,6 +448,14 @@ export function formatAssistantErrorText(
     );
   }
 
+  // Catch OpenAI reasoning content validation errors
+  if (/type\s+['"]reasoning['"].*(?:required following item|without.*following)/i.test(raw)) {
+    return (
+      "Message format error detected. Please try again. " +
+      "If this persists, use /new to start a fresh session."
+    );
+  }
+
   if (isMissingToolCallInputError(raw)) {
     return (
       "Session history looks corrupted (tool call input missing). " +
@@ -497,6 +505,13 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     if (/incorrect role information|roles must alternate/i.test(trimmed)) {
       return (
         "Message ordering conflict - please try again. " +
+        "If this persists, use /new to start a fresh session."
+      );
+    }
+
+    if (/type\s+['"]reasoning['"].*(?:required following item|without.*following)/i.test(trimmed)) {
+      return (
+        "Message format error detected. Please try again. " +
         "If this persists, use /new to start a fresh session."
       );
     }

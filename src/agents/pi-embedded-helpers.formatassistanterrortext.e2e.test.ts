@@ -70,6 +70,16 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Message ordering conflict");
     expect(result).not.toContain("400");
   });
+  it("handles OpenAI reasoning content validation errors", () => {
+    const msg = makeAssistantError(
+      "400 Item 'rs_08b156396265e0d700698f54f4675481a1a588caf1fc80260a' of type 'reasoning' was provided without its required following item.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Message format error");
+    expect(result).toContain("/new");
+    expect(result).not.toContain("rs_08b156396265");
+    expect(result).not.toContain("400");
+  });
   it("suppresses raw error JSON payloads that are not otherwise classified", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
