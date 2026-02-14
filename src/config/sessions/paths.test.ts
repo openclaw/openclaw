@@ -96,13 +96,29 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "abc-123-topic-42.jsonl"));
   });
 
-  it("rejects absolute sessionFile paths outside the sessions dir", () => {
+  it("accepts absolute sessionFile paths in another agent's sessions dir (cross-agent binding)", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+
+    const resolved = resolveSessionFilePath(
+      "sess-1",
+      { sessionFile: "/tmp/openclaw/agents/work/sessions/abc-123.jsonl" },
+      { sessionsDir },
+    );
+
+    expect(resolved).toBe(path.resolve("/tmp/openclaw/agents/work/sessions/abc-123.jsonl"));
+  });
+
+  it("rejects absolute paths outside any agent sessions dir", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+
+    expect(() =>
+      resolveSessionFilePath("sess-1", { sessionFile: "/etc/passwd" }, { sessionsDir }),
+    ).toThrow(/within sessions directory/);
 
     expect(() =>
       resolveSessionFilePath(
         "sess-1",
-        { sessionFile: "/tmp/openclaw/agents/work/sessions/abc-123.jsonl" },
+        { sessionFile: "/tmp/openclaw/agents/work/config/secrets.json" },
         { sessionsDir },
       ),
     ).toThrow(/within sessions directory/);
