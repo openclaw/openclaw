@@ -169,8 +169,13 @@ function sameToolAction(
   meta?: string,
   actionFingerprint?: string,
 ): boolean {
-  if (existing.actionFingerprint && actionFingerprint) {
-    return existing.actionFingerprint === actionFingerprint;
+  if (existing.actionFingerprint != null || actionFingerprint != null) {
+    // For mutating flows, fail closed: only clear when both fingerprints exist and match.
+    return (
+      existing.actionFingerprint != null &&
+      actionFingerprint != null &&
+      existing.actionFingerprint === actionFingerprint
+    );
   }
   return existing.toolName === toolName && (existing.meta ?? "") === (meta ?? "");
 }
