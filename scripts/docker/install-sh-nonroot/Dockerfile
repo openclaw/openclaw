@@ -12,6 +12,8 @@ RUN set -eux; \
     ca-certificates \
     curl \
     sudo \
+    unzip \
+    xz-utils \
   && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash app \

@@ -24,6 +24,98 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+can_run_sudo_non_interactive() {
+  command_exists sudo && sudo -n true >/dev/null 2>&1
+}
+
+install_unzip_with_known_package_manager() {
+  if command_exists apt-get; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      apt-get update && apt-get install -y unzip
+    elif can_run_sudo_non_interactive; then
+      sudo apt-get update && sudo apt-get install -y unzip
+    else
+      return 1
+    fi
+    return 0
+  fi
+
+  if command_exists dnf; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      dnf install -y unzip
+    elif can_run_sudo_non_interactive; then
+      sudo dnf install -y unzip
+    else
+      return 1
+    fi
+    return 0
+  fi
+
+  if command_exists yum; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      yum install -y unzip
+    elif can_run_sudo_non_interactive; then
+      sudo yum install -y unzip
+    else
+      return 1
+    fi
+    return 0
+  fi
+
+  if command_exists zypper; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      zypper --non-interactive install unzip
+    elif can_run_sudo_non_interactive; then
+      sudo zypper --non-interactive install unzip
+    else
+      return 1
+    fi
+    return 0
+  fi
+
+  if command_exists apk; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      apk add --no-cache unzip
+    elif can_run_sudo_non_interactive; then
+      sudo apk add --no-cache unzip
+    else
+      return 1
+    fi
+    return 0
+  fi
+
+  if command_exists brew; then
+    brew install unzip
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_unzip_for_fnm() {
+  if command_exists unzip; then
+    return 0
+  fi
+
+  echo "Missing dependency: unzip (required by fnm installer)."
+  echo "Attempting to install unzip automatically..."
+
+  if install_unzip_with_known_package_manager; then
+    if command_exists unzip; then
+      echo "Installed unzip successfully."
+      return 0
+    fi
+  fi
+
+  echo "Could not install unzip automatically." >&2
+  echo "Install unzip manually, then rerun this installer." >&2
+  echo "Examples:" >&2
+  echo "  Ubuntu/Debian: sudo apt-get update && sudo apt-get install -y unzip" >&2
+  echo "  RHEL/Fedora:   sudo dnf install -y unzip" >&2
+  echo "  macOS (brew):  brew install unzip" >&2
+  exit 1
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -71,6 +163,8 @@ ensure_node() {
     echo "curl is required to install Node.js." >&2
     exit 1
   fi
+
+  ensure_unzip_for_fnm
 
   curl -fsSL https://fnm.vercel.app/install | bash
   export PATH="$HOME/.local/share/fnm:$PATH"
