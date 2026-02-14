@@ -30,6 +30,7 @@ const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
+const MAX_QMD_OUTPUT_CHARS = 200_000;
 
 type CollectionRoot = {
   path: string;
@@ -74,6 +75,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     string,
     { rel: string; abs: string; source: MemorySource }
   >();
+  private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
@@ -562,6 +564,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       });
       let stdout = "";
       let stderr = "";
+      let stdoutTruncated = false;
+      let stderrTruncated = false;
       const timer = opts?.timeoutMs
         ? setTimeout(() => {
             child.kill("SIGKILL");
@@ -569,10 +573,14 @@ export class QmdMemoryManager implements MemorySearchManager {
           }, opts.timeoutMs)
         : null;
       child.stdout.on("data", (data) => {
-        stdout += data.toString();
+        const next = appendOutputWithCap(stdout, data.toString("utf8"), this.maxQmdOutputChars);
+        stdout = next.text;
+        stdoutTruncated = stdoutTruncated || next.truncated;
       });
       child.stderr.on("data", (data) => {
-        stderr += data.toString();
+        const next = appendOutputWithCap(stderr, data.toString("utf8"), this.maxQmdOutputChars);
+        stderr = next.text;
+        stderrTruncated = stderrTruncated || next.truncated;
       });
       child.on("error", (err) => {
         if (timer) {
@@ -583,6 +591,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       child.on("close", (code) => {
         if (timer) {
           clearTimeout(timer);
+        }
+        if (stdoutTruncated || stderrTruncated) {
+          reject(
+            new Error(
+              `qmd ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
+            ),
+          );
+          return;
         }
         if (code === 0) {
           resolve({ stdout, stderr });
@@ -950,4 +966,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     return [command, query, "--json"];
   }
+}
+
+function appendOutputWithCap(
+  current: string,
+  chunk: string,
+  maxChars: number,
+): { text: string; truncated: boolean } {
+  const appended = current + chunk;
+  if (appended.length <= maxChars) {
+    return { text: appended, truncated: false };
+  }
+  return { text: appended.slice(-maxChars), truncated: true };
 }
