@@ -99,7 +99,7 @@ async function uploadSlackFile(params: {
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
-}): Promise<string> {
+}): Promise<{ fileId: string; messageTs?: string }> {
   const {
     buffer,
     contentType: _contentType,
@@ -117,8 +117,8 @@ async function uploadSlackFile(params: {
     : basePayload;
   const response = await params.client.files.uploadV2(payload);
   const parsed = response as {
-    files?: Array<{ id?: string; name?: string }>;
-    file?: { id?: string; name?: string };
+    files?: Array<{ id?: string; name?: string; ts?: string }>;
+    file?: { id?: string; name?: string; ts?: string };
   };
   const fileId =
     parsed.files?.[0]?.id ??
@@ -126,7 +126,9 @@ async function uploadSlackFile(params: {
     parsed.files?.[0]?.name ??
     parsed.file?.name ??
     "unknown";
-  return fileId;
+  // Extract the message timestamp from the file upload response
+  const messageTs = parsed.files?.[0]?.ts ?? parsed.file?.ts;
+  return { fileId, messageTs };
 }
 
 export async function sendMessageSlack(
@@ -178,7 +180,7 @@ export async function sendMessageSlack(
   let lastMessageId = "";
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = chunks;
-    lastMessageId = await uploadSlackFile({
+    const uploadResult = await uploadSlackFile({
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
@@ -186,6 +188,8 @@ export async function sendMessageSlack(
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,
     });
+    // Use the actual message ts from the file upload for origin tracking
+    lastMessageId = uploadResult.messageTs ?? uploadResult.fileId;
     for (const chunk of rest) {
       const response = await client.chat.postMessage({
         channel: channelId,
