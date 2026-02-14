@@ -4,6 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
+import { truncateUtf16Safe } from "../../utils.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;
@@ -153,10 +154,10 @@ function clampToBudget(content: string, budget: number): string {
     return content;
   }
   if (budget <= 3) {
-    return content.slice(0, budget);
+    return truncateUtf16Safe(content, budget);
   }
   const safe = Math.max(1, budget - 1);
-  return `${content.slice(0, safe)}…`;
+  return `${truncateUtf16Safe(content, safe)}…`;
 }
 
 export async function ensureSessionHeader(params: {
