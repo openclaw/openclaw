@@ -273,6 +273,8 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     - `first`
     - `all`
 
+    Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+
     Message IDs are surfaced in context/history so agents can target specific messages.
 
   </Accordion>

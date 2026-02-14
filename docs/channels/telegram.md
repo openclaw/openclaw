@@ -416,6 +416,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `first`
     - `all`
 
+    Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+
   </Accordion>
 
   <Accordion title="Forum topics and thread behavior">
