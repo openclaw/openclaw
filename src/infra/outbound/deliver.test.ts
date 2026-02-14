@@ -16,9 +16,6 @@ const mocks = vi.hoisted(() => ({
   getGlobalHookRunner: vi.fn(),
 }));
 
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: mocks.getGlobalHookRunner,
-}));
 const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => false),
@@ -486,10 +483,8 @@ describe("deliverOutboundPayloads", () => {
 
   it("calls runMessageSent per payload after successful delivery", async () => {
     const mockRunMessageSent = vi.fn().mockResolvedValue(undefined);
-    mocks.getGlobalHookRunner.mockReturnValue({
-      hasHooks: vi.fn().mockReturnValue(true),
-      runMessageSent: mockRunMessageSent,
-    });
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runMessageSent = mockRunMessageSent;
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     const cfg: OpenClawConfig = {};
 
@@ -531,10 +526,8 @@ describe("deliverOutboundPayloads", () => {
 
   it("runMessageSent errors don't propagate to caller", async () => {
     const mockRunMessageSent = vi.fn().mockRejectedValue(new Error("hook boom"));
-    mocks.getGlobalHookRunner.mockReturnValue({
-      hasHooks: vi.fn().mockReturnValue(true),
-      runMessageSent: mockRunMessageSent,
-    });
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runMessageSent = mockRunMessageSent;
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     const cfg: OpenClawConfig = {};
 
