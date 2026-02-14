@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
-# update-and-restart.sh — Pull, build, link, and restart OpenClaw gateway
-# Verifies the running gateway matches the built commit.
+# update-and-restart.sh — Rebase, build, link, push, and restart OpenClaw gateway
 #
 set -euo pipefail
 
@@ -21,15 +20,13 @@ cd "$REPO_DIR" || fail "Cannot cd to $REPO_DIR"
 
 # --- Check for uncommitted changes ---
 if ! git diff --quiet || ! git diff --cached --quiet; then
-  warn "You have uncommitted changes:"
+  echo ""
   git status --short
   echo ""
-  read -rp "Continue anyway? (y/N) " confirm
-  [[ "$confirm" =~ ^[Yy]$ ]] || { log "Aborted."; exit 0; }
+  fail "Working tree is dirty — commit or stash your changes first."
 fi
 
 # --- Record pre-pull state ---
-OLD_SHA=$(git rev-parse HEAD)
 OLD_SHORT=$(git rev-parse --short HEAD)
 log "Current commit: ${OLD_SHORT}"
 
@@ -38,7 +35,9 @@ log "Current commit: ${OLD_SHORT}"
 # We rebase our commits on top of upstream (origin/main), then force-push out.
 # Never pull/rebase from bitbucket/fork — those are downstream mirrors.
 log "Fetching origin..."
+UPSTREAM_BEFORE=$(git rev-parse origin/main)
 git fetch origin 2>&1 || fail "Could not fetch origin"
+UPSTREAM_AFTER=$(git rev-parse origin/main)
 log "Rebasing onto origin/main..."
 if git rebase origin/main 2>&1; then
   ok "Rebase onto origin/main complete"
@@ -48,15 +47,19 @@ else
   fail "Rebase onto origin/main failed (conflicts?). Resolve manually."
 fi
 
-NEW_SHA=$(git rev-parse HEAD)
-NEW_SHORT=$(git rev-parse --short HEAD)
+BUILT_SHA=$(git rev-parse HEAD)
+BUILT_SHORT=$(git rev-parse --short HEAD)
 
-if [ "$OLD_SHA" = "$NEW_SHA" ]; then
-  log "Already up to date (${NEW_SHORT})"
+if [ "$UPSTREAM_BEFORE" = "$UPSTREAM_AFTER" ]; then
+  log "Already up to date with origin/main (${BUILT_SHORT})"
 else
-  log "Updated: ${OLD_SHORT} → ${NEW_SHORT}"
+  log "Rebased onto new upstream commits (${BUILT_SHORT})"
   echo ""
-  git --no-pager log --oneline "${OLD_SHA}..${NEW_SHA}" | head -20
+  UPSTREAM_COUNT=$(git rev-list --count "${UPSTREAM_BEFORE}..${UPSTREAM_AFTER}")
+  if [ "$UPSTREAM_COUNT" -gt 20 ]; then
+    log "(showing last 20 of ${UPSTREAM_COUNT} new upstream commits)"
+  fi
+  git --no-pager log --oneline -20 "${UPSTREAM_BEFORE}..${UPSTREAM_AFTER}"
   echo ""
 fi
 
@@ -72,7 +75,7 @@ fi
 
 # --- pnpm format (check only) ---
 log "Checking code formatting..."
-pnpm format 2>&1 || fail "Format check failed — run 'pnpm exec oxfmt --write <file>' to fix"
+pnpm format:check 2>&1 || fail "Format check failed — run 'pnpm exec oxfmt --write <file>' to fix"
 ok "Format check passed"
 
 # --- pnpm build ---
@@ -87,44 +90,43 @@ ok "Lint check passed"
 
 # --- pnpm link ---
 log "Linking globally..."
-pnpm link --global 2>&1 || fail "pnpm link --global failed"
+pnpm link --global --ignore-scripts 2>&1 || fail "pnpm link --global failed"
 ok "Linked globally"
 
-# --- Capture the commit SHA that was just built ---
-BUILT_SHA=$(git rev-parse HEAD)
-BUILT_SHORT=$(git rev-parse --short HEAD)
 log "Built commit: ${BUILT_SHORT} (${BUILT_SHA})"
 
 # --- Force-push to remotes (this repo is source of truth) ---
 BRANCH=$(git branch --show-current)
 log "Force-pushing ${BRANCH} to bitbucket and fork..."
-git push --force-with-lease bitbucket "HEAD:${BRANCH}" 2>&1 || warn "Could not push to bitbucket"
-git push --force-with-lease fork "HEAD:${BRANCH}" 2>&1 || warn "Could not push to fork"
-ok "Pushed to remotes"
+BB_OK=0; FK_OK=0
+git push --force-with-lease bitbucket "HEAD:${BRANCH}" 2>&1 && BB_OK=1 || warn "Could not push to bitbucket"
+git push --force-with-lease fork "HEAD:${BRANCH}" 2>&1 && FK_OK=1 || warn "Could not push to fork"
+if [ "$BB_OK" -eq 1 ] && [ "$FK_OK" -eq 1 ]; then
+  ok "Pushed to both remotes"
+elif [ "$BB_OK" -eq 1 ] || [ "$FK_OK" -eq 1 ]; then
+  warn "Pushed to one remote only (see warnings above)"
+else
+  fail "Could not push to either remote"
+fi
 
 # --- Restart gateway ---
 log "Restarting gateway..."
 openclaw gateway restart 2>&1 || fail "Gateway restart failed"
 
-# --- Wait for gateway to come back ---
-log "Waiting for gateway to stabilize..."
-sleep 3
-
-# --- Verify the running gateway matches ---
-RUNNING_ENTRY=$(openclaw gateway status 2>&1 | grep -oP '(?<=Command: ).*' || true)
-
-# Check commit from the built dist
-if [ -f "$REPO_DIR/dist/version.js" ]; then
-  DIST_SHA=$(grep -oP '[a-f0-9]{40}' "$REPO_DIR/dist/version.js" 2>/dev/null | head -1 || true)
-  DIST_SHORT="${DIST_SHA:0:7}"
-fi
-
-# Verify SHA match
-POST_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
-if [ "$BUILT_SHA" = "$POST_SHA" ]; then
-  ok "Commit verified: built=${BUILT_SHORT}, repo=${POST_SHA:0:7} ✓"
+# --- Wait for gateway to come back and verify ---
+log "Waiting for gateway health..."
+HEALTHY=0
+for i in {1..10}; do
+  if openclaw gateway health 2>&1; then
+    HEALTHY=1
+    break
+  fi
+  sleep 1
+done
+if [ "$HEALTHY" -eq 1 ]; then
+  ok "Gateway is healthy"
 else
-  fail "SHA MISMATCH! Built ${BUILT_SHORT} but repo is now ${POST_SHA:0:7}"
+  warn "Gateway health check failed after 10 attempts — may need manual inspection"
 fi
 
 # --- Summary ---
@@ -132,8 +134,7 @@ echo ""
 echo -e "${GREEN}════════════════════════════════════════${NC}"
 echo -e "${GREEN}  OpenClaw updated and restarted!${NC}"
 echo -e "${GREEN}  Commit: ${BUILT_SHORT}${NC}"
-if [ "$OLD_SHA" != "$NEW_SHA" ]; then
-  COMMIT_COUNT=$(git rev-list --count "${OLD_SHA}..${NEW_SHA}")
-  echo -e "${GREEN}  Changes: ${COMMIT_COUNT} new commit(s)${NC}"
+if [ "$UPSTREAM_BEFORE" != "$UPSTREAM_AFTER" ]; then
+  echo -e "${GREEN}  Upstream: ${UPSTREAM_COUNT} new commit(s) from origin/main${NC}"
 fi
 echo -e "${GREEN}════════════════════════════════════════${NC}"
