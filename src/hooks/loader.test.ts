@@ -150,6 +150,37 @@ describe("loader", () => {
       expect(count).toBe(1);
     });
 
+    it("should load CJS hook module when ESM import fails with 'module is not defined'", async () => {
+      // Simulate a hook shipped as CommonJS (e.g. from Foundry or an npm pack). Use a
+      // subdir without "type": "module" so require() treats the .js file as CJS.
+      const cjsDir = path.join(tmpDir, "cjs-handler");
+      await fs.mkdir(cjsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(cjsDir, "package.json"),
+        JSON.stringify({ name: "cjs-hook" }),
+        "utf-8",
+      );
+      const handlerPath = path.join(cjsDir, "handler.js");
+      await fs.writeFile(
+        handlerPath,
+        "module.exports = async function () { return 'cjs'; };",
+        "utf-8",
+      );
+
+      const cfg: OpenClawConfig = {
+        hooks: {
+          internal: {
+            enabled: true,
+            handlers: [{ event: "command:new", module: handlerPath }],
+          },
+        },
+      };
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(1);
+      expect(getRegisteredEventKeys()).toContain("command:new");
+    });
+
     it("should handle module loading errors gracefully", async () => {
       const cfg: OpenClawConfig = {
         hooks: {

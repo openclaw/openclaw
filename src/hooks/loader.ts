@@ -3,16 +3,17 @@
  *
  * Loads hook handlers from external modules based on configuration
  * and from directory-based discovery (bundled, managed, workspace)
+ * Supports both ESM and CommonJS hook modules.
  */
 
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
 import { registerInternalHook } from "./internal-hooks.js";
+import { getHandlerFromModule, loadHookModule } from "./load-module.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const log = createSubsystemLogger("hooks:loader");
@@ -71,14 +72,9 @@ export async function loadInternalHooks(
       }
 
       try {
-        // Import handler module with cache-busting
-        const url = pathToFileURL(entry.hook.handlerPath).href;
-        const cacheBustedUrl = `${url}?t=${Date.now()}`;
-        const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
-
-        // Get handler function (default or named export)
+        const mod = await loadHookModule(entry.hook.handlerPath);
         const exportName = entry.metadata?.export ?? "default";
-        const handler = mod[exportName];
+        const handler = getHandlerFromModule(mod, exportName);
 
         if (typeof handler !== "function") {
           log.error(`Handler '${exportName}' from ${entry.hook.name} is not a function`);
@@ -121,14 +117,9 @@ export async function loadInternalHooks(
         ? handlerConfig.module
         : path.join(process.cwd(), handlerConfig.module);
 
-      // Import the module with cache-busting to ensure fresh reload
-      const url = pathToFileURL(modulePath).href;
-      const cacheBustedUrl = `${url}?t=${Date.now()}`;
-      const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
-
-      // Get the handler function
+      const mod = await loadHookModule(modulePath);
       const exportName = handlerConfig.export ?? "default";
-      const handler = mod[exportName];
+      const handler = getHandlerFromModule(mod, exportName);
 
       if (typeof handler !== "function") {
         log.error(`Handler '${exportName}' from ${modulePath} is not a function`);

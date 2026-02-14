@@ -103,6 +103,7 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
 
 Operational checklist when running this fork with [OpenClaw-Foundry](https://github.com/openclaw/openclaw-foundry): [docs/MAINTENANCE.md](docs/MAINTENANCE.md#openclaw-foundry-integration).
 
+- **Hooks loader (ESM + CJS)** — Hook handlers from managed dir (`~/.openclaw/hooks/`), workspace, bundled, or plugins (e.g. Foundry) can be CommonJS. The loader previously used only dynamic `import()`, so CJS modules threw “module is not defined in ES module scope” (e.g. `sessions-notfound-auto-retry`). Fix: shared `src/hooks/load-module.ts` tries ESM import first; on that error, falls back to `createRequire(import.meta.url)(filePath)`. Both the internal hooks loader (`src/hooks/loader.ts`) and the plugin hooks loader (`src/hooks/plugin-hooks.ts`) use this helper, so CJS hooks load whether they are discovered as internal or plugin hooks. Handler resolution supports `module.exports = function` as the default export.
 - **Tool group tightening for agents**
   - `group:fs` now expands to `read` + `apply_patch` only. Direct `write`/`edit` are no longer part of the global fs group and must be granted explicitly on a per-agent basis (for example, to a dedicated analyst workspace) instead of every agent inheriting broad write access.
   - Gateway docs and examples have been updated so `tools.profile: "coding"` plus `group:fs` describe read + structured patch access, matching the new behavior.
