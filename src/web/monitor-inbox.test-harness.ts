@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -20,16 +21,34 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   },
 } as const;
 
-export const mockLoadConfig = vi.fn().mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
-
-export const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
-export const upsertPairingRequestMock = vi
+export const mockLoadConfig: MockFn<() => typeof DEFAULT_WEB_INBOX_CONFIG> = vi
   .fn()
-  .mockResolvedValue({ code: "PAIRCODE", created: true });
+  .mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
 
-export type MockSock = ReturnType<typeof createMockSock>;
+export const readAllowFromStoreMock: MockFn<(...args: unknown[]) => Promise<unknown[]>> = vi
+  .fn()
+  .mockResolvedValue([]);
+export const upsertPairingRequestMock: MockFn<
+  (...args: unknown[]) => Promise<{ code: string; created: boolean }>
+> = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 
-function createMockSock() {
+export type MockSock = {
+  ev: EventEmitter;
+  ws: { close: MockFn };
+  sendPresenceUpdate: MockFn;
+  sendMessage: MockFn;
+  readMessages: MockFn;
+  updateMediaMessage: MockFn;
+  logger: Record<string, unknown>;
+  signalRepository: {
+    lidMapping: {
+      getPNForLID: MockFn;
+    };
+  };
+  user: { id: string };
+};
+
+function createMockSock(): MockSock {
   const ev = new EventEmitter();
   return {
     ev,
