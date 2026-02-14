@@ -54,6 +54,7 @@ describe("buildAuthChoiceOptions", () => {
     });
 
     expect(options.some((opt) => opt.value === "minimax-api")).toBe(true);
+    expect(options.some((opt) => opt.value === "minimax-api-key-cn")).toBe(true);
     expect(options.some((opt) => opt.value === "minimax-api-lightning")).toBe(true);
   });
 
