@@ -1,0 +1,22 @@
+{
+  "id": "response-verifier",
+  "name": "Response Verifier",
+  "version": "1.0.0",
+  "description": "Verifies agent completion claims against audit log before delivery",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "strictMode": {
+        "type": "boolean",
+        "description": "If true, block unverified completion claims. If false, just warn.",
+        "default": false
+      },
+      "completionPatterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Additional patterns that indicate completion claims"
+      }
+    }
+  }
+}

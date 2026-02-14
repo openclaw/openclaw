@@ -29,7 +29,10 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
         handleMessageUpdate(ctx, evt as never);
         return;
       case "message_end":
-        handleMessageEnd(ctx, evt as never);
+        // Async handler - supports before_response hook for verification
+        handleMessageEnd(ctx, evt as never).catch((err) => {
+          ctx.log.debug(`message_end handler failed: ${String(err)}`);
+        });
         return;
       case "tool_execution_start":
         // Async handler - best-effort typing indicator, avoids blocking tool summaries.

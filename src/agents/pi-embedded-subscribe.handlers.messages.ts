@@ -3,6 +3,7 @@ import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handler
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -188,10 +189,10 @@ export function handleMessageUpdate(
   }
 }
 
-export function handleMessageEnd(
+export async function handleMessageEnd(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
-) {
+): Promise<void> {
   const msg = evt.message;
   if (msg?.role !== "assistant") {
     return;
@@ -306,7 +307,7 @@ export function handleMessageEnd(
         ctx.state.lastBlockReplyText = text;
         const splitResult = ctx.consumeReplyDirectives(text, { final: true });
         if (splitResult) {
-          const {
+          let {
             text: cleanedText,
             mediaUrls,
             audioAsVoice,
@@ -314,6 +315,47 @@ export function handleMessageEnd(
             replyToTag,
             replyToCurrent,
           } = splitResult;
+
+          // Run before_response hook for verification/modification
+          const hookRunner = getGlobalHookRunner();
+          if (hookRunner?.hasHooks("before_response") && cleanedText) {
+            try {
+              const sessionId = (ctx.params.session as { id?: string }).id;
+              const hookResult = await hookRunner.runBeforeResponse(
+                {
+                  text: cleanedText,
+                  mediaUrls,
+                  toolCalls: ctx.state.toolMetas?.map((t) => ({
+                    tool: t.toolName ?? "unknown",
+                    params: {},
+                    success: true,
+                  })),
+                },
+                {
+                  sessionKey: sessionId,
+                },
+              );
+
+              if (hookResult?.block) {
+                ctx.log.warn(
+                  `[before_response] Response blocked: ${hookResult.blockReason ?? "no reason given"}`,
+                );
+                return; // Skip sending this response
+              }
+
+              if (hookResult?.text) {
+                cleanedText = hookResult.text;
+              }
+
+              if (hookResult?.prependWarning) {
+                cleanedText = `⚠️ ${hookResult.prependWarning}\n\n${cleanedText}`;
+              }
+            } catch (err) {
+              ctx.log.debug(`[before_response] Hook error: ${String(err)}`);
+              // Continue with original response on error
+            }
+          }
+
           // Emit if there's content OR audioAsVoice flag (to propagate the flag).
           if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
             void onBlockReply({
