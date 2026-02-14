@@ -44,6 +44,18 @@ type AnnounceQueueState = {
 
 const ANNOUNCE_QUEUES = new Map<string, AnnounceQueueState>();
 
+export function resetAnnounceQueuesForTests() {
+  // Test isolation: other suites may leave a draining queue behind in the worker.
+  // Clearing the map alone isn't enough because drain loops capture `queue` by reference.
+  for (const queue of ANNOUNCE_QUEUES.values()) {
+    queue.items.length = 0;
+    queue.summaryLines.length = 0;
+    queue.droppedCount = 0;
+    queue.lastEnqueuedAt = 0;
+  }
+  ANNOUNCE_QUEUES.clear();
+}
+
 function getAnnounceQueue(
   key: string,
   settings: AnnounceQueueSettings,

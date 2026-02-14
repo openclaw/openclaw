@@ -56,6 +56,23 @@ describe("models-config", () => {
       const previousSynthetic = process.env.SYNTHETIC_API_KEY;
       const previousVenice = process.env.VENICE_API_KEY;
       const previousXiaomi = process.env.XIAOMI_API_KEY;
+      const previousOllama = process.env.OLLAMA_API_KEY;
+      const previousVllm = process.env.VLLM_API_KEY;
+      const previousTogether = process.env.TOGETHER_API_KEY;
+      const previousHuggingfaceHub = process.env.HUGGINGFACE_HUB_TOKEN;
+      const previousHuggingfaceHf = process.env.HF_TOKEN;
+      const previousQianfan = process.env.QIANFAN_API_KEY;
+      const previousNvidia = process.env.NVIDIA_API_KEY;
+      const previousAwsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
+      const previousAwsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+      const previousAwsSessionToken = process.env.AWS_SESSION_TOKEN;
+      const previousAwsProfile = process.env.AWS_PROFILE;
+      const previousAwsRegion = process.env.AWS_REGION;
+      const previousAwsDefaultRegion = process.env.AWS_DEFAULT_REGION;
+      const previousAwsSharedCredentials = process.env.AWS_SHARED_CREDENTIALS_FILE;
+      const previousAwsConfigFile = process.env.AWS_CONFIG_FILE;
+      const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+      const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
       delete process.env.COPILOT_GITHUB_TOKEN;
       delete process.env.GH_TOKEN;
       delete process.env.GITHUB_TOKEN;
@@ -65,9 +82,29 @@ describe("models-config", () => {
       delete process.env.SYNTHETIC_API_KEY;
       delete process.env.VENICE_API_KEY;
       delete process.env.XIAOMI_API_KEY;
+      delete process.env.OLLAMA_API_KEY;
+      delete process.env.VLLM_API_KEY;
+      delete process.env.TOGETHER_API_KEY;
+      delete process.env.HUGGINGFACE_HUB_TOKEN;
+      delete process.env.HF_TOKEN;
+      delete process.env.QIANFAN_API_KEY;
+      delete process.env.NVIDIA_API_KEY;
+      delete process.env.AWS_ACCESS_KEY_ID;
+      delete process.env.AWS_SECRET_ACCESS_KEY;
+      delete process.env.AWS_SESSION_TOKEN;
+      delete process.env.AWS_PROFILE;
+      delete process.env.AWS_REGION;
+      delete process.env.AWS_DEFAULT_REGION;
+      delete process.env.AWS_SHARED_CREDENTIALS_FILE;
+      delete process.env.AWS_CONFIG_FILE;
+      delete process.env.OPENCLAW_AGENT_DIR;
+      delete process.env.PI_CODING_AGENT_DIR;
 
       try {
         const agentDir = path.join(home, "agent-empty");
+        // Avoid merging in the user's real main auth store via OPENCLAW_AGENT_DIR.
+        process.env.OPENCLAW_AGENT_DIR = agentDir;
+        process.env.PI_CODING_AGENT_DIR = agentDir;
         const result = await ensureOpenClawModelsJson(
           {
             models: { providers: {} },
@@ -123,6 +160,91 @@ describe("models-config", () => {
         } else {
           process.env.XIAOMI_API_KEY = previousXiaomi;
         }
+        if (previousOllama === undefined) {
+          delete process.env.OLLAMA_API_KEY;
+        } else {
+          process.env.OLLAMA_API_KEY = previousOllama;
+        }
+        if (previousVllm === undefined) {
+          delete process.env.VLLM_API_KEY;
+        } else {
+          process.env.VLLM_API_KEY = previousVllm;
+        }
+        if (previousTogether === undefined) {
+          delete process.env.TOGETHER_API_KEY;
+        } else {
+          process.env.TOGETHER_API_KEY = previousTogether;
+        }
+        if (previousHuggingfaceHub === undefined) {
+          delete process.env.HUGGINGFACE_HUB_TOKEN;
+        } else {
+          process.env.HUGGINGFACE_HUB_TOKEN = previousHuggingfaceHub;
+        }
+        if (previousHuggingfaceHf === undefined) {
+          delete process.env.HF_TOKEN;
+        } else {
+          process.env.HF_TOKEN = previousHuggingfaceHf;
+        }
+        if (previousQianfan === undefined) {
+          delete process.env.QIANFAN_API_KEY;
+        } else {
+          process.env.QIANFAN_API_KEY = previousQianfan;
+        }
+        if (previousNvidia === undefined) {
+          delete process.env.NVIDIA_API_KEY;
+        } else {
+          process.env.NVIDIA_API_KEY = previousNvidia;
+        }
+        if (previousAwsAccessKeyId === undefined) {
+          delete process.env.AWS_ACCESS_KEY_ID;
+        } else {
+          process.env.AWS_ACCESS_KEY_ID = previousAwsAccessKeyId;
+        }
+        if (previousAwsSecretAccessKey === undefined) {
+          delete process.env.AWS_SECRET_ACCESS_KEY;
+        } else {
+          process.env.AWS_SECRET_ACCESS_KEY = previousAwsSecretAccessKey;
+        }
+        if (previousAwsSessionToken === undefined) {
+          delete process.env.AWS_SESSION_TOKEN;
+        } else {
+          process.env.AWS_SESSION_TOKEN = previousAwsSessionToken;
+        }
+        if (previousAwsProfile === undefined) {
+          delete process.env.AWS_PROFILE;
+        } else {
+          process.env.AWS_PROFILE = previousAwsProfile;
+        }
+        if (previousAwsRegion === undefined) {
+          delete process.env.AWS_REGION;
+        } else {
+          process.env.AWS_REGION = previousAwsRegion;
+        }
+        if (previousAwsDefaultRegion === undefined) {
+          delete process.env.AWS_DEFAULT_REGION;
+        } else {
+          process.env.AWS_DEFAULT_REGION = previousAwsDefaultRegion;
+        }
+        if (previousAwsSharedCredentials === undefined) {
+          delete process.env.AWS_SHARED_CREDENTIALS_FILE;
+        } else {
+          process.env.AWS_SHARED_CREDENTIALS_FILE = previousAwsSharedCredentials;
+        }
+        if (previousAwsConfigFile === undefined) {
+          delete process.env.AWS_CONFIG_FILE;
+        } else {
+          process.env.AWS_CONFIG_FILE = previousAwsConfigFile;
+        }
+        if (previousAgentDir === undefined) {
+          delete process.env.OPENCLAW_AGENT_DIR;
+        } else {
+          process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+        }
+        if (previousPiAgentDir === undefined) {
+          delete process.env.PI_CODING_AGENT_DIR;
+        } else {
+          process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+        }
       }
     });
   });
@@ -158,7 +280,7 @@ describe("models-config", () => {
             }
           >;
         };
-        expect(parsed.providers.minimax?.baseUrl).toBe("https://api.minimax.chat/v1");
+        expect(parsed.providers.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
         expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-M2.1");

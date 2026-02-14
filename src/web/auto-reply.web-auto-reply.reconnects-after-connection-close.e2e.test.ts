@@ -70,75 +70,82 @@ describe("web auto-reply", () => {
   });
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
-    const sleep = vi.fn(async () => {});
-    const closeResolvers: Array<(reason: unknown) => void> = [];
-    let capturedOnMessage:
-      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-      | undefined;
-    const listenerFactory = vi.fn(
-      async (opts: {
-        onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
-      }) => {
-        capturedOnMessage = opts.onMessage;
-        let resolveClose: (reason: unknown) => void = () => {};
-        const onClose = new Promise<unknown>((res) => {
-          resolveClose = res;
-          closeResolvers.push(res);
-        });
-        return {
-          close: vi.fn(),
-          onClose,
-          signalClose: (reason?: unknown) => resolveClose(reason),
-        };
-      },
-    );
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    const controller = new AbortController();
-    const run = monitorWebChannel(
-      false,
-      listenerFactory,
-      true,
-      async () => ({ text: "ok" }),
-      runtime as never,
-      controller.signal,
-      {
-        heartbeatSeconds: 1,
-        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
-        sleep,
-      },
-    );
+    try {
+      const sleep = vi.fn(async () => {});
+      const closeResolvers: Array<(reason: unknown) => void> = [];
+      let capturedOnMessage:
+        | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+        | undefined;
+      const listenerFactory = vi.fn(
+        async (opts: {
+          onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
+        }) => {
+          capturedOnMessage = opts.onMessage;
+          let resolveClose: (reason: unknown) => void = () => {};
+          const onClose = new Promise<unknown>((res) => {
+            resolveClose = res;
+            closeResolvers.push(res);
+          });
+          return {
+            close: vi.fn(),
+            onClose,
+            signalClose: (reason?: unknown) => resolveClose(reason),
+          };
+        },
+      );
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const controller = new AbortController();
+      const run = monitorWebChannel(
+        false,
+        listenerFactory,
+        true,
+        async () => ({ text: "ok" }),
+        runtime as never,
+        controller.signal,
+        {
+          heartbeatSeconds: 1,
+          reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+          sleep,
+        },
+      );
 
-    await Promise.resolve();
-    expect(listenerFactory).toHaveBeenCalledTimes(1);
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
 
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const sendComposing = vi.fn();
-    const sendMedia = vi.fn();
-    await capturedOnMessage?.({
-      body: "hi",
-      from: "+1",
-      to: "+2",
-      id: "m1",
-      sendComposing,
-      reply,
-      sendMedia,
-    });
+      const reply = vi.fn().mockResolvedValue(undefined);
+      const sendComposing = vi.fn();
+      const sendMedia = vi.fn();
 
-    await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
-    await Promise.resolve();
+      // The watchdog only needs `lastMessageAt` to be set. Don't await full message
+      // processing here since it can schedule timers and become flaky under load.
+      void capturedOnMessage?.({
+        body: "hi",
+        from: "+1",
+        to: "+2",
+        id: "m1",
+        sendComposing,
+        reply,
+        sendMedia,
+      });
 
-    await vi.advanceTimersByTimeAsync(1);
-    await Promise.resolve();
-    expect(listenerFactory).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+      await Promise.resolve();
 
-    controller.abort();
-    closeResolvers[1]?.({ status: 499, isLoggedOut: false });
-    await Promise.resolve();
-    await run;
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(2);
+
+      controller.abort();
+      closeResolvers[1]?.({ status: 499, isLoggedOut: false });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
   }, 15_000);
 
   it("stops after hitting max reconnect attempts", { timeout: 60_000 }, async () => {
