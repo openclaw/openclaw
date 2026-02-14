@@ -13,16 +13,15 @@ export function normalizeSignalMessagingTarget(raw: string): string | undefined 
   const lower = normalized.toLowerCase();
   if (lower.startsWith("group:")) {
     const id = normalized.slice("group:".length).trim();
-    // Signal group IDs are base64-like and case-sensitive. Preserve ID casing.
     return id ? `group:${id}` : undefined;
   }
   if (lower.startsWith("username:")) {
     const id = normalized.slice("username:".length).trim();
-    return id ? `username:${id}`.toLowerCase() : undefined;
+    return id ? `username:${id}` : undefined;
   }
   if (lower.startsWith("u:")) {
     const id = normalized.slice("u:".length).trim();
-    return id ? `username:${id}`.toLowerCase() : undefined;
+    return id ? `username:${id}` : undefined;
   }
   if (lower.startsWith("uuid:")) {
     const id = normalized.slice("uuid:".length).trim();
