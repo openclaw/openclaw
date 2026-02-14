@@ -1,14 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { runReplyAgent } from "./agent-runner.js";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   createBaseRun,
   getRunEmbeddedPiAgentMock,
   seedSessionStore,
   type EmbeddedRunParams,
 } from "./agent-runner.memory-flush.test-harness.js";
+
+let runReplyAgent: typeof import("./agent-runner.js").runReplyAgent;
+
+beforeAll(async () => {
+  ({ runReplyAgent } = await import("./agent-runner.js"));
+});
 
 describe("runReplyAgent memory flush", () => {
   it("skips memory flush when the sandbox workspace is read-only", async () => {
