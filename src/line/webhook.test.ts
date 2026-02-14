@@ -118,4 +118,43 @@ describe("createLineWebhookMiddleware", () => {
     expect(res.status).toHaveBeenCalledWith(401);
     expect(onEvents).not.toHaveBeenCalled();
   });
+
+  it("responds 200 to LINE verification requests (empty events, no signature)", async () => {
+    const onEvents = vi.fn(async () => {});
+    const middleware = createLineWebhookMiddleware({ channelSecret: "secret", onEvents });
+
+    const rawBody = JSON.stringify({ events: [] });
+    const req = {
+      headers: {},
+      body: rawBody,
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const res = createRes();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+    expect(onEvents).not.toHaveBeenCalled();
+  });
+
+  it("still rejects missing signature when events are present", async () => {
+    const onEvents = vi.fn(async () => {});
+    const middleware = createLineWebhookMiddleware({ channelSecret: "secret", onEvents });
+
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const req = {
+      headers: {},
+      body: rawBody,
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const res = createRes();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(onEvents).not.toHaveBeenCalled();
+  });
 });
