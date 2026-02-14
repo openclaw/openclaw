@@ -49,6 +49,88 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("does not emit chat delta for NO_REPLY streaming text", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
+    chatRunState.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
+
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: " NO_REPLY  " },
+    });
+
+    const chatCalls = broadcast.mock.calls.filter(([event]) => event === "chat");
+    expect(chatCalls).toHaveLength(0);
+    const sessionChatCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
+    expect(sessionChatCalls).toHaveLength(0);
+    nowSpy.mockRestore();
+  });
+
+  it("does not include NO_REPLY text in chat final message", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(2_000);
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
+    chatRunState.registry.add("run-2", { sessionKey: "session-2", clientRunId: "client-2" });
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
+
+    handler({
+      runId: "run-2",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "NO_REPLY" },
+    });
+    handler({
+      runId: "run-2",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    const chatCalls = broadcast.mock.calls.filter(([event]) => event === "chat");
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as { state?: string; message?: unknown };
+    expect(payload.state).toBe("final");
+    expect(payload.message).toBeUndefined();
+    const sessionChatCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
+    expect(sessionChatCalls).toHaveLength(1);
+    nowSpy.mockRestore();
+  });
+
   it("routes tool events only to registered recipients when verbose is enabled", () => {
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
