@@ -13,10 +13,21 @@ import {
   startMaxDurationTimer,
 } from "./timers.js";
 
-function shouldAcceptInbound(
-  config: CallManagerContext["config"],
-  from: string | undefined,
-): boolean {
+type EventContext = Pick<
+  CallManagerContext,
+  | "activeCalls"
+  | "providerCallIdMap"
+  | "processedEventIds"
+  | "rejectedProviderCallIds"
+  | "provider"
+  | "config"
+  | "storePath"
+  | "transcriptWaiters"
+  | "maxDurationTimers"
+  | "onCallAnswered"
+>;
+
+function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
   const { inboundPolicy: policy, allowFrom } = config;
 
   switch (policy) {
@@ -49,7 +60,7 @@ function shouldAcceptInbound(
 }
 
 function createInboundCall(params: {
-  ctx: CallManagerContext;
+  ctx: EventContext;
   providerCallId: string;
   from: string;
   to: string;
@@ -80,7 +91,7 @@ function createInboundCall(params: {
   return callRecord;
 }
 
-export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): void {
+export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   if (ctx.processedEventIds.has(event.id)) {
     return;
   }
