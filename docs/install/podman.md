@@ -22,7 +22,7 @@ Run the OpenClaw gateway in a **rootless** Podman container. Uses the same image
 ./setup-podman.sh
 ```
 
-By default the container is **not** installed as a systemd service — you start it manually (see below). To install it as a systemd Quadlet user service instead, run:
+By default the container is **not** installed as a systemd service, you start it manually (see below). For a production-style setup with auto-start and restarts, install it as a systemd Quadlet user service instead:
 
 ```bash
 ./setup-podman.sh --quadlet
@@ -30,7 +30,7 @@ By default the container is **not** installed as a systemd service — you start
 
 (Or set `OPENCLAW_PODMAN_QUADLET=1`; use `--container` to install only the container and launch script.)
 
-**2. Start gateway** — **manual** (from repo or as the openclaw user):
+**2. Start gateway** (manual, for quick smoke testing):
 
 ```bash
 ./scripts/run-openclaw-podman.sh launch
@@ -72,8 +72,8 @@ To add quadlet **after** an initial setup that did not use it, re-run: `./setup-
   Then start the gateway as that user (e.g. from cron or systemd):
 
   ```bash
-  sudo -u openclaw env OPENCLAW_PODMAN_USERNS=keep-id /home/openclaw/run-openclaw-podman.sh
-  sudo -u openclaw env OPENCLAW_PODMAN_USERNS=keep-id /home/openclaw/run-openclaw-podman.sh setup
+  sudo -u openclaw /home/openclaw/run-openclaw-podman.sh
+  sudo -u openclaw /home/openclaw/run-openclaw-podman.sh setup
   ```
 
 - **Config:** Only `openclaw` and root can access `/home/openclaw/.openclaw`. To edit config: use the Control UI once the gateway is running, or `sudo -u openclaw $EDITOR /home/openclaw/.openclaw/openclaw.json`.
@@ -81,8 +81,9 @@ To add quadlet **after** an initial setup that did not use it, re-run: `./setup-
 ## Environment and config
 
 - **Token:** Stored in `~openclaw/.openclaw/.env` as `OPENCLAW_GATEWAY_TOKEN`. Generate with: `openssl rand -hex 32`.
-- **Optional:** In that `.env` you can set `OPENCLAW_GATEWAY_PORT`, `OPENCLAW_BRIDGE_PORT`, `OPENCLAW_GATEWAY_BIND`, and provider keys (e.g. `GROQ_API_KEY`, `OLLAMA_API_KEY`).
-- **Paths:** Config and workspace default to `~openclaw/.openclaw` and `~openclaw/.openclaw/workspace`. Override with `OPENCLAW_CONFIG_DIR` and `OPENCLAW_WORKSPACE_DIR` when running the launch script.
+- **Optional:** In that `.env` you can set provider keys (e.g. `GROQ_API_KEY`, `OLLAMA_API_KEY`) and other OpenClaw env vars.
+- **Host ports:** By default the script maps `18789` (gateway) and `18790` (bridge). Override the **host** port mapping with `OPENCLAW_PODMAN_GATEWAY_HOST_PORT` and `OPENCLAW_PODMAN_BRIDGE_HOST_PORT` when launching.
+- **Paths:** Host config and workspace default to `~openclaw/.openclaw` and `~openclaw/.openclaw/workspace`. Override the host paths used by the launch script with `OPENCLAW_CONFIG_DIR` and `OPENCLAW_WORKSPACE_DIR`.
 
 ## Useful commands
 
@@ -93,8 +94,7 @@ To add quadlet **after** an initial setup that did not use it, re-run: `./setup-
 
 ## Troubleshooting
 
-- **Permission denied (EACCES) on config or auth-profiles:** The container runs with `--userns=keep-id` so it uses the same uid/gid as the host user (openclaw). Ensure `~openclaw/.openclaw` and `~openclaw/.openclaw/workspace` are owned by the openclaw user. If you run the launch script as a different user, either run it as openclaw (see above) or set `OPENCLAW_PODMAN_USERNS=keep-id` when running as your user so the container uid matches your mount ownership.
-- **“Operation not permitted” from setfacl / ACLs:** Use `OPENCLAW_PODMAN_USERNS=keep-id` so the container runs as the same user as the mounts; no ACLs needed.
+- **Permission denied (EACCES) on config or auth-profiles:** The container defaults to `--userns=keep-id` and runs as the same uid/gid as the host user running the script. Ensure your host `OPENCLAW_CONFIG_DIR` and `OPENCLAW_WORKSPACE_DIR` are owned by that user.
 - **Rootless Podman fails for user openclaw:** Check `/etc/subuid` and `/etc/subgid` contain a line for `openclaw` (e.g. `openclaw:100000:65536`). Add it if missing and restart.
 - **Container name in use:** The launch script uses `podman run --replace`, so the existing container is replaced when you start again. To clean up manually: `podman rm -f openclaw`.
 - **Script not found when running as openclaw:** Ensure `setup-podman.sh` was run so that `run-openclaw-podman.sh` is copied to openclaw’s home (e.g. `/home/openclaw/run-openclaw-podman.sh`).
