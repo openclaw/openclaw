@@ -46,8 +46,20 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
 }
 
 function isQmdNoResultsOutput(raw: string): boolean {
-  const normalized = raw.trim().toLowerCase().replace(/\s+/g, " ");
-  return normalized === "no results found" || normalized === "no results found.";
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim().toLowerCase().replace(/\s+/g, " "))
+    .filter((line) => line.length > 0);
+  return lines.some((line) => isQmdNoResultsLine(line));
+}
+
+function isQmdNoResultsLine(line: string): boolean {
+  if (line === "no results found" || line === "no results found.") {
+    return true;
+  }
+  return /^(?:\[[^\]]+\]\s*)?(?:(?:warn(?:ing)?|info|error|qmd)\s*:\s*)+no results found\.?$/.test(
+    line,
+  );
 }
 
 function summarizeQmdStderr(raw: string): string {
