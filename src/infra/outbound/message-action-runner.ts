@@ -568,11 +568,36 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   if (options.length < 2) {
     throw new Error("pollOption requires at least two values");
   }
+  const silent = readBooleanParam(params, "silent");
   const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
+  const pollAnonymous = readBooleanParam(params, "pollAnonymous");
+  const pollPublic = readBooleanParam(params, "pollPublic");
+  if (pollAnonymous && pollPublic) {
+    throw new Error("pollAnonymous and pollPublic are mutually exclusive");
+  }
+  const isAnonymous = pollAnonymous ? true : pollPublic ? false : undefined;
   const durationHours = readNumberParam(params, "pollDurationHours", {
     integer: true,
   });
+  const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
+    integer: true,
+  });
   const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
+
+  const threadId = readStringParam(params, "threadId");
+  const slackAutoThreadId =
+    channel === "slack" && !threadId
+      ? resolveSlackAutoThreadId({ to, toolContext: input.toolContext })
+      : undefined;
+  const telegramAutoThreadId =
+    channel === "telegram" && !threadId
+      ? resolveTelegramAutoThreadId({ to, toolContext: input.toolContext })
+      : undefined;
+  const resolvedThreadId = threadId ?? slackAutoThreadId ?? telegramAutoThreadId;
+  if (resolvedThreadId && !params.threadId) {
+    params.threadId = resolvedThreadId;
+  }
+
   const base = typeof params.message === "string" ? params.message : "";
   await maybeApplyCrossContextMarker({
     cfg,
@@ -595,12 +620,16 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       gateway,
       toolContext: input.toolContext,
       dryRun,
+      silent: silent ?? undefined,
     },
     to,
     question,
     options,
     maxSelections,
+    durationSeconds: durationSeconds ?? undefined,
     durationHours: durationHours ?? undefined,
+    threadId: resolvedThreadId ?? undefined,
+    isAnonymous,
   });
 
   return {

@@ -120,6 +120,7 @@ type CollectTelegramUnmentionedGroupIds =
 type ProbeTelegram = typeof import("../../telegram/probe.js").probeTelegram;
 type ResolveTelegramToken = typeof import("../../telegram/token.js").resolveTelegramToken;
 type SendMessageTelegram = typeof import("../../telegram/send.js").sendMessageTelegram;
+type SendPollTelegram = typeof import("../../telegram/send.js").sendPollTelegram;
 type MonitorTelegramProvider = typeof import("../../telegram/monitor.js").monitorTelegramProvider;
 type TelegramMessageActions =
   typeof import("../../channels/plugins/actions/telegram.js").telegramMessageActions;
@@ -301,6 +302,7 @@ export type PluginRuntime = {
       probeTelegram: ProbeTelegram;
       resolveTelegramToken: ResolveTelegramToken;
       sendMessageTelegram: SendMessageTelegram;
+      sendPollTelegram: SendPollTelegram;
       monitorTelegramProvider: MonitorTelegramProvider;
       messageActions: TelegramMessageActions;
     };

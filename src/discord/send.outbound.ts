@@ -274,12 +274,15 @@ export async function sendPollDiscord(
   const { channelId } = await resolveChannelId(rest, recipient, request);
   const content = opts.content?.trim();
   const payload = normalizeDiscordPollInput(poll);
+  // Discord message flag for silent/suppress notifications (matches send.shared.ts)
+  const flags = opts.silent ? 1 << 12 : undefined;
   const res = (await request(
     () =>
       rest.post(Routes.channelMessages(channelId), {
         body: {
           content: content || undefined,
           poll: payload,
+          ...(flags ? { flags } : {}),
         },
       }) as Promise<{ id: string; channel_id: string }>,
     "poll",

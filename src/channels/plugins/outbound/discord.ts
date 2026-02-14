@@ -27,8 +27,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "discord", ...result };
   },
-  sendPoll: async ({ to, poll, accountId }) =>
+  sendPoll: async ({ to, poll, accountId, silent }) =>
     await sendPollDiscord(to, poll, {
       accountId: accountId ?? undefined,
+      silent: silent ?? undefined,
     }),
 };

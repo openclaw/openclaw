@@ -344,4 +344,6 @@ export type ChannelPollContext = {
   poll: PollInput;
   accountId?: string | null;
   threadId?: string | null;
+  silent?: boolean;
+  isAnonymous?: boolean;
 };
