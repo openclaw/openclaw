@@ -71,6 +71,9 @@ export function normalizePollInput(
   if (durationHours !== undefined && durationHours < 1) {
     throw new Error("durationHours must be at least 1");
   }
+  if (durationSeconds !== undefined && durationHours !== undefined) {
+    throw new Error("durationSeconds and durationHours are mutually exclusive");
+  }
   return {
     question,
     options: cleaned,

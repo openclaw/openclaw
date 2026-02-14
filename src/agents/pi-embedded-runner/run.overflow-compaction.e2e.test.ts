@@ -116,6 +116,7 @@ vi.mock("./logger.js", () => ({
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
+    isEnabled: vi.fn(() => false),
   },
 }));
 
@@ -206,6 +207,7 @@ function makeAttemptResult(
   return {
     aborted: false,
     timedOut: false,
+    timedOutDuringCompaction: false,
     promptError: null,
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],

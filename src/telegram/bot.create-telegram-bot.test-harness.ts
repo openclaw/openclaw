@@ -1,8 +1,10 @@
-import { beforeEach, vi, type Mock } from "vitest";
+import { beforeEach, vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 
-type AnyMock = Mock<(...args: unknown[]) => unknown>;
-type AnyAsyncMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type AnyMock = MockFn<(...args: unknown[]) => unknown>;
+type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
+
 type ReplyOpts =
   | {
       onReplyStart?: () => void | Promise<void>;
@@ -74,12 +76,12 @@ vi.mock("../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest,
 }));
 
-export const useSpy: Mock<(arg: unknown) => void> = vi.fn();
-export const middlewareUseSpy: Mock<(...args: unknown[]) => unknown> = vi.fn();
-export const onSpy: Mock<(...args: unknown[]) => unknown> = vi.fn();
-export const stopSpy: Mock<(...args: unknown[]) => unknown> = vi.fn();
-export const commandSpy: Mock<(...args: unknown[]) => unknown> = vi.fn();
-export const botCtorSpy: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const useSpy: MockFn<(arg: unknown) => void> = vi.fn();
+export const middlewareUseSpy: AnyMock = vi.fn();
+export const onSpy: AnyMock = vi.fn();
+export const stopSpy: AnyMock = vi.fn();
+export const commandSpy: AnyMock = vi.fn();
+export const botCtorSpy: AnyMock = vi.fn();
 export const answerCallbackQuerySpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const sendChatActionSpy: AnyMock = vi.fn();
 export const setMessageReactionSpy: AnyAsyncMock = vi.fn(async () => undefined);
@@ -154,7 +156,7 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
   apiThrottler: () => throttlerSpy(),
 }));
 
-export const replySpy: Mock<(ctx: unknown, opts?: ReplyOpts) => Promise<void>> = vi.fn(
+export const replySpy: MockFn<(ctx: unknown, opts?: ReplyOpts) => Promise<void>> = vi.fn(
   async (_ctx, opts) => {
     await opts?.onReplyStart?.();
     return undefined;

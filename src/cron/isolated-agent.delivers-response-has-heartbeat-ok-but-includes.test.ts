@@ -46,8 +46,9 @@ async function writeSessionStore(home: string) {
         "agent:main:main": {
           sessionId: "main-session",
           updatedAt: Date.now(),
-          lastProvider: "webchat",
-          lastTo: "",
+          lastProvider: "telegram",
+          lastChannel: "telegram",
+          lastTo: "123",
         },
       },
       null,
@@ -101,6 +102,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.mocked(runEmbeddedPiAgent).mockReset();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
     vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue(true);
@@ -184,7 +186,7 @@ describe("runCronIsolatedAgentTurn", () => {
             kind: "agentTurn",
             message: "do it",
           }),
-          delivery: { mode: "announce", channel: "telegram", to: "123" },
+          delivery: { mode: "announce", channel: "last" },
         },
         message: "do it",
         sessionKey: "cron:job-1",
@@ -210,7 +212,7 @@ describe("runCronIsolatedAgentTurn", () => {
             message: "do it",
           }),
           deleteAfterRun: true,
-          delivery: { mode: "announce", channel: "telegram", to: "123" },
+          delivery: { mode: "announce", channel: "last" },
         },
         message: "do it",
         sessionKey: "cron:job-1",

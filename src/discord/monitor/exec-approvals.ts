@@ -19,6 +19,16 @@ const EXEC_APPROVAL_KEY = "execapproval";
 
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
+/** Extract Discord channel ID from a session key like "agent:main:discord:channel:123456789" */
+export function extractDiscordChannelId(sessionKey?: string | null): string | null {
+  if (!sessionKey) {
+    return null;
+  }
+  // Session key format: agent:<id>:discord:channel:<channelId> or agent:<id>:discord:group:<channelId>
+  const match = sessionKey.match(/discord:(?:channel|group):(\d+)/);
+  return match ? match[1] : null;
+}
+
 type PendingApproval = {
   discordMessageId: string;
   discordChannelId: string;
@@ -348,70 +358,122 @@ export class DiscordExecApprovalHandler {
       },
     ];
 
-    const approvers = this.opts.config.approvers ?? [];
+    const target = this.opts.config.target ?? "dm";
+    const sendToDm = target === "dm" || target === "both";
+    const sendToChannel = target === "channel" || target === "both";
+    let fallbackToDm = false;
 
-    for (const approver of approvers) {
-      const userId = String(approver);
-      try {
-        // Create DM channel
-        const dmChannel = (await discordRequest(
-          () =>
-            rest.post(Routes.userChannels(), {
-              body: { recipient_id: userId },
-            }) as Promise<{ id: string }>,
-          "dm-channel",
-        )) as { id: string };
+    // Send to originating channel if configured
+    if (sendToChannel) {
+      const channelId = extractDiscordChannelId(request.request.sessionKey);
+      if (channelId) {
+        try {
+          const message = (await discordRequest(
+            () =>
+              rest.post(Routes.channelMessages(channelId), {
+                body: {
+                  embeds: [embed],
+                  components,
+                },
+              }) as Promise<{ id: string; channel_id: string }>,
+            "send-approval-channel",
+          )) as { id: string; channel_id: string };
 
-        if (!dmChannel?.id) {
-          logError(`discord exec approvals: failed to create DM for user ${userId}`);
-          continue;
+          if (message?.id) {
+            const timeoutMs = Math.max(0, request.expiresAtMs - Date.now());
+            const timeoutId = setTimeout(() => {
+              void this.handleApprovalTimeout(request.id, "channel");
+            }, timeoutMs);
+
+            this.pending.set(`${request.id}:channel`, {
+              discordMessageId: message.id,
+              discordChannelId: channelId,
+              timeoutId,
+            });
+
+            logDebug(`discord exec approvals: sent approval ${request.id} to channel ${channelId}`);
+          }
+        } catch (err) {
+          logError(`discord exec approvals: failed to send to channel: ${String(err)}`);
         }
-
-        // Send message with embed and buttons
-        const message = (await discordRequest(
-          () =>
-            rest.post(Routes.channelMessages(dmChannel.id), {
-              body: {
-                embeds: [embed],
-                components,
-              },
-            }) as Promise<{ id: string; channel_id: string }>,
-          "send-approval",
-        )) as { id: string; channel_id: string };
-
-        if (!message?.id) {
-          logError(`discord exec approvals: failed to send message to user ${userId}`);
-          continue;
+      } else {
+        if (!sendToDm) {
+          logError(
+            `discord exec approvals: target is "channel" but could not extract channel id from session key "${request.request.sessionKey ?? "(none)"}" — falling back to DM delivery for approval ${request.id}`,
+          );
+          fallbackToDm = true;
+        } else {
+          logDebug(`discord exec approvals: could not extract channel id from session key`);
         }
+      }
+    }
 
-        // Set up timeout
-        const timeoutMs = Math.max(0, request.expiresAtMs - Date.now());
-        const timeoutId = setTimeout(() => {
-          void this.handleApprovalTimeout(request.id);
-        }, timeoutMs);
+    // Send to approver DMs if configured (or as fallback when channel extraction fails)
+    if (sendToDm || fallbackToDm) {
+      const approvers = this.opts.config.approvers ?? [];
 
-        this.pending.set(request.id, {
-          discordMessageId: message.id,
-          discordChannelId: dmChannel.id,
-          timeoutId,
-        });
+      for (const approver of approvers) {
+        const userId = String(approver);
+        try {
+          // Create DM channel
+          const dmChannel = (await discordRequest(
+            () =>
+              rest.post(Routes.userChannels(), {
+                body: { recipient_id: userId },
+              }) as Promise<{ id: string }>,
+            "dm-channel",
+          )) as { id: string };
 
-        logDebug(`discord exec approvals: sent approval ${request.id} to user ${userId}`);
-      } catch (err) {
-        logError(`discord exec approvals: failed to notify user ${userId}: ${String(err)}`);
+          if (!dmChannel?.id) {
+            logError(`discord exec approvals: failed to create DM for user ${userId}`);
+            continue;
+          }
+
+          // Send message with embed and buttons
+          const message = (await discordRequest(
+            () =>
+              rest.post(Routes.channelMessages(dmChannel.id), {
+                body: {
+                  embeds: [embed],
+                  components,
+                },
+              }) as Promise<{ id: string; channel_id: string }>,
+            "send-approval",
+          )) as { id: string; channel_id: string };
+
+          if (!message?.id) {
+            logError(`discord exec approvals: failed to send message to user ${userId}`);
+            continue;
+          }
+
+          // Clear any existing pending DM entry to avoid timeout leaks
+          const existingDm = this.pending.get(`${request.id}:dm`);
+          if (existingDm) {
+            clearTimeout(existingDm.timeoutId);
+          }
+
+          // Set up timeout
+          const timeoutMs = Math.max(0, request.expiresAtMs - Date.now());
+          const timeoutId = setTimeout(() => {
+            void this.handleApprovalTimeout(request.id, "dm");
+          }, timeoutMs);
+
+          this.pending.set(`${request.id}:dm`, {
+            discordMessageId: message.id,
+            discordChannelId: dmChannel.id,
+            timeoutId,
+          });
+
+          logDebug(`discord exec approvals: sent approval ${request.id} to user ${userId}`);
+        } catch (err) {
+          logError(`discord exec approvals: failed to notify user ${userId}: ${String(err)}`);
+        }
       }
     }
   }
 
   private async handleApprovalResolved(resolved: ExecApprovalResolved): Promise<void> {
-    const pending = this.pending.get(resolved.id);
-    if (!pending) {
-      return;
-    }
-
-    clearTimeout(pending.timeoutId);
-    this.pending.delete(resolved.id);
-
+    // Clean up all pending entries for this approval (channel + dm)
     const request = this.requestCache.get(resolved.id);
     this.requestCache.delete(resolved.id);
 
@@ -421,29 +483,50 @@ export class DiscordExecApprovalHandler {
 
     logDebug(`discord exec approvals: resolved ${resolved.id} with ${resolved.decision}`);
 
-    await this.finalizeMessage(
-      pending.discordChannelId,
-      pending.discordMessageId,
-      formatResolvedEmbed(request, resolved.decision, resolved.resolvedBy),
-    );
+    const resolvedEmbed = formatResolvedEmbed(request, resolved.decision, resolved.resolvedBy);
+
+    for (const suffix of [":channel", ":dm", ""]) {
+      const key = `${resolved.id}${suffix}`;
+      const pending = this.pending.get(key);
+      if (!pending) {
+        continue;
+      }
+
+      clearTimeout(pending.timeoutId);
+      this.pending.delete(key);
+
+      await this.finalizeMessage(pending.discordChannelId, pending.discordMessageId, resolvedEmbed);
+    }
   }
 
-  private async handleApprovalTimeout(approvalId: string): Promise<void> {
-    const pending = this.pending.get(approvalId);
+  private async handleApprovalTimeout(
+    approvalId: string,
+    source?: "channel" | "dm",
+  ): Promise<void> {
+    const key = source ? `${approvalId}:${source}` : approvalId;
+    const pending = this.pending.get(key);
     if (!pending) {
       return;
     }
 
-    this.pending.delete(approvalId);
+    this.pending.delete(key);
 
     const request = this.requestCache.get(approvalId);
-    this.requestCache.delete(approvalId);
+
+    // Only clean up requestCache if no other pending entries exist for this approval
+    const hasOtherPending =
+      this.pending.has(`${approvalId}:channel`) ||
+      this.pending.has(`${approvalId}:dm`) ||
+      this.pending.has(approvalId);
+    if (!hasOtherPending) {
+      this.requestCache.delete(approvalId);
+    }
 
     if (!request) {
       return;
     }
 
-    logDebug(`discord exec approvals: timeout for ${approvalId}`);
+    logDebug(`discord exec approvals: timeout for ${approvalId} (${source ?? "default"})`);
 
     await this.finalizeMessage(
       pending.discordChannelId,
@@ -524,6 +607,11 @@ export class DiscordExecApprovalHandler {
       return false;
     }
   }
+
+  /** Return the list of configured approver IDs. */
+  getApprovers(): Array<string | number> {
+    return this.opts.config.approvers ?? [];
+  }
 }
 
 export type ExecApprovalButtonContext = {
@@ -548,6 +636,21 @@ export class ExecApprovalButton extends Button {
         await interaction.update({
           content: "This approval is no longer valid.",
           components: [],
+        });
+      } catch {
+        // Interaction may have expired
+      }
+      return;
+    }
+
+    // Verify the user is an authorized approver
+    const approvers = this.ctx.handler.getApprovers();
+    const userId = interaction.userId;
+    if (!approvers.some((id) => String(id) === userId)) {
+      try {
+        await interaction.reply({
+          content: "⛔ You are not authorized to approve exec requests.",
+          ephemeral: true,
         });
       } catch {
         // Interaction may have expired

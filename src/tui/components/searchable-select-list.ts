@@ -33,6 +33,12 @@ export class SearchableSelectList implements Component {
   onCancel?: () => void;
   onSelectionChange?: (item: SelectItem) => void;
 
+  private static readonly DESCRIPTION_LAYOUT_MIN_WIDTH = 40;
+  private static readonly DESCRIPTION_MIN_WIDTH = 12;
+  private static readonly DESCRIPTION_SPACING_WIDTH = 2;
+  // Keep a small right margin so we don't risk wrapping due to styling/terminal quirks.
+  private static readonly RIGHT_MARGIN_WIDTH = 2;
+
   constructor(items: SelectItem[], maxVisible: number, theme: SearchableSelectListTheme) {
     this.items = items;
     this.filteredItems = items;
@@ -218,23 +224,20 @@ export class SearchableSelectList implements Component {
     const prefixWidth = prefix.length;
     const displayValue = this.getItemLabel(item);
 
-    if (item.description && width > 40) {
-      const minDescriptionWidth = 12;
-      const spacingWidth = 2;
-      const availableWidth = Math.max(1, width - prefixWidth - 2);
-
-      if (availableWidth > minDescriptionWidth + spacingWidth + 1) {
-        const maxValueWidth = availableWidth - minDescriptionWidth - spacingWidth;
-        const truncatedValue = truncateToWidth(displayValue, maxValueWidth, "");
+    const description = item.description;
+    if (description) {
+      const descriptionLayout = this.getDescriptionLayout(width, prefixWidth);
+      if (descriptionLayout) {
+        const truncatedValue = truncateToWidth(displayValue, descriptionLayout.maxValueWidth, "");
         const valueText = this.highlightMatch(truncatedValue, query);
 
         const usedByValue = visibleWidth(valueText);
-        const remainingWidth = availableWidth - usedByValue;
+        const remainingWidth = descriptionLayout.availableWidth - usedByValue;
+        const descriptionWidth = remainingWidth - descriptionLayout.spacingWidth;
 
-        if (remainingWidth > spacingWidth + 1) {
-          const descriptionWidth = remainingWidth - spacingWidth;
-          const spacing = " ".repeat(spacingWidth);
-          const truncatedDesc = truncateToWidth(item.description, descriptionWidth, "");
+        if (descriptionWidth >= SearchableSelectList.DESCRIPTION_MIN_WIDTH) {
+          const spacing = " ".repeat(descriptionLayout.spacingWidth);
+          const truncatedDesc = truncateToWidth(description, descriptionWidth, "");
           // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
           const highlightedDesc = this.highlightMatch(truncatedDesc, query);
           const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
@@ -249,6 +252,34 @@ export class SearchableSelectList implements Component {
     const valueText = this.highlightMatch(truncatedValue, query);
     const line = `${prefix}${valueText}`;
     return isSelected ? this.theme.selectedText(line) : line;
+  }
+
+  private getDescriptionLayout(
+    width: number,
+    prefixWidth: number,
+  ): { availableWidth: number; maxValueWidth: number; spacingWidth: number } | null {
+    if (width <= SearchableSelectList.DESCRIPTION_LAYOUT_MIN_WIDTH) {
+      return null;
+    }
+
+    const availableWidth = Math.max(
+      1,
+      width - prefixWidth - SearchableSelectList.RIGHT_MARGIN_WIDTH,
+    );
+    const maxValueWidth =
+      availableWidth -
+      SearchableSelectList.DESCRIPTION_MIN_WIDTH -
+      SearchableSelectList.DESCRIPTION_SPACING_WIDTH;
+
+    if (maxValueWidth < 1) {
+      return null;
+    }
+
+    return {
+      availableWidth,
+      maxValueWidth,
+      spacingWidth: SearchableSelectList.DESCRIPTION_SPACING_WIDTH,
+    };
   }
 
   handleInput(keyData: string): void {

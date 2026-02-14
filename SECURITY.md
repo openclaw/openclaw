@@ -39,6 +39,10 @@ Reports without reproduction steps, demonstrated impact, and remediation advice 
 OpenClaw is a labor of love. There is no bug bounty program and no budget for paid reports. Please still disclose responsibly so we can fix issues quickly.
 The best way to help the project right now is by sending PRs.
 
+## Maintainers: GHSA Updates via CLI
+
+When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (or newer). Without it, some fields (notably CVSS) may not persist even if the request returns 200.
+
 ## Out of Scope
 
 - Public Internet Exposure

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { timingSafeEqual } from "node:crypto";
 import {
   normalizeWebhookMessage,
   normalizeWebhookReaction,
@@ -315,6 +316,73 @@ function maskSecret(value: string): string {
   return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }
 
+function normalizeAuthToken(raw: string): string {
+  const value = raw.trim();
+  if (!value) {
+    return "";
+  }
+  if (value.toLowerCase().startsWith("bearer ")) {
+    return value.slice("bearer ".length).trim();
+  }
+  return value;
+}
+
+function safeEqualSecret(aRaw: string, bRaw: string): boolean {
+  const a = normalizeAuthToken(aRaw);
+  const b = normalizeAuthToken(bRaw);
+  if (!a || !b) {
+    return false;
+  }
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
+
+function getHostName(hostHeader?: string | string[]): string {
+  const host = (Array.isArray(hostHeader) ? hostHeader[0] : (hostHeader ?? ""))
+    .trim()
+    .toLowerCase();
+  if (!host) {
+    return "";
+  }
+  // Bracketed IPv6: [::1]:18789
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    if (end !== -1) {
+      return host.slice(1, end);
+    }
+  }
+  const [name] = host.split(":");
+  return name ?? "";
+}
+
+function isDirectLocalLoopbackRequest(req: IncomingMessage): boolean {
+  const remote = (req.socket?.remoteAddress ?? "").trim().toLowerCase();
+  const remoteIsLoopback =
+    remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+  if (!remoteIsLoopback) {
+    return false;
+  }
+
+  const host = getHostName(req.headers?.host);
+  const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
+  if (!hostIsLocal) {
+    return false;
+  }
+
+  // If a reverse proxy is in front, it will usually inject forwarding headers.
+  // Passwordless webhooks must never be accepted through a proxy.
+  const hasForwarded = Boolean(
+    req.headers?.["x-forwarded-for"] ||
+    req.headers?.["x-real-ip"] ||
+    req.headers?.["x-forwarded-host"],
+  );
+  return !hasForwarded;
+}
+
 export async function handleBlueBubblesWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -407,14 +475,14 @@ export async function handleBlueBubblesWebhookRequest(
   const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
 
   const strictMatches: WebhookTarget[] = [];
-  const fallbackTargets: WebhookTarget[] = [];
+  const passwordlessTargets: WebhookTarget[] = [];
   for (const target of targets) {
     const token = target.account.config.password?.trim() ?? "";
     if (!token) {
-      fallbackTargets.push(target);
+      passwordlessTargets.push(target);
       continue;
     }
-    if (guid && guid.trim() === token) {
+    if (safeEqualSecret(guid, token)) {
       strictMatches.push(target);
       if (strictMatches.length > 1) {
         break;
@@ -422,7 +490,12 @@ export async function handleBlueBubblesWebhookRequest(
     }
   }
 
-  const matching = strictMatches.length > 0 ? strictMatches : fallbackTargets;
+  const matching =
+    strictMatches.length > 0
+      ? strictMatches
+      : isDirectLocalLoopbackRequest(req)
+        ? passwordlessTargets
+        : [];
 
   if (matching.length === 0) {
     res.statusCode = 401;

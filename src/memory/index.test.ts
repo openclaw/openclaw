@@ -6,6 +6,14 @@ import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 let embedBatchCalls = 0;
 
+// Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).
+vi.mock("chokidar", () => ({
+  default: {
+    watch: () => ({ on: () => {}, close: async () => {} }),
+  },
+  watch: () => ({ on: () => {}, close: async () => {} }),
+}));
+
 vi.mock("./sqlite-vec.js", () => ({
   loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
 }));
@@ -49,6 +57,9 @@ describe("memory index", () => {
   });
 
   beforeEach(async () => {
+    // Perf: most suites don't need atomic swap behavior for full reindexes.
+    // Keep atomic reindex tests on the safe path.
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
     embedBatchCalls = 0;
     workspaceDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
     await fs.mkdir(workspaceDir, { recursive: true });

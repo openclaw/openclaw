@@ -60,6 +60,7 @@ describe("loadWorkspaceSkillEntries", () => {
       ),
       "utf-8",
     );
+    await fs.writeFile(path.join(pluginRoot, "index.ts"), "export {};\n", "utf-8");
     await fs.writeFile(
       path.join(pluginRoot, "skills", "prose", "SKILL.md"),
       `---\nname: prose\ndescription: test\n---\n`,
@@ -99,6 +100,7 @@ describe("loadWorkspaceSkillEntries", () => {
       ),
       "utf-8",
     );
+    await fs.writeFile(path.join(pluginRoot, "index.ts"), "export {};\n", "utf-8");
     await fs.writeFile(
       path.join(pluginRoot, "skills", "prose", "SKILL.md"),
       `---\nname: prose\ndescription: test\n---\n`,

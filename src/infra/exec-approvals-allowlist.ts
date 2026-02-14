@@ -55,6 +55,12 @@ export function resolveSafeBins(entries?: string[] | null): Set<string> {
   return normalizeSafeBins(entries ?? []);
 }
 
+function hasGlobToken(value: string): boolean {
+  // Safe bins are stdin-only; globbing is both surprising and a historical bypass vector.
+  // Note: we still harden execution-time expansion separately.
+  return /[*?[\]]/.test(value);
+}
+
 export function isSafeBinUsage(params: {
   argv: string[];
   resolution: CommandResolution | null;
@@ -62,6 +68,11 @@ export function isSafeBinUsage(params: {
   cwd?: string;
   fileExists?: (filePath: string) => boolean;
 }): boolean {
+  // Windows host exec uses PowerShell, which has different parsing/expansion rules.
+  // Keep safeBins conservative there (require explicit allowlist entries).
+  if (isWindowsPlatform(process.platform)) {
+    return false;
+  }
   if (params.safeBins.size === 0) {
     return false;
   }
@@ -94,11 +105,17 @@ export function isSafeBinUsage(params: {
       const eqIndex = token.indexOf("=");
       if (eqIndex > 0) {
         const value = token.slice(eqIndex + 1);
+        if (value && hasGlobToken(value)) {
+          return false;
+        }
         if (value && (isPathLikeToken(value) || exists(path.resolve(cwd, value)))) {
           return false;
         }
       }
       continue;
+    }
+    if (hasGlobToken(token)) {
+      return false;
     }
     if (isPathLikeToken(token)) {
       return false;
@@ -113,7 +130,10 @@ export function isSafeBinUsage(params: {
 export type ExecAllowlistEvaluation = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
+  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
+
+export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "skills" | null;
 
 function evaluateSegments(
   segments: ExecCommandSegment[],
@@ -124,9 +144,14 @@ function evaluateSegments(
     skillBins?: Set<string>;
     autoAllowSkills?: boolean;
   },
-): { satisfied: boolean; matches: ExecAllowlistEntry[] } {
+): {
+  satisfied: boolean;
+  matches: ExecAllowlistEntry[];
+  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+} {
   const matches: ExecAllowlistEntry[] = [];
   const allowSkills = params.autoAllowSkills === true && (params.skillBins?.size ?? 0) > 0;
+  const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
 
   const satisfied = segments.every((segment) => {
     const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
@@ -148,10 +173,18 @@ function evaluateSegments(
       allowSkills && segment.resolution?.executableName
         ? params.skillBins?.has(segment.resolution.executableName)
         : false;
-    return Boolean(match || safe || skillAllow);
+    const by: ExecSegmentSatisfiedBy = match
+      ? "allowlist"
+      : safe
+        ? "safeBins"
+        : skillAllow
+          ? "skills"
+          : null;
+    segmentSatisfiedBy.push(by);
+    return Boolean(by);
   });
 
-  return { satisfied, matches };
+  return { satisfied, matches, segmentSatisfiedBy };
 }
 
 export function evaluateExecAllowlist(params: {
@@ -163,8 +196,9 @@ export function evaluateExecAllowlist(params: {
   autoAllowSkills?: boolean;
 }): ExecAllowlistEvaluation {
   const allowlistMatches: ExecAllowlistEntry[] = [];
+  const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
   if (!params.analysis.ok || params.analysis.segments.length === 0) {
-    return { allowlistSatisfied: false, allowlistMatches };
+    return { allowlistSatisfied: false, allowlistMatches, segmentSatisfiedBy };
   }
 
   // If the analysis contains chains, evaluate each chain part separately
@@ -178,11 +212,12 @@ export function evaluateExecAllowlist(params: {
         autoAllowSkills: params.autoAllowSkills,
       });
       if (!result.satisfied) {
-        return { allowlistSatisfied: false, allowlistMatches: [] };
+        return { allowlistSatisfied: false, allowlistMatches: [], segmentSatisfiedBy: [] };
       }
       allowlistMatches.push(...result.matches);
+      segmentSatisfiedBy.push(...result.segmentSatisfiedBy);
     }
-    return { allowlistSatisfied: true, allowlistMatches };
+    return { allowlistSatisfied: true, allowlistMatches, segmentSatisfiedBy };
   }
 
   // No chains, evaluate all segments together
@@ -193,7 +228,11 @@ export function evaluateExecAllowlist(params: {
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
   });
-  return { allowlistSatisfied: result.satisfied, allowlistMatches: result.matches };
+  return {
+    allowlistSatisfied: result.satisfied,
+    allowlistMatches: result.matches,
+    segmentSatisfiedBy: result.segmentSatisfiedBy,
+  };
 }
 
 export type ExecAllowlistAnalysis = {
@@ -201,6 +240,7 @@ export type ExecAllowlistAnalysis = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   segments: ExecCommandSegment[];
+  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
 /**
@@ -230,6 +270,7 @@ export function evaluateShellAllowlist(params: {
         allowlistSatisfied: false,
         allowlistMatches: [],
         segments: [],
+        segmentSatisfiedBy: [],
       };
     }
     const evaluation = evaluateExecAllowlist({
@@ -245,11 +286,13 @@ export function evaluateShellAllowlist(params: {
       allowlistSatisfied: evaluation.allowlistSatisfied,
       allowlistMatches: evaluation.allowlistMatches,
       segments: analysis.segments,
+      segmentSatisfiedBy: evaluation.segmentSatisfiedBy,
     };
   }
 
   const allowlistMatches: ExecAllowlistEntry[] = [];
   const segments: ExecCommandSegment[] = [];
+  const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
 
   for (const part of chainParts) {
     const analysis = analyzeShellCommand({
@@ -264,6 +307,7 @@ export function evaluateShellAllowlist(params: {
         allowlistSatisfied: false,
         allowlistMatches: [],
         segments: [],
+        segmentSatisfiedBy: [],
       };
     }
 
@@ -277,12 +321,14 @@ export function evaluateShellAllowlist(params: {
       autoAllowSkills: params.autoAllowSkills,
     });
     allowlistMatches.push(...evaluation.allowlistMatches);
+    segmentSatisfiedBy.push(...evaluation.segmentSatisfiedBy);
     if (!evaluation.allowlistSatisfied) {
       return {
         analysisOk: true,
         allowlistSatisfied: false,
         allowlistMatches,
         segments,
+        segmentSatisfiedBy,
       };
     }
   }
@@ -292,5 +338,6 @@ export function evaluateShellAllowlist(params: {
     allowlistSatisfied: true,
     allowlistMatches,
     segments,
+    segmentSatisfiedBy,
   };
 }

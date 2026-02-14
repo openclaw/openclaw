@@ -744,11 +744,22 @@ class MemoryManagerSyncOps {
       (vectorReady && !meta?.vectorDims);
     try {
       if (needsFullReindex) {
-        await this.runSafeReindex({
-          reason: params?.reason,
-          force: params?.force,
-          progress: progress ?? undefined,
-        });
+        if (
+          process.env.OPENCLAW_TEST_FAST === "1" &&
+          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1"
+        ) {
+          await this.runUnsafeReindex({
+            reason: params?.reason,
+            force: params?.force,
+            progress: progress ?? undefined,
+          });
+        } else {
+          await this.runSafeReindex({
+            reason: params?.reason,
+            force: params?.force,
+            progress: progress ?? undefined,
+          });
+        }
         return;
       }
 
@@ -956,6 +967,51 @@ class MemoryManagerSyncOps {
       restoreOriginalState();
       throw err;
     }
+  }
+
+  private async runUnsafeReindex(params: {
+    reason?: string;
+    force?: boolean;
+    progress?: MemorySyncProgressState;
+  }): Promise<void> {
+    // Perf: for test runs, skip atomic temp-db swapping. The index is isolated
+    // under the per-test HOME anyway, and this cuts substantial fs+sqlite churn.
+    this.resetIndex();
+
+    const shouldSyncMemory = this.sources.has("memory");
+    const shouldSyncSessions = this.shouldSyncSessions(
+      { reason: params.reason, force: params.force },
+      true,
+    );
+
+    if (shouldSyncMemory) {
+      await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+      this.dirty = false;
+    }
+
+    if (shouldSyncSessions) {
+      await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+      this.sessionsDirty = false;
+      this.sessionsDirtyFiles.clear();
+    } else if (this.sessionsDirtyFiles.size > 0) {
+      this.sessionsDirty = true;
+    } else {
+      this.sessionsDirty = false;
+    }
+
+    const nextMeta: MemoryIndexMeta = {
+      model: this.provider.model,
+      provider: this.provider.id,
+      providerKey: this.providerKey,
+      chunkTokens: this.settings.chunking.tokens,
+      chunkOverlap: this.settings.chunking.overlap,
+    };
+    if (this.vector.available && this.vector.dims) {
+      nextMeta.vectorDims = this.vector.dims;
+    }
+
+    this.writeMeta(nextMeta);
+    this.pruneEmbeddingCacheIfNeeded();
   }
 
   private resetIndex() {
