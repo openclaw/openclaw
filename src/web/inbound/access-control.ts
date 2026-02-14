@@ -32,6 +32,8 @@ export async function checkInboundAccessControl(params: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   };
   remoteJid: string;
+  /** Original message body for pairing notifications (optional). */
+  messageBody?: string;
 }): Promise<InboundAccessControlResult> {
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({
@@ -164,6 +166,35 @@ export async function checkInboundAccessControl(params: {
                 });
               } catch (err) {
                 logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
+              }
+
+              // Notify owner if configured
+              const pairingConfig = account.pairing ?? cfg.channels?.whatsapp?.pairing;
+              if (pairingConfig?.notifyOwner && pairingConfig.ownerChat) {
+                const senderName = (params.pushName ?? "").trim() || "Unknown";
+                const includeMessage = pairingConfig.includeMessage !== false;
+                const messagePreview =
+                  includeMessage && params.messageBody
+                    ? `\n\n📝 Message:\n"${params.messageBody}"`
+                    : "";
+                const notificationText = [
+                  `📩 *New pairing request*`,
+                  ``,
+                  `From: ${senderName} (${candidate})`,
+                  `Code: \`${code}\``,
+                  messagePreview,
+                  ``,
+                  `To approve: \`openclaw pairing approve whatsapp ${code}\``,
+                ].join("\n");
+
+                try {
+                  await params.sock.sendMessage(pairingConfig.ownerChat, {
+                    text: notificationText,
+                  });
+                  logVerbose(`Pairing notification sent to owner ${pairingConfig.ownerChat}`);
+                } catch (err) {
+                  logVerbose(`Failed to notify owner of pairing request: ${String(err)}`);
+                }
               }
             }
           }

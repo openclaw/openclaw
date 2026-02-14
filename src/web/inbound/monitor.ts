@@ -199,6 +199,9 @@ export async function monitorWebInbox(options: {
         ? Number(msg.messageTimestamp) * 1000
         : undefined;
 
+      // Extract message body early for pairing notifications
+      const earlyBody = extractText(msg.message ?? undefined);
+
       const access = await checkInboundAccessControl({
         accountId: options.accountId,
         from,
@@ -211,6 +214,7 @@ export async function monitorWebInbox(options: {
         connectedAtMs,
         sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
         remoteJid,
+        messageBody: earlyBody ?? undefined,
       });
       if (!access.allowed) {
         continue;
