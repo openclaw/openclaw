@@ -189,21 +189,39 @@ export async function dispatchReplyFromConfig(params: {
   const inboundAudio = isInboundAudioContext(ctx);
 
   // Check triggerPrefix filter (e.g., "Jarvis" prefix requirement)
-  // Use RawBody/BodyForCommands (clean message without envelope) for prefix check
-  // Audio messages bypass triggerPrefix: voice notes have no text body to match against,
-  // and the transcript isn't available yet at this point.
+  // For audio messages: transcribe first, then check prefix against transcript.
   const triggerPrefix = resolveTriggerPrefix(cfg, channel);
-  if (triggerPrefix && !inboundAudio) {
-    const messageBody = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  if (triggerPrefix) {
+    let messageBody = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+
+    // Audio preflight: transcribe voice note before prefix check
+    if (inboundAudio && messageBody.replace(/\s/g, "").match(/^<media:audio/i)) {
+      try {
+        const { transcribeFirstAudio } = await import("../../media-understanding/audio-preflight.js");
+        const transcript = await transcribeFirstAudio({ ctx, cfg });
+        if (transcript) {
+          logVerbose(`Audio preflight transcript (${transcript.length} chars): ${transcript.substring(0, 100)}`);
+          // Use transcript for prefix check and update context
+          messageBody = transcript;
+          ctx.Body = transcript;
+          ctx.BodyForAgent = transcript;
+          ctx.RawBody = transcript;
+        } else {
+          logVerbose("Audio preflight: no transcript returned, skipping triggerPrefix check for audio");
+          messageBody = ""; // will fail prefix check below
+        }
+      } catch (err) {
+        logVerbose(`Audio preflight transcription failed: ${String(err)}`);
+        messageBody = ""; // fail prefix check on error
+      }
+    }
+
     const prefixCheck = checkTriggerPrefix(messageBody, triggerPrefix);
     if (!prefixCheck.pass) {
-      logVerbose(`Skipped message (triggerPrefix "${triggerPrefix}" not found)`);
+      logVerbose(`Skipped message (triggerPrefix "${triggerPrefix}" not found in: ${messageBody.substring(0, 80)})`);
       recordProcessed("skipped", { reason: `triggerPrefix:${triggerPrefix}` });
       return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
     }
-    // Optionally update Body with stripped version (prefix removed)
-    // ctx.Body = prefixCheck.strippedBody;
-    // ctx.BodyForAgent = prefixCheck.strippedBody;
   }
   const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
   const hookRunner = getGlobalHookRunner();
