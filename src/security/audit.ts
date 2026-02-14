@@ -258,6 +258,33 @@ function collectGatewayConfigFindings(
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+
+  // HTTP /tools/invoke is intended for narrow automation, not session orchestration/admin operations.
+  // If operators opt-in to re-enabling these tools over HTTP, warn loudly so the choice is explicit.
+  const gatewayToolsAllowRaw = Array.isArray(cfg.gateway?.tools?.allow)
+    ? cfg.gateway?.tools?.allow
+    : [];
+  const gatewayToolsAllow = new Set(
+    gatewayToolsAllowRaw
+      .map((v) => (typeof v === "string" ? v.trim().toLowerCase() : ""))
+      .filter(Boolean),
+  );
+  const defaultHttpDeniedTools = ["sessions_spawn", "sessions_send", "gateway", "whatsapp_login"];
+  const reenabledOverHttp = defaultHttpDeniedTools.filter((name) => gatewayToolsAllow.has(name));
+  if (reenabledOverHttp.length > 0) {
+    const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
+    findings.push({
+      checkId: "gateway.tools_invoke_http.dangerous_allow",
+      severity: extraRisk ? "critical" : "warn",
+      title: "Gateway HTTP /tools/invoke re-enables dangerous tools",
+      detail:
+        `gateway.tools.allow includes ${reenabledOverHttp.join(", ")} which removes them from the default HTTP deny list. ` +
+        "This can allow remote session spawning / control-plane actions via HTTP and increases RCE blast radius if the gateway is reachable.",
+      remediation:
+        "Remove these entries from gateway.tools.allow (recommended). " +
+        "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
+    });
+  }
   if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
     findings.push({
       checkId: "gateway.bind_no_auth",
