@@ -433,7 +433,17 @@ export function rollingEvict(params: RollingEvictParams): RollingEvictResult {
   } = params;
 
   const targetTokens = Math.floor(maxContextTokens * targetUtilization);
-  const totalTokens = estimateMessagesTokens(messages);
+  // The SDK's estimateTokens uses chars/4 which underestimates by ~40-50% for
+  // mixed content with tool calls, system prompts, and structured data.
+  // Apply a 1.75x correction factor to align with actual API token counts.
+  const ESTIMATION_CORRECTION = 1.75;
+  const rawEstimate = estimateMessagesTokens(messages);
+  const totalTokens = Math.ceil(rawEstimate * ESTIMATION_CORRECTION);
+
+  console.warn(
+    `[rolling-evict] rawEstimate=${rawEstimate} corrected=${totalTokens} targetTokens=${targetTokens} ` +
+      `(${maxContextTokens}*${targetUtilization}) messages=${messages.length} minKeep=${minKeepMessages}`,
+  );
 
   // Nothing to evict
   if (totalTokens <= targetTokens || messages.length <= minKeepMessages) {
@@ -459,7 +469,7 @@ export function rollingEvict(params: RollingEvictParams): RollingEvictResult {
     if (evictedTokens >= tokensToEvict) {
       break;
     }
-    evictedTokens += estimateTokens(messages[i]);
+    evictedTokens += Math.ceil(estimateTokens(messages[i]) * ESTIMATION_CORRECTION);
     evictBoundary = i + 1;
   }
 
