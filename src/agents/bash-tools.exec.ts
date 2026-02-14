@@ -6,8 +6,6 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { routeReply } from "../auto-reply/reply/route-reply.js";
 import { loadCombinedSessionStoreForGateway } from "../gateway/session-utils.js";
-import { logWarn } from "../logger.js";
-import { runRubberBandCheck } from "../security/rubberband.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -30,8 +28,10 @@ import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
+import { logWarn } from "../logger.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { runRubberBandCheck } from "../security/rubberband.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
