@@ -45,7 +45,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 describe("pairing cli", () => {
-  it("evaluates pairing channels when registering the CLI (not at import)", async () => {
+  it("defers pairing channel evaluation to action time (not registration)", async () => {
     listPairingChannels.mockClear();
 
     const { registerPairingCli } = await import("./pairing-cli.js");
@@ -55,7 +55,8 @@ describe("pairing cli", () => {
     program.name("test");
     registerPairingCli(program);
 
-    expect(listPairingChannels).toHaveBeenCalledTimes(1);
+    // Channel evaluation is deferred to action time for startup performance
+    expect(listPairingChannels).not.toHaveBeenCalled();
   });
 
   it("labels Telegram ids as telegramUserId", async () => {

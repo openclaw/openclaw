@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import fs from "node:fs/promises";
 import type { NodesRpcOpts } from "./types.js";
-import { randomIdempotencyKey } from "../../gateway/call.js";
+import { randomIdempotencyKey } from "../../gateway/idempotency.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { writeBase64ToFile } from "../nodes-camera.js";

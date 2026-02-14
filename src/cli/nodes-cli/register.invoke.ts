@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import type { NodesRpcOpts } from "./types.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
-import { randomIdempotencyKey } from "../../gateway/call.js";
+import { randomIdempotencyKey } from "../../gateway/idempotency.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalsFile,

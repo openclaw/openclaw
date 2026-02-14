@@ -66,6 +66,10 @@ vi.mock("../gateway/call.js", () => ({
   randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
+vi.mock("../gateway/idempotency.js", () => ({
+  randomIdempotencyKey: () => randomIdempotencyKey(),
+}));
+
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
