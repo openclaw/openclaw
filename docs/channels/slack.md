@@ -233,6 +233,8 @@ Manual reply tags are supported:
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
 
+Note: `replyToMode="off"` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+
 ## Media, chunking, and delivery
 
 <AccordionGroup>

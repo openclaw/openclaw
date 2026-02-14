@@ -22,6 +22,7 @@ import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -35,22 +36,6 @@ import { getBearerToken, getHeader } from "./http-utils.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
-
-/**
- * Tools denied via HTTP /tools/invoke regardless of session policy.
- * Prevents RCE and privilege escalation from HTTP API surface.
- * Configurable via gateway.tools.{deny,allow} in openclaw.json.
- */
-const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
-  // Session orchestration — spawning agents remotely is RCE
-  "sessions_spawn",
-  // Cross-session injection — message injection across sessions
-  "sessions_send",
-  // Gateway control plane — prevents gateway reconfiguration via HTTP
-  "gateway",
-  // Interactive setup — requires terminal QR scan, hangs on HTTP
-  "whatsapp_login",
-];
 
 type ToolsInvokeBody = {
   tool?: unknown;
@@ -345,9 +330,12 @@ export async function handleToolsInvokeHttpRequest(
 
   // Gateway HTTP-specific deny list — applies to ALL sessions via HTTP.
   const gatewayToolsCfg = cfg.gateway?.tools;
-  const gatewayDenyNames = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+  const defaultGatewayDeny: string[] = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
     (name) => !gatewayToolsCfg?.allow?.includes(name),
-  ).concat(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []);
+  );
+  const gatewayDenyNames = defaultGatewayDeny.concat(
+    Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [],
+  );
   const gatewayDenySet = new Set(gatewayDenyNames);
   const gatewayFiltered = subagentFiltered.filter((t) => !gatewayDenySet.has(t.name));
 
