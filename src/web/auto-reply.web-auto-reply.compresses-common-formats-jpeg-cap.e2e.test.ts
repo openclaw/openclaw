@@ -1,130 +1,18 @@
-import "./test-helpers.js";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as ssrf from "../infra/net/ssrf.js";
-
-const TEST_NET_IP = "203.0.113.10";
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-}));
-
-import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import { resetLogger, setLoggerOverride } from "../logging.js";
+import { describe, expect, it, vi } from "vitest";
 import { monitorWebChannel } from "./auto-reply.js";
-import { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
+import {
+  installWebAutoReplyTestHomeHooks,
+  installWebAutoReplyUnitTestHooks,
+  resetLoadConfigMock,
+  setLoadConfigMock,
+} from "./auto-reply.test-harness.js";
 
-let previousHome: string | undefined;
-let tempHome: string | undefined;
-
-const rmDirWithRetries = async (dir: string): Promise<void> => {
-  // Some tests can leave async session-store writes in-flight; recursive deletion can race and throw ENOTEMPTY.
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-      return;
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err
-          ? String((err as { code?: unknown }).code)
-          : null;
-      if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  await fs.rm(dir, { recursive: true, force: true });
-};
-
-beforeEach(async () => {
-  resetInboundDedupe();
-  previousHome = process.env.HOME;
-  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-"));
-  process.env.HOME = tempHome;
-});
-
-afterEach(async () => {
-  process.env.HOME = previousHome;
-  if (tempHome) {
-    await rmDirWithRetries(tempHome);
-    tempHome = undefined;
-  }
-});
-
-const _makeSessionStore = async (
-  entries: Record<string, unknown> = {},
-): Promise<{ storePath: string; cleanup: () => Promise<void> }> => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(storePath, JSON.stringify(entries));
-  const cleanup = async () => {
-    // Session store writes can be in-flight when the test finishes (e.g. updateLastRoute
-    // after a message flush). `fs.rm({ recursive })` can race and throw ENOTEMPTY.
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      try {
-        await fs.rm(dir, { recursive: true, force: true });
-        return;
-      } catch (err) {
-        const code =
-          err && typeof err === "object" && "code" in err
-            ? String((err as { code?: unknown }).code)
-            : null;
-        if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-          continue;
-        }
-        throw err;
-      }
-    }
-
-    await fs.rm(dir, { recursive: true, force: true });
-  };
-  return {
-    storePath,
-    cleanup,
-  };
-};
+installWebAutoReplyTestHomeHooks();
 
 describe("web auto-reply", () => {
-  let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    resetBaileysMocks();
-    resetLoadConfigMock();
-    resolvePinnedHostnameSpy = vi
-      .spyOn(ssrf, "resolvePinnedHostname")
-      .mockImplementation(async (hostname) => {
-        // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-        const addresses = [TEST_NET_IP];
-        return {
-          hostname: normalized,
-          addresses,
-          lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-        };
-      });
-  });
-
-  afterEach(() => {
-    resolvePinnedHostnameSpy?.mockRestore();
-    resolvePinnedHostnameSpy = undefined;
-    resetLogger();
-    setLoggerOverride(null);
-    vi.useRealTimers();
-  });
+  installWebAutoReplyUnitTestHooks({ pinDns: true });
 
   it("compresses common formats to jpeg under the cap", { timeout: 45_000 }, async () => {
     const formats = [
