@@ -598,7 +598,7 @@ export async function runCronIsolatedAgentTurn(params: {
           requesterDisplayKey: announceSessionKey,
           task: taskLabel,
           timeoutMs,
-          cleanup: "keep",
+          cleanup: params.job.deleteAfterRun ? "delete" : "keep",
           roundOneReply: synthesizedText,
           waitForCompletion: false,
           startedAt: runStartedAt,
