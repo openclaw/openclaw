@@ -25,10 +25,11 @@ import { getModelCapabilitiesFromCatalog } from "./model-capabilities.js";
 import { isLatestModel } from "./model-catalog.js";
 import { isModelCoolingDown } from "./model-fallback.js";
 import { modelKey } from "./model-selection.js";
+import { classifyComplexity } from "./task-classifier.js";
 
 // ── Cost/performance tier ordinals for comparison ──
 
-const COST_TIER_ORDER: Record<CostTier, number> = {
+export const COST_TIER_ORDER: Record<CostTier, number> = {
   free: 0,
   cheap: 1,
   moderate: 2,
@@ -362,6 +363,9 @@ export function computeAutoSelections(
 // ── Cached auto-selection state ──
 
 let cachedSelections: Map<AgentRole, ModelRef> | null = null;
+let cachedCatalog: ModelCatalogEntry[] | null = null;
+let cachedAllowedKeys: Set<string> | undefined;
+let cachedCfg: OpenClawConfig | undefined;
 
 /**
  * Initialize the auto-model-selection cache from the catalog.
@@ -376,6 +380,9 @@ export function initAutoModelSelection(
   // Load auth store to filter out cooldown providers
   const authStore = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
 
+  cachedCatalog = catalog;
+  cachedAllowedKeys = allowedKeys;
+  cachedCfg = cfg;
   cachedSelections = computeAutoSelections(catalog, allowedKeys, cfg, authStore);
 
   if (cachedSelections.size > 0) {
@@ -394,7 +401,182 @@ export function getAutoSelectedModel(role: AgentRole): ModelRef | null {
   return cachedSelections?.get(role) ?? null;
 }
 
+/**
+ * Get the auto-selected model for a task+role pair using adaptive routing.
+ * Falls back to role-based selection when adaptive routing fails or catalog is unavailable.
+ *
+ * Uses synchronous import since adaptive-routing has no circular dependency at runtime.
+ */
+export function getAutoSelectedModelForTask(
+  task: string,
+  role: AgentRole,
+): { ref: ModelRef; complexity: string; downgraded: boolean } | null {
+  if (!cachedCatalog || cachedCatalog.length === 0) {
+    const ref = cachedSelections?.get(role) ?? null;
+    return ref ? { ref, complexity: "moderate", downgraded: false } : null;
+  }
+
+  const authStore = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+
+  const result = selectModelForTaskFromCatalog({
+    task,
+    role,
+    catalog: cachedCatalog,
+    allowedKeys: cachedAllowedKeys,
+    cfg: cachedCfg,
+    authStore,
+  });
+
+  if (result) {
+    return result;
+  }
+
+  // Fallback to role-based selection.
+  const ref = cachedSelections?.get(role) ?? null;
+  return ref ? { ref, complexity: "moderate", downgraded: false } : null;
+}
+
+/**
+ * Internal: select model for task using the catalog directly.
+ * Inlined to avoid circular dependency with adaptive-routing.ts
+ * (which imports ROLE_REQUIREMENTS and rankModelsForRole from this module).
+ */
+function selectModelForTaskFromCatalog(params: {
+  task: string;
+  role: AgentRole;
+  catalog: ModelCatalogEntry[];
+  allowedKeys?: Set<string>;
+  cfg?: OpenClawConfig;
+  authStore?: AuthProfileStore;
+}): { ref: ModelRef; complexity: string; downgraded: boolean } | null {
+  const complexity = classifyComplexity(params.task);
+
+  const COMPLEXITY_TO_ROLE: Record<string, AgentRole> = {
+    trivial: "worker",
+    moderate: "specialist",
+    complex: "orchestrator",
+  };
+
+  // For complex tasks, prefer most capable model (highest cost tier + newest).
+  if (complexity === "complex") {
+    const ranked = rankModelsForRole(
+      params.catalog,
+      ROLE_REQUIREMENTS[params.role],
+      params.allowedKeys,
+      params.cfg,
+      params.authStore,
+    );
+    if (ranked.length > 0) {
+      const best = ranked[ranked.length - 1];
+      return {
+        ref: { provider: best.entry.provider, model: best.entry.id },
+        complexity,
+        downgraded: false,
+      };
+    }
+    return null;
+  }
+
+  const cheaperRole = COMPLEXITY_TO_ROLE[complexity] ?? params.role;
+  const cheaperReqs = ROLE_REQUIREMENTS[cheaperRole];
+  const roleReqs = ROLE_REQUIREMENTS[params.role];
+  const isDowngrade =
+    COST_TIER_ORDER[cheaperReqs.maxCostTier] < COST_TIER_ORDER[roleReqs.maxCostTier];
+
+  if (isDowngrade) {
+    const merged: RoleRequirements = {
+      minPerformanceTier: cheaperReqs.minPerformanceTier,
+      requiredCapabilities: roleReqs.requiredCapabilities,
+      maxCostTier: cheaperReqs.maxCostTier,
+    };
+    const cheapRanked = rankModelsForRole(
+      params.catalog,
+      merged,
+      params.allowedKeys,
+      params.cfg,
+      params.authStore,
+    );
+    if (cheapRanked.length > 0) {
+      const best = cheapRanked[0];
+      return {
+        ref: { provider: best.entry.provider, model: best.entry.id },
+        complexity,
+        downgraded: true,
+      };
+    }
+  }
+
+  // Fallback: use role's default requirements.
+  const ranked = rankModelsForRole(
+    params.catalog,
+    roleReqs,
+    params.allowedKeys,
+    params.cfg,
+    params.authStore,
+  );
+  if (ranked.length > 0) {
+    const best = ranked[0];
+    return {
+      ref: { provider: best.entry.provider, model: best.entry.id },
+      complexity,
+      downgraded: false,
+    };
+  }
+
+  // Relaxation: allow any cost tier if role's default also fails.
+  if (roleReqs.maxCostTier !== "expensive") {
+    const relaxed: RoleRequirements = { ...roleReqs, maxCostTier: "expensive" };
+    const relaxedRanked = rankModelsForRole(
+      params.catalog,
+      relaxed,
+      params.allowedKeys,
+      params.cfg,
+      params.authStore,
+    );
+    if (relaxedRanked.length > 0) {
+      const best = relaxedRanked[0];
+      return {
+        ref: { provider: best.entry.provider, model: best.entry.id },
+        complexity,
+        downgraded: false,
+      };
+    }
+  }
+
+  // Final relaxation: drop all capability/performance requirements.
+  const fullyRelaxed: RoleRequirements = {
+    minPerformanceTier: "fast",
+    requiredCapabilities: [],
+    maxCostTier: "expensive",
+  };
+  const fullyRelaxedRanked = rankModelsForRole(
+    params.catalog,
+    fullyRelaxed,
+    params.allowedKeys,
+    params.cfg,
+    params.authStore,
+  );
+  if (fullyRelaxedRanked.length > 0) {
+    const best = fullyRelaxedRanked[0];
+    return {
+      ref: { provider: best.entry.provider, model: best.entry.id },
+      complexity,
+      downgraded: false,
+    };
+  }
+
+  return null;
+}
+
+/** Get the cached model catalog. Exported for modules that need direct catalog access. */
+export function getCachedModelCatalog(): ModelCatalogEntry[] {
+  return cachedCatalog ?? [];
+}
+
 /** Reset auto-selection cache. Exported for test isolation. */
 export function resetAutoModelSelection(): void {
   cachedSelections = null;
+  cachedCatalog = null;
+  cachedAllowedKeys = undefined;
+  cachedCfg = undefined;
 }

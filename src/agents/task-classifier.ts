@@ -447,6 +447,8 @@ export function classifyComplexity(prompt: string): TaskComplexity {
     /\b(improve|rewrite|revise|edit|polish)\b/,
     /\b(explain)\b/,
     /\b(draft|email|proposal|report|document)\b/,
+    /\b(algorithm|memoization|memoize|recursion|recursive|dynamic programming)\b/,
+    /\b(calculate|compute|parse|transform|convert)\b/,
   ]);
 
   // Strong signals of multi-step/constraint-heavy requests.
