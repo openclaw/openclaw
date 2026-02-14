@@ -111,6 +111,61 @@ class TestSTM:
         mid = brain.remember("Update me", categories=["test"])
         assert brain.update_stm(mid, importance=2.5) is True
 
+    def test_delete_stm(self, brain):
+        mid = brain.remember("Delete me", categories=["test"])
+        assert brain.delete_stm(mid) is True
+        # Verify it's gone
+        stm = brain.get_stm(limit=100)
+        assert not any(s["id"] == mid for s in stm)
+
+    def test_delete_stm_nonexistent(self, brain):
+        assert brain.delete_stm("stm_nonexistent") is False
+
+    def test_delete_stm_batch_empty_list(self, brain):
+        assert brain.delete_stm_batch([]) == 0
+
+    def test_delete_stm_batch_single(self, brain):
+        mid = brain.remember("Batch delete single", categories=["test"])
+        count = brain.delete_stm_batch([mid])
+        assert count == 1
+        # Verify it's gone
+        stm = brain.get_stm(limit=100)
+        assert not any(s["id"] == mid for s in stm)
+
+    def test_delete_stm_batch_multiple(self, brain):
+        ids = []
+        for i in range(3):
+            ids.append(brain.remember(f"Batch delete {i}", categories=["test"]))
+        count = brain.delete_stm_batch(ids)
+        assert count == 3
+        # Verify all are gone
+        stm = brain.get_stm(limit=100)
+        for mid in ids:
+            assert not any(s["id"] == mid for s in stm)
+
+    def test_delete_stm_batch_mixed_existing_nonexistent(self, brain):
+        # Mix of existing and non-existent IDs
+        mid1 = brain.remember("Exists 1", categories=["test"])
+        mid2 = brain.remember("Exists 2", categories=["test"])
+        nonexistent = ["stm_fake1", "stm_fake2"]
+        
+        count = brain.delete_stm_batch([mid1, mid2] + nonexistent)
+        assert count == 2  # Only the existing ones should be deleted
+
+    def test_delete_stm_batch_large(self, brain):
+        """Test batch deletion with many items."""
+        ids = []
+        for i in range(10):
+            ids.append(brain.remember(f"Large batch {i}", categories=["test"]))
+        
+        count = brain.delete_stm_batch(ids)
+        assert count == 10
+        
+        # Verify all are gone
+        stm = brain.get_stm(limit=100)
+        for mid in ids:
+            assert not any(s["id"] == mid for s in stm)
+
     def test_provenance_field(self, brain):
         # Create a real message first (FK constraint)
         msg = brain.send("alice", "bob", "Source", "Body")
@@ -393,6 +448,196 @@ class TestEdgeCases:
     def test_concurrent_writes(self, brain):
         ids = [brain.remember(f"C{i}", categories=["test"]) for i in range(20)]
         assert len(set(ids)) == 20
+
+    def test_empty_content_operations(self, brain):
+        """Test operations with empty or minimal content."""
+        # Empty content should still work
+        mid = brain.remember("", categories=["test"])
+        assert mid.startswith("stm_")
+        
+        # Single character content
+        mid2 = brain.remember("x", categories=["test"])
+        assert mid2.startswith("stm_")
+        
+        # Verify both exist
+        stm = brain.get_stm(limit=10)
+        assert len(stm) >= 2
+
+    def test_very_long_content(self, brain):
+        """Test with very long content."""
+        long_content = "x" * 10000  # 10KB of content
+        mid = brain.remember(long_content, categories=["test"])
+        assert mid.startswith("stm_")
+        
+        stm = brain.get_stm(limit=1)
+        assert stm[0]["content"] == long_content
+
+    def test_special_characters_in_content(self, brain):
+        """Test with special characters, unicode, etc."""
+        special_content = "🚀 Special chars: \n\t\r'\"\\{}[]() 测试 العربية"
+        mid = brain.remember(special_content, categories=["test"])
+        assert mid.startswith("stm_")
+        
+        stm = brain.get_stm(limit=1)
+        assert stm[0]["content"] == special_content
+
+    def test_null_and_none_handling(self, brain):
+        """Test handling of None values."""
+        # These should not crash
+        assert brain.delete_stm(None) is False
+        assert brain.delete_stm("") is False
+        assert brain.delete_stm_batch(None) == 0
+        assert brain.delete_stm_batch([]) == 0
+        assert brain.delete_stm_batch([None, "", "invalid"]) == 0
+
+    def test_malformed_ids(self, brain):
+        """Test with malformed/invalid IDs."""
+        invalid_ids = [
+            "invalid",
+            "stm_",
+            "stm_tooshort",
+            "wrong_prefix_123456",
+            "stm_!@#$%^&*()",
+            "stm_" + "x" * 100,  # Very long ID
+        ]
+        
+        for invalid_id in invalid_ids:
+            assert brain.delete_stm(invalid_id) is False
+            
+        count = brain.delete_stm_batch(invalid_ids)
+        assert count == 0
+
+    def test_extreme_importance_values(self, brain):
+        """Test with extreme importance values."""
+        mid1 = brain.remember("Max importance", importance=999999.0, categories=["test"])
+        mid2 = brain.remember("Min importance", importance=-999999.0, categories=["test"])
+        mid3 = brain.remember("Zero importance", importance=0.0, categories=["test"])
+        
+        stm = brain.get_stm(limit=10)
+        assert len(stm) >= 3
+
+    def test_large_category_lists(self, brain):
+        """Test with very large category lists."""
+        large_categories = [f"cat_{i}" for i in range(100)]
+        mid = brain.remember("Many categories", categories=large_categories)
+        assert mid.startswith("stm_")
+        
+        stm = brain.get_stm(limit=1)
+        stored_cats = stm[0]["categories"]
+        assert len(stored_cats) == 100
+
+
+# ============================================================
+# Concurrent Access Tests
+# ============================================================
+
+class TestConcurrentAccess:
+    def test_concurrent_stm_operations(self, brain):
+        """Test concurrent STM create/read/delete operations."""
+        import threading
+        import time
+        
+        results = {"created": [], "deleted": [], "errors": []}
+        
+        def create_memories():
+            try:
+                for i in range(10):
+                    mid = brain.remember(f"Concurrent create {i}", categories=["concurrent"])
+                    results["created"].append(mid)
+                    time.sleep(0.001)  # Small delay to encourage interleaving
+            except Exception as e:
+                results["errors"].append(f"create: {e}")
+        
+        def delete_memories():
+            try:
+                time.sleep(0.01)  # Let some memories be created first
+                for i in range(5):
+                    # Try to delete some memories that might exist
+                    if results["created"]:
+                        mid = results["created"][i] if i < len(results["created"]) else None
+                        if mid:
+                            deleted = brain.delete_stm(mid)
+                            if deleted:
+                                results["deleted"].append(mid)
+                    time.sleep(0.001)
+            except Exception as e:
+                results["errors"].append(f"delete: {e}")
+        
+        def batch_delete_memories():
+            try:
+                time.sleep(0.02)  # Let more memories be created
+                # Try to delete remaining memories in batch
+                if len(results["created"]) > 5:
+                    to_delete = results["created"][5:8]  # Delete a few more
+                    count = brain.delete_stm_batch(to_delete)
+                    results["deleted"].extend(to_delete[:count])
+            except Exception as e:
+                results["errors"].append(f"batch_delete: {e}")
+        
+        # Run operations concurrently
+        threads = [
+            threading.Thread(target=create_memories),
+            threading.Thread(target=delete_memories),
+            threading.Thread(target=batch_delete_memories),
+        ]
+        
+        for t in threads:
+            t.start()
+        
+        for t in threads:
+            t.join()
+        
+        # Verify no errors occurred
+        assert results["errors"] == [], f"Concurrent operation errors: {results['errors']}"
+        
+        # Verify some operations succeeded
+        assert len(results["created"]) > 0
+        assert len(results["deleted"]) >= 0  # May be 0 if delete operations ran before creates
+
+    def test_concurrent_search_and_modify(self, brain):
+        """Test concurrent search while modifying data."""
+        import threading
+        import time
+        
+        results = {"searches": [], "modifications": [], "errors": []}
+        
+        def search_continuously():
+            try:
+                for i in range(10):
+                    search_results = brain.unified_search("concurrent", limit=10)
+                    results["searches"].append(len(search_results))
+                    time.sleep(0.001)
+            except Exception as e:
+                results["errors"].append(f"search: {e}")
+        
+        def modify_continuously():
+            try:
+                for i in range(10):
+                    # Create and immediately delete
+                    mid = brain.remember(f"Concurrent modify {i}", categories=["concurrent"])
+                    results["modifications"].append(mid)
+                    brain.delete_stm(mid)
+                    time.sleep(0.001)
+            except Exception as e:
+                results["errors"].append(f"modify: {e}")
+        
+        threads = [
+            threading.Thread(target=search_continuously),
+            threading.Thread(target=modify_continuously),
+        ]
+        
+        for t in threads:
+            t.start()
+        
+        for t in threads:
+            t.join()
+        
+        # Verify no errors occurred
+        assert results["errors"] == [], f"Concurrent operation errors: {results['errors']}"
+        
+        # Verify operations completed
+        assert len(results["searches"]) == 10
+        assert len(results["modifications"]) == 10
 
 
 # ============================================================
