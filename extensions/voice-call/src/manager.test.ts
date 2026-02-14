@@ -195,6 +195,46 @@ describe("CallManager", () => {
     expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-suffix");
   });
 
+  it("rejects duplicate inbound events with a single hangup call", () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+      inboundPolicy: "disabled",
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const manager = new CallManager(config, storePath);
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    manager.processEvent({
+      id: "evt-reject-init",
+      type: "call.initiated",
+      callId: "provider-dup",
+      providerCallId: "provider-dup",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15552222222",
+      to: "+15550000000",
+    });
+
+    manager.processEvent({
+      id: "evt-reject-ring",
+      type: "call.ringing",
+      callId: "provider-dup",
+      providerCallId: "provider-dup",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15552222222",
+      to: "+15550000000",
+    });
+
+    expect(manager.getCallByProviderCallId("provider-dup")).toBeUndefined();
+    expect(provider.hangupCalls).toHaveLength(1);
+    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-dup");
+  });
+
   it("accepts inbound calls that exactly match the allowlist", () => {
     const config = VoiceCallConfigSchema.parse({
       enabled: true,

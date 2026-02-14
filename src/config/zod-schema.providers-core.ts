@@ -20,6 +20,7 @@ import {
   RetryConfigSchema,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
@@ -97,7 +98,7 @@ export const TelegramAccountSchemaBase = z
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
     configWrites: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    botToken: z.string().optional(),
+    botToken: z.string().optional().register(sensitive),
     tokenFile: z.string().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
@@ -124,8 +125,9 @@ export const TelegramAccountSchemaBase = z
       .optional(),
     proxy: z.string().optional(),
     webhookUrl: z.string().optional(),
-    webhookSecret: z.string().optional(),
+    webhookSecret: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),
+    webhookHost: z.string().optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),
@@ -263,7 +265,8 @@ export const DiscordAccountSchema = z
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
-    token: z.string().optional(),
+    token: z.string().optional().register(sensitive),
+    proxy: z.string().optional(),
     allowBots: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
@@ -324,13 +327,50 @@ export const DiscordAccountSchema = z
     pluralkit: z
       .object({
         enabled: z.boolean().optional(),
-        token: z.string().optional(),
+        token: z.string().optional().register(sensitive),
       })
       .strict()
       .optional(),
     responsePrefix: z.string().optional(),
+    activity: z.string().optional(),
+    status: z.enum(["online", "dnd", "idle", "invisible"]).optional(),
+    activityType: z
+      .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
+      .optional(),
+    activityUrl: z.string().url().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    const activityText = typeof value.activity === "string" ? value.activity.trim() : "";
+    const hasActivity = Boolean(activityText);
+    const hasActivityType = value.activityType !== undefined;
+    const activityUrl = typeof value.activityUrl === "string" ? value.activityUrl.trim() : "";
+    const hasActivityUrl = Boolean(activityUrl);
+
+    if ((hasActivityType || hasActivityUrl) && !hasActivity) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "channels.discord.activity is required when activityType or activityUrl is set",
+        path: ["activity"],
+      });
+    }
+
+    if (value.activityType === 1 && !hasActivityUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "channels.discord.activityUrl is required when activityType is 1 (Streaming)",
+        path: ["activityUrl"],
+      });
+    }
+
+    if (hasActivityUrl && value.activityType !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "channels.discord.activityType must be 1 (Streaming) when activityUrl is set",
+        path: ["activityType"],
+      });
+    }
+  });
 
 export const DiscordConfigSchema = DiscordAccountSchema.extend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
@@ -463,16 +503,16 @@ export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
     mode: z.enum(["socket", "http"]).optional(),
-    signingSecret: z.string().optional(),
+    signingSecret: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
-    botToken: z.string().optional(),
-    appToken: z.string().optional(),
-    userToken: z.string().optional(),
+    botToken: z.string().optional().register(sensitive),
+    appToken: z.string().optional().register(sensitive),
+    userToken: z.string().optional().register(sensitive),
     userTokenReadOnly: z.boolean().optional().default(true),
     allowBots: z.boolean().optional(),
     requireMention: z.boolean().optional(),
@@ -521,7 +561,7 @@ export const SlackAccountSchema = z
 
 export const SlackConfigSchema = SlackAccountSchema.extend({
   mode: z.enum(["socket", "http"]).optional().default("socket"),
-  signingSecret: z.string().optional(),
+  signingSecret: z.string().optional().register(sensitive),
   webhookPath: z.string().optional().default("/slack/events"),
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
 }).superRefine((value, ctx) => {
@@ -641,7 +681,7 @@ export const IrcNickServSchema = z
   .object({
     enabled: z.boolean().optional(),
     service: z.string().optional(),
-    password: z.string().optional(),
+    password: z.string().optional().register(sensitive),
     passwordFile: z.string().optional(),
     register: z.boolean().optional(),
     registerEmail: z.string().optional(),
@@ -661,7 +701,7 @@ export const IrcAccountSchemaBase = z
     nick: z.string().optional(),
     username: z.string().optional(),
     realname: z.string().optional(),
-    password: z.string().optional(),
+    password: z.string().optional().register(sensitive),
     passwordFile: z.string().optional(),
     nickserv: IrcNickServSchema.optional(),
     channels: z.array(z.string()).optional(),
@@ -822,7 +862,7 @@ export const BlueBubblesAccountSchemaBase = z
     configWrites: z.boolean().optional(),
     enabled: z.boolean().optional(),
     serverUrl: z.string().optional(),
-    password: z.string().optional(),
+    password: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(BlueBubblesAllowFromEntry).optional(),
@@ -893,7 +933,7 @@ export const MSTeamsConfigSchema = z
     markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
     appId: z.string().optional(),
-    appPassword: z.string().optional(),
+    appPassword: z.string().optional().register(sensitive),
     tenantId: z.string().optional(),
     webhook: z
       .object({

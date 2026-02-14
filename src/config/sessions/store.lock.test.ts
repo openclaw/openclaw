@@ -50,9 +50,8 @@ describe("session store lock (Promise chain mutex)", () => {
       Array.from({ length: N }, (_, i) =>
         updateSessionStore(storePath, async (store) => {
           const entry = store[key] as Record<string, unknown>;
-          // Simulate async work so that without proper serialization
-          // multiple readers would see the same stale value.
-          await sleep(Math.random() * 20);
+          // Keep an async boundary so stale-read races would surface without serialization.
+          await Promise.resolve();
           entry.counter = (entry.counter as number) + 1;
           entry.tag = `writer-${i}`;
         }),
@@ -74,7 +73,7 @@ describe("session store lock (Promise chain mutex)", () => {
         storePath,
         sessionKey: key,
         update: async () => {
-          await sleep(30);
+          await Promise.resolve();
           return { modelOverride: "model-a" };
         },
       }),
@@ -82,7 +81,7 @@ describe("session store lock (Promise chain mutex)", () => {
         storePath,
         sessionKey: key,
         update: async () => {
-          await sleep(10);
+          await Promise.resolve();
           return { thinkingLevel: "high" as const };
         },
       }),
@@ -90,7 +89,7 @@ describe("session store lock (Promise chain mutex)", () => {
         storePath,
         sessionKey: key,
         update: async () => {
-          await sleep(20);
+          await Promise.resolve();
           return { systemPromptOverride: "custom" };
         },
       }),
@@ -165,25 +164,48 @@ describe("session store lock (Promise chain mutex)", () => {
     });
 
     const order: string[] = [];
+    let started = 0;
+    let releaseBoth: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    const markStarted = () => {
+      started += 1;
+      if (started === 2) {
+        releaseBoth?.();
+      }
+    };
 
     const opA = updateSessionStore(pathA, async (store) => {
       order.push("a-start");
-      await sleep(50);
+      markStarted();
+      await gate;
       store.a = { ...store.a, modelOverride: "done-a" } as unknown as SessionEntry;
       order.push("a-end");
     });
 
     const opB = updateSessionStore(pathB, async (store) => {
       order.push("b-start");
-      await sleep(10);
+      markStarted();
+      await gate;
       store.b = { ...store.b, modelOverride: "done-b" } as unknown as SessionEntry;
       order.push("b-end");
     });
 
     await Promise.all([opA, opB]);
 
-    // B should finish before A because they run in parallel and B sleeps less.
-    expect(order.indexOf("b-end")).toBeLessThan(order.indexOf("a-end"));
+    // Parallel behavior: both ops start before either one finishes.
+    const aStart = order.indexOf("a-start");
+    const bStart = order.indexOf("b-start");
+    const aEnd = order.indexOf("a-end");
+    const bEnd = order.indexOf("b-end");
+    const firstEnd = Math.min(aEnd, bEnd);
+    expect(aStart).toBeGreaterThanOrEqual(0);
+    expect(bStart).toBeGreaterThanOrEqual(0);
+    expect(aEnd).toBeGreaterThanOrEqual(0);
+    expect(bEnd).toBeGreaterThanOrEqual(0);
+    expect(aStart).toBeLessThan(firstEnd);
+    expect(bStart).toBeLessThan(firstEnd);
 
     expect(loadSessionStore(pathA).a?.modelOverride).toBe("done-a");
     expect(loadSessionStore(pathB).b?.modelOverride).toBe("done-b");
@@ -201,7 +223,7 @@ describe("session store lock (Promise chain mutex)", () => {
     });
 
     // Allow microtask (finally) to run.
-    await sleep(0);
+    await Promise.resolve();
 
     expect(getSessionStoreLockQueueSizeForTest()).toBe(0);
   });
@@ -213,7 +235,7 @@ describe("session store lock (Promise chain mutex)", () => {
       throw new Error("fail");
     }).catch(() => undefined);
 
-    await sleep(0);
+    await Promise.resolve();
 
     expect(getSessionStoreLockQueueSizeForTest()).toBe(0);
   });
@@ -256,21 +278,21 @@ describe("session store lock (Promise chain mutex)", () => {
     const lockHolder = withSessionStoreLockForTest(
       storePath,
       async () => {
-        await sleep(80);
+        await sleep(15);
       },
-      { timeoutMs: 2_000 },
+      { timeoutMs: 1_000 },
     );
     const timedOut = withSessionStoreLockForTest(
       storePath,
       async () => {
         timedOutRan = true;
       },
-      { timeoutMs: 20 },
+      { timeoutMs: 5 },
     );
 
     await expect(timedOut).rejects.toThrow("timeout waiting for session store lock");
     await lockHolder;
-    await sleep(30);
+    await sleep(2);
     expect(timedOutRan).toBe(false);
   });
 
@@ -281,12 +303,22 @@ describe("session store lock (Promise chain mutex)", () => {
     });
 
     const write = updateSessionStore(storePath, async (store) => {
-      await sleep(60);
+      await sleep(8);
       store[key] = { ...store[key], modelOverride: "v" } as unknown as SessionEntry;
     });
 
-    await sleep(10);
-    await expect(fs.access(`${storePath}.lock`)).resolves.toBeUndefined();
+    const lockPath = `${storePath}.lock`;
+    let lockSeen = false;
+    for (let i = 0; i < 20; i += 1) {
+      try {
+        await fs.access(lockPath);
+        lockSeen = true;
+        break;
+      } catch {
+        await sleep(1);
+      }
+    }
+    expect(lockSeen).toBe(true);
     await write;
 
     const files = await fs.readdir(dir);

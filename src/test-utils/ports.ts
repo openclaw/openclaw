@@ -62,7 +62,9 @@ export async function getDeterministicFreePortBlock(params?: {
   // Allocate in blocks to avoid derived-port overlaps (e.g. port+3).
   const blockSize = Math.max(maxOffset + 1, 8);
 
-  for (let attempt = 0; attempt < usable; attempt += 1) {
+  // Scan in block-size steps. Tests consume neighboring derived ports (+1/+2/...),
+  // so probing every single offset is wasted work and slows large suites.
+  for (let attempt = 0; attempt < usable; attempt += blockSize) {
     const start = base + ((nextTestPortOffset + attempt) % usable);
     // eslint-disable-next-line no-await-in-loop
     const ok = (await Promise.all(offsets.map((offset) => isPortFree(start + offset)))).every(

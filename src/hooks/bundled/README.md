@@ -18,6 +18,20 @@ Automatically saves session context to memory when you issue `/new`.
 openclaw hooks enable session-memory
 ```
 
+### 📎 bootstrap-extra-files
+
+Injects extra bootstrap files (for example monorepo `AGENTS.md`/`TOOLS.md`) during prompt assembly.
+
+**Events**: `agent:bootstrap`
+**What it does**: Expands configured workspace glob/path patterns and appends matching bootstrap files to injected context.
+**Output**: No files written; context is modified in-memory only.
+
+**Enable**:
+
+```bash
+openclaw hooks enable bootstrap-extra-files
+```
+
 ### 📝 command-logger
 
 Logs all command events to a centralized audit file.

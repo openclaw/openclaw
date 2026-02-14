@@ -24,7 +24,7 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
   while (Date.now() < deadline) {
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 1000);
+      const t = setTimeout(ctrl.abort.bind(ctrl), 1000);
       try {
         const res = await fetch(url, { signal: ctrl.signal });
         if (res.ok) {

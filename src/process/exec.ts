@@ -100,7 +100,12 @@ export async function runCommandWithTimeout(
     return false;
   })();
 
-  const resolvedEnv = env ? { ...process.env, ...env } : { ...process.env };
+  const mergedEnv = env ? { ...process.env, ...env } : { ...process.env };
+  const resolvedEnv = Object.fromEntries(
+    Object.entries(mergedEnv)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [key, String(value)]),
+  );
   if (shouldSuppressNpmFund) {
     if (resolvedEnv.NPM_CONFIG_FUND == null) {
       resolvedEnv.NPM_CONFIG_FUND = "false";
@@ -111,11 +116,15 @@ export async function runCommandWithTimeout(
   }
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const child = spawn(resolveCommand(argv[0]), argv.slice(1), {
+  const resolvedCommand = resolveCommand(argv[0] ?? "");
+  const commandExt = path.extname(resolvedCommand).toLowerCase();
+  const useShell = process.platform === "win32" && commandExt !== ".exe";
+  const child = spawn(resolvedCommand, argv.slice(1), {
     stdio,
     cwd,
     env: resolvedEnv,
     windowsVerbatimArguments,
+    shell: useShell,
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
