@@ -1,0 +1,84 @@
+# TLDR ignore patterns (gitignore syntax)
+# Auto-generated - review and customize for your project
+# Docs: https://git-scm.com/docs/gitignore
+
+# ===================
+# Dependencies
+# ===================
+node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+vendor/
+Pods/
+
+# ===================
+# Build outputs
+# ===================
+dist/
+build/
+out/
+target/
+*.egg-info/
+*.whl
+*.pyc
+*.pyo
+
+# ===================
+# Binary/large files
+# ===================
+*.so
+*.dylib
+*.dll
+*.exe
+*.bin
+*.o
+*.a
+*.lib
+
+# ===================
+# IDE/editors
+# ===================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===================
+# Security (always exclude)
+# ===================
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.*
+secrets.*
+
+# ===================
+# Version control
+# ===================
+.git/
+.hg/
+.svn/
+
+# ===================
+# OS files
+# ===================
+.DS_Store
+Thumbs.db
+
+# ===================
+# Project-specific
+# Add your custom patterns below
+# ===================
+# large_test_fixtures/
+# data/
