@@ -1,6 +1,7 @@
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk";
 import { Readable } from "node:stream";
-import { validateUrbitBaseUrl } from "./base-url.js";
+import { ensureUrbitChannelOpen } from "./channel-ops.js";
+import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { urbitFetch } from "./fetch.js";
 
 export type UrbitSseLogger = {
@@ -54,14 +55,10 @@ export class UrbitSSEClient {
   streamRelease: (() => Promise<void>) | null = null;
 
   constructor(url: string, cookie: string, options: UrbitSseOptions = {}) {
-    const validated = validateUrbitBaseUrl(url);
-    if (!validated.ok) {
-      throw new Error(validated.error);
-    }
-
-    this.url = validated.baseUrl;
-    this.cookie = cookie.split(";")[0];
-    this.ship = options.ship?.replace(/^~/, "") ?? this.resolveShipFromHostname(validated.hostname);
+    const ctx = getUrbitContext(url, options.ship);
+    this.url = ctx.baseUrl;
+    this.cookie = normalizeUrbitCookie(cookie);
+    this.ship = ctx.ship;
     this.channelId = `${Math.floor(Date.now() / 1000)}-${Math.random().toString(36).substring(2, 8)}`;
     this.channelUrl = new URL(`/~/channel/${this.channelId}`, this.url).toString();
     this.onReconnect = options.onReconnect ?? null;
@@ -73,13 +70,6 @@ export class UrbitSSEClient {
     this.ssrfPolicy = options.ssrfPolicy;
     this.lookupFn = options.lookupFn;
     this.fetchImpl = options.fetchImpl;
-  }
-
-  private resolveShipFromHostname(hostname: string): string {
-    if (hostname.includes(".")) {
-      return hostname.split(".")[0] ?? hostname;
-    }
-    return hostname;
   }
 
   async subscribe(params: {
@@ -150,70 +140,21 @@ export class UrbitSSEClient {
   }
 
   async connect() {
-    {
-      const { response, release } = await urbitFetch({
+    await ensureUrbitChannelOpen(
+      {
         baseUrl: this.url,
-        path: `/~/channel/${this.channelId}`,
-        init: {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Cookie: this.cookie,
-          },
-          body: JSON.stringify(this.subscriptions),
-        },
+        cookie: this.cookie,
+        ship: this.ship,
+        channelId: this.channelId,
         ssrfPolicy: this.ssrfPolicy,
         lookupFn: this.lookupFn,
         fetchImpl: this.fetchImpl,
-        timeoutMs: 30_000,
-        auditContext: "tlon-urbit-channel-create",
-      });
-
-      try {
-        if (!response.ok && response.status !== 204) {
-          throw new Error(`Channel creation failed: ${response.status}`);
-        }
-      } finally {
-        await release();
-      }
-    }
-
-    {
-      const { response, release } = await urbitFetch({
-        baseUrl: this.url,
-        path: `/~/channel/${this.channelId}`,
-        init: {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Cookie: this.cookie,
-          },
-          body: JSON.stringify([
-            {
-              id: Date.now(),
-              action: "poke",
-              ship: this.ship,
-              app: "hood",
-              mark: "helm-hi",
-              json: "Opening API channel",
-            },
-          ]),
-        },
-        ssrfPolicy: this.ssrfPolicy,
-        lookupFn: this.lookupFn,
-        fetchImpl: this.fetchImpl,
-        timeoutMs: 30_000,
-        auditContext: "tlon-urbit-channel-wake",
-      });
-
-      try {
-        if (!response.ok && response.status !== 204) {
-          throw new Error(`Channel activation failed: ${response.status}`);
-        }
-      } finally {
-        await release();
-      }
-    }
+      },
+      {
+        createBody: this.subscriptions,
+        createAuditContext: "tlon-urbit-channel-create",
+      },
+    );
 
     await this.openStream();
     this.isConnected = true;
