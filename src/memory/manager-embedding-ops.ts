@@ -41,6 +41,8 @@ const vectorToBlob = (embedding: number[]): Buffer =>
 
 const log = createSubsystemLogger("memory");
 
+const QUERY_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
 class MemoryManagerEmbeddingOps {
   [key: string]: any;
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
@@ -553,13 +555,32 @@ class MemoryManagerEmbeddingOps {
   }
 
   private async embedQueryWithTimeout(text: string): Promise<number[]> {
+    const now = Date.now();
+    const cached = this._queryEmbeddingCache.get(text);
+    if (cached && now - cached.ts < QUERY_CACHE_TTL_MS) {
+      return cached.vec;
+    }
+
     const timeoutMs = this.resolveEmbeddingTimeout("query");
     log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
-    return await this.withTimeout(
+    const vec = await this.withTimeout(
       this.provider.embedQuery(text),
       timeoutMs,
       `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
     );
+
+    this._queryEmbeddingCache.set(text, { vec, ts: now });
+
+    // Evict stale entries periodically
+    if (this._queryEmbeddingCache.size > 50) {
+      for (const [key, entry] of this._queryEmbeddingCache) {
+        if (now - entry.ts > QUERY_CACHE_TTL_MS) {
+          this._queryEmbeddingCache.delete(key);
+        }
+      }
+    }
+
+    return vec;
   }
 
   private async withTimeout<T>(

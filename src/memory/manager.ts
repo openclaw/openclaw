@@ -97,6 +97,8 @@ export class MemoryIndexManager implements MemorySearchManager {
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
+  private _searchSyncDebounce: ReturnType<typeof setTimeout> | null = null;
+  private _queryEmbeddingCache = new Map<string, { vec: number[]; ts: number }>();
 
   static async get(params: {
     cfg: OpenClawConfig;
@@ -205,9 +207,14 @@ export class MemoryIndexManager implements MemorySearchManager {
   ): Promise<MemorySearchResult[]> {
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
-      void this.sync({ reason: "search" }).catch((err) => {
-        log.warn(`memory sync failed (search): ${String(err)}`);
-      });
+      if (!this._searchSyncDebounce) {
+        this._searchSyncDebounce = setTimeout(() => {
+          this._searchSyncDebounce = null;
+          void this.sync({ reason: "search" }).catch((err) => {
+            log.warn(`memory sync failed (search): ${String(err)}`);
+          });
+        }, 2000);
+      }
     }
     const cleaned = query.trim();
     if (!cleaned) {
@@ -221,11 +228,12 @@ export class MemoryIndexManager implements MemorySearchManager {
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
 
-    const keywordResults = hybrid.enabled
-      ? await this.searchKeyword(cleaned, candidates).catch(() => [])
-      : [];
-
-    const queryVec = (await this.embedQueryWithTimeout(cleaned)) as number[];
+    const [keywordResults, queryVec] = (await Promise.all([
+      hybrid.enabled
+        ? this.searchKeyword(cleaned, candidates).catch(() => [])
+        : Promise.resolve([]),
+      this.embedQueryWithTimeout(cleaned),
+    ])) as [Awaited<ReturnType<typeof this.searchKeyword>>, number[]];
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
       ? await this.searchVector(queryVec, candidates).catch(() => [])
@@ -521,6 +529,10 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
       this.watchTimer = null;
+    }
+    if (this._searchSyncDebounce) {
+      clearTimeout(this._searchSyncDebounce);
+      this._searchSyncDebounce = null;
     }
     if (this.sessionWatchTimer) {
       clearTimeout(this.sessionWatchTimer);
