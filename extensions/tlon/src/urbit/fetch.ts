@@ -1,6 +1,7 @@
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import { validateUrbitBaseUrl } from "./base-url.js";
+import { UrbitUrlError } from "./errors.js";
 
 export type UrbitFetchOptions = {
   baseUrl: string;
@@ -19,7 +20,7 @@ export type UrbitFetchOptions = {
 export async function urbitFetch(params: UrbitFetchOptions) {
   const validated = validateUrbitBaseUrl(params.baseUrl);
   if (!validated.ok) {
-    throw new Error(validated.error);
+    throw new UrbitUrlError(validated.error);
   }
 
   const url = new URL(params.path, validated.baseUrl).toString();

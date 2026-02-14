@@ -36,8 +36,16 @@ export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
     return { ok: false, error: "Invalid hostname" };
   }
 
-  // Normalize to origin so callers can't smuggle paths/query fragments into the base URL.
-  return { ok: true, baseUrl: parsed.origin, hostname };
+  // Normalize to origin so callers can't smuggle paths/query fragments into the base URL,
+  // and strip a trailing dot from the hostname (DNS root label).
+  const isIpv6 = hostname.includes(":");
+  const host = parsed.port
+    ? `${isIpv6 ? `[${hostname}]` : hostname}:${parsed.port}`
+    : isIpv6
+      ? `[${hostname}]`
+      : hostname;
+
+  return { ok: true, baseUrl: `${parsed.protocol}//${host}`, hostname };
 }
 
 export function isBlockedUrbitHostname(hostname: string): boolean {

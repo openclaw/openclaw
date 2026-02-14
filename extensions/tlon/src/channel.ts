@@ -17,6 +17,7 @@ import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
 import { UrbitChannelClient } from "./urbit/channel-client.js";
+import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
 import { buildMediaText, sendDm, sendGroupMessage } from "./urbit/send.js";
 
 const TLON_CHANNEL_ID = "tlon" as const;
@@ -123,7 +124,7 @@ const tlonOutbound: ChannelOutboundAdapter = {
       throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
     }
 
-    const ssrfPolicy = account.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+    const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
     const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
     const api = new UrbitChannelClient(account.url, cookie, {
       ship: account.ship.replace(/^~/, ""),
@@ -345,7 +346,7 @@ export const tlonPlugin: ChannelPlugin = {
         return { ok: false, error: "Not configured" };
       }
       try {
-        const ssrfPolicy = account.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+        const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
         const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
         const api = new UrbitChannelClient(account.url, cookie, {
           ship: account.ship.replace(/^~/, ""),
