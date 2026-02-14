@@ -186,13 +186,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         moderation: false,
       },
       replyToMode: "off", // off | first | all
-      dm: {
-        enabled: true,
-        policy: "pairing",
-        allowFrom: ["1234567890", "steipete"],
-        groupEnabled: false,
-        groupChannels: ["openclaw-dm"],
-      },
+      dmPolicy: "pairing",
+      allowFrom: ["1234567890", "steipete"],
+      dm: { enabled: true, groupEnabled: false, groupChannels: ["openclaw-dm"] },
       guilds: {
         "123456789012345678": {
           slug: "friends-of-openclaw",
@@ -276,13 +272,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       enabled: true,
       botToken: "xoxb-...",
       appToken: "xapp-...",
-      dm: {
-        enabled: true,
-        policy: "pairing",
-        allowFrom: ["U123", "U456", "*"],
-        groupEnabled: false,
-        groupChannels: ["G123"],
-      },
+      dmPolicy: "pairing",
+      allowFrom: ["U123", "U456", "*"],
+      dm: { enabled: true, groupEnabled: false, groupChannels: ["G123"] },
       channels: {
         C123: { allow: true, requireMention: true, allowBots: false },
         "#general": {
