@@ -153,7 +153,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Skip when hookContext is missing — callers must opt in with valid context.
         const hookRunner = getGlobalHookRunner();
         const hctx = options.hookContext;
-        if (hookRunner && normalized.text && hctx?.channelId) {
+        if (hookRunner?.hasHooks("message_sent") && normalized.text && hctx?.channelId) {
           void hookRunner
             .runMessageSent(
               {

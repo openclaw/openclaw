@@ -17,6 +17,7 @@ describe("createReplyDispatcher – message_sent hook", () => {
     mockRunMessageSent = vi.fn().mockResolvedValue(undefined);
     mocks.getGlobalHookRunner.mockReturnValue({
       runMessageSent: mockRunMessageSent,
+      hasHooks: vi.fn().mockReturnValue(true),
     });
   });
 
