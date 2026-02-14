@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import type { PlivoConfig, WebhookSecurityConfig } from "../config.js";
 import type {
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -398,6 +400,52 @@ export class PlivoProvider implements VoiceCallProvider {
 
   async stopListening(_input: StopListeningInput): Promise<void> {
     // GetInput ends automatically when speech ends.
+  }
+
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    const terminalStatuses = new Set([
+      "busy",
+      "cancel",
+      "canceled",
+      "cancelled",
+      "completed",
+      "failed",
+      "no-answer",
+      "no_answer",
+    ]);
+
+    try {
+      const response = await fetch(
+        `https://api.plivo.com/v1/Account/${this.authId}/Call/${input.providerCallId}/`,
+        {
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString("base64")}`,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        return {
+          status: "unknown",
+          isTerminal: true,
+          error: `Plivo API error: ${response.status}`,
+        };
+      }
+
+      const data = (await response.json()) as { call_status?: string };
+      const status = data.call_status || "unknown";
+      const normalized = status.toLowerCase();
+      return {
+        status,
+        isTerminal: terminalStatuses.has(normalized),
+      };
+    } catch (err) {
+      return {
+        status: "unknown",
+        isTerminal: true,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   private static normalizeNumber(numberOrSip: string): string {

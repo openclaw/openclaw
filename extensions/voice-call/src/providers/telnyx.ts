@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import type { TelnyxConfig } from "../config.js";
 import type {
   EndReason,
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -337,6 +339,46 @@ export class TelnyxProvider implements VoiceCallProvider {
       { command_id: crypto.randomUUID() },
       { allowNotFound: true },
     );
+  }
+
+  /**
+   * Get call status from Telnyx API.
+   */
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    const terminalStatuses = new Set([
+      "busy",
+      "cancel",
+      "canceled",
+      "cancelled",
+      "completed",
+      "failed",
+      "hangup",
+      "no_answer",
+      "rejected",
+      "timeout",
+    ]);
+
+    try {
+      const result = await this.apiRequest<{ data?: { is_alive?: boolean; state?: string } }>(
+        `/calls/${input.providerCallId}`,
+        {},
+        { allowNotFound: true },
+      );
+
+      const state = result?.data?.state || "unknown";
+      const normalized = state.toLowerCase();
+      const isAlive = result?.data?.is_alive ?? false;
+      return {
+        status: state,
+        isTerminal: !isAlive || terminalStatuses.has(normalized),
+      };
+    } catch (err) {
+      return {
+        status: "unknown",
+        isTerminal: true,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 }
 
