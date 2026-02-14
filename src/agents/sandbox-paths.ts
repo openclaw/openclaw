@@ -30,6 +30,9 @@ function resolveToCwd(filePath: string, cwd: string): string {
   return path.resolve(cwd, expanded);
 }
 
+// Pattern for Docker bind mount paths inside containers (e.g., /workspace-one, /workspace-two)
+const CONTAINER_MOUNT_PATH_RE = /^\/workspace-[a-zA-Z0-9_-]/;
+
 export function resolveSandboxPath(params: { filePath: string; cwd: string; root: string }): {
   resolved: string;
   relative: string;
@@ -40,7 +43,13 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   if (!relative || relative === "") {
     return { resolved, relative: "" };
   }
+  // Allow container mount paths (e.g., /workspace-one/) - these are bind mounts
+  // that the sandbox container can access, even though they escape the host workspace root
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    // Check if this is a container mount path that should be allowed
+    if (CONTAINER_MOUNT_PATH_RE.test(resolved)) {
+      return { resolved, relative: "" };
+    }
     throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
   }
   return { resolved, relative };
