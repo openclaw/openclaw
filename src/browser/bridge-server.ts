@@ -5,6 +5,7 @@ import type { ResolvedBrowserConfig } from "./config.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
+import { browserMutationGuardMiddleware } from "./csrf.js";
 import { isAuthorizedBrowserRequest } from "./http-auth.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import {
@@ -49,6 +50,7 @@ export async function startBrowserBridgeServer(params: {
     next();
   });
   app.use(express.json({ limit: "1mb" }));
+  app.use(browserMutationGuardMiddleware());
 
   const authToken = params.authToken?.trim() || undefined;
   const authPassword = params.authPassword?.trim() || undefined;
