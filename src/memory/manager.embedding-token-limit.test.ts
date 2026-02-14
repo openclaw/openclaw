@@ -74,7 +74,7 @@ describe("memory embedding token limits", () => {
       throw new Error("manager missing");
     }
     manager = result.manager;
-    await manager.sync({ force: true });
+    await manager.sync({ reason: "test" });
 
     const inputs = embedBatch.mock.calls.flatMap((call) => call[0] ?? []);
     expect(inputs.length).toBeGreaterThan(1);
@@ -111,7 +111,7 @@ describe("memory embedding token limits", () => {
       throw new Error("manager missing");
     }
     manager = result.manager;
-    await manager.sync({ force: true });
+    await manager.sync({ reason: "test" });
 
     const batchSizes = embedBatch.mock.calls.map(
       (call) => (call[0] as string[] | undefined)?.length ?? 0,

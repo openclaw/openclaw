@@ -85,7 +85,6 @@ describe("memory embedding batches", () => {
     manager = result.manager;
     const updates: Array<{ completed: number; total: number; label?: string }> = [];
     await manager.sync({
-      force: true,
       progress: (update) => {
         updates.push(update);
       },
@@ -130,7 +129,7 @@ describe("memory embedding batches", () => {
       throw new Error("manager missing");
     }
     manager = result.manager;
-    await manager.sync({ force: true });
+    await manager.sync({ reason: "test" });
 
     expect(embedBatch.mock.calls.length).toBe(1);
   });
@@ -191,7 +190,7 @@ describe("memory embedding batches", () => {
     }
     manager = result.manager;
     try {
-      await manager.sync({ force: true });
+      await manager.sync({ reason: "test" });
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -224,7 +223,7 @@ describe("memory embedding batches", () => {
       throw new Error("manager missing");
     }
     manager = result.manager;
-    await manager.sync({ force: true });
+    await manager.sync({ reason: "test" });
 
     const inputs = embedBatch.mock.calls.flatMap((call) => call[0] ?? []);
     expect(inputs).not.toContain("");

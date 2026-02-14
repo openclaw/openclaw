@@ -89,7 +89,7 @@ describe("memory index", () => {
       throw new Error("manager missing");
     }
     manager = result.manager;
-    await result.manager.sync({ force: true });
+    await result.manager.sync({ reason: "test" });
     const results = await result.manager.search("alpha");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
@@ -141,7 +141,7 @@ describe("memory index", () => {
     if (!first.manager) {
       throw new Error("manager missing");
     }
-    await first.manager.sync({ force: true });
+    await first.manager.sync({ reason: "test" });
     const callsAfterFirstSync = embedBatchCalls;
     await first.manager.close();
 
@@ -234,7 +234,7 @@ describe("memory index", () => {
       return;
     }
 
-    await manager.sync({ force: true });
+    await manager.sync({ reason: "test" });
     const results = await manager.search("zebra");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
