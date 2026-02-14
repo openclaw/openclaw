@@ -558,9 +558,12 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
 
-    // Shared subagent announce flow is text-based. When we have an explicit sender
-    // identity to preserve, prefer direct outbound delivery even for plain-text payloads.
-    if (deliveryPayloadHasStructuredContent || identity) {
+    // Shared subagent announce flow is text-based and prompts the main agent to
+    // summarize. When we have an explicit delivery target (delivery.to), sender
+    // identity, or structured content, prefer direct outbound delivery to send
+    // the actual cron output without summarization.
+    const hasExplicitDeliveryTarget = Boolean(deliveryPlan.to);
+    if (deliveryPayloadHasStructuredContent || identity || hasExplicitDeliveryTarget) {
       try {
         const payloadsForDelivery =
           deliveryPayloadHasStructuredContent && deliveryPayloads.length > 0
