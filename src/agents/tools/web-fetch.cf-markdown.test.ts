@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import * as logger from "../../logger.js";
+import { createWebFetchTool } from "./web-tools.js";
 
 const lookupMock = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+const baseToolConfig = {
+  config: {
+    tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
+  },
+} as const;
 
 function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
   return {
@@ -51,12 +57,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
-      },
-    });
+    const tool = createWebFetchTool(baseToolConfig);
 
     await tool?.execute?.("call", { url: "https://example.com/page" });
 
@@ -71,12 +72,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
-      },
-    });
+    const tool = createWebFetchTool(baseToolConfig);
 
     const result = await tool?.execute?.("call", { url: "https://example.com/cf" });
     expect(result?.details).toMatchObject({
@@ -96,12 +92,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
-      },
-    });
+    const tool = createWebFetchTool(baseToolConfig);
 
     const result = await tool?.execute?.("call", { url: "https://example.com/html" });
     expect(result?.details?.extractor).not.toBe("cf-markdown");
@@ -116,12 +107,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
-      },
-    });
+    const tool = createWebFetchTool(baseToolConfig);
 
     await tool?.execute?.("call", { url: "https://example.com/tokens/private?token=secret" });
 
@@ -142,12 +128,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
-      },
-    });
+    const tool = createWebFetchTool(baseToolConfig);
 
     const result = await tool?.execute?.("call", {
       url: "https://example.com/text-mode",
@@ -169,12 +150,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
-      },
-    });
+    const tool = createWebFetchTool(baseToolConfig);
 
     await tool?.execute?.("call", { url: "https://example.com/no-tokens" });
 

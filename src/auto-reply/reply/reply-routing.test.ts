@@ -100,6 +100,8 @@ describe("createReplyDispatcher", () => {
     dispatcher.sendFinalReply({ text: "two" });
 
     await dispatcher.waitForIdle();
+    dispatcher.markComplete();
+    await Promise.resolve();
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
@@ -156,8 +158,8 @@ describe("createReplyDispatcher", () => {
 });
 
 describe("resolveReplyToMode", () => {
-  it("defaults to first for Telegram", () => {
-    expect(resolveReplyToMode(emptyCfg, "telegram")).toBe("first");
+  it("defaults to off for Telegram", () => {
+    expect(resolveReplyToMode(emptyCfg, "telegram")).toBe("off");
   });
 
   it("defaults to off for Discord and Slack", () => {

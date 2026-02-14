@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
@@ -90,6 +91,7 @@ export async function ensureSandboxBrowser(params: {
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
+  bridgeAuth?: { token?: string; password?: string };
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) {
     return null;
@@ -152,15 +154,36 @@ export async function ensureSandboxBrowser(params: {
   const existingProfile = existing
     ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
     : null;
+
+  let desiredAuthToken = params.bridgeAuth?.token?.trim() || undefined;
+  let desiredAuthPassword = params.bridgeAuth?.password?.trim() || undefined;
+  if (!desiredAuthToken && !desiredAuthPassword) {
+    // Always require auth for the sandbox bridge server, even if gateway auth
+    // mode doesn't produce a shared secret (e.g. trusted-proxy).
+    // Keep it stable across calls by reusing the existing bridge auth.
+    desiredAuthToken = existing?.authToken;
+    desiredAuthPassword = existing?.authPassword;
+    if (!desiredAuthToken && !desiredAuthPassword) {
+      desiredAuthToken = crypto.randomBytes(24).toString("hex");
+    }
+  }
+
   const shouldReuse =
     existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
+  const authMatches =
+    !existing ||
+    (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
   if (existing && !shouldReuse) {
+    await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
+    BROWSER_BRIDGES.delete(params.scopeKey);
+  }
+  if (existing && shouldReuse && !authMatches) {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
 
   const bridge = (() => {
-    if (shouldReuse && existing) {
+    if (shouldReuse && authMatches && existing) {
       return existing.bridge;
     }
     return null;
@@ -196,15 +219,19 @@ export async function ensureSandboxBrowser(params: {
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
+      authToken: desiredAuthToken,
+      authPassword: desiredAuthPassword,
       onEnsureAttachTarget,
     });
   };
 
   const resolvedBridge = await ensureBridge();
-  if (!shouldReuse) {
+  if (!shouldReuse || !authMatches) {
     BROWSER_BRIDGES.set(params.scopeKey, {
       bridge: resolvedBridge,
       containerName,
+      authToken: desiredAuthToken,
+      authPassword: desiredAuthPassword,
     });
   }
 

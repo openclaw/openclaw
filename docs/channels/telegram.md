@@ -412,9 +412,11 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `channels.telegram.replyToMode` controls handling:
 
-    - `first` (default)
+    - `off` (default)
+    - `first`
     - `all`
-    - `off`
+
+    Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
 
   </Accordion>
 
@@ -694,7 +696,7 @@ Primary reference:
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
 - `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
-- `channels.telegram.replyToMode`: `off | first | all` (default: `first`).
+- `channels.telegram.replyToMode`: `off | first | all` (default: `off`).
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).

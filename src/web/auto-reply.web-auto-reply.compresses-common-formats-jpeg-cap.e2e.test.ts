@@ -160,6 +160,10 @@ describe("web auto-reply", () => {
       },
     ] as const;
 
+    const width = 1200;
+    const height = 1200;
+    const sharedRaw = crypto.randomBytes(width * height * 3);
+
     for (const fmt of formats) {
       // Force a small cap to ensure compression is exercised for every format.
       setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
@@ -181,10 +185,7 @@ describe("web auto-reply", () => {
         return { close: vi.fn() };
       };
 
-      const width = 1200;
-      const height = 1200;
-      const raw = crypto.randomBytes(width * height * 3);
-      const big = await fmt.make(raw, { width, height });
+      const big = await fmt.make(sharedRaw, { width, height });
       expect(big.length).toBeGreaterThan(1 * 1024 * 1024);
 
       const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
@@ -244,8 +245,8 @@ describe("web auto-reply", () => {
 
     const bigPng = await sharp({
       create: {
-        width: 2600,
-        height: 2600,
+        width: 1800,
+        height: 1800,
         channels: 3,
         background: { r: 0, g: 0, b: 255 },
       },

@@ -101,6 +101,14 @@ export type RunCronAgentTurnResult = {
   error?: string;
   sessionId?: string;
   sessionKey?: string;
+  /**
+   * `true` when the isolated run already delivered its output to the target
+   * channel (via outbound payloads, the subagent announce flow, or a matching
+   * messaging-tool send). Callers should skip posting a summary to the main
+   * session to avoid duplicate
+   * messages.  See: https://github.com/openclaw/openclaw/issues/15692
+   */
+  delivered?: boolean;
 };
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -518,6 +526,9 @@ export async function runCronIsolatedAgentTurn(params: {
       }),
     );
 
+  // `true` means we confirmed at least one outbound send reached the target.
+  // Keep this strict so timer fallback can safely decide whether to wake main.
+  let delivered = skipMessagingToolDelivery;
   if (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery) {
     if (resolvedDelivery.error) {
       if (!deliveryBestEffort) {
@@ -548,7 +559,7 @@ export async function runCronIsolatedAgentTurn(params: {
     // for media/channel payloads so structured content is preserved.
     if (deliveryPayloadHasStructuredContent) {
       try {
-        await deliverOutboundPayloads({
+        const deliveryResults = await deliverOutboundPayloads({
           cfg: cfgWithAgentDefaults,
           channel: resolvedDelivery.channel,
           to: resolvedDelivery.to,
@@ -558,6 +569,7 @@ export async function runCronIsolatedAgentTurn(params: {
           bestEffort: deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
         });
+        delivered = deliveryResults.length > 0;
       } catch (err) {
         if (!deliveryBestEffort) {
           return withRunSession({ status: "error", summary, outputText, error: String(err) });
@@ -586,7 +598,7 @@ export async function runCronIsolatedAgentTurn(params: {
           requesterDisplayKey: announceSessionKey,
           task: taskLabel,
           timeoutMs,
-          cleanup: "keep",
+          cleanup: params.job.deleteAfterRun ? "delete" : "keep",
           roundOneReply: synthesizedText,
           waitForCompletion: false,
           startedAt: runStartedAt,
@@ -594,7 +606,9 @@ export async function runCronIsolatedAgentTurn(params: {
           outcome: { status: "ok" },
           announceType: "cron job",
         });
-        if (!didAnnounce) {
+        if (didAnnounce) {
+          delivered = true;
+        } else {
           const message = "cron announce delivery failed";
           if (!deliveryBestEffort) {
             return withRunSession({
@@ -615,5 +629,5 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
-  return withRunSession({ status: "ok", summary, outputText });
+  return withRunSession({ status: "ok", summary, outputText, delivered });
 }
