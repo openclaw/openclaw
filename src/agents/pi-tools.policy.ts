@@ -6,70 +6,30 @@ import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
-type CompiledPattern =
-  | { kind: "all" }
-  | { kind: "exact"; value: string }
-  | { kind: "regex"; value: RegExp };
-
-function compilePattern(pattern: string): CompiledPattern {
-  const normalized = normalizeToolName(pattern);
-  if (!normalized) {
-    return { kind: "exact", value: "" };
-  }
-  if (normalized === "*") {
-    return { kind: "all" };
-  }
-  if (!normalized.includes("*")) {
-    return { kind: "exact", value: normalized };
-  }
-  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return {
-    kind: "regex",
-    value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`),
-  };
-}
-
-function compilePatterns(patterns?: string[]): CompiledPattern[] {
-  if (!Array.isArray(patterns)) {
-    return [];
-  }
-  return expandToolGroups(patterns)
-    .map(compilePattern)
-    .filter((pattern) => pattern.kind !== "exact" || pattern.value);
-}
-
-function matchesAny(name: string, patterns: CompiledPattern[]): boolean {
-  for (const pattern of patterns) {
-    if (pattern.kind === "all") {
-      return true;
-    }
-    if (pattern.kind === "exact" && name === pattern.value) {
-      return true;
-    }
-    if (pattern.kind === "regex" && pattern.value.test(name)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
-  const deny = compilePatterns(policy.deny);
-  const allow = compilePatterns(policy.allow);
+  const deny = compileGlobPatterns({
+    raw: expandToolGroups(policy.deny ?? []),
+    normalize: normalizeToolName,
+  });
+  const allow = compileGlobPatterns({
+    raw: expandToolGroups(policy.allow ?? []),
+    normalize: normalizeToolName,
+  });
   return (name: string) => {
     const normalized = normalizeToolName(name);
-    if (matchesAny(normalized, deny)) {
+    if (matchesAnyGlobPattern(normalized, deny)) {
       return false;
     }
     if (allow.length === 0) {
       return true;
     }
-    if (matchesAny(normalized, allow)) {
+    if (matchesAnyGlobPattern(normalized, allow)) {
       return true;
     }
-    if (normalized === "apply_patch" && matchesAny("exec", allow)) {
+    if (normalized === "apply_patch" && matchesAnyGlobPattern("exec", allow)) {
       return true;
     }
     return false;
