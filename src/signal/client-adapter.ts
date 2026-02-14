@@ -14,7 +14,9 @@ import { resolveSignalAccount } from "./accounts.js";
 import {
   containerCheck,
   containerFetchAttachment,
+  containerRemoveReaction,
   containerSendMessage,
+  containerSendReaction,
   containerSendReceipt,
   containerSendTyping,
   streamContainerEvents,
@@ -150,24 +152,7 @@ async function handleContainerRpc<T>(
     case "sendReaction": {
       const recipient = (params.recipients as string[] | undefined)?.[0] ?? "";
       const groupId = (params.groupIds as string[] | undefined)?.[0] ?? undefined;
-
-      if (params.remove) {
-        const { containerRemoveReaction } = await import("./client-container.js");
-        const result = await containerRemoveReaction({
-          baseUrl: opts.baseUrl,
-          account: (params.account as string) ?? "",
-          recipient,
-          emoji: (params.emoji as string) ?? "",
-          targetAuthor: (params.targetAuthor as string) ?? recipient,
-          targetTimestamp: params.targetTimestamp as number,
-          groupId,
-          timeoutMs: opts.timeoutMs,
-        });
-        return result as T;
-      }
-
-      const { containerSendReaction } = await import("./client-container.js");
-      const result = await containerSendReaction({
+      const reactionParams = {
         baseUrl: opts.baseUrl,
         account: (params.account as string) ?? "",
         recipient,
@@ -176,8 +161,9 @@ async function handleContainerRpc<T>(
         targetTimestamp: params.targetTimestamp as number,
         groupId,
         timeoutMs: opts.timeoutMs,
-      });
-      return result as T;
+      };
+      const fn = params.remove ? containerRemoveReaction : containerSendReaction;
+      return (await fn(reactionParams)) as T;
     }
 
     case "getAttachment": {
@@ -266,7 +252,8 @@ export async function streamSignalEventsAdapter(params: {
 }
 
 /**
- * Send a message via Signal, using the appropriate API based on mode.
+ * Backward-compatible wrappers used by existing tests and transitional callers.
+ * New call sites should use adapterRpcRequest directly.
  */
 export async function sendMessageAdapter(params: {
   baseUrl: string;
@@ -279,26 +266,6 @@ export async function sendMessageAdapter(params: {
   attachments?: string[];
   timeoutMs?: number;
 }): Promise<{ timestamp?: number }> {
-  const mode = await resolveApiMode(params.baseUrl, params.accountId);
-
-  if (mode === "container") {
-    // For container mode, group IDs must be in format "group.{base64(internal_id)}"
-    const formattedGroupId = params.groupId ? formatGroupIdForContainer(params.groupId) : undefined;
-    const recipients =
-      params.recipients.length > 0 ? params.recipients : formattedGroupId ? [formattedGroupId] : [];
-
-    return containerSendMessage({
-      baseUrl: params.baseUrl,
-      account: params.account,
-      recipients,
-      message: params.message,
-      textStyles: params.textStyles,
-      attachments: params.attachments,
-      timeoutMs: params.timeoutMs,
-    });
-  }
-
-  // Default: native JSON-RPC
   const rpcParams: Record<string, unknown> = {
     message: params.message,
     account: params.account,
@@ -320,17 +287,14 @@ export async function sendMessageAdapter(params: {
     rpcParams.attachments = params.attachments;
   }
 
-  const result = await signalRpcRequest<{ timestamp?: number }>("send", rpcParams, {
+  const result = await adapterRpcRequest<{ timestamp?: number }>("send", rpcParams, {
     baseUrl: params.baseUrl,
     timeoutMs: params.timeoutMs,
+    accountId: params.accountId,
   });
-
   return result ?? {};
 }
 
-/**
- * Send typing indicator via Signal.
- */
 export async function sendTypingAdapter(params: {
   baseUrl: string;
   account: string;
@@ -340,44 +304,25 @@ export async function sendTypingAdapter(params: {
   stop?: boolean;
   timeoutMs?: number;
 }): Promise<boolean> {
-  const mode = await resolveApiMode(params.baseUrl, params.accountId);
-
-  if (mode === "container") {
-    return containerSendTyping({
-      baseUrl: params.baseUrl,
-      account: params.account,
-      recipient: params.recipient,
-      stop: params.stop,
-      timeoutMs: params.timeoutMs,
-    });
-  }
-
-  // Default: native JSON-RPC
   const rpcParams: Record<string, unknown> = {
     account: params.account,
   };
-
   if (params.groupId) {
     rpcParams.groupId = params.groupId;
   } else {
     rpcParams.recipient = [params.recipient];
   }
-
   if (params.stop) {
     rpcParams.stop = true;
   }
-
-  await signalRpcRequest("sendTyping", rpcParams, {
+  await adapterRpcRequest("sendTyping", rpcParams, {
     baseUrl: params.baseUrl,
     timeoutMs: params.timeoutMs,
+    accountId: params.accountId,
   });
-
   return true;
 }
 
-/**
- * Send read receipt via Signal.
- */
 export async function sendReceiptAdapter(params: {
   baseUrl: string;
   account: string;
@@ -387,38 +332,23 @@ export async function sendReceiptAdapter(params: {
   type?: "read" | "viewed";
   timeoutMs?: number;
 }): Promise<boolean> {
-  const mode = await resolveApiMode(params.baseUrl, params.accountId);
-
-  if (mode === "container") {
-    return containerSendReceipt({
-      baseUrl: params.baseUrl,
+  await adapterRpcRequest(
+    "sendReceipt",
+    {
       account: params.account,
-      recipient: params.recipient,
-      timestamp: params.targetTimestamp,
-      type: params.type,
+      recipient: [params.recipient],
+      targetTimestamp: params.targetTimestamp,
+      type: params.type ?? "read",
+    },
+    {
+      baseUrl: params.baseUrl,
       timeoutMs: params.timeoutMs,
-    });
-  }
-
-  // Default: native JSON-RPC
-  const rpcParams: Record<string, unknown> = {
-    account: params.account,
-    recipient: [params.recipient],
-    targetTimestamp: params.targetTimestamp,
-    type: params.type ?? "read",
-  };
-
-  await signalRpcRequest("sendReceipt", rpcParams, {
-    baseUrl: params.baseUrl,
-    timeoutMs: params.timeoutMs,
-  });
-
+      accountId: params.accountId,
+    },
+  );
   return true;
 }
 
-/**
- * Fetch attachment from Signal.
- */
 export async function fetchAttachmentAdapter(params: {
   baseUrl: string;
   account?: string;
@@ -429,7 +359,6 @@ export async function fetchAttachmentAdapter(params: {
   timeoutMs?: number;
 }): Promise<Buffer | null> {
   const mode = await resolveApiMode(params.baseUrl, params.accountId);
-
   if (mode === "container") {
     return containerFetchAttachment(params.attachmentId, {
       baseUrl: params.baseUrl,
@@ -437,15 +366,12 @@ export async function fetchAttachmentAdapter(params: {
     });
   }
 
-  // Default: native JSON-RPC
   const rpcParams: Record<string, unknown> = {
     id: params.attachmentId,
   };
-
   if (params.account) {
     rpcParams.account = params.account;
   }
-
   if (params.groupId) {
     rpcParams.groupId = params.groupId;
   } else if (params.sender) {
@@ -453,17 +379,76 @@ export async function fetchAttachmentAdapter(params: {
   } else {
     return null;
   }
-
-  const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
+  const result = await adapterRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
     baseUrl: params.baseUrl,
     timeoutMs: params.timeoutMs,
+    accountId: params.accountId,
   });
-
   if (!result?.data) {
     return null;
   }
-
   return Buffer.from(result.data, "base64");
+}
+
+export async function sendReactionAdapter(params: {
+  baseUrl: string;
+  account: string;
+  accountId?: string;
+  recipient: string;
+  emoji: string;
+  targetAuthor: string;
+  targetTimestamp: number;
+  groupId?: string;
+  timeoutMs?: number;
+}): Promise<{ timestamp?: number }> {
+  const result = await adapterRpcRequest<{ timestamp?: number }>(
+    "sendReaction",
+    {
+      emoji: params.emoji,
+      targetTimestamp: params.targetTimestamp,
+      targetAuthor: params.targetAuthor,
+      account: params.account,
+      recipients: [params.recipient],
+      ...(params.groupId ? { groupIds: [params.groupId] } : {}),
+    },
+    {
+      baseUrl: params.baseUrl,
+      timeoutMs: params.timeoutMs,
+      accountId: params.accountId,
+    },
+  );
+  return result ?? {};
+}
+
+export async function removeReactionAdapter(params: {
+  baseUrl: string;
+  account: string;
+  accountId?: string;
+  recipient: string;
+  emoji: string;
+  targetAuthor: string;
+  targetTimestamp: number;
+  groupId?: string;
+  timeoutMs?: number;
+}): Promise<{ timestamp?: number }> {
+  const result = await adapterRpcRequest<{ timestamp?: number }>(
+    "sendReaction",
+    {
+      emoji: params.emoji,
+      targetTimestamp: params.targetTimestamp,
+      targetAuthor: params.targetAuthor,
+      account: params.account,
+      remove: true,
+      recipients: [params.recipient],
+      ...(params.groupId ? { groupIds: [params.groupId] } : {}),
+    },
+    {
+      baseUrl: params.baseUrl,
+      timeoutMs: params.timeoutMs,
+      accountId: params.accountId,
+    },
+  );
+  return result ?? {};
 }
 
 /**
@@ -482,113 +467,4 @@ export async function checkAdapter(
     return containerCheck(baseUrl, timeoutMs);
   }
   return signalCheck(baseUrl, timeoutMs);
-}
-
-/**
- * Send a reaction to a message via Signal.
- */
-export async function sendReactionAdapter(params: {
-  baseUrl: string;
-  account: string;
-  accountId?: string;
-  recipient: string;
-  emoji: string;
-  targetAuthor: string;
-  targetTimestamp: number;
-  groupId?: string;
-  timeoutMs?: number;
-}): Promise<{ timestamp?: number }> {
-  const mode = await resolveApiMode(params.baseUrl, params.accountId);
-
-  if (mode === "container") {
-    const { containerSendReaction } = await import("./client-container.js");
-    return containerSendReaction({
-      baseUrl: params.baseUrl,
-      account: params.account,
-      recipient: params.recipient,
-      emoji: params.emoji,
-      targetAuthor: params.targetAuthor,
-      targetTimestamp: params.targetTimestamp,
-      groupId: params.groupId,
-      timeoutMs: params.timeoutMs,
-    });
-  }
-
-  // Default: native JSON-RPC
-  const rpcParams: Record<string, unknown> = {
-    emoji: params.emoji,
-    targetTimestamp: params.targetTimestamp,
-    targetAuthor: params.targetAuthor,
-    account: params.account,
-  };
-
-  if (params.recipient) {
-    rpcParams.recipients = [params.recipient];
-  }
-
-  if (params.groupId) {
-    rpcParams.groupIds = [params.groupId];
-  }
-
-  const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", rpcParams, {
-    baseUrl: params.baseUrl,
-    timeoutMs: params.timeoutMs,
-  });
-
-  return result ?? {};
-}
-
-/**
- * Remove a reaction from a message via Signal.
- */
-export async function removeReactionAdapter(params: {
-  baseUrl: string;
-  account: string;
-  accountId?: string;
-  recipient: string;
-  emoji: string;
-  targetAuthor: string;
-  targetTimestamp: number;
-  groupId?: string;
-  timeoutMs?: number;
-}): Promise<{ timestamp?: number }> {
-  const mode = await resolveApiMode(params.baseUrl, params.accountId);
-
-  if (mode === "container") {
-    const { containerRemoveReaction } = await import("./client-container.js");
-    return containerRemoveReaction({
-      baseUrl: params.baseUrl,
-      account: params.account,
-      recipient: params.recipient,
-      emoji: params.emoji,
-      targetAuthor: params.targetAuthor,
-      targetTimestamp: params.targetTimestamp,
-      groupId: params.groupId,
-      timeoutMs: params.timeoutMs,
-    });
-  }
-
-  // Default: native JSON-RPC with remove flag
-  const rpcParams: Record<string, unknown> = {
-    emoji: params.emoji,
-    targetTimestamp: params.targetTimestamp,
-    targetAuthor: params.targetAuthor,
-    account: params.account,
-    remove: true,
-  };
-
-  if (params.recipient) {
-    rpcParams.recipients = [params.recipient];
-  }
-
-  if (params.groupId) {
-    rpcParams.groupIds = [params.groupId];
-  }
-
-  const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", rpcParams, {
-    baseUrl: params.baseUrl,
-    timeoutMs: params.timeoutMs,
-  });
-
-  return result ?? {};
 }
