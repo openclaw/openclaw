@@ -39,6 +39,7 @@ import {
   resolveThreadSessionKeys,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
+import { runWithReconnect } from "./reconnect.js";
 import { sendMessageMattermost } from "./send.js";
 
 export type MonitorMattermostOpts = {
@@ -891,88 +892,102 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
   const connectOnce = async (): Promise<void> => {
     const ws = new WebSocket(wsUrl);
-    const onAbort = () => ws.close();
+    const onAbort = () => ws.terminate();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
-    return await new Promise((resolve) => {
-      ws.on("open", () => {
-        opts.statusSink?.({
-          connected: true,
-          lastConnectedAt: Date.now(),
-          lastError: null,
-        });
-        ws.send(
-          JSON.stringify({
-            seq: seq++,
-            action: "authentication_challenge",
-            data: { token: botToken },
-          }),
-        );
-      });
+    try {
+      return await new Promise((resolve, reject) => {
+        let opened = false;
 
-      ws.on("message", async (data) => {
-        const raw = rawDataToString(data);
-        let payload: MattermostEventPayload;
-        try {
-          payload = JSON.parse(raw) as MattermostEventPayload;
-        } catch {
-          return;
-        }
-        if (payload.event !== "posted") {
-          return;
-        }
-        const postData = payload.data?.post;
-        if (!postData) {
-          return;
-        }
-        let post: MattermostPost | null = null;
-        if (typeof postData === "string") {
+        ws.on("open", () => {
+          opened = true;
+          opts.statusSink?.({
+            connected: true,
+            lastConnectedAt: Date.now(),
+            lastError: null,
+          });
+          ws.send(
+            JSON.stringify({
+              seq: seq++,
+              action: "authentication_challenge",
+              data: { token: botToken },
+            }),
+          );
+        });
+
+        ws.on("message", async (data) => {
+          const raw = rawDataToString(data);
+          let payload: MattermostEventPayload;
           try {
-            post = JSON.parse(postData) as MattermostPost;
+            payload = JSON.parse(raw) as MattermostEventPayload;
           } catch {
             return;
           }
-        } else if (typeof postData === "object") {
-          post = postData as MattermostPost;
-        }
-        if (!post) {
-          return;
-        }
-        try {
-          await debouncer.enqueue({ post, payload });
-        } catch (err) {
-          runtime.error?.(`mattermost handler failed: ${String(err)}`);
-        }
-      });
-
-      ws.on("close", (code, reason) => {
-        const message = reason.length > 0 ? reason.toString("utf8") : "";
-        opts.statusSink?.({
-          connected: false,
-          lastDisconnect: {
-            at: Date.now(),
-            status: code,
-            error: message || undefined,
-          },
+          if (payload.event !== "posted") {
+            return;
+          }
+          const postData = payload.data?.post;
+          if (!postData) {
+            return;
+          }
+          let post: MattermostPost | null = null;
+          if (typeof postData === "string") {
+            try {
+              post = JSON.parse(postData) as MattermostPost;
+            } catch {
+              return;
+            }
+          } else if (typeof postData === "object") {
+            post = postData as MattermostPost;
+          }
+          if (!post) {
+            return;
+          }
+          try {
+            await debouncer.enqueue({ post, payload });
+          } catch (err) {
+            runtime.error?.(`mattermost handler failed: ${String(err)}`);
+          }
         });
-        opts.abortSignal?.removeEventListener("abort", onAbort);
-        resolve();
-      });
 
-      ws.on("error", (err) => {
-        runtime.error?.(`mattermost websocket error: ${String(err)}`);
-        opts.statusSink?.({
-          lastError: String(err),
+        ws.on("close", (code, reason) => {
+          const message = reason.length > 0 ? reason.toString("utf8") : "";
+          opts.statusSink?.({
+            connected: false,
+            lastDisconnect: {
+              at: Date.now(),
+              status: code,
+              error: message || undefined,
+            },
+          });
+          if (opened) {
+            resolve();
+          } else {
+            reject(new Error(`websocket closed before open (code ${code})`));
+          }
+        });
+
+        ws.on("error", (err) => {
+          runtime.error?.(`mattermost websocket error: ${String(err)}`);
+          opts.statusSink?.({
+            lastError: String(err),
+          });
+          ws.close();
         });
       });
-    });
+    } finally {
+      opts.abortSignal?.removeEventListener("abort", onAbort);
+    }
   };
 
-  while (!opts.abortSignal?.aborted) {
-    await connectOnce();
-    if (opts.abortSignal?.aborted) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
+  await runWithReconnect(connectOnce, {
+    abortSignal: opts.abortSignal,
+    onError: (err) => {
+      runtime.error?.(`mattermost connection failed: ${String(err)}`);
+      opts.statusSink?.({ lastError: String(err), connected: false });
+    },
+    onReconnect: (delayMs) => {
+      runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
+    },
+  });
 }
