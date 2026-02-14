@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { monitorSignalProvider } from "./monitor.js";
 import {
   config,
   flush,
@@ -9,6 +8,9 @@ import {
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
+
+// Import after the harness registers `vi.mock(...)` for Signal internals.
+const { monitorSignalProvider } = await import("./monitor.js");
 
 const { replyMock, sendMock, streamMock, upsertPairingRequestMock } =
   getSignalToolResultTestMocks();

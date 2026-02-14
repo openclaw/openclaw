@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { normalizeE164 } from "../utils.js";
-import { monitorSignalProvider } from "./monitor.js";
 import {
   config,
   flush,
@@ -13,6 +12,9 @@ import {
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
+
+// Import after the harness registers `vi.mock(...)` for Signal internals.
+const { monitorSignalProvider } = await import("./monitor.js");
 
 const {
   replyMock,
