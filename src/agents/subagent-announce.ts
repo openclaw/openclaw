@@ -9,6 +9,7 @@ import {
   resolveSessionFilePath,
   resolveStorePath,
 } from "../config/sessions.js";
+import { resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { callGateway } from "../gateway/call.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { normalizeMainKey } from "../routing/session-key.js";
@@ -25,7 +26,11 @@ import {
   queueEmbeddedPiMessage,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded.js";
+import { listAgentIds, resolveAgentConfig } from "./agent-scope.js";
+import { buildDelegationPrompt } from "./delegation-prompt.js";
+import { resolveMaxChildrenPerAgent, resolveMaxSpawnDepth } from "./recursive-spawn-config.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
+import { getActiveChildCount, listAllSubagentRuns } from "./subagent-registry.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
 function formatTokenCount(value?: number) {
@@ -318,6 +323,21 @@ async function readLatestAssistantReplyWithRetry(params: {
   return reply;
 }
 
+function resolveModelLabel(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const primary = (value as { primary?: unknown }).primary;
+  if (typeof primary === "string" && primary.trim()) {
+    return primary.trim();
+  }
+  return undefined;
+}
+
 export function buildSubagentSystemPrompt(params: {
   requesterSessionKey?: string;
   requesterOrigin?: DeliveryContext;
@@ -325,6 +345,7 @@ export function buildSubagentSystemPrompt(params: {
   label?: string;
   task?: string;
 }) {
+  const childDepth = getSubagentDepth(params.childSessionKey);
   const taskText =
     typeof params.task === "string" && params.task.trim()
       ? params.task.replace(/\s+/g, " ").trim()
@@ -365,16 +386,52 @@ export function buildSubagentSystemPrompt(params: {
       ? `- Requester channel: ${params.requesterOrigin.channel}.`
       : undefined,
     `- Your session: ${params.childSessionKey}.`,
-    (() => {
-      const depth = getSubagentDepth(params.childSessionKey);
-      if (depth > 1) {
-        return `- Depth: ${depth} (your results go to your parent subagent, not the end user). You CAN spawn sub-subagents if needed.`;
-      }
-      return undefined;
-    })(),
+    childDepth > 1
+      ? `- Depth: ${childDepth} (your results go to your parent subagent, not the end user).`
+      : undefined,
     "",
   ].filter((line): line is string => line !== undefined);
-  return lines.join("\n");
+  const prompt = lines.join("\n");
+  if (childDepth <= 1) {
+    return prompt;
+  }
+
+  const cfg = loadConfig();
+  const childAgentId = resolveAgentIdFromSessionKey(params.childSessionKey);
+  const maxDepth = resolveMaxSpawnDepth(cfg, childAgentId);
+  const maxChildrenPerAgent = resolveMaxChildrenPerAgent(cfg, childAgentId);
+  const activeChildren = getActiveChildCount(params.childSessionKey);
+  const childSlotsAvailable = Math.max(0, maxChildrenPerAgent - activeChildren);
+
+  const maxConcurrent = resolveSubagentMaxConcurrent(cfg);
+  const activeGlobal = listAllSubagentRuns().filter((entry) => !entry.endedAt).length;
+  const globalSlotsAvailable = Math.max(0, maxConcurrent - activeGlobal);
+
+  const fleet = listAgentIds(cfg).map((id) => {
+    const agentConfig = resolveAgentConfig(cfg, id);
+    const model = resolveModelLabel(agentConfig?.model);
+    const fallbackDescription = cfg.agents?.list?.find(
+      (entry) => entry?.id?.trim().toLowerCase() === id.toLowerCase(),
+    )?.description;
+    return {
+      id,
+      model,
+      description: fallbackDescription ?? agentConfig?.name,
+    };
+  });
+
+  const parentKey = params.requesterSessionKey?.trim() || "unknown";
+  const delegationPrompt = buildDelegationPrompt({
+    depth: childDepth,
+    maxDepth,
+    parentKey,
+    childSlotsAvailable,
+    maxChildrenPerAgent,
+    globalSlotsAvailable,
+    maxConcurrent,
+    fleet,
+  });
+  return `${prompt}\n${delegationPrompt}`;
 }
 
 export type SubagentRunOutcome = {
