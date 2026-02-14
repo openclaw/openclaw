@@ -38,6 +38,11 @@ vi.mock("@mariozechner/pi-coding-agent", () => ({
   },
 }));
 
+// Avoid importing the full chat command registry for reserved-name calculation.
+vi.mock("./commands-registry.js", () => ({
+  listChatCommands: () => [],
+}));
+
 let listSkillCommandsForAgents: typeof import("./skill-commands.js").listSkillCommandsForAgents;
 let resolveSkillCommandInvocation: typeof import("./skill-commands.js").resolveSkillCommandInvocation;
 
