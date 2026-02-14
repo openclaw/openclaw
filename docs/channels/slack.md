@@ -137,17 +137,18 @@ For actions/directory reads, user token can be preferred when configured. For wr
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.slack.dm.policy` controls DM access:
+    `channels.slack.dmPolicy` controls DM access (legacy: `channels.slack.dm.policy`):
 
     - `pairing` (default)
     - `allowlist`
-    - `open` (requires `dm.allowFrom` to include `"*"`)
+    - `open` (requires `channels.slack.allowFrom` to include `"*"`; legacy: `channels.slack.dm.allowFrom`)
     - `disabled`
 
     DM flags:
 
     - `dm.enabled` (default true)
-    - `dm.allowFrom`
+    - `channels.slack.allowFrom` (preferred)
+    - `dm.allowFrom` (legacy)
     - `dm.groupEnabled` (group DMs default false)
     - `dm.groupChannels` (optional MPIM allowlist)
 
@@ -399,7 +400,7 @@ openclaw doctor
     Check:
 
     - `channels.slack.dm.enabled`
-    - `channels.slack.dm.policy`
+    - `channels.slack.dmPolicy` (or legacy `channels.slack.dm.policy`)
     - pairing approvals / allowlist entries
 
 ```bash
