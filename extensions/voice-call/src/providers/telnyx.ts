@@ -22,8 +22,8 @@ import type { VoiceCallProvider } from "./base.js";
  * @see https://developers.telnyx.com/docs/api/v2/call-control
  */
 export interface TelnyxProviderOptions {
-  /** Allow unsigned webhooks when no public key is configured */
-  allowUnsignedWebhooks?: boolean;
+  /** Skip webhook signature verification (development only, NOT for production) */
+  skipVerification?: boolean;
 }
 
 export class TelnyxProvider implements VoiceCallProvider {
@@ -82,11 +82,12 @@ export class TelnyxProvider implements VoiceCallProvider {
    * Verify Telnyx webhook signature using Ed25519.
    */
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
+    if (this.options.skipVerification) {
+      console.warn("[telnyx] Webhook verification skipped (skipSignatureVerification=true)");
+      return { ok: true, reason: "verification skipped (skipSignatureVerification=true)" };
+    }
+
     if (!this.publicKey) {
-      if (this.options.allowUnsignedWebhooks) {
-        console.warn("[telnyx] Webhook verification skipped (no public key configured)");
-        return { ok: true, reason: "verification skipped (no public key configured)" };
-      }
       return {
         ok: false,
         reason: "Missing telnyx.publicKey (configure to verify webhooks)",

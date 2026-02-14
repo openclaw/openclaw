@@ -57,7 +57,7 @@ export function handleMessageUpdate(
     return;
   }
 
-  ctx.state.lastAssistant = msg;
+  ctx.noteLastAssistant(msg);
 
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =
@@ -200,7 +200,7 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
-  ctx.state.lastAssistant = assistantMessage;
+  ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   promoteThinkingTagsToBlocks(assistantMessage);
 

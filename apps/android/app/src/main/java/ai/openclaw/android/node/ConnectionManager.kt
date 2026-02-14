@@ -49,7 +49,7 @@ class ConnectionManager(
         return GatewayTlsParams(
           required = true,
           expectedFingerprint = null,
-          allowTOFU = true,
+          allowTOFU = false,
           stableId = stableId,
         )
       }
@@ -70,7 +70,7 @@ class ConnectionManager(
         return GatewayTlsParams(
           required = true,
           expectedFingerprint = null,
-          allowTOFU = true,
+          allowTOFU = false,
           stableId = stableId,
         )
       }
