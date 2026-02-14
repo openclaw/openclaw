@@ -100,6 +100,11 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     deps.chatLog.addSystem(`[local] $ ${cmd}`);
     deps.tui.requestRender();
 
+    const appendWithCap = (text: string, chunk: string) => {
+      const combined = text + chunk;
+      return combined.length > maxChars ? combined.slice(-maxChars) : combined;
+    };
+
     await new Promise<void>((resolve) => {
       const child = spawnCommand(cmd, {
         shell: true,
@@ -110,10 +115,10 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (buf) => {
-        stdout += buf.toString("utf8");
+        stdout = appendWithCap(stdout, buf.toString("utf8"));
       });
       child.stderr.on("data", (buf) => {
-        stderr += buf.toString("utf8");
+        stderr = appendWithCap(stderr, buf.toString("utf8"));
       });
 
       child.on("close", (code, signal) => {
