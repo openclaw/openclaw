@@ -21,7 +21,7 @@ Compaction **persists** in the session’s JSONL history.
 
 ## Configuration
 
-Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.).
+Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.). See [Session Management & Compaction (Deep Dive)](/reference/session-management-compaction) for full details.
 
 ## Auto-compaction (default on)
 
