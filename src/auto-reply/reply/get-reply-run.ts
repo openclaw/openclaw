@@ -42,7 +42,6 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
-  resolveInboundTime,
   type InboundTimeParams,
 } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -196,15 +195,16 @@ export async function runPreparedReply(
     lastTimeSentAt: sessionEntry?.lastInboundTimeSentAt,
     lastDateSentAt: sessionEntry?.lastInboundTimeDateSentAt,
   };
-  const inboundMetaPrompt = buildInboundMetaSystemPrompt(
+  const inboundMetaResult = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     inboundTimeParams,
   );
 
   // Update session entry with inbound time tracking
+  // Reuse the timeResult from buildInboundMetaSystemPrompt to avoid duplicate Date.now() calls
   const currentTimestamp = sessionCtx.Timestamp ?? Date.now();
-  const inboundTimeResult = resolveInboundTime(currentTimestamp, inboundTimeParams);
-  if (inboundTimeResult.value && sessionEntry && sessionStore && sessionKey) {
+  const inboundTimeResult = inboundMetaResult.timeResult;
+  if (inboundTimeResult?.value && sessionEntry && sessionStore && sessionKey) {
     sessionEntry.lastInboundTimeSentAt = currentTimestamp;
     if (inboundTimeResult.isFullDate) {
       sessionEntry.lastInboundTimeDateSentAt = currentTimestamp;
@@ -218,7 +218,7 @@ export async function runPreparedReply(
       });
     }
   }
-  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
+  const extraSystemPrompt = [inboundMetaResult.prompt, groupChatContext, groupIntro, groupSystemPrompt]
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";

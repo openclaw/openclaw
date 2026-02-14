@@ -54,7 +54,7 @@ vi.mock("./groups.js", () => ({
 }));
 
 vi.mock("./inbound-meta.js", () => ({
-  buildInboundMetaSystemPrompt: vi.fn().mockReturnValue(""),
+  buildInboundMetaSystemPrompt: vi.fn().mockReturnValue({ prompt: "", timeResult: undefined }),
   buildInboundUserContextPrefix: vi.fn().mockReturnValue(""),
 }));
 
