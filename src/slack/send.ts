@@ -33,6 +33,16 @@ type SlackSendOpts = {
   mediaUrl?: string;
   client?: WebClient;
   threadTs?: string;
+  /**
+   * Origin agent ID for agent-to-agent messaging (#15836).
+   * When provided, included in message metadata for routing.
+   */
+  originAgentId?: string;
+  /**
+   * Origin session key for agent-to-agent messaging (#15836).
+   * When provided, included in message metadata for routing.
+   */
+  originSessionKey?: string;
 };
 
 export type SlackSendResult = {
@@ -170,6 +180,18 @@ export async function sendMessageSlack(
       ? account.config.mediaMaxMb * 1024 * 1024
       : undefined;
 
+  // Build metadata for agent-to-agent messaging (#15836)
+  const metadata = opts.originSessionKey
+    ? {
+        event_type: "agent_message",
+        event_payload: {
+          originAgent: opts.originAgentId ?? "unknown",
+          originSession: opts.originSessionKey,
+          timestamp: Date.now(),
+        },
+      }
+    : undefined;
+
   let lastMessageId = "";
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = chunks;
@@ -186,6 +208,7 @@ export async function sendMessageSlack(
         channel: channelId,
         text: chunk,
         thread_ts: opts.threadTs,
+        ...(metadata ? { metadata } : {}),
       });
       lastMessageId = response.ts ?? lastMessageId;
     }
@@ -195,6 +218,7 @@ export async function sendMessageSlack(
         channel: channelId,
         text: chunk,
         thread_ts: opts.threadTs,
+        ...(metadata ? { metadata } : {}),
       });
       lastMessageId = response.ts ?? lastMessageId;
     }

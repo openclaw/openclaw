@@ -94,9 +94,17 @@ export async function prepareSlackMessage(params: {
 
   const isBotMessage = Boolean(message.bot_id);
   if (isBotMessage) {
-    if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
+    // Check for agent origin metadata in the message
+    // This allows messages from other agents to be routed to bound sessions (#15836)
+    const agentOrigin = (message as unknown as { metadata?: { event_payload?: { originSession?: string } } }).metadata?.event_payload?.originSession;
+    const isOwnMessage = message.user && ctx.botUserId && message.user === ctx.botUserId;
+    
+    // If it's our own message without origin metadata, it's an echo - drop it
+    // If it has origin metadata, it's from another agent - process it for routing
+    if (isOwnMessage && !agentOrigin) {
       return null;
     }
+    
     if (!allowBots) {
       logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
       return null;
