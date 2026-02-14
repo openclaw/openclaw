@@ -55,6 +55,12 @@ For threat model + hardening guidance (including `openclaw security audit --deep
 
 - `https://docs.openclaw.ai/gateway/security`
 
+### Tool filesystem hardening
+
+- `tools.exec.applyPatch.workspaceOnly: true` (recommended): keeps `apply_patch` writes/deletes within the configured workspace directory.
+- `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths to the workspace directory.
+- Avoid setting `tools.exec.applyPatch.workspaceOnly: false` unless you fully trust who can trigger tool execution.
+
 ### Web Interface Safety
 
 OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for **local use only**.
