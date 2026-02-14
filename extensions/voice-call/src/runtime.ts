@@ -112,6 +112,12 @@ export async function createVoiceCallRuntime(params: {
     throw new Error("Voice call disabled. Enable the plugin entry in config.");
   }
 
+  if (config.skipSignatureVerification) {
+    log.warn(
+      "[voice-call] SECURITY WARNING: skipSignatureVerification=true disables webhook signature verification (development only). Do not use in production.",
+    );
+  }
+
   const validation = validateProviderConfig(config);
   if (!validation.valid) {
     throw new Error(`Invalid voice-call config: ${validation.errors.join("; ")}`);
