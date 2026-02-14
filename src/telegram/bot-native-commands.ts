@@ -366,25 +366,26 @@ export const registerTelegramNativeCommands = ({
     ...pluginCommands,
     ...customCommands,
   ];
-  // Telegram Bot API limits commands to 100 per scope.
-  // Truncate with a warning rather than failing with BOT_COMMANDS_TOO_MUCH.
   const TELEGRAM_MAX_COMMANDS = 100;
   if (allCommandsFull.length > TELEGRAM_MAX_COMMANDS) {
     runtime.log?.(
-      `telegram: truncating ${allCommandsFull.length} commands to ${TELEGRAM_MAX_COMMANDS} (Telegram Bot API limit)`,
+      `Telegram limits bots to ${TELEGRAM_MAX_COMMANDS} commands. ` +
+        `${allCommandsFull.length} configured; registering first ${TELEGRAM_MAX_COMMANDS}. ` +
+        `Use channels.telegram.commands.native: false to disable, or reduce skill/custom commands.`,
     );
   }
-  const allCommands = allCommandsFull.slice(0, TELEGRAM_MAX_COMMANDS);
+  // Telegram only limits the setMyCommands payload (menu entries).
+  const commandsToRegister = allCommandsFull.slice(0, TELEGRAM_MAX_COMMANDS);
 
   // Clear stale commands before registering new ones to prevent
   // leftover commands from deleted skills persisting across restarts (#5717).
   // Chain delete → set so a late-resolving delete cannot wipe newly registered commands.
   const registerCommands = () => {
-    if (allCommands.length > 0) {
+    if (commandsToRegister.length > 0) {
       withTelegramApiErrorLogging({
         operation: "setMyCommands",
         runtime,
-        fn: () => bot.api.setMyCommands(allCommands),
+        fn: () => bot.api.setMyCommands(commandsToRegister),
       }).catch(() => {});
     }
   };
@@ -401,7 +402,7 @@ export const registerTelegramNativeCommands = ({
     registerCommands();
   }
 
-  if (allCommands.length > 0) {
+  if (commandsToRegister.length > 0) {
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
