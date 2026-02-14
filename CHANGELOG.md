@@ -524,7 +524,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: recover from grammY long-poll timed out errors. (#7466) Thanks @macmimi23.
 - Media understanding: skip binary media from file text extraction. (#7475) Thanks @AlexZhangji.
 - Security: enforce access-group gating for Slack slash commands when channel type lookup fails.
-- Security: require validated shared-secret auth before skipping device identity on gateway connect.
+- Security: require validated shared-secret auth before skipping device identity on gateway connect. Thanks @simecek.
 - Security: guard skill installer downloads with SSRF checks (block private/localhost URLs).
 - Security/Gateway: require `operator.approvals` for in-chat `/approve` when invoked from gateway clients. Thanks @yueyueL.
 - Security: harden Windows exec allowlist; block cmd.exe bypass via single &. Thanks @simecek.
