@@ -3,6 +3,9 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import type { ResolvedBrowserConfig } from "./config.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
+import { isLoopbackHost } from "../gateway/net.js";
+import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
+import { isAuthorizedBrowserRequest } from "./http-auth.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import {
   type BrowserServerState,
@@ -22,9 +25,13 @@ export async function startBrowserBridgeServer(params: {
   host?: string;
   port?: number;
   authToken?: string;
+  authPassword?: string;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
+  if (!isLoopbackHost(host)) {
+    throw new Error(`bridge server must bind to loopback host (got ${host})`);
+  }
   const port = params.port ?? 0;
 
   const app = express();
@@ -43,11 +50,14 @@ export async function startBrowserBridgeServer(params: {
   });
   app.use(express.json({ limit: "1mb" }));
 
-  const authToken = params.authToken?.trim();
-  if (authToken) {
+  const authToken = params.authToken?.trim() || undefined;
+  const authPassword = params.authPassword?.trim() || undefined;
+  if (!authToken && !authPassword) {
+    throw new Error("bridge server requires auth (authToken/authPassword missing)");
+  }
+  if (authToken || authPassword) {
     app.use((req, res, next) => {
-      const auth = String(req.headers.authorization ?? "").trim();
-      if (auth === `Bearer ${authToken}`) {
+      if (isAuthorizedBrowserRequest(req, { token: authToken, password: authPassword })) {
         return next();
       }
       res.status(401).send("Unauthorized");
@@ -78,11 +88,21 @@ export async function startBrowserBridgeServer(params: {
   state.port = resolvedPort;
   state.resolved.controlPort = resolvedPort;
 
+  setBridgeAuthForPort(resolvedPort, { token: authToken, password: authPassword });
+
   const baseUrl = `http://${host}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, state };
 }
 
 export async function stopBrowserBridgeServer(server: Server): Promise<void> {
+  try {
+    const address = server.address() as AddressInfo | null;
+    if (address?.port) {
+      deleteBridgeAuthForPort(address.port);
+    }
+  } catch {
+    // ignore
+  }
   await new Promise<void>((resolve) => {
     server.close(() => resolve());
   });

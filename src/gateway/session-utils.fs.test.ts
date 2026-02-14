@@ -7,6 +7,7 @@ import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readSessionMessages,
+  readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
@@ -364,6 +365,68 @@ describe("readLastMessagePreviewFromTranscript", () => {
 
     const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
     expect(result).toBe("Valid UTF-8: 你好世界 🌍");
+  });
+});
+
+describe("readSessionTitleFieldsFromTranscript cache", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
+    storePath = path.join(tmpDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("returns cached values without re-reading when unchanged", () => {
+    const sessionId = "test-cache-1";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "Hello world" } }),
+      JSON.stringify({ message: { role: "assistant", content: "Hi there" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const readSpy = vi.spyOn(fs, "readSync");
+
+    const first = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    const readsAfterFirst = readSpy.mock.calls.length;
+    expect(readsAfterFirst).toBeGreaterThan(0);
+
+    const second = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    expect(second).toEqual(first);
+    expect(readSpy.mock.calls.length).toBe(readsAfterFirst);
+  });
+
+  test("invalidates cache when transcript changes", () => {
+    const sessionId = "test-cache-2";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "First" } }),
+      JSON.stringify({ message: { role: "assistant", content: "Old" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const readSpy = vi.spyOn(fs, "readSync");
+
+    const first = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    const readsAfterFirst = readSpy.mock.calls.length;
+    expect(first.lastMessagePreview).toBe("Old");
+
+    fs.appendFileSync(
+      transcriptPath,
+      `\n${JSON.stringify({ message: { role: "assistant", content: "New" } })}`,
+      "utf-8",
+    );
+
+    const second = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    expect(second.lastMessagePreview).toBe("New");
+    expect(readSpy.mock.calls.length).toBeGreaterThan(readsAfterFirst);
   });
 });
 

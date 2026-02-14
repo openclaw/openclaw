@@ -467,10 +467,12 @@ export function createNodesTool(options?: {
             // the gateway and wait for the user to approve/deny via the UI.
             const APPROVAL_TIMEOUT_MS = 120_000;
             const cmdText = command.join(" ");
+            const approvalId = crypto.randomUUID();
             const approvalResult = await callGatewayTool(
               "exec.approval.request",
               { ...gatewayOpts, timeoutMs: APPROVAL_TIMEOUT_MS + 5_000 },
               {
+                id: approvalId,
                 command: cmdText,
                 cwd,
                 host: "node",
@@ -502,6 +504,7 @@ export function createNodesTool(options?: {
               command: "system.run",
               params: {
                 ...runParams,
+                runId: approvalId,
                 approved: true,
                 approvalDecision,
               },

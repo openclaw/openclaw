@@ -24,10 +24,16 @@ export type OverviewProps = {
 
 export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
-    | { uptimeMs?: number; policy?: { tickIntervalMs?: number } }
+    | {
+        uptimeMs?: number;
+        policy?: { tickIntervalMs?: number };
+        authMode?: "none" | "token" | "password" | "trusted-proxy";
+      }
     | undefined;
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : "n/a";
   const tick = snapshot?.policy?.tickIntervalMs ? `${snapshot.policy.tickIntervalMs}ms` : "n/a";
+  const authMode = snapshot?.authMode;
+  const isTrustedProxy = authMode === "trusted-proxy";
   const authHint = (() => {
     if (props.connected || !props.lastError) {
       return null;
@@ -136,29 +142,35 @@ export function renderOverview(props: OverviewProps) {
               placeholder="ws://100.x.y.z:18789"
             />
           </label>
-          <label class="field">
-            <span>Gateway Token</span>
-            <input
-              .value=${props.settings.token}
-              @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({ ...props.settings, token: v });
-              }}
-              placeholder="OPENCLAW_GATEWAY_TOKEN"
-            />
-          </label>
-          <label class="field">
-            <span>Password (not stored)</span>
-            <input
-              type="password"
-              .value=${props.password}
-              @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onPasswordChange(v);
-              }}
-              placeholder="system or shared password"
-            />
-          </label>
+          ${
+            isTrustedProxy
+              ? ""
+              : html`
+                <label class="field">
+                  <span>Gateway Token</span>
+                  <input
+                    .value=${props.settings.token}
+                    @input=${(e: Event) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      props.onSettingsChange({ ...props.settings, token: v });
+                    }}
+                    placeholder="OPENCLAW_GATEWAY_TOKEN"
+                  />
+                </label>
+                <label class="field">
+                  <span>Password (not stored)</span>
+                  <input
+                    type="password"
+                    .value=${props.password}
+                    @input=${(e: Event) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      props.onPasswordChange(v);
+                    }}
+                    placeholder="system or shared password"
+                  />
+                </label>
+              `
+          }
           <label class="field">
             <span>Default Session Key</span>
             <input
@@ -173,7 +185,7 @@ export function renderOverview(props: OverviewProps) {
         <div class="row" style="margin-top: 14px;">
           <button class="btn" @click=${() => props.onConnect()}>Connect</button>
           <button class="btn" @click=${() => props.onRefresh()}>Refresh</button>
-          <span class="muted">Click Connect to apply connection changes.</span>
+          <span class="muted">${isTrustedProxy ? "Authenticated via trusted proxy." : "Click Connect to apply connection changes."}</span>
         </div>
       </div>
 
