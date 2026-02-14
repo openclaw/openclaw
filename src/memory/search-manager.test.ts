@@ -53,6 +53,8 @@ const fallbackManager = {
   close: vi.fn(async () => {}),
 };
 
+const mockMemoryIndexGet = vi.fn(async () => fallbackManager);
+
 vi.mock("./qmd-manager.js", () => ({
   QmdMemoryManager: {
     create: vi.fn(async () => mockPrimary),
@@ -61,7 +63,7 @@ vi.mock("./qmd-manager.js", () => ({
 
 vi.mock("./manager.js", () => ({
   MemoryIndexManager: {
-    get: vi.fn(async () => fallbackManager),
+    get: mockMemoryIndexGet,
   },
 }));
 
@@ -83,6 +85,8 @@ beforeEach(() => {
   fallbackManager.probeEmbeddingAvailability.mockClear();
   fallbackManager.probeVectorAvailability.mockClear();
   fallbackManager.close.mockClear();
+  mockMemoryIndexGet.mockReset();
+  mockMemoryIndexGet.mockResolvedValue(fallbackManager);
   QmdMemoryManager.create.mockClear();
 });
 
@@ -124,6 +128,32 @@ describe("getMemorySearchManager caching", () => {
     expect(second.manager).not.toBe(first.manager);
     // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(QmdMemoryManager.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache status-only qmd managers", async () => {
+    const agentId = "status-agent";
+    const cfg = {
+      memory: { backend: "qmd", qmd: {} },
+      agents: { list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }] },
+    } as const;
+
+    const first = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+    const second = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+
+    expect(first.manager).toBeTruthy();
+    expect(second.manager).toBeTruthy();
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(QmdMemoryManager.create).toHaveBeenCalledTimes(2);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(QmdMemoryManager.create).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ agentId, mode: "status" }),
+    );
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(QmdMemoryManager.create).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ agentId, mode: "status" }),
+    );
   });
 
   it("does not evict a newer cached wrapper when closing an older failed wrapper", async () => {

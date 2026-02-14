@@ -44,18 +44,21 @@ type SessionExporterConfig = {
   collectionName: string;
 };
 
+type QmdManagerMode = "full" | "status";
+
 export class QmdMemoryManager implements MemorySearchManager {
   static async create(params: {
     cfg: OpenClawConfig;
     agentId: string;
     resolved: ResolvedMemoryBackendConfig;
+    mode?: QmdManagerMode;
   }): Promise<QmdMemoryManager | null> {
     const resolved = params.resolved.qmd;
     if (!resolved) {
       return null;
     }
     const manager = new QmdMemoryManager({ cfg: params.cfg, agentId: params.agentId, resolved });
-    await manager.initialize();
+    await manager.initialize(params.mode ?? "full");
     return manager;
   }
 
@@ -143,7 +146,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private async initialize(): Promise<void> {
+  private async initialize(mode: QmdManagerMode): Promise<void> {
+    this.bootstrapCollections();
+    if (mode === "status") {
+      return;
+    }
+
     await fs.mkdir(this.xdgConfigHome, { recursive: true });
     await fs.mkdir(this.xdgCacheHome, { recursive: true });
     await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
@@ -156,7 +164,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     // isolated while models are shared.
     await this.symlinkSharedModels();
 
-    this.bootstrapCollections();
     await this.ensureCollections();
 
     if (this.qmd.update.onBoot) {

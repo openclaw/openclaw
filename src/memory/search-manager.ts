@@ -19,13 +19,17 @@ export type MemorySearchManagerResult = {
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
+    const statusOnly = params.purpose === "status";
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
-    const cached = QMD_MANAGER_CACHE.get(cacheKey);
-    if (cached) {
-      return { manager: cached };
+    if (!statusOnly) {
+      const cached = QMD_MANAGER_CACHE.get(cacheKey);
+      if (cached) {
+        return { manager: cached };
+      }
     }
     try {
       const { QmdMemoryManager } = await import("./qmd-manager.js");
@@ -33,8 +37,12 @@ export async function getMemorySearchManager(params: {
         cfg: params.cfg,
         agentId: params.agentId,
         resolved,
+        mode: statusOnly ? "status" : "full",
       });
       if (primary) {
+        if (statusOnly) {
+          return { manager: primary };
+        }
         const wrapper = new FallbackMemoryManager(
           {
             primary,
