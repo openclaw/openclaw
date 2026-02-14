@@ -57,6 +57,10 @@ export type ContextDecayConfig = {
   summarizeWindowAfterTurns?: number;
   /** Number of turns per group-summarization window (default: 4). */
   summarizeWindowSize?: number;
+  /** Swap tool results to file after N turns (replaces content with file path + hint). */
+  swapToolResultsAfterTurns?: number;
+  /** Minimum tool result size in chars to qualify for file swap (default: 256). */
+  swapMinChars?: number;
   /** Replace tool results with placeholder after N turns. */
   stripToolResultsAfterTurns?: number;
   /** Hard cap on total messages in context. */

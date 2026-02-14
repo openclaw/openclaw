@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ContextDecayConfig } from "../../../config/types.agent-defaults.js";
+import type { SwappedFileStore } from "../../context-decay/file-store.js";
 import type { GroupSummaryStore, SummaryStore } from "../../context-decay/summary-store.js";
 import { computeTurnAges } from "../../context-decay/turn-ages.js";
 import { repairToolUseResultPairing } from "../../session-transcript-repair.js";
@@ -12,6 +13,7 @@ function isEnabled(value: number | undefined | null): value is number {
  * Apply graduated context decay to messages.
  * Processing order:
  * 1. Strip thinking blocks from old assistant messages
+ * 1.5. Apply file swaps for aged tool results
  * 2. Apply group summaries (replace anchor + absorbed messages in-place)
  * 3. Apply pre-computed individual summaries for old tool results (skip grouped messages)
  * 4. Strip tool results past the strip threshold
@@ -23,8 +25,9 @@ export function applyContextDecay(params: {
   config: ContextDecayConfig;
   summaryStore: SummaryStore;
   groupSummaryStore?: GroupSummaryStore;
+  swappedFileStore?: SwappedFileStore;
 }): AgentMessage[] {
-  const { messages, config, summaryStore, groupSummaryStore } = params;
+  const { messages, config, summaryStore, groupSummaryStore, swappedFileStore } = params;
 
   if (messages.length === 0) {
     return messages;
@@ -32,12 +35,13 @@ export function applyContextDecay(params: {
 
   // Check if any decay is actually enabled
   const hasStripThinking = isEnabled(config.stripThinkingAfterTurns);
+  const hasSwap = isEnabled(config.swapToolResultsAfterTurns) && swappedFileStore && Object.keys(swappedFileStore).length > 0;
   const hasSummarize = isEnabled(config.summarizeToolResultsAfterTurns);
   const hasGroupSummarize = isEnabled(config.summarizeWindowAfterTurns);
   const hasStrip = isEnabled(config.stripToolResultsAfterTurns);
   const hasMaxMessages = isEnabled(config.maxContextMessages);
 
-  if (!hasStripThinking && !hasSummarize && !hasGroupSummarize && !hasStrip && !hasMaxMessages) {
+  if (!hasStripThinking && !hasSwap && !hasSummarize && !hasGroupSummarize && !hasStrip && !hasMaxMessages) {
     return messages;
   }
 
@@ -88,6 +92,28 @@ export function applyContextDecay(params: {
           current = { ...current, content: filtered };
           mutated = true;
         }
+      }
+    }
+
+    // 1.5. Apply file swaps for aged tool results
+    if (
+      hasSwap &&
+      !anchorIndices.has(idx) &&
+      !absorbedIndices.has(idx) &&
+      current.role === "toolResult" &&
+      age >= config.swapToolResultsAfterTurns! &&
+      swappedFileStore![idx]
+    ) {
+      // Only apply swap if not past summarize or strip threshold (those take precedence)
+      const skipForSummarize = hasSummarize && age >= config.summarizeToolResultsAfterTurns! && summaryStore[idx];
+      const skipForStrip = hasStrip && age >= config.stripToolResultsAfterTurns!;
+      if (!skipForSummarize && !skipForStrip) {
+        const entry = swappedFileStore![idx];
+        current = {
+          ...current,
+          content: [{ type: "text", text: `[Tool result saved to ${entry.filePath}]\n${entry.hint}` }],
+        } as AgentMessage;
+        mutated = true;
       }
     }
 

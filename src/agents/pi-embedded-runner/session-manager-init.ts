@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { clearSwappedFileStore } from "../context-decay/file-store.js";
 import { clearGroupSummaryStore, clearSummaryStore } from "../context-decay/summary-store.js";
 
 type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
@@ -48,6 +49,7 @@ export async function prepareSessionManagerForRun(params: {
     // Clear stale summary stores — indices are positional and become invalid on reset.
     await clearSummaryStore(params.sessionFile);
     await clearGroupSummaryStore(params.sessionFile);
+    await clearSwappedFileStore(params.sessionFile);
     sm.fileEntries = [header];
     sm.byId?.clear?.();
     sm.labelsById?.clear?.();

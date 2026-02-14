@@ -48,6 +48,14 @@ function mergeDecayConfig(
     base?.summarizeWindowSize,
     override?.summarizeWindowSize,
   );
+  merged.swapToolResultsAfterTurns = pickPositiveInt(
+    base?.swapToolResultsAfterTurns,
+    override?.swapToolResultsAfterTurns,
+  );
+  merged.swapMinChars = pickPositiveInt(
+    base?.swapMinChars,
+    override?.swapMinChars,
+  );
   merged.stripToolResultsAfterTurns = pickPositiveInt(
     base?.stripToolResultsAfterTurns,
     override?.stripToolResultsAfterTurns,
@@ -63,6 +71,7 @@ function mergeDecayConfig(
   // Check if anything is actually enabled
   const hasAnything =
     merged.stripThinkingAfterTurns !== undefined ||
+    merged.swapToolResultsAfterTurns !== undefined ||
     merged.summarizeToolResultsAfterTurns !== undefined ||
     merged.summarizeWindowAfterTurns !== undefined ||
     merged.stripToolResultsAfterTurns !== undefined ||
@@ -85,6 +94,24 @@ function enforceDecayOrdering(config: ContextDecayConfig): ContextDecayConfig {
   const summarize = config.summarizeToolResultsAfterTurns;
   const groupSummarize = config.summarizeWindowAfterTurns;
   const strip = config.stripToolResultsAfterTurns;
+
+  // Enforce swap < summarize. Swap must fire before summarize so that swapped results
+  // get replaced by summaries when they age past the summarize threshold.
+  const swap = config.swapToolResultsAfterTurns;
+  if (typeof swap === "number" && typeof summarize === "number" && swap >= summarize) {
+    const clamped = summarize - 1 >= 1 ? summarize - 1 : 1;
+    config.swapToolResultsAfterTurns = clamped;
+    log.info(
+      `context-decay: swapToolResultsAfterTurns ${swap} -> ${clamped} (must be < summarizeToolResultsAfterTurns=${summarize})`,
+    );
+  }
+  if (typeof swap === "number" && typeof strip === "number" && swap >= strip) {
+    const clamped = strip - 1 >= 1 ? strip - 1 : 1;
+    config.swapToolResultsAfterTurns = clamped;
+    log.info(
+      `context-decay: swapToolResultsAfterTurns ${swap} -> ${clamped} (must be < stripToolResultsAfterTurns=${strip})`,
+    );
+  }
 
   // Only enforce strip > individual summarize. Individual summaries are consumed
   // by the VIEW, so stripping before summarization wastes API calls.
@@ -198,6 +225,8 @@ export function isContextDecayActive(config: ContextDecayConfig | undefined): bo
   }
   return (
     (typeof config.stripThinkingAfterTurns === "number" && config.stripThinkingAfterTurns >= 1) ||
+    (typeof config.swapToolResultsAfterTurns === "number" &&
+      config.swapToolResultsAfterTurns >= 1) ||
     (typeof config.summarizeToolResultsAfterTurns === "number" &&
       config.summarizeToolResultsAfterTurns >= 1) ||
     (typeof config.summarizeWindowAfterTurns === "number" &&

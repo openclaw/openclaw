@@ -8,6 +8,7 @@ import {
   resolveContextDecayConfig,
   isContextDecayActive,
 } from "../context-decay/resolve-config.js";
+import { loadSwappedFileStoreSync } from "../context-decay/file-store.js";
 import { loadGroupSummaryStoreSync, loadSummaryStoreSync } from "../context-decay/summary-store.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -87,11 +88,13 @@ function buildContextDecayExtension(params: {
 
   const summaryStore = params.sessionFile ? loadSummaryStoreSync(params.sessionFile) : {};
   const groupSummaryStore = params.sessionFile ? loadGroupSummaryStoreSync(params.sessionFile) : [];
+  const swappedFileStore = params.sessionFile ? loadSwappedFileStoreSync(params.sessionFile) : {};
 
   setContextDecayRuntime(params.sessionManager, {
     config: config!,
     summaryStore,
     groupSummaryStore,
+    swappedFileStore,
   });
 
   return {

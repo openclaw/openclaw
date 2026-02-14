@@ -20,6 +20,7 @@ export default function contextDecayExtension(api: ExtensionAPI): void {
       config: runtime.config,
       summaryStore: runtime.summaryStore,
       groupSummaryStore: runtime.groupSummaryStore,
+      swappedFileStore: runtime.swappedFileStore,
     });
 
     if (next === event.messages) {

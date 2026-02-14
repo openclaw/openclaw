@@ -1,4 +1,5 @@
 import type { ContextDecayConfig } from "../../../config/types.agent-defaults.js";
+import type { SwappedFileStore } from "../../context-decay/file-store.js";
 import type { GroupSummaryStore, SummaryStore } from "../../context-decay/summary-store.js";
 
 /** Per-session runtime state for the context-decay extension. */
@@ -6,6 +7,7 @@ export type ContextDecayRuntimeValue = {
   config: ContextDecayConfig;
   summaryStore: SummaryStore;
   groupSummaryStore: GroupSummaryStore;
+  swappedFileStore: SwappedFileStore;
 };
 
 const REGISTRY = new WeakMap<object, ContextDecayRuntimeValue>();
