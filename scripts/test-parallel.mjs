@@ -139,7 +139,8 @@ const maxWorkersForRun = (name) => {
     return 1;
   }
   if (name === "unit-isolated") {
-    return 1;
+    // Local: allow a bit of parallelism while keeping this run stable.
+    return Math.min(4, localWorkers);
   }
   if (name === "extensions") {
     return defaultExtensionsWorkers;
