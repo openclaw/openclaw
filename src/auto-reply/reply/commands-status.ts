@@ -15,6 +15,7 @@ import {
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import { resolveThinkingAwareModelRef } from "../../agents/model-selection-thinking.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
@@ -211,13 +212,20 @@ export async function buildStatusReply(params: {
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
   const agentDefaults = cfg.agents?.defaults ?? {};
+  const effectiveThink = resolvedThinkLevel ?? (await resolveDefaultThinkingLevel());
+  const thinkingAwareRef = resolveThinkingAwareModelRef({
+    provider,
+    model,
+    thinkingLevel: effectiveThink,
+  });
+
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
       ...agentDefaults,
       model: {
         ...agentDefaults.model,
-        primary: `${provider}/${model}`,
+        primary: `${thinkingAwareRef.provider}/${thinkingAwareRef.model}`,
       },
       contextTokens,
       thinkingDefault: agentDefaults.thinkingDefault,
@@ -230,11 +238,11 @@ export async function buildStatusReply(params: {
     sessionScope,
     sessionStorePath: storePath,
     groupActivation,
-    resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
+    resolvedThink: effectiveThink,
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,
-    modelAuth: resolveModelAuthLabel(provider, cfg, sessionEntry, statusAgentDir),
+    modelAuth: resolveModelAuthLabel(thinkingAwareRef.provider, cfg, sessionEntry, statusAgentDir),
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,
