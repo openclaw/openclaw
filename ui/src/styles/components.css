@@ -1394,6 +1394,11 @@
   gap: 3px;
 }
 
+.log-detail-row-inline {
+  display: flex;
+  gap: 16px;
+}
+
 .log-detail-label {
   font-size: 10px;
   font-weight: 600;

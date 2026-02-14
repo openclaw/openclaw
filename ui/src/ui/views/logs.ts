@@ -115,16 +115,18 @@ function renderDetailPanel(entry: LogEntry, requestUpdate: () => void) {
           <div class="log-detail-label">Time</div>
           <div class="log-detail-value mono">${formatFullTime(entry.time)}</div>
         </div>
-        <div class="log-detail-field">
-          <div class="log-detail-label">Level</div>
-          <div class="log-detail-value"><span class="log-level ${entry.level ?? ""}">${entry.level ?? ""}</span></div>
-        </div>
-        ${entry.subsystem ? html`
-          <div class="log-detail-field">
-            <div class="log-detail-label">Subsystem</div>
-            <div class="log-detail-value mono">${entry.subsystem}</div>
+        <div class="log-detail-row-inline">
+          <div class="log-detail-field" style="flex:1">
+            <div class="log-detail-label">Level</div>
+            <div class="log-detail-value"><span class="log-level ${entry.level ?? ""}">${entry.level ?? ""}</span></div>
           </div>
-        ` : nothing}
+          ${entry.subsystem ? html`
+            <div class="log-detail-field" style="flex:2">
+              <div class="log-detail-label">Subsystem</div>
+              <div class="log-detail-value mono">${entry.subsystem}</div>
+            </div>
+          ` : nothing}
+        </div>
         <div class="log-detail-field">
           <div class="log-detail-label">Message</div>
           <div class="log-detail-value mono" style="white-space: pre-wrap; word-break: break-word;">${entry.message ?? ""}</div>
