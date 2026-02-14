@@ -1,6 +1,6 @@
 import fsSync from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -13,7 +13,9 @@ import { resolveUserPath } from "../utils.js";
  */
 export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void> {
   const agentId = resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
   const resolved = resolveMemorySearchConfig(cfg, agentId);
+  const hasRemoteApiKey = Boolean(resolved?.remote?.apiKey?.trim());
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
@@ -41,7 +43,7 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
       return;
     }
     // Remote provider — check for API key
-    if (await hasApiKeyForProvider(resolved.provider, cfg)) {
+    if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
       return;
     }
     const envVar = providerEnvVar(resolved.provider);
@@ -67,7 +69,7 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
     return;
   }
   for (const provider of ["openai", "gemini", "voyage"] as const) {
-    if (await hasApiKeyForProvider(provider, cfg)) {
+    if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
       return;
     }
   }
@@ -111,11 +113,12 @@ function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
 async function hasApiKeyForProvider(
   provider: "openai" | "gemini" | "voyage",
   cfg: OpenClawConfig,
+  agentDir: string,
 ): Promise<boolean> {
   // Map embedding provider names to model-auth provider names
   const authProvider = provider === "gemini" ? "google" : provider;
   try {
-    await resolveApiKeyForProvider({ provider: authProvider, cfg });
+    await resolveApiKeyForProvider({ provider: authProvider, cfg, agentDir });
     return true;
   } catch {
     return false;
