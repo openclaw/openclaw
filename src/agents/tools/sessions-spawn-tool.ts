@@ -12,12 +12,21 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
-import { resolveAgentConfig } from "../agent-scope.js";
+import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
-import { resolveAllowRecursiveSpawn, resolveMaxSpawnDepth } from "../recursive-spawn-config.js";
+import {
+  resolveAllowRecursiveSpawn,
+  resolveMaxChildrenPerAgent,
+  resolveMaxSpawnDepth,
+} from "../recursive-spawn-config.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
-import { registerSubagentRun } from "../subagent-registry.js";
+import {
+  getActiveChildCount,
+  registerSubagentRun,
+  releaseChildSlot,
+  reserveChildSlot,
+} from "../subagent-registry.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   resolveDisplaySessionKey,
@@ -121,31 +130,6 @@ export function createSessionsSpawnTool(opts?: {
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const requesterSessionKey = opts?.agentSessionKey;
-      if (typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)) {
-        const currentDepth = getSubagentDepth(requesterSessionKey);
-        // Compute agent ID early from session key for recursive spawn checks.
-        // requesterAgentId is defined later in the flow, so we parse it here.
-        const earlyAgentId = normalizeAgentId(
-          opts?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterSessionKey)?.agentId,
-        );
-        const allowRecursive = resolveAllowRecursiveSpawn(cfg, earlyAgentId);
-        const maxDepth = resolveMaxSpawnDepth(cfg, earlyAgentId);
-
-        if (!allowRecursive) {
-          return jsonResult({
-            status: "forbidden",
-            error:
-              "Recursive spawning is not enabled. Set subagents.allowRecursiveSpawn: true in config.",
-          });
-        }
-
-        if (currentDepth >= maxDepth) {
-          return jsonResult({
-            status: "forbidden",
-            error: `Maximum subagent depth (${maxDepth}) reached. Cannot spawn deeper.`,
-          });
-        }
-      }
       const requesterInternalKey = requesterSessionKey
         ? resolveInternalSessionKey({
             key: requesterSessionKey,
@@ -165,6 +149,37 @@ export function createSessionsSpawnTool(opts?: {
       const targetAgentId = requestedAgentId
         ? normalizeAgentId(requestedAgentId)
         : requesterAgentId;
+      if (targetAgentId !== requesterAgentId) {
+        const knownIds = new Set(listAgentIds(cfg).map((id) => normalizeAgentId(id)));
+        if (!knownIds.has(normalizeAgentId(targetAgentId))) {
+          return jsonResult({
+            status: "error",
+            error: `Unknown agent: "${targetAgentId}". Available: ${[...knownIds].join(", ")}`,
+          });
+        }
+      }
+
+      if (typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)) {
+        const currentDepth = getSubagentDepth(requesterSessionKey);
+        const allowRecursive = resolveAllowRecursiveSpawn(cfg, requesterAgentId);
+        const maxDepth = resolveMaxSpawnDepth(cfg, requesterAgentId);
+
+        if (!allowRecursive) {
+          return jsonResult({
+            status: "forbidden",
+            error:
+              "Recursive spawning is not enabled. Set subagents.allowRecursiveSpawn: true in config.",
+          });
+        }
+
+        if (currentDepth >= maxDepth) {
+          return jsonResult({
+            status: "forbidden",
+            error: `Maximum subagent depth (${maxDepth}) reached. Cannot spawn deeper.`,
+          });
+        }
+      }
+
       if (targetAgentId !== requesterAgentId) {
         const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
         const allowAny = allowAgents.some((value) => value.trim() === "*");
@@ -186,70 +201,131 @@ export function createSessionsSpawnTool(opts?: {
           });
         }
       }
-      const childSessionKey =
-        typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)
-          ? `${requesterSessionKey}:sub:${crypto.randomUUID()}`
-          : `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
-      const parentDepth = getSubagentDepth(requesterInternalKey);
-      const childDepth = parentDepth > 0 ? parentDepth + 1 : 1;
-      const spawnedByKey = requesterInternalKey;
-      const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
-      const resolvedModel =
-        normalizeModelSelection(modelOverride) ??
-        normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
-        normalizeModelSelection(cfg.agents?.defaults?.subagents?.model);
-
-      const resolvedThinkingDefaultRaw =
-        readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
-        readStringParam(cfg.agents?.defaults?.subagents ?? {}, "thinking");
-
-      let thinkingOverride: string | undefined;
-      const thinkingCandidateRaw = thinkingOverrideRaw || resolvedThinkingDefaultRaw;
-      if (thinkingCandidateRaw) {
-        const normalized = normalizeThinkLevel(thinkingCandidateRaw);
-        if (!normalized) {
-          const { provider, model } = splitModelRef(resolvedModel);
-          const hint = formatThinkingLevels(provider, model);
-          return jsonResult({
-            status: "error",
-            error: `Invalid thinking level "${thinkingCandidateRaw}". Use one of: ${hint}.`,
-          });
-        }
-        thinkingOverride = normalized;
+      const maxChildren = resolveMaxChildrenPerAgent(cfg, requesterAgentId);
+      const reserved = reserveChildSlot(requesterInternalKey, maxChildren);
+      if (!reserved) {
+        const active = getActiveChildCount(requesterInternalKey);
+        return jsonResult({
+          status: "blocked",
+          reason: "parent_limit",
+          error: `Cannot spawn: ${active}/${maxChildren} children active. Wait for a child to complete.`,
+        });
       }
-      if (resolvedModel) {
-        try {
-          await callGateway({
-            method: "sessions.patch",
-            params: { key: childSessionKey, model: resolvedModel },
-            timeoutMs: 10_000,
-          });
-          modelApplied = true;
-        } catch (err) {
-          const messageText =
-            err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-          const recoverable =
-            messageText.includes("invalid model") || messageText.includes("model not allowed");
-          if (!recoverable) {
+
+      let registeredRun = false;
+      try {
+        const childSessionKey =
+          typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)
+            ? `${requesterSessionKey}:sub:${crypto.randomUUID()}`
+            : `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+        const parentDepth = getSubagentDepth(requesterInternalKey);
+        const childDepth = parentDepth > 0 ? parentDepth + 1 : 1;
+        const spawnedByKey = requesterInternalKey;
+        const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+        const resolvedModel =
+          normalizeModelSelection(modelOverride) ??
+          normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
+          normalizeModelSelection(cfg.agents?.defaults?.subagents?.model);
+
+        const resolvedThinkingDefaultRaw =
+          readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
+          readStringParam(cfg.agents?.defaults?.subagents ?? {}, "thinking");
+
+        let thinkingOverride: string | undefined;
+        const thinkingCandidateRaw = thinkingOverrideRaw || resolvedThinkingDefaultRaw;
+        if (thinkingCandidateRaw) {
+          const normalized = normalizeThinkLevel(thinkingCandidateRaw);
+          if (!normalized) {
+            const { provider, model } = splitModelRef(resolvedModel);
+            const hint = formatThinkingLevels(provider, model);
+            return jsonResult({
+              status: "error",
+              error: `Invalid thinking level "${thinkingCandidateRaw}". Use one of: ${hint}.`,
+            });
+          }
+          thinkingOverride = normalized;
+        }
+        if (resolvedModel) {
+          try {
+            await callGateway({
+              method: "sessions.patch",
+              params: { key: childSessionKey, model: resolvedModel },
+              timeoutMs: 10_000,
+            });
+            modelApplied = true;
+          } catch (err) {
+            const messageText =
+              err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+            const recoverable =
+              messageText.includes("invalid model") || messageText.includes("model not allowed");
+            if (!recoverable) {
+              return jsonResult({
+                status: "error",
+                error: messageText,
+                childSessionKey,
+              });
+            }
+            modelWarning = messageText;
+          }
+        }
+        if (thinkingOverride !== undefined) {
+          try {
+            await callGateway({
+              method: "sessions.patch",
+              params: {
+                key: childSessionKey,
+                thinkingLevel: thinkingOverride === "off" ? null : thinkingOverride,
+              },
+              timeoutMs: 10_000,
+            });
+          } catch (err) {
+            const messageText =
+              err instanceof Error ? err.message : typeof err === "string" ? err : "error";
             return jsonResult({
               status: "error",
               error: messageText,
               childSessionKey,
             });
           }
-          modelWarning = messageText;
         }
-      }
-      if (thinkingOverride !== undefined) {
+        const childSystemPrompt = buildSubagentSystemPrompt({
+          requesterSessionKey,
+          requesterOrigin,
+          childSessionKey,
+          label: label || undefined,
+          task,
+        });
+
+        const childIdem = crypto.randomUUID();
+        let childRunId: string = childIdem;
         try {
-          await callGateway({
-            method: "sessions.patch",
+          const response = await callGateway<{ runId: string }>({
+            method: "agent",
             params: {
-              key: childSessionKey,
-              thinkingLevel: thinkingOverride === "off" ? null : thinkingOverride,
+              message: task,
+              sessionKey: childSessionKey,
+              channel: requesterOrigin?.channel,
+              to: requesterOrigin?.to ?? undefined,
+              accountId: requesterOrigin?.accountId ?? undefined,
+              threadId:
+                requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+              idempotencyKey: childIdem,
+              deliver: false,
+              lane: AGENT_LANE_SUBAGENT,
+              extraSystemPrompt: childSystemPrompt,
+              thinking: thinkingOverride,
+              timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
+              label: label || undefined,
+              spawnedBy: spawnedByKey,
+              groupId: opts?.agentGroupId ?? undefined,
+              groupChannel: opts?.agentGroupChannel ?? undefined,
+              groupSpace: opts?.agentGroupSpace ?? undefined,
             },
             timeoutMs: 10_000,
           });
+          if (typeof response?.runId === "string" && response.runId) {
+            childRunId = response.runId;
+          }
         } catch (err) {
           const messageText =
             err instanceof Error ? err.message : typeof err === "string" ? err : "error";
@@ -257,78 +333,36 @@ export function createSessionsSpawnTool(opts?: {
             status: "error",
             error: messageText,
             childSessionKey,
+            runId: childRunId,
           });
         }
-      }
-      const childSystemPrompt = buildSubagentSystemPrompt({
-        requesterSessionKey,
-        requesterOrigin,
-        childSessionKey,
-        label: label || undefined,
-        task,
-      });
 
-      const childIdem = crypto.randomUUID();
-      let childRunId: string = childIdem;
-      try {
-        const response = await callGateway<{ runId: string }>({
-          method: "agent",
-          params: {
-            message: task,
-            sessionKey: childSessionKey,
-            channel: requesterOrigin?.channel,
-            to: requesterOrigin?.to ?? undefined,
-            accountId: requesterOrigin?.accountId ?? undefined,
-            threadId:
-              requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
-            idempotencyKey: childIdem,
-            deliver: false,
-            lane: AGENT_LANE_SUBAGENT,
-            extraSystemPrompt: childSystemPrompt,
-            thinking: thinkingOverride,
-            timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
-            label: label || undefined,
-            spawnedBy: spawnedByKey,
-            groupId: opts?.agentGroupId ?? undefined,
-            groupChannel: opts?.agentGroupChannel ?? undefined,
-            groupSpace: opts?.agentGroupSpace ?? undefined,
-          },
-          timeoutMs: 10_000,
+        registerSubagentRun({
+          runId: childRunId,
+          childSessionKey,
+          requesterSessionKey: requesterInternalKey,
+          requesterOrigin,
+          requesterDisplayKey,
+          task,
+          cleanup,
+          label: label || undefined,
+          runTimeoutSeconds,
+          depth: childDepth,
         });
-        if (typeof response?.runId === "string" && response.runId) {
-          childRunId = response.runId;
-        }
-      } catch (err) {
-        const messageText =
-          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+        registeredRun = true;
+
         return jsonResult({
-          status: "error",
-          error: messageText,
+          status: "accepted",
           childSessionKey,
           runId: childRunId,
+          modelApplied: resolvedModel ? modelApplied : undefined,
+          warning: modelWarning,
         });
+      } finally {
+        if (!registeredRun) {
+          releaseChildSlot(requesterInternalKey);
+        }
       }
-
-      registerSubagentRun({
-        runId: childRunId,
-        childSessionKey,
-        requesterSessionKey: requesterInternalKey,
-        requesterOrigin,
-        requesterDisplayKey,
-        task,
-        cleanup,
-        label: label || undefined,
-        runTimeoutSeconds,
-        depth: childDepth,
-      });
-
-      return jsonResult({
-        status: "accepted",
-        childSessionKey,
-        runId: childRunId,
-        modelApplied: resolvedModel ? modelApplied : undefined,
-        warning: modelWarning,
-      });
     },
   };
 }
