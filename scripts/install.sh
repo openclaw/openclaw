@@ -249,6 +249,11 @@ main() {
     exit 1
   fi
 
+  # Non-root users: use ~/.npm-global so CLI is in a writable location and on PATH
+  if [[ "$(id -u)" -ne 0 && "$SET_NPM_PREFIX" != "1" ]]; then
+    SET_NPM_PREFIX=1
+  fi
+
   if [[ "$INSTALL_METHOD" == "git" ]]; then
     install_from_git
   else
