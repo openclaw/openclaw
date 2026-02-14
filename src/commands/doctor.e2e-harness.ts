@@ -85,6 +85,45 @@ export const callGateway = vi
   .fn()
   .mockRejectedValue(new Error("gateway closed")) as unknown as MockFn;
 
+export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
+  migrated: false,
+  skipped: false,
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
+
+export const detectLegacyStateMigrations = vi.fn().mockResolvedValue({
+  targetAgentId: "main",
+  targetMainKey: "main",
+  targetScope: undefined,
+  stateDir: "/tmp/state",
+  oauthDir: "/tmp/oauth",
+  sessions: {
+    legacyDir: "/tmp/state/sessions",
+    legacyStorePath: "/tmp/state/sessions/sessions.json",
+    targetDir: "/tmp/state/agents/main/sessions",
+    targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
+    hasLegacy: false,
+    legacyKeys: [],
+  },
+  agentDir: {
+    legacyDir: "/tmp/state/agent",
+    targetDir: "/tmp/state/agents/main/agent",
+    hasLegacy: false,
+  },
+  whatsappAuth: {
+    legacyDir: "/tmp/oauth",
+    targetDir: "/tmp/oauth/whatsapp/default",
+    hasLegacy: false,
+  },
+  preview: [],
+}) as unknown as MockFn;
+
+export const runLegacyStateMigrations = vi.fn().mockResolvedValue({
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
+
 vi.mock("@clack/prompts", () => ({
   confirm,
   intro: vi.fn(),
@@ -212,13 +251,33 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
-  autoMigrateLegacyStateDir: vi.fn().mockResolvedValue({
-    migrated: false,
-    skipped: false,
-    changes: [],
-    warnings: [],
-  }),
-  detectLegacyStateMigrations: vi.fn().mockResolvedValue({
+  autoMigrateLegacyStateDir,
+  detectLegacyStateMigrations,
+  runLegacyStateMigrations,
+}));
+
+export async function arrangeLegacyStateMigrationTest() {
+  readConfigFileSnapshot.mockResolvedValue({
+    path: "/tmp/openclaw.json",
+    exists: true,
+    raw: "{}",
+    parsed: {},
+    valid: true,
+    config: {},
+    issues: [],
+    legacyIssues: [],
+  });
+
+  const { doctorCommand } = await import("./doctor.js");
+  const runtime = {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
+
+  detectLegacyStateMigrations.mockClear();
+  runLegacyStateMigrations.mockClear();
+  detectLegacyStateMigrations.mockResolvedValueOnce({
     targetAgentId: "main",
     targetMainKey: "main",
     targetScope: undefined,
@@ -229,7 +288,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
       legacyStorePath: "/tmp/state/sessions/sessions.json",
       targetDir: "/tmp/state/agents/main/sessions",
       targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
-      hasLegacy: false,
+      hasLegacy: true,
       legacyKeys: [],
     },
     agentDir: {
@@ -242,13 +301,22 @@ vi.mock("./doctor-state-migrations.js", () => ({
       targetDir: "/tmp/oauth/whatsapp/default",
       hasLegacy: false,
     },
-    preview: [],
-  }),
-  runLegacyStateMigrations: vi.fn().mockResolvedValue({
-    changes: [],
+    preview: ["- Legacy sessions detected"],
+  });
+  runLegacyStateMigrations.mockResolvedValueOnce({
+    changes: ["migrated"],
     warnings: [],
-  }),
-}));
+  });
+
+  confirm.mockClear();
+
+  return {
+    doctorCommand,
+    runtime,
+    detectLegacyStateMigrations,
+    runLegacyStateMigrations,
+  };
+}
 
 beforeEach(() => {
   confirm.mockReset().mockResolvedValue(true);
