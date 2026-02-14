@@ -10,11 +10,9 @@ export const callGateway: Mock = vi.fn();
 export const runChannelLogin: Mock = vi.fn();
 export const runChannelLogout: Mock = vi.fn();
 export const runTui: Mock = vi.fn();
-
 export const loadAndMaybeMigrateDoctorConfig: Mock = vi.fn();
 export const ensureConfigReady: Mock = vi.fn();
 export const ensurePluginRegistryLoaded: Mock = vi.fn();
-
 export const runtime: { log: Mock; error: Mock; exit: Mock<() => never> } = {
   log: vi.fn(),
   error: vi.fn(),
