@@ -46,8 +46,14 @@ Rules:
 - Entity types: person, organization, location, event, concept
 - Relationship types: WORKS_AT, LIVES_AT, KNOWS, MARRIED_TO, PREFERS, DECIDED, RELATED_TO
 - Confidence: 0.0-1.0
-- Only extract what's explicitly stated or strongly implied
-- Return empty arrays if nothing to extract
+- Only extract SPECIFIC named entities: real people, companies, products, tools, places, events
+- Do NOT extract generic technology terms (python, javascript, docker, linux, api, sql, html, css, json, etc.)
+- Do NOT extract generic concepts (meeting, project, training, email, code, data, server, file, script, etc.)
+- Do NOT extract programming abstractions (function, class, module, async, sync, process, etc.)
+- Good entities: "Tarun", "Abundent Academy", "Tioman Island", "LiveKit", "Neo4j", "Fish Speech S1 Mini"
+- Bad entities: "python", "ai", "automation", "email", "docker", "machine learning", "api"
+- When in doubt, do NOT extract — fewer high-quality entities beat many generic ones
+- Return empty arrays if nothing specific to extract
 - Keep entity descriptions brief (1 sentence max)
 - Category: "preference" for opinions/preferences, "fact" for factual info, "decision" for choices made, "entity" for entity-focused, "other" for miscellaneous`;
 
@@ -113,6 +119,165 @@ export async function extractEntities(
 }
 
 /**
+ * Normalize a tag name: lowercase, collapse hyphens/underscores to spaces,
+ * collapse multiple spaces, trim. Ensures "machine-learning", "machine_learning",
+ * and "machine learning" all resolve to the same tag node.
+ */
+function normalizeTagName(name: string): string {
+  return name.trim().toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Generic terms that should never be extracted as entities.
+ * These are common technology/concept words that the LLM tends to
+ * extract despite prompt instructions. Post-filter is more reliable
+ * than prompt engineering alone.
+ */
+const GENERIC_ENTITY_BLOCKLIST = new Set([
+  // Programming languages & frameworks
+  "python",
+  "javascript",
+  "typescript",
+  "java",
+  "go",
+  "rust",
+  "ruby",
+  "php",
+  "c",
+  "c++",
+  "c#",
+  "swift",
+  "kotlin",
+  "bash",
+  "shell",
+  "html",
+  "css",
+  "sql",
+  "nosql",
+  "json",
+  "xml",
+  "yaml",
+  "react",
+  "vue",
+  "angular",
+  "svelte",
+  "next.js",
+  "express",
+  "fastapi",
+  "django",
+  "flask",
+  // Generic tech concepts
+  "ai",
+  "artificial intelligence",
+  "machine learning",
+  "deep learning",
+  "neural network",
+  "automation",
+  "api",
+  "rest api",
+  "graphql",
+  "webhook",
+  "websocket",
+  "database",
+  "server",
+  "client",
+  "cloud",
+  "microservice",
+  "monolith",
+  "frontend",
+  "backend",
+  "fullstack",
+  "devops",
+  "ci/cd",
+  "deployment",
+  // Generic tools/infra
+  "docker",
+  "kubernetes",
+  "linux",
+  "windows",
+  "macos",
+  "nginx",
+  "apache",
+  "git",
+  "npm",
+  "pnpm",
+  "yarn",
+  "pip",
+  "node",
+  "nodejs",
+  "node.js",
+  // Generic work concepts
+  "meeting",
+  "project",
+  "training",
+  "email",
+  "calendar",
+  "task",
+  "ticket",
+  "code",
+  "data",
+  "file",
+  "folder",
+  "directory",
+  "script",
+  "module",
+  "debug",
+  "deploy",
+  "build",
+  "release",
+  "update",
+  "upgrade",
+  "user",
+  "admin",
+  "system",
+  "service",
+  "process",
+  "job",
+  "worker",
+  // Programming abstractions
+  "function",
+  "class",
+  "method",
+  "variable",
+  "object",
+  "array",
+  "string",
+  "async",
+  "sync",
+  "promise",
+  "callback",
+  "event",
+  "hook",
+  "middleware",
+  "component",
+  "plugin",
+  "extension",
+  "library",
+  "package",
+  "dependency",
+  // Generic descriptors
+  "app",
+  "application",
+  "web",
+  "mobile",
+  "desktop",
+  "browser",
+  "config",
+  "configuration",
+  "settings",
+  "environment",
+  "production",
+  "staging",
+  "error",
+  "bug",
+  "issue",
+  "fix",
+  "patch",
+  "feature",
+  "improvement",
+]);
+
+/**
  * Validate and sanitize LLM extraction output.
  */
 function validateExtractionResult(raw: Record<string, unknown>): ExtractionResult {
@@ -146,7 +311,7 @@ function validateExtractionResult(raw: Record<string, unknown>): ExtractionResul
           : undefined,
         description: typeof e.description === "string" ? e.description : undefined,
       }))
-      .filter((e) => e.name.length > 0),
+      .filter((e) => e.name.length > 0 && !GENERIC_ENTITY_BLOCKLIST.has(e.name)),
 
     relationships: relationships
       .filter(
@@ -173,7 +338,7 @@ function validateExtractionResult(raw: Record<string, unknown>): ExtractionResul
           typeof (t as Record<string, unknown>).name === "string",
       )
       .map((t) => ({
-        name: String(t.name).trim().toLowerCase(),
+        name: normalizeTagName(String(t.name)),
         category: typeof t.category === "string" ? t.category : "topic",
       }))
       .filter((t) => t.name.length > 0),
