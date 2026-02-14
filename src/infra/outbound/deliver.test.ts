@@ -598,6 +598,35 @@ describe("deliverOutboundPayloads", () => {
       );
     });
   });
+
+  it("emits message_sent failure when message_sending hook cancels delivery", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValue({ cancel: true });
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "blocked message" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "+1555",
+          content: "blocked message",
+          success: false,
+          error: "canceled by message_sending hook",
+        }),
+        expect.objectContaining({ channelId: "whatsapp" }),
+      );
+    });
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);
