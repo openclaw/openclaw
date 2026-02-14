@@ -68,10 +68,10 @@ describe("runWithReconnect", () => {
     });
 
     expect(connectFn).toHaveBeenCalledTimes(6);
-    // 5 errors produce doubled delays: 200, 400, 800, 1000(cap), 1000(cap)
-    // 6th succeeds → delay resets to 100
+    // 5 errors produce delays: 100, 200, 400, 800, 1000(cap)
+    // 6th succeeds -> delay resets to 100
     // But 6th also aborts → onReconnect NOT called (abort check fires first)
-    expect(delays).toEqual([200, 400, 800, 1000, 1000]);
+    expect(delays).toEqual([100, 200, 400, 800, 1000]);
   });
 
   it("resets backoff after successful connection", async () => {
@@ -100,11 +100,11 @@ describe("runWithReconnect", () => {
     });
 
     expect(connectFn).toHaveBeenCalledTimes(4);
-    // call 1: fail → delay 200
+    // call 1: fail -> delay 100
     // call 2: success → delay resets to 100
-    // call 3: fail → delay 200 (NOT 400 — was reset)
+    // call 3: fail -> delay 100 (reset held)
     // call 4: success + abort → no onReconnect
-    expect(delays).toEqual([200, 100, 200]);
+    expect(delays).toEqual([100, 100, 100]);
   });
 
   it("stops immediately when abort signal is pre-fired", async () => {

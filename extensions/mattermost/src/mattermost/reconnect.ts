@@ -2,7 +2,8 @@
  * Reconnection loop with exponential backoff.
  *
  * Calls `connectFn` in a while loop. On normal resolve (connection closed),
- * the backoff resets. On thrown error (connection failed), the backoff doubles.
+ * the backoff resets. On thrown error (connection failed), the current delay is
+ * used, then doubled for the next retry.
  * The loop exits when `abortSignal` fires.
  */
 export async function runWithReconnect(
@@ -19,6 +20,7 @@ export async function runWithReconnect(
   let retryDelay = initialDelayMs;
 
   while (!opts.abortSignal?.aborted) {
+    let shouldIncreaseDelay = false;
     try {
       await connectFn();
       retryDelay = initialDelayMs;
@@ -27,13 +29,16 @@ export async function runWithReconnect(
         return;
       }
       opts.onError?.(err);
-      retryDelay = Math.min(retryDelay * 2, maxDelayMs);
+      shouldIncreaseDelay = true;
     }
     if (opts.abortSignal?.aborted) {
       return;
     }
     opts.onReconnect?.(retryDelay);
     await sleepAbortable(retryDelay, opts.abortSignal);
+    if (shouldIncreaseDelay) {
+      retryDelay = Math.min(retryDelay * 2, maxDelayMs);
+    }
   }
 }
 
