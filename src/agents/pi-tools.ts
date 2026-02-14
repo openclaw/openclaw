@@ -26,7 +26,6 @@ import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import {
-  filterToolsByPolicy,
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -44,14 +43,11 @@ import {
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
+import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
 import {
   applyOwnerOnlyToolPolicy,
-  buildPluginToolGroups,
   collectExplicitAllowlist,
-  expandPolicyWithPluginGroups,
-  normalizeToolName,
   resolveToolProfilePolicy,
-  stripPluginOnlyAllowlist,
 } from "./tool-policy.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -388,76 +384,46 @@ export function createOpenClawCodingTools(options?: {
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
-  const coreToolNames = new Set(
-    toolsByAuthorization
-      .filter((tool) => !getPluginToolMeta(tool))
-      .map((tool) => normalizeToolName(tool.name))
-      .filter(Boolean),
-  );
-  const pluginGroups = buildPluginToolGroups({
+  const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
+    warn: logWarn,
+    steps: [
+      {
+        policy: profilePolicyWithAlsoAllow,
+        label: profile ? `tools.profile (${profile})` : "tools.profile",
+        stripPluginOnlyAllowlist: true,
+      },
+      {
+        policy: providerProfilePolicyWithAlsoAllow,
+        label: providerProfile
+          ? `tools.byProvider.profile (${providerProfile})`
+          : "tools.byProvider.profile",
+        stripPluginOnlyAllowlist: true,
+      },
+      { policy: globalPolicy, label: "tools.allow", stripPluginOnlyAllowlist: true },
+      {
+        policy: globalProviderPolicy,
+        label: "tools.byProvider.allow",
+        stripPluginOnlyAllowlist: true,
+      },
+      {
+        policy: agentPolicy,
+        label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
+        stripPluginOnlyAllowlist: true,
+      },
+      {
+        policy: agentProviderPolicy,
+        label: agentId
+          ? `agents.${agentId}.tools.byProvider.allow`
+          : "agent tools.byProvider.allow",
+        stripPluginOnlyAllowlist: true,
+      },
+      { policy: groupPolicy, label: "group tools.allow", stripPluginOnlyAllowlist: true },
+      { policy: sandbox?.tools, label: "sandbox tools.allow" },
+      { policy: subagentPolicy, label: "subagent tools.allow" },
+    ],
   });
-  const resolvePolicy = (policy: typeof profilePolicy, label: string) => {
-    const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
-    if (resolved.unknownAllowlist.length > 0) {
-      const entries = resolved.unknownAllowlist.join(", ");
-      const suffix = resolved.strippedAllowlist
-        ? "Ignoring allowlist so core tools remain available. Use tools.alsoAllow for additive plugin tool enablement."
-        : "These entries won't match any tool unless the plugin is enabled.";
-      logWarn(`tools: ${label} allowlist contains unknown entries (${entries}). ${suffix}`);
-    }
-    return expandPolicyWithPluginGroups(resolved.policy, pluginGroups);
-  };
-  const profilePolicyExpanded = resolvePolicy(
-    profilePolicyWithAlsoAllow,
-    profile ? `tools.profile (${profile})` : "tools.profile",
-  );
-  const providerProfileExpanded = resolvePolicy(
-    providerProfilePolicyWithAlsoAllow,
-    providerProfile ? `tools.byProvider.profile (${providerProfile})` : "tools.byProvider.profile",
-  );
-  const globalPolicyExpanded = resolvePolicy(globalPolicy, "tools.allow");
-  const globalProviderExpanded = resolvePolicy(globalProviderPolicy, "tools.byProvider.allow");
-  const agentPolicyExpanded = resolvePolicy(
-    agentPolicy,
-    agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-  );
-  const agentProviderExpanded = resolvePolicy(
-    agentProviderPolicy,
-    agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
-  );
-  const groupPolicyExpanded = resolvePolicy(groupPolicy, "group tools.allow");
-  const sandboxPolicyExpanded = expandPolicyWithPluginGroups(sandbox?.tools, pluginGroups);
-  const subagentPolicyExpanded = expandPolicyWithPluginGroups(subagentPolicy, pluginGroups);
-
-  const toolsFiltered = profilePolicyExpanded
-    ? filterToolsByPolicy(toolsByAuthorization, profilePolicyExpanded)
-    : toolsByAuthorization;
-  const providerProfileFiltered = providerProfileExpanded
-    ? filterToolsByPolicy(toolsFiltered, providerProfileExpanded)
-    : toolsFiltered;
-  const globalFiltered = globalPolicyExpanded
-    ? filterToolsByPolicy(providerProfileFiltered, globalPolicyExpanded)
-    : providerProfileFiltered;
-  const globalProviderFiltered = globalProviderExpanded
-    ? filterToolsByPolicy(globalFiltered, globalProviderExpanded)
-    : globalFiltered;
-  const agentFiltered = agentPolicyExpanded
-    ? filterToolsByPolicy(globalProviderFiltered, agentPolicyExpanded)
-    : globalProviderFiltered;
-  const agentProviderFiltered = agentProviderExpanded
-    ? filterToolsByPolicy(agentFiltered, agentProviderExpanded)
-    : agentFiltered;
-  const groupFiltered = groupPolicyExpanded
-    ? filterToolsByPolicy(agentProviderFiltered, groupPolicyExpanded)
-    : agentProviderFiltered;
-  const sandboxed = sandboxPolicyExpanded
-    ? filterToolsByPolicy(groupFiltered, sandboxPolicyExpanded)
-    : groupFiltered;
-  const subagentFiltered = subagentPolicyExpanded
-    ? filterToolsByPolicy(sandboxed, subagentPolicyExpanded)
-    : sandboxed;
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   const normalized = subagentFiltered.map(normalizeToolParameters);
