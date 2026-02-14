@@ -190,8 +190,9 @@ export class GatewayClient {
     const storedToken = this.opts.deviceIdentity
       ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
       : null;
-    const authToken = storedToken ?? this.opts.token ?? undefined;
-    const canFallbackToShared = Boolean(storedToken && this.opts.token);
+    // Prefer explicitly provided credentials (e.g. CLI `--token`) over any persisted
+    // device-auth tokens. Persisted tokens are only used when no token is provided.
+    const authToken = this.opts.token ?? storedToken ?? undefined;
     const auth =
       authToken || this.opts.password
         ? {
@@ -270,12 +271,6 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
-        if (canFallbackToShared && this.opts.deviceIdentity) {
-          clearDeviceAuthToken({
-            deviceId: this.opts.deviceIdentity.deviceId,
-            role,
-          });
-        }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${String(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) {
