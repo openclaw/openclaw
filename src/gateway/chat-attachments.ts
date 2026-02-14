@@ -1,3 +1,4 @@
+import { estimateBase64DecodedBytes } from "../media/base64.js";
 import { detectMime } from "../media/mime.js";
 
 export type ChatAttachment = {
@@ -54,6 +55,11 @@ function isImageMime(mime?: string): boolean {
   return typeof mime === "string" && mime.startsWith("image/");
 }
 
+function isValidBase64(value: string): boolean {
+  // Minimal validation; avoid full decode allocations for large payloads.
+  return value.length > 0 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
 /**
  * Parse attachments and extract images as structured content blocks.
  * Returns the message text and an array of image content blocks
@@ -91,15 +97,10 @@ export async function parseMessageWithAttachments(
     if (dataUrlMatch) {
       b64 = dataUrlMatch[1];
     }
-    // Basic base64 sanity: length multiple of 4 and charset check.
-    if (b64.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(b64)) {
+    if (!isValidBase64(b64)) {
       throw new Error(`attachment ${label}: invalid base64 content`);
     }
-    try {
-      sizeBytes = Buffer.from(b64, "base64").byteLength;
-    } catch {
-      throw new Error(`attachment ${label}: invalid base64 content`);
-    }
+    sizeBytes = estimateBase64DecodedBytes(b64);
     if (sizeBytes <= 0 || sizeBytes > maxBytes) {
       throw new Error(`attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`);
     }
@@ -163,15 +164,10 @@ export function buildMessageWithAttachments(
 
     let sizeBytes = 0;
     const b64 = content.trim();
-    // Basic base64 sanity: length multiple of 4 and charset check.
-    if (b64.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(b64)) {
+    if (!isValidBase64(b64)) {
       throw new Error(`attachment ${label}: invalid base64 content`);
     }
-    try {
-      sizeBytes = Buffer.from(b64, "base64").byteLength;
-    } catch {
-      throw new Error(`attachment ${label}: invalid base64 content`);
-    }
+    sizeBytes = estimateBase64DecodedBytes(b64);
     if (sizeBytes <= 0 || sizeBytes > maxBytes) {
       throw new Error(`attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`);
     }
