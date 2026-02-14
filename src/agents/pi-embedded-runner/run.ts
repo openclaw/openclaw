@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -57,6 +58,33 @@ import {
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
 import { describeUnknownError } from "./utils.js";
+
+function splitModelRef(ref: string): { provider?: string; model: string } {
+  const trimmed = ref.trim();
+  const [provider, model] = trimmed.split("/", 2);
+  if (model) {
+    return { provider, model };
+  }
+  return { provider: undefined, model: trimmed };
+}
+
+function resolveCompactionModelOverride(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  defaultProvider: string;
+  defaultModel: string;
+}): { provider: string; model: string } {
+  const { cfg, agentId, defaultProvider, defaultModel } = params;
+  // Check per-agent compaction config first
+  const agentList = cfg.agents?.list ?? [];
+  const agentCfg = agentId ? agentList.find((a) => a.identity?.id === agentId) : undefined;
+  const compactionModel = agentCfg?.compaction?.model?.trim() ?? cfg.agents?.defaults?.compaction?.model?.trim();
+  if (compactionModel) {
+    const { provider, model } = splitModelRef(compactionModel);
+    return { provider: provider ?? defaultProvider, model };
+  }
+  return { provider: defaultProvider, model: defaultModel };
+}
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
@@ -543,8 +571,15 @@ export async function runEmbeddedPiAgent(
                 );
               }
               overflowCompactionAttempts++;
+              // Apply compaction.model override if configured (#15826)
+              const compactionModel = resolveCompactionModelOverride({
+                cfg: params.config,
+                agentId: params.agentId,
+                defaultProvider: provider,
+                defaultModel: modelId,
+              });
               log.warn(
-                `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
+                `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${compactionModel.provider}/${compactionModel.model}`,
               );
               const compactResult = await compactEmbeddedPiSessionDirect({
                 sessionId: params.sessionId,
@@ -559,8 +594,8 @@ export async function runEmbeddedPiAgent(
                 config: params.config,
                 skillsSnapshot: params.skillsSnapshot,
                 senderIsOwner: params.senderIsOwner,
-                provider,
-                model: modelId,
+                provider: compactionModel.provider,
+                model: compactionModel.model,
                 runId: params.runId,
                 thinkLevel,
                 reasoningLevel: params.reasoningLevel,

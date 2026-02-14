@@ -248,6 +248,13 @@ export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
+  /**
+   * Model override for compaction.
+   * Allows using a cheaper model (e.g., sonnet) for compaction while keeping
+   * an expensive primary model (e.g., opus) for conversation quality.
+   * Same pattern as heartbeat.model and subagents.model.
+   */
+  model?: string;
   /** Minimum reserve tokens enforced for Pi compaction (0 disables the floor). */
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */

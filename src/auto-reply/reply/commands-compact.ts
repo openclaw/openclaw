@@ -17,6 +17,33 @@ import { formatContextUsageShort, formatTokenCount } from "../status.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
+function splitModelRef(ref: string): { provider?: string; model: string } {
+  const trimmed = ref.trim();
+  const [provider, model] = trimmed.split("/", 2);
+  if (model) {
+    return { provider, model };
+  }
+  return { provider: undefined, model: trimmed };
+}
+
+function resolveCompactionModelOverride(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  defaultProvider: string;
+  defaultModel: string;
+}): { provider: string; model: string } {
+  const { cfg, agentId, defaultProvider, defaultModel } = params;
+  // Check per-agent compaction config first
+  const agentList = cfg.agents?.list ?? [];
+  const agentCfg = agentId ? agentList.find((a) => a.identity?.id === agentId) : undefined;
+  const compactionModel = agentCfg?.compaction?.model?.trim() ?? cfg.agents?.defaults?.compaction?.model?.trim();
+  if (compactionModel) {
+    const { provider, model } = splitModelRef(compactionModel);
+    return { provider: provider ?? defaultProvider, model };
+  }
+  return { provider: defaultProvider, model: defaultModel };
+}
+
 function extractCompactInstructions(params: {
   rawBody?: string;
   ctx: import("../templating.js").MsgContext;
@@ -75,6 +102,13 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     agentId: params.agentId,
     isGroup: params.isGroup,
   });
+  // Apply compaction.model override if configured (#15826)
+  const compactionModel = resolveCompactionModelOverride({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    defaultProvider: params.provider,
+    defaultModel: params.model,
+  });
   const result = await compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
@@ -94,8 +128,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
-    provider: params.provider,
-    model: params.model,
+    provider: compactionModel.provider,
+    model: compactionModel.model,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
       enabled: false,
