@@ -115,7 +115,7 @@ describe("runCronIsolatedAgentTurn", () => {
     );
   });
 
-  it("delivers when response has HEARTBEAT_OK but includes media", async () => {
+  it("handles media heartbeat delivery and announce cleanup modes", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
       const deps: CliDeps = {
@@ -128,6 +128,7 @@ describe("runCronIsolatedAgentTurn", () => {
         sendMessageSignal: vi.fn(),
         sendMessageIMessage: vi.fn(),
       };
+
       // Media should still be delivered even if text is just HEARTBEAT_OK.
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
@@ -137,7 +138,7 @@ describe("runCronIsolatedAgentTurn", () => {
         },
       });
 
-      const res = await runCronIsolatedAgentTurn({
+      const mediaRes = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath),
         deps,
         job: {
@@ -152,25 +153,12 @@ describe("runCronIsolatedAgentTurn", () => {
         lane: "cron",
       });
 
-      expect(res.status).toBe("ok");
+      expect(mediaRes.status).toBe("ok");
       expect(deps.sendMessageTelegram).toHaveBeenCalled();
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    });
-  });
 
-  it("uses shared announce flow when heartbeat ack padding exceeds configured limit", async () => {
-    await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
-      const deps: CliDeps = {
-        sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi.fn().mockResolvedValue({
-          messageId: "t1",
-          chatId: "123",
-        }),
-        sendMessageDiscord: vi.fn(),
-        sendMessageSignal: vi.fn(),
-        sendMessageIMessage: vi.fn(),
-      };
+      vi.mocked(runSubagentAnnounceFlow).mockClear();
+      vi.mocked(deps.sendMessageTelegram).mockClear();
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "HEARTBEAT_OK 🦞" }],
         meta: {
@@ -188,7 +176,7 @@ describe("runCronIsolatedAgentTurn", () => {
         },
       };
 
-      const res = await runCronIsolatedAgentTurn({
+      const keepRes = await runCronIsolatedAgentTurn({
         cfg,
         deps,
         job: {
@@ -203,47 +191,17 @@ describe("runCronIsolatedAgentTurn", () => {
         lane: "cron",
       });
 
-      expect(res.status).toBe("ok");
+      expect(keepRes.status).toBe("ok");
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-      const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+      const keepArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
         | { cleanup?: "keep" | "delete" }
         | undefined;
-      expect(announceArgs?.cleanup).toBe("keep");
+      expect(keepArgs?.cleanup).toBe("keep");
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
-    });
-  });
 
-  it("passes cleanup=delete to announce flow when job.deleteAfterRun is true", async () => {
-    await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
-      const deps: CliDeps = {
-        sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi.fn().mockResolvedValue({
-          messageId: "t1",
-          chatId: "123",
-        }),
-        sendMessageDiscord: vi.fn(),
-        sendMessageSignal: vi.fn(),
-        sendMessageIMessage: vi.fn(),
-      };
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [{ text: "HEARTBEAT_OK 🦞" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+      vi.mocked(runSubagentAnnounceFlow).mockClear();
 
-      const cfg = makeCfg(home, storePath);
-      cfg.agents = {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          heartbeat: { ackMaxChars: 0 },
-        },
-      };
-
-      const res = await runCronIsolatedAgentTurn({
+      const deleteRes = await runCronIsolatedAgentTurn({
         cfg,
         deps,
         job: {
@@ -259,12 +217,12 @@ describe("runCronIsolatedAgentTurn", () => {
         lane: "cron",
       });
 
-      expect(res.status).toBe("ok");
+      expect(deleteRes.status).toBe("ok");
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-      const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+      const deleteArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
         | { cleanup?: "keep" | "delete" }
         | undefined;
-      expect(announceArgs?.cleanup).toBe("delete");
+      expect(deleteArgs?.cleanup).toBe("delete");
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
