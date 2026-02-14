@@ -254,8 +254,16 @@ function renderGroupedMessage(
     .join(" ");
 
   // Tool results: show only the compact card, full output via sidebar "View"
-  if (isToolResult && hasToolCards) {
-    return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
+  if (isToolResult) {
+    // If no cards extracted, synthesise one from the message text
+    const cards = hasToolCards
+      ? toolCards
+      : [{
+          kind: "result" as const,
+          name: (typeof m.toolName === "string" && m.toolName) || (typeof m.tool_name === "string" && m.tool_name as string) || "tool",
+          text: extractedText ?? undefined,
+        }];
+    return html`${cards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
   if (!markdown && hasToolCards) {
