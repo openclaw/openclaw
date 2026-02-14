@@ -402,6 +402,15 @@ export const OpenClawSchema = z
             token: z.string().optional().register(sensitive),
             password: z.string().optional().register(sensitive),
             allowTailscale: z.boolean().optional(),
+            rateLimit: z
+              .object({
+                maxAttempts: z.number().int().positive().optional(),
+                windowMs: z.number().int().positive().optional(),
+                lockoutMs: z.number().int().positive().optional(),
+                exemptLoopback: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),
