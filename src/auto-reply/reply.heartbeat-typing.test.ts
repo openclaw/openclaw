@@ -1,6 +1,7 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runEmbeddedPiAgentMock = vi.fn();
 
@@ -39,14 +40,76 @@ vi.mock("../web/session.js", () => webMocks);
 
 import { getReplyFromConfig } from "./reply.js";
 
+type HomeEnvSnapshot = {
+  HOME: string | undefined;
+  USERPROFILE: string | undefined;
+  HOMEDRIVE: string | undefined;
+  HOMEPATH: string | undefined;
+  OPENCLAW_STATE_DIR: string | undefined;
+  OPENCLAW_AGENT_DIR: string | undefined;
+  PI_CODING_AGENT_DIR: string | undefined;
+};
+
+function snapshotHomeEnv(): HomeEnvSnapshot {
+  return {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    HOMEDRIVE: process.env.HOMEDRIVE,
+    HOMEPATH: process.env.HOMEPATH,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+    OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
+    PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+  };
+}
+
+function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
+let fixtureRoot = "";
+let caseId = 0;
+
+beforeAll(async () => {
+  fixtureRoot = await fs.mkdtemp(join(os.tmpdir(), "openclaw-typing-"));
+});
+
+afterAll(async () => {
+  if (!fixtureRoot) {
+    return;
+  }
+  await fs.rm(fixtureRoot, { recursive: true, force: true });
+});
+
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(
-    async (home) => {
-      runEmbeddedPiAgentMock.mockClear();
-      return await fn(home);
-    },
-    { prefix: "openclaw-typing-" },
-  );
+  const home = join(fixtureRoot, `case-${++caseId}`);
+  await fs.mkdir(join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+  const envSnapshot = snapshotHomeEnv();
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  process.env.OPENCLAW_STATE_DIR = join(home, ".openclaw");
+  process.env.OPENCLAW_AGENT_DIR = join(home, ".openclaw", "agent");
+  process.env.PI_CODING_AGENT_DIR = join(home, ".openclaw", "agent");
+
+  if (process.platform === "win32") {
+    const match = home.match(/^([A-Za-z]:)(.*)$/);
+    if (match) {
+      process.env.HOMEDRIVE = match[1];
+      process.env.HOMEPATH = match[2] || "\\";
+    }
+  }
+
+  try {
+    runEmbeddedPiAgentMock.mockClear();
+    return await fn(home);
+  } finally {
+    restoreHomeEnv(envSnapshot);
+  }
 }
 
 function makeCfg(home: string) {
