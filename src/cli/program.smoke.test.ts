@@ -17,8 +17,10 @@ const ensurePluginRegistryLoaded = vi.fn();
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
-  exit: vi.fn(() => {
-    throw new Error("exit");
+  exit: vi.fn((code) => {
+    if (code !== 0) {
+      throw new Error(`exit ${code}`);
+    }
   }),
 };
 
