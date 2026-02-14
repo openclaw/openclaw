@@ -20,7 +20,7 @@ describe("signalMessageActions", () => {
     const cfg = {
       channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
     } as OpenClawConfig;
-    expect(signalMessageActions.listActions({ cfg })).toEqual(["send"]);
+    expect(signalMessageActions.listActions({ cfg })).toEqual(["send", "unsend"]);
   });
 
   it("enables react when at least one account allows reactions", () => {
@@ -34,7 +34,7 @@ describe("signalMessageActions", () => {
         },
       },
     } as OpenClawConfig;
-    expect(signalMessageActions.listActions({ cfg })).toEqual(["send", "react"]);
+    expect(signalMessageActions.listActions({ cfg })).toEqual(["send", "react", "unsend"]);
   });
 
   it("skips send for plugin dispatch", () => {

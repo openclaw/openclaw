@@ -3,6 +3,7 @@ import { createActionGate, jsonResult, readStringParam } from "../../../agents/t
 import { listEnabledSignalAccounts, resolveSignalAccount } from "../../../signal/accounts.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { sendReactionSignal, removeReactionSignal } from "../../../signal/send-reactions.js";
+import { sendRemoteDeleteSignal } from "../../../signal/send.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";
@@ -56,6 +57,13 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     );
     if (reactionsEnabled) {
       actions.add("react");
+    }
+
+    const unsendEnabled = configuredAccounts.some((account) =>
+      createActionGate(account.config.actions)("unsend"),
+    );
+    if (unsendEnabled) {
+      actions.add("unsend");
     }
 
     return Array.from(actions);
@@ -139,6 +147,43 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         targetAuthorUuid,
       });
       return jsonResult({ ok: true, added: emoji });
+    }
+
+    if (action === "unsend") {
+      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
+      const isActionEnabled = createActionGate(actionConfig);
+      if (!isActionEnabled("unsend")) {
+        throw new Error("Signal unsend is disabled via actions.unsend.");
+      }
+
+      const recipientRaw =
+        readStringParam(params, "recipient") ??
+        readStringParam(params, "to", {
+          required: true,
+          label: "recipient (UUID, phone number, or group)",
+        });
+      const target = resolveSignalReactionTarget(recipientRaw);
+      if (!target.recipient && !target.groupId) {
+        throw new Error("recipient or group required");
+      }
+
+      const messageId = readStringParam(params, "messageId", {
+        required: true,
+        label: "messageId (timestamp)",
+      });
+
+      const timestamp = parseInt(messageId, 10);
+      if (!Number.isFinite(timestamp) || timestamp <= 0) {
+        throw new Error(`Invalid messageId: ${messageId}. Expected positive numeric timestamp.`);
+      }
+
+      const deleted = await sendRemoteDeleteSignal(recipientRaw, timestamp, {
+        accountId: accountId ?? undefined,
+      });
+      if (!deleted) {
+        throw new Error(`Failed to delete message ${messageId}.`);
+      }
+      return jsonResult({ ok: true, deleted: messageId });
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

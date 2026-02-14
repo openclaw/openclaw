@@ -246,3 +246,34 @@ export async function sendReadReceiptSignal(
   });
   return true;
 }
+
+export async function sendRemoteDeleteSignal(
+  to: string,
+  targetTimestamp: number,
+  opts: SignalRpcOpts = {},
+): Promise<boolean> {
+  if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
+    return false;
+  }
+  const { baseUrl, account } = resolveSignalRpcContext(opts);
+  const targetParams = buildTargetParams(parseTarget(to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    return false;
+  }
+  const params: Record<string, unknown> = {
+    ...targetParams,
+    targetTimestamp,
+  };
+  if (account) {
+    params.account = account;
+  }
+  await signalRpcRequest("remoteDelete", params, {
+    baseUrl,
+    timeoutMs: opts.timeoutMs,
+  });
+  return true;
+}

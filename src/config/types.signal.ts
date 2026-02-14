@@ -73,6 +73,8 @@ export type SignalAccountConfig = {
   actions?: {
     /** Enable/disable sending reactions via message tool (default: true). */
     reactions?: boolean;
+    /** Enable/disable unsending messages via message tool (default: true). */
+    unsend?: boolean;
   };
   /**
    * Controls agent reaction behavior:
