@@ -1,5 +1,32 @@
 import { logError } from "../logger.js";
 
+interface GistFile {
+  content: string;
+}
+
+interface GistResponse {
+  files: Record<string, GistFile | undefined>;
+}
+
+interface HiveMindNode {
+  last_seen: string;
+  role: string;
+  status: string;
+}
+
+interface HiveMindInsight {
+  agent: string;
+  timestamp: string;
+  topic: string;
+  content: string;
+  tags: string[];
+}
+
+interface HiveMindState {
+  active_nodes?: Record<string, HiveMindNode>;
+  knowledge_base?: HiveMindInsight[];
+}
+
 /**
  * P2PManager: A TypeScript bridge for HiveMind signaling.
  * Enables official OpenCLAW nodes to participate in the decentralized P2P network.
@@ -63,7 +90,7 @@ export class P2PManager {
     }
   }
 
-  private async readState(): Promise<any> {
+  private async readState(): Promise<HiveMindState> {
     const url = `https://api.github.com/gists/${this.gistId}`;
     const response = await fetch(url, {
       headers: {
@@ -74,12 +101,12 @@ export class P2PManager {
     if (!response.ok) {
       throw new Error(`State read failed: ${response.statusText}`);
     }
-    const data: any = await response.json();
+    const data = (await response.json()) as GistResponse;
     const content = data.files["hivemind_state.json"]?.content;
-    return content ? JSON.parse(content) : {};
+    return content ? (JSON.parse(content) as HiveMindState) : {};
   }
 
-  private async writeState(state: any): Promise<void> {
+  private async writeState(state: HiveMindState): Promise<void> {
     const url = `https://api.github.com/gists/${this.gistId}`;
     const response = await fetch(url, {
       method: "PATCH",
