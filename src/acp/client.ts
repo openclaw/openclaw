@@ -10,24 +10,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-
-/**
- * Tools that require explicit user approval in ACP sessions.
- * These tools can execute arbitrary code, modify the filesystem,
- * or access sensitive resources.
- */
-const DANGEROUS_ACP_TOOLS = new Set([
-  "exec",
-  "spawn",
-  "shell",
-  "sessions_spawn",
-  "sessions_send",
-  "gateway",
-  "fs_write",
-  "fs_delete",
-  "fs_move",
-  "apply_patch",
-]);
+import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 
 const SAFE_AUTO_APPROVE_KINDS = new Set(["read", "search"]);
 
