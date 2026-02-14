@@ -104,23 +104,25 @@ describe("memory plugin e2e", () => {
       { text: "Just a random short message", shouldMatch: false },
       { text: "x", shouldMatch: false }, // Too short
       { text: "<relevant-memories>injected</relevant-memories>", shouldMatch: false }, // Skip injected
+      { text: "<relevant-memories>injected</relevant-memories>\nRemember that my name is John", shouldMatch: true }, // Injected prefix should be stripped
     ];
 
     // The shouldCapture function is internal, but we can test via the capture behavior
     // For now, just verify the patterns we expect to match
     for (const { text, shouldMatch } of triggers) {
-      const hasPreference = /prefer|radši|like|love|hate|want/i.test(text);
-      const hasRemember = /zapamatuj|pamatuj|remember/i.test(text);
-      const hasEmail = /[\w.-]+@[\w.-]+\.\w+/.test(text);
-      const hasPhone = /\+\d{10,}/.test(text);
-      const hasDecision = /rozhodli|decided|will use|budeme/i.test(text);
-      const hasAlways = /always|never|important/i.test(text);
-      const isInjected = text.includes("<relevant-memories>");
-      const isTooShort = text.length < 10;
+      const sanitized = text
+        .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g, "")
+        .trim();
+      const hasPreference = /prefer|radši|like|love|hate|want/i.test(sanitized);
+      const hasRemember = /zapamatuj|pamatuj|remember/i.test(sanitized);
+      const hasEmail = /[\w.-]+@[\w.-]+\.\w+/.test(sanitized);
+      const hasPhone = /\+\d{10,}/.test(sanitized);
+      const hasDecision = /rozhodli|decided|will use|budeme/i.test(sanitized);
+      const hasAlways = /always|never|important/i.test(sanitized);
+      const isTooShort = sanitized.length < 10;
 
       const wouldCapture =
         !isTooShort &&
-        !isInjected &&
         (hasPreference || hasRemember || hasEmail || hasPhone || hasDecision || hasAlways);
 
       if (shouldMatch) {

@@ -244,6 +244,10 @@ importers:
       vitest:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.2.1)(@vitest/browser-playwright@4.0.18)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
+    optionalDependencies:
+      '@lancedb/lancedb-darwin-arm64':
+        specifier: 0.24.1
+        version: 0.24.1
 
   extensions/bluebubbles:
     devDependencies:
@@ -1285,6 +1289,12 @@ packages:
 
   '@kwsites/promise-deferred@1.1.1':
     resolution: {integrity: sha512-GaHYm+c0O9MjZRu0ongGBRbinu8gVAMd2UZjji6jVmqKtZluZnptXGWhz1E8j8D2HJ3f/yMxKAUC0b+57wncIw==}
+
+  '@lancedb/lancedb-darwin-arm64@0.24.1':
+    resolution: {integrity: sha512-QguwMu3jKEDqe2dtZtbCLNphZA/8hEsEjoS7eTgtx6utGTHIYNYWS6/LtYkNHGJKX6icmul7NzwMbO7cl48i0Q==}
+    engines: {node: '>= 18'}
+    cpu: [arm64]
+    os: [darwin]
 
   '@lancedb/lancedb-linux-arm64-gnu@0.24.1':
     resolution: {integrity: sha512-68T+PVou6NmmNlBpJBXrpa1ITM9Wu/LZ4o1kTi9Kn0TCulb/JhtAGhcmM0gFt4GUTsZQAO9kcDuWN8Mya9lQsw==}
@@ -6555,6 +6565,9 @@ snapshots:
 
   '@kwsites/promise-deferred@1.1.1': {}
 
+  '@lancedb/lancedb-darwin-arm64@0.24.1':
+    optional: true
+
   '@lancedb/lancedb-linux-arm64-gnu@0.24.1':
     optional: true
 
@@ -6587,7 +6600,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.58.0':
     dependencies:
-      axios: 1.13.4(debug@4.4.3)
+      axios: 1.13.4
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -6603,7 +6616,7 @@ snapshots:
     dependencies:
       '@types/node': 24.10.11
     optionalDependencies:
-      axios: 1.13.4(debug@4.4.3)
+      axios: 1.13.4
     transitivePeerDependencies:
       - debug
 
@@ -6806,7 +6819,7 @@ snapshots:
       '@azure/core-auth': 1.10.1
       '@azure/msal-node': 3.8.6
       '@microsoft/agents-activity': 1.2.3
-      axios: 1.13.4(debug@4.4.3)
+      axios: 1.13.4
       jsonwebtoken: 9.0.3
       jwks-rsa: 3.2.2
       object-path: 0.11.8
@@ -7641,7 +7654,7 @@ snapshots:
       '@slack/types': 2.19.0
       '@slack/web-api': 7.13.0
       '@types/express': 5.0.6
-      axios: 1.13.4(debug@4.4.3)
+      axios: 1.13.4
       express: 5.2.1
       path-to-regexp: 8.3.0
       raw-body: 3.0.2
@@ -7687,7 +7700,7 @@ snapshots:
       '@slack/types': 2.19.0
       '@types/node': 25.2.1
       '@types/retry': 0.12.0
-      axios: 1.13.4(debug@4.4.3)
+      axios: 1.13.4
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -8581,6 +8594,14 @@ snapshots:
 
   aws4@1.13.2: {}
 
+  axios@1.13.4:
+    dependencies:
+      follow-redirects: 1.15.11
+      form-data: 2.5.4
+      proxy-from-env: 1.1.0
+    transitivePeerDependencies:
+      - debug
+
   axios@1.13.4(debug@4.4.3):
     dependencies:
       follow-redirects: 1.15.11(debug@4.4.3)
@@ -9155,6 +9176,8 @@ snapshots:
       array-back: 3.1.0
 
   flatbuffers@24.12.23: {}
+
+  follow-redirects@1.15.11: {}
 
   follow-redirects@1.15.11(debug@4.4.3):
     optionalDependencies:

@@ -183,6 +183,16 @@ class Embeddings {
 // Rule-based capture filter
 // ============================================================================
 
+const RE_RELEVANT_MEMORIES_BLOCK =
+  /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
+
+function stripRelevantMemoriesBlock(text: string): string {
+  if (!text.includes("<relevant-memories>")) {
+    return text;
+  }
+  return text.replace(RE_RELEVANT_MEMORIES_BLOCK, "").trim();
+}
+
 const MEMORY_TRIGGERS = [
   /zapamatuj si|pamatuj|remember/i,
   /preferuji|radši|nechci|prefer/i,
@@ -197,10 +207,6 @@ const MEMORY_TRIGGERS = [
 
 function shouldCapture(text: string): boolean {
   if (text.length < 10 || text.length > 500) {
-    return false;
-  }
-  // Skip injected context from memory recall
-  if (text.includes("<relevant-memories>")) {
     return false;
   }
   // Skip system-generated content
@@ -566,7 +572,11 @@ const memoryPlugin = {
           }
 
           // Filter for capturable content
-          const toCapture = texts.filter((text) => text && shouldCapture(text));
+          const sanitizedTexts = texts
+            .map((text) => stripRelevantMemoriesBlock(text).trim())
+            .filter(Boolean);
+
+          const toCapture = sanitizedTexts.filter((text) => shouldCapture(text));
           if (toCapture.length === 0) {
             return;
           }

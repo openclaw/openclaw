@@ -246,5 +246,8 @@
       "apps/macos/.build/**",
       "dist/OpenClaw.app/**"
     ]
+  },
+  "optionalDependencies": {
+    "@lancedb/lancedb-darwin-arm64": "0.24.1"
   }
 }
